@@ -1,0 +1,6 @@
+{
+    // --- COPILOT & DOX CONFIGURATION ---
+    "chat.useAgentsMdFile": true,
+    "chat.useNestedAgentsMdFiles": true,
+    "chat.useCustomizationsInParentRepositories": true,
+}
