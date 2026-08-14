@@ -166,7 +166,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
         "price": 19.99,
         "color": "red"
     },
-    "status": "draft",               // draft | in_review | approved | published | archived
+    "status": "draft",               // draft | in_review | approved | rejected | published | archived
     "version": 3,
     "created_at": "...",
     "updated_at": "...",
@@ -195,7 +195,11 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
         "max": 999999,
         "enum_values": ["red", "green", "blue"],   // optional für geschlossene Wertelisten
         "multilingual": true                        // optional, kennzeichnet sprachabhängige Felder
-    }
+    },
+    "version": 1,
+    "created_at": "...",
+    "updated_at": "...",
+    "updated_by": "user_1"
 }
 ```
 
@@ -292,7 +296,7 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
 
 #### Tabelle `audit_log`
 
-Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 12).
+Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
 
 ```json
 {
@@ -309,11 +313,11 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 12).
 }
 ```
 
-#### Zukünftige Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
+#### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
-- **`saved_search`**: Speichert komplexe Suchanfragen (Abschnitt 10.1).
-- **`collection`**: Materialisierte Ergebnislisten auf Basis gespeicherter Suchen (Abschnitt 10.2).
-- **`release`**: Kanalspezifische Freigaben (Abschnitt 8.2, spätere Ausbaustufe).
+- **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (Abschnitt 10.1); wird in der Tabelle `object` gespeichert.
+- **`collection`**: Objekttyp (`type: "collection"`) für materialisierte Ergebnislisten auf Basis gespeicherter Suchen (Abschnitt 10.2); wird in der Tabelle `object` gespeichert.
+- **`release`**: Eigene Tabelle für kanalspezifische Freigaben (Abschnitt 8.2, spätere Ausbaustufe).
 
 ### 4.3 Indizes & Suche
 
@@ -543,7 +547,7 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 **Grundprinzip:**
 
-- Eine **Kategorie** wird als Objekt mit `type: "category"` (oder einem frei wählbaren Typ wie `grouping`, `folder`, `collection`) angelegt.
+- Eine **Kategorie** wird als Objekt mit `type: "category"` (oder einem frei wählbaren Typ wie `grouping` oder `folder`) angelegt.
 - Die Zuordnung eines Objekts zu einer Kategorie erfolgt über eine Relation vom Typ `category_member`.
 
   ```json
@@ -805,8 +809,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
           "en": "Example product",
           "de": "Beispielprodukt"
         },
-        "price": 19.99,
-        "status": "draft"
+        "price": 19.99
       },
       "status": "draft",
       "references": [
@@ -962,7 +965,7 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
 - Erlaubte Übergänge werden zentral definiert, z. B.:
 
 ```
-draft → in_review → approved → published
+draft → in_review → approved → published → archived
                      ↓
                   rejected → draft
 ```
@@ -1180,13 +1183,13 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 **Modellierung:**
 
 - Das Collection-Objekt besitzt eine Referenz auf die zugrunde liegende `saved_search`.
-- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden:
+- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden. Analog zu `category_member` zeigt die Relation vom Mitgliedsobjekt (`from`) auf das Container-Objekt (`to`):
 
   ```json
   {
     "id": "ref_coll_001",
-    "from": "collection_10",
-    "to": "object_123",
+    "from": "object_123",
+    "to": "collection_10",
     "type": "collection_member",
     "attributes": {
       "rank": 1,
@@ -1442,7 +1445,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** und ein **einfaches Audit-L
   - `created_at`: Zeitpunkt der Erstellung (unveränderlich)
   - `updated_at`: Zeitpunkt der letzten Änderung
   - `updated_by`: Benutzer- oder Systemkennung, die die Änderung ausgelöst hat
-- Die Versionierung gilt für **alle Objekttypen**, einschließlich Attributdefinitionen, Kategorien, gespeicherter Suchen und Collections.
+- Die Versionierung gilt für **alle Objekttypen** (einschließlich Kategorien, gespeicherter Suchen und Collections) sowie für die technische Tabelle `attribute_definition`.
 
 **Beispiel:**
 
