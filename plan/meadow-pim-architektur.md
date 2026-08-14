@@ -109,7 +109,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 
 | Komponente                  | Technologie                          | Zweck                                                                 |
 |-----------------------------|--------------------------------------|-----------------------------------------------------------------------|
-| Python-Basis                | Python 3.12+                         | Gemeinsame Laufzeit für Worker und Frontend                           |
+| Python-Basis                | Python 3.14                          | Gemeinsame Laufzeit für Worker und Frontend                           |
 | Business Logic              | Pydantic (Validierung), ggf. FastAPI | Business Rules, berechnete Attribute, Validierung von MEF-Dokumenten  |
 | Worker                      | asyncio, nats-py, httpx              | Ausführung von Jobs (Import/Export), Webhooks, Status-Updates         |
 | Frontend                    | NiceGUI                              | Rollenbasierte Web-Oberfläche                                         |
@@ -135,6 +135,8 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 - **Redis** ist im MVP nicht zwingend, da die Vererbungs- und Sprachauflösung bei geringen Hierarchietiefen auch ohne Cache performant ist. Es wird als optionale Komponente geführt.
 - **Meilisearch/Elasticsearch** sind nicht vorgesehen, da SurrealDB über integrierte Volltextsuche verfügt. Erst bei sehr komplexen Suchanforderungen (z. B. Facetten, Synonyme) könnte eine externe Suchmaschine ergänzt werden.
 - **ETIM/Klassifizierungsstandards** benötigen keine eigene Technologie, sondern werden später als Datenmodell-Erweiterung im Kern abgebildet.
+- **SurrealDB-Lizenz:** Der SurrealDB-Serverkern ist unter der **Business Source License 1.1 (BSL)** lizenziert (SDKs/Clients unter Apache/MIT). Für den produktiven Betrieb bei Kunden sollte die BSL kurz rechtlich geprüft werden – für KMU-Szenarien in der Regel unkritisch, aber dokumentierenswert.
+- **jsonwebtoken (v10+/v11):** Bei der Dependency-Einrichtung muss eines der Crypto-Backend-Features gewählt werden (`aws_lc_rs` oder `rust_crypto`), sonst schlägt der Build fehl. Zudem liegt die MSRV des Crates bei 1.88.
 
 ---
 
@@ -254,7 +256,7 @@ Definiert wiederkehrende oder manuell ausführbare Aufgaben (Details in Abschnit
     "id": "job_def_123",
     "name": "Täglicher Produktexport",
     "type": "outbound_export",       // outbound_export | inbound_import | business_rule
-    "schedule": "0 3 * * *",         // Cron-Ausdruck, null = nur manuell
+    "schedule": "0 0 3 * * *",       // Cron (6 Felder, Sekunden zuerst), null = nur manuell
     "parameters": {
         "connector_id": "conn_amazon",
         "filter": { "type": "product", "active": true }
@@ -320,10 +322,12 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 12).
   - kombinierte Indizes für `from` + `type` und `to` + `type` (z. B. für Kategorieabfragen)
   - speziell für `inherits_from` und `category_member`
 - **Volltextsuche:**
-  - SurrealDB-eigene Volltextindizes auf ausgewählte Attributfelder (z. B. `attributes.description.*`)
+  - SurrealDB-eigene Volltextindizes auf ausgewählte Attributfelder (Syntax `FULLTEXT ANALYZER …`, seit SurrealDB 3.0; zuvor `SEARCH ANALYZER`)
+  - Wichtig: Ein `FULLTEXT`-Index deckt **immer nur ein Feld** ab – pro Feld (bzw. pro Sprachfeld wie `attributes.description.de`) ist ein eigener `DEFINE INDEX` nötig
   - sprachspezifische Suche unter Berücksichtigung des Sprachbaums
 - **Graph-Traversierung:**
-  - Indizes auf Relationen ermöglichen performante Traversierung in beide Richtungen (`->type->object` oder `<-type<-object`)
+  - Indizes auf Relationen ermöglichen performante Traversierung in beide Richtungen
+  - Da alle Relationen in einer generischen `reference`-Tabelle mit `type`-Feld liegen, erfolgt die Traversierung über typisierte Edge-Queries, z. B. `->(reference WHERE type = 'inherits_from')->object` bzw. `<-()<-object` in Gegenrichtung
 - **Weitere Indizes (vorbereitet):**
   - auf `saved_search.status`, `collection.status` für spätere Funktionen
 
@@ -442,7 +446,7 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
   }
   ```
 
-- Über SurrealDB-Graphfunktionen kann entlang dieser Relationen effizient traversiert werden (`->inherits_from->object`).
+- Über SurrealDB-Graphfunktionen kann entlang dieser Relationen effizient traversiert werden. Da die Relationen in der generischen `reference`-Tabelle liegen, wird der Typ als Bedingung angegeben: `->(reference WHERE type = 'inherits_from')->object`.
 - Ein Objekt kann mehrere `inherits_from`-Relationen besitzen. In diesem Fall gilt die durch `priority` definierte Reihenfolge (niedriger Wert = höhere Priorität). Ist keine Priorität gesetzt, wird die zuerst gefundene Relation verwendet.
 
 **Attributkategorien:**
@@ -505,7 +509,7 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
 - Indizes auf `reference` (insbesondere `type` und `from`) beschleunigen die Traversierung.
 - Die Vererbung wird über SurrealQL-Abfragen realisiert, z. B.:
   ```sql
-  SELECT ->inherits_from->object.attributes.brand AS inherited_brand
+  SELECT ->(reference WHERE type = 'inherits_from')->object.attributes.brand AS inherited_brand
   FROM object:variant_1
   ```
   oder durch schrittweises Aufsteigen in der Applikationslogik.
@@ -577,7 +581,7 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 **Anforderungen an die Implementierung:**
 
 - **Indizes** auf `reference.type` und `reference.to` sorgen für schnelle Abfragen der Kategorien eines Objekts sowie aller Objekte einer Kategorie.
-- **Rekursive Abfragen** müssen effizient sein: z. B. alle Produkte inklusive Unterkategorien. SurrealDB bietet dafür Graph-Traversierung (z. B. `->category_member->object` in beide Richtungen).
+- **Rekursive Abfragen** müssen effizient sein: z. B. alle Produkte inklusive Unterkategorien. SurrealDB bietet dafür Graph-Traversierung über die generische `reference`-Tabelle (z. B. `->(reference WHERE type = 'category_member')->object` in beide Richtungen).
 - **Sortierung:** Die optionale `position` an der Relation wird beim Lesen ausgewertet, um eine konfigurierbare Reihenfolge innerhalb der Kategorie zu ermöglichen.
 - **Caching:** Für häufig gelesene Kategoriebäume (Navigation) kann ein Cache eingesetzt werden. Für KMU-Größenordnungen ist das meist nicht erforderlich, da die Baumtiefen gering sind.
 
@@ -741,6 +745,8 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 ```
 
 ### 6.2 Ablauf eines Jobs
+
+> **Cron-Format:** `tokio-cron-scheduler` nutzt ein **6-Felder-Format mit Sekunden an erster Stelle** (`sec min hour day month dow`). „Täglich um 03:00 Uhr“ lautet also `0 0 3 * * *` (nicht das übliche 5-Felder-Format `0 3 * * *`).
 
 1. Der Scheduler (oder ein manueller API-Aufruf) erzeugt ein `job_run` mit Status `pending`.
 2. Der Rust-Kern publiziert eine Message in den entsprechenden NATS-JetStream-Stream (Subject: `jobs.<type>`).
@@ -1001,7 +1007,7 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
       ],
       "limit": 500
     },
-    "refresh_interval": "0 2 * * *",
+    "refresh_interval": "0 0 2 * * *",   // Cron (6 Felder, Sekunden zuerst)
     "last_executed_at": "...",
     "last_result_count": 42
   },
