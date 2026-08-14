@@ -148,7 +148,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 
 ### 4.1 Grundprinzip
 
-Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** gespeichert. Unterschiede ergeben sich durch den Typ und flexible Metadaten. Technische Tabellen (Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell.
+Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** gespeichert. Unterschiede ergeben sich durch den Typ und flexible Metadaten. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell.
 
 ### 4.2 Tabellen in SurrealDB
 
@@ -221,7 +221,7 @@ Referenzen zwischen Objekten (Graph-Kanten) mit eigenen Metadaten. Der `type` is
 
 - `inherits_from` → Datenwertvererbung (Abschnitt 4.5)
 - `category_member` → Kategorisierung (Abschnitt 4.6)
-- `collection_member` → materialisierte Collections (Abschnitt 9.2)
+- `collection_member` → materialisierte Collections (Abschnitt 10.2)
 - weitere Typen (z. B. `related`, `parent`, `variant`) sind reine Verknüpfungen ohne Sonderlogik.
 
 ```json
@@ -311,8 +311,8 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 12).
 
 #### Zukünftige Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
-- **`saved_search`**: Speichert komplexe Suchanfragen (Abschnitt 9.1).
-- **`collection`**: Materialisierte Ergebnislisten auf Basis gespeicherter Suchen (Abschnitt 9.2).
+- **`saved_search`**: Speichert komplexe Suchanfragen (Abschnitt 10.1).
+- **`collection`**: Materialisierte Ergebnislisten auf Basis gespeicherter Suchen (Abschnitt 10.2).
 - **`release`**: Kanalspezifische Freigaben (Abschnitt 8.2, spätere Ausbaustufe).
 
 ### 4.3 Indizes & Suche
@@ -421,7 +421,7 @@ root
 **Mehrsprachigkeit der Oberfläche vs. Daten:**
 
 - Die Sprachbaum-Logik betrifft ausschließlich **fachliche Attributwerte** (Produktname, Beschreibung, etc.).
-- Die Übersetzung der Benutzeroberfläche (Menü, Buttons) bleibt davon getrennt und folgt dem in Abschnitt 8.3 beschriebenen Ansatz.
+- Die Übersetzung der Benutzeroberfläche (Menü, Buttons) bleibt davon getrennt und folgt dem in Abschnitt 11.3 beschriebenen Ansatz.
 
 ### 4.5 Datenwertvererbung über Objektrelationen
 
@@ -704,9 +704,15 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | GET     | `/jobs/{job_def_id}/runs`         | Job-Historie abrufen                            |
 | PATCH   | `/jobs/runs/{run_id}`             | Status eines Job-Runs aktualisieren (Worker)    |
 | POST    | `/search`                         | Volltextsuche über Objekte                      |
+| GET     | `/auth/me`                        | Rollen, Berechtigungen & Scope des Nutzers      |
+| POST    | `/users`                          | Benutzer anlegen                                |
+| PATCH   | `/users/{id}`                     | Benutzer bearbeiten (Rolle, Status)             |
+| DELETE  | `/users/{id}`                     | Benutzer löschen (Superadmin-Schutz)            |
+| POST    | `/groups`                         | Gruppe anlegen                                  |
+| POST    | `/groups/{id}/members`            | Benutzer einer Gruppe zuordnen                  |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
-- **Rollen**: `admin`, `editor`, `viewer` – werden im JWT abgebildet.
+- **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9).
 - **Pagination**: Cursor-basiert für große Listen.
 
 ---
@@ -971,11 +977,146 @@ draft → in_review → approved → published
 
 ---
 
-## 9. Gespeicherte Suchen & Materialisierte Collections
+## 9. Benutzer, Gruppen & Rechte (RBAC + ABAC-Scopes)
+
+### 9.1 Grundprinzip
+
+- Die Rechteprüfung erfolgt **ausschließlich im Rust-Kern** (autoritative Quelle). Das Frontend spiegelt Rechte nur wider (Ausblenden von Menüs/Aktionen), erzwingt aber nichts.
+- Kombination aus **RBAC** (Rollen & Gruppen), **ABAC-Scopes** (welche Daten sichtbar/bearbeitbar sind) und optional später **ReBAC** (beziehungsbasierte Rechte über den SurrealDB-Graphen).
+- Benutzer und Gruppen sind **technische Tabellen** und damit klar von den fachlichen `object`-Entitäten getrennt (Abschnitt 4.1).
+- Effektive Rechte = direkte Rolle + Berechtigungen aller Gruppen (transitiv) abzüglich expliziter Deny-Liste.
+
+### 9.2 Rollen
+
+Vier fest eingebaute Rollen; `admin` ist eine Sonderform des `editor`:
+
+| Rolle | Bedeutung | Besonderheit |
+|---|---|---|
+| `superadmin` | Darf alles, systemweit | Geschützt: nicht löschbar, mindestens einer existiert immer |
+| `admin` | `editor` + Verwaltung (Nutzer, Gruppen, Definitionen, Jobs/DLQ) | Sonderform des Editors |
+| `editor` | Pflege von Objekten, Referenzen, Kategorien, Statuswechsel | – |
+| `viewer` | Nur lesen (Read-only) | – |
+
+### 9.3 Berechtigungen
+
+Rollen sind Bündel feingranularer Berechtigungen; Gruppen können weitere Berechtigungen ergänzen.
+
+```text
+object.read / create / update / delete / publish
+reference.read / create / delete
+attribute_definition.read / manage
+attribute_group.manage
+language_tree.read / manage
+job.read / run / manage
+audit.read
+user.read / manage
+group.read / manage
+system.manage
+```
+
+Zuordnung (Auszug):
+
+| Berechtigung | viewer | editor | admin | superadmin |
+|---|---|---|---|---|
+| `object.read` | ✓ | ✓ | ✓ | ✓ |
+| `object.create` / `update` / `delete` / `publish` | – | ✓ | ✓ | ✓ |
+| `reference.create` / `delete` | – | ✓ | ✓ | ✓ |
+| `attribute_definition.manage` | – | – | ✓ | ✓ |
+| `language_tree.manage` | – | – | ✓ | ✓ |
+| `job.run` / `job.manage` | – | – | ✓ | ✓ |
+| `user.manage` / `group.manage` | – | – | ✓ | ✓ |
+| `audit.read` | – | – | ✓ | ✓ |
+| `system.manage` | – | – | – | ✓ |
+
+### 9.4 Gruppen & Vererbung
+
+- `user → group` (Mitgliedschaft) und `group → group` (Hierarchie) werden als **Graph-Relationen** modelliert (`member_of`, `child_of`).
+- Effektive Rechte = Vereinigung aus direkter Rolle + allen Gruppen (transitiv, inkl. Eltern-Gruppen).
+- Konflikte werden über eine explizite `deny_permissions`-Liste gelöst; ansonsten gilt „Allow vereinigt“.
+- `superadmin` umgeht sämtliche Prüfungen.
+
+### 9.5 Daten-Scope (ABAC-light)
+
+Berechtigungen regeln **Operationen**, Scopes regeln **Daten**:
+
+```json
+{
+  "id": "scope_group_webshop",
+  "subject": { "type": "group", "id": "group_webshop" },
+  "rules": [
+    { "field": "type", "operator": "in", "value": ["product"] },
+    { "reference": { "type": "category_member", "to": "category_webshop" } }
+  ]
+}
+```
+
+Der Kern übersetzt diese Regeln beim Lesen in SurrealQL-`WHERE`-Bedingungen (serverseitige Filterung). Ohne Scope-Regeln gelten die Standardrechte der Rolle/Gruppe.
+
+### 9.6 Datenmodell
+
+```json
+// Tabelle user
+{
+  "id": "user_42",
+  "username": "h.mueller",
+  "email": "h.mueller@example.com",
+  "password_hash": "$argon2...",
+  "auth_provider": "local",        // local | oidc (SSO-Vorbereitung)
+  "external_sub": null,            // Subject aus dem IdP bei SSO
+  "roles": ["editor"],
+  "status": "active",              // active | suspended
+  "token_version": 3,              // Invalidierung bestehender JWTs
+  "locale": "de",
+  "created_at": "...",
+  "updated_at": "..."
+}
+
+// Tabelle group
+{
+  "id": "group_webshop",
+  "name": "Webshop-Team",
+  "grant_permissions": ["object.publish"],
+  "deny_permissions": [],
+  "scope": { "rules": [] },
+  "branding": { "theme": "dark", "accent_color": "#2f6f4f" }
+}
+```
+
+- **Superadmin-Schutz:** Die API verweigert `DELETE` und den Rollenentzug, solange der betroffene Benutzer der letzte aktive `superadmin` ist.
+- Passwörter werden mit **argon2** gehasht (Abschnitt 3.1); Passwort-Reset ist optional.
+
+### 9.7 JWT & API
+
+- JWT-Claims: `sub`, `username`, `roles[]`, `groups[]`, `perms[]`, `token_version`, `exp`.
+- Kurzlebige Access-Tokens; `token_version` erlaubt sofortiges Sperren/Logout einzelner Benutzer.
+- Neue Endpunkte: `GET /auth/me`, `POST|PATCH|DELETE /users`, `POST|PATCH|DELETE /groups`, `POST /groups/{id}/members`, `POST /groups/{id}/children` (siehe Abschnitt 5.1).
+- **Service-Accounts:** Der Worker greift über API-Keys/Service-Accounts (Machine-to-Machine) auf den Kern zu, nicht über Personen-Logins.
+
+### 9.8 UI & Branding
+
+- Sichtbarkeit von Menüs/Aktionen anhand der Berechtigungen aus `GET /auth/me` (siehe Abschnitt 11).
+- `group.branding` (Theme, Farben, Logo) wird über die Gruppenhierarchie vererbt und von NiceGUI angewendet. **Kein Multi-Tenant** – reines UI-Styling ohne Auswirkung auf den Daten-Scope.
+- Ein UI-Branding ist noch nicht formuliert; das Feld wird vorbereitet und bleibt zunächst leer.
+
+### 9.9 SSO (spätere Version)
+
+- Ziel: **OIDC** (OpenID Connect); SAML optional für Enterprise-Anbindung.
+- Vorbereitung jetzt: `auth_provider`/`external_sub`, abstrakter Token-Validator (eigene JWTs **oder** IdP-JWTs via JWKS) sowie Mapping von IdP-Gruppen auf interne Gruppen.
+- Meadow bleibt für die **Autorisierung** zuständig; die **Identität** kommt vom IdP.
+
+### 9.10 Audit & Sicherheitshinweise
+
+- Änderungen an Benutzern, Gruppen, Rollen und Scopes werden im `audit_log` protokolliert (Abschnitt 13).
+- Die Rechteprüfung erfolgt zentral im Kern vor jeder Operation – niemals nur im Frontend.
+- Benutzer-/Gruppendaten sind technische Tabellen und werden nicht über das generische `object`-Modell exponiert.
+
+---
+
+## 10. Gespeicherte Suchen & Materialisierte Collections
 
 Meadow PIM sieht die Möglichkeit vor, komplexe Suchanfragen zu speichern und deren Ergebnisse als refreshbare Collections zu materialisieren. Dies ist nicht Teil der ersten Version, wird aber von Anfang an im Datenmodell und in der Architektur berücksichtigt.
 
-### 9.1 Gespeicherte Suchen (Advanced Search)
+### 10.1 Gespeicherte Suchen (Advanced Search)
 
 Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Kriterien einer komplexen Suche in strukturierter Form enthält. Sie kann jederzeit erneut ausgeführt werden und dient als Grundlage für Business Rules, Exporte und die Materialisierung.
 
@@ -1032,7 +1173,7 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
 - Die Ergebnisse können als Liste von Objekt-IDs zurückgegeben werden.
 - Business Rules können eine `saved_search` als Filter verwenden, z. B. „Wende Preisregel auf alle Objekte aus Suche X an“.
 
-### 9.2 Materialisierte Collections
+### 10.2 Materialisierte Collections
 
 Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`), das die Ergebnisliste einer gespeicherten Suche als relationierte Objektmenge abbildet. Dadurch wird das Suchergebnis zu einem **refreshbaren Cache**, der wie eine normale Gruppe/Kategorie verwendet werden kann.
 
@@ -1088,23 +1229,23 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 
 ---
 
-## 10. Benutzeroberfläche (Frontend)
+## 11. Benutzeroberfläche (Frontend)
 
-### 10.1 Architektur
+### 11.1 Architektur
 
 - **Separater Docker-Container** mit Python + NiceGUI.
 - Der NiceGUI-Dienst kommuniziert ausschließlich über die REST-API des Rust-Kerns.
-- **Ein Dienst für alle Benutzer**: Es wird keine getrennte Admin-Oberfläche aufgebaut. Stattdessen werden Menüpunkte, Seiten und Buttons abhängig von der Benutzerrolle (`admin`, `editor`, `viewer`) ein-/ausgeblendet.
+- **Ein Dienst für alle Benutzer**: Es wird keine getrennte Admin-Oberfläche aufgebaut. Stattdessen werden Menüpunkte, Seiten und Buttons abhängig von Benutzerrolle und Berechtigungen (Abschnitt 9) ein-/ausgeblendet.
 - Authentifizierung erfolgt über JWT: NiceGUI nimmt Login-Daten entgegen, fordert ein Token vom Kern an und speichert es in der Session.
 - **Asynchrone Updates** (z. B. Job-Status, Änderungsbenachrichtigungen) werden in der ersten Version über **REST-Polling** realisiert. Eine direkte NATS-Anbindung des Frontends ist für spätere Versionen möglich, wird im MVP aber bewusst vermieden, um die Architektur einfach zu halten.
 
-### 10.2 Vorteile
+### 11.2 Vorteile
 
 - Einheitliche Codebasis, schnelle Entwicklung.
 - Keine doppelte UI-Pflege.
-- Rollenbasierte Zugriffskontrolle einfach umsetzbar (NiceGUI `roles`-Parameter).
+- Rollen- und berechtigungsbasierte Zugriffskontrolle einfach umsetzbar (Berechtigungen aus `GET /auth/me`).
 
-### 10.3 Mehrsprachigkeit der Oberfläche
+### 11.3 Mehrsprachigkeit der Oberfläche
 
 Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**. Dies betrifft ausschließlich die **UI-Texte** (Navigation, Buttons, Meldungen, Hilfe) – nicht die fachlichen Daten. Die Mehrsprachigkeit der Datenobjekte ist bereits über die flexiblen Metadaten gelöst und bleibt davon unabhängig.
 
@@ -1142,13 +1283,13 @@ Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**
 - Die fachlichen Daten bleiben unberührt – Mehrsprachigkeit der Oberfläche ist strikt von der Datenmehrsprachigkeit getrennt.
 - Das System ist von Anfang an auf internationale Nutzer vorbereitet, ohne den Kern zu beeinträchtigen.
 
-### 10.4 Kernfunktionen der Oberfläche (MVP)
+### 11.4 Kernfunktionen der Oberfläche (MVP)
 
 Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbeitsabläufe. Folgende Module sind vorgesehen:
 
 1. **Login & Benutzerverwaltung**
    - Anmeldung mit JWT, Passwort-Reset (optional)
-   - Anzeige und Bearbeitung von Benutzern und Rollen (nur `admin`)
+   - Anzeige und Bearbeitung von Benutzern, Gruppen und Rollen (nur `admin`/`superadmin`)
 
 2. **Objektliste & Suche**
    - Listenansicht aller Objekte, filterbar nach Typ, Status, Kategorie
@@ -1193,11 +1334,11 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 
 ---
 
-## 11. Betrieb & Deployment
+## 12. Betrieb & Deployment
 
 Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**, das für KMU-Umgebungen ausreicht. Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
 
-### 11.1 Container-Übersicht
+### 12.1 Container-Übersicht
 
 | Dienst               | Image                                | Beschreibung                                           |
 |----------------------|--------------------------------------|--------------------------------------------------------|
@@ -1209,7 +1350,7 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 | `object-storage`     | MinIO oder S3-kompatibel             | Binärdaten (Bilder, Exportdateien)                     |
 | `redis` (optional)   | Offizielles Redis-Image              | Cache für Vererbungs-/Sprachauflösung und Suche        |
 
-### 11.2 Netzwerk & Sicherheit
+### 12.2 Netzwerk & Sicherheit
 
 - **Öffentlicher Zugang:** Nur der `pim-frontend`-Container ist über HTTPS erreichbar (Reverse Proxy, z. B. Traefik, Caddy oder Nginx).
 - **Internes Netz:** `pim-core`, `surrealdb`, `nats`, `object-storage`, `redis` und `pim-worker` befinden sich in einem privaten Docker-Netzwerk und sind nicht direkt aus dem Internet erreichbar.
@@ -1222,14 +1363,14 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 - **Secrets:** Zugangsdaten (Datenbank, NATS, Objektstorage, JWT-Secret) werden über Umgebungsvariablen oder Docker Secrets injiziert und nicht in Images eingebacken.
 - **TLS:** Die externe Kommunikation läuft ausschließlich über HTTPS (TLS-Terminierung am Reverse Proxy).
 
-### 11.3 Persistenz & Volumes
+### 12.3 Persistenz & Volumes
 
 - **SurrealDB:** Datenbankdatei in einem benannten Volume oder Host-Pfad (`/data`).
 - **NATS JetStream:** Persistenter Store in einem Volume (`/data/jetstream`).
 - **Objektstorage:** Datenverzeichnis in einem Volume (bei MinIO: `/data`).
 - **Redis (optional):** Persistenz konfigurierbar; für Cache-Nutzung kann AOF/RDB aktiviert oder deaktiviert werden.
 
-### 11.4 Konfiguration
+### 12.4 Konfiguration
 
 Jeder Dienst wird über eine eigene Konfigurationsdatei (z. B. `config.yaml` oder Umgebungsvariablen) parametrisiert. Zentrale Einstellungen im Compose-File:
 
@@ -1241,21 +1382,21 @@ Jeder Dienst wird über eine eigene Konfigurationsdatei (z. B. `config.yaml` ode
 - `LOG_LEVEL` (für alle Dienste)
 - `WEBHOOK_RETRY_MAX`, `WEBHOOK_RETRY_BACKOFF` (Worker)
 
-### 11.5 Skalierung
+### 12.5 Skalierung
 
 - **Rust-Kern:** Kann horizontal skaliert werden (mehrere Instanzen hinter Load Balancer). Achtung: Scheduler darf nur in einer Instanz aktiv sein (Leader-Election oder dedizierte Instanz mit `scheduler.enabled=true`).
 - **Python-Worker:** Skalierung über mehrere Container, die sich eine NATS-Queue-Group teilen (automatische Lastverteilung).
 - **Frontend:** Bei Bedarf mehrere Instanzen hinter Load Balancer (sticky sessions erforderlich, da NiceGUI zustandsbehaftet ist).
 - **SurrealDB:** Im MVP als Einzelinstanz (embedded oder separater Dienst). Cluster-Modus ist möglich, wird aber erst bei größerem Datenaufkommen relevant.
 
-### 11.6 Backup & Wiederherstellung
+### 12.6 Backup & Wiederherstellung
 
 - **SurrealDB:** Regelmäßige Exporte (`SURREAL EXPORT`) oder Dateisicherung des Volumes. Zeitplan über Host-Cron oder externes Tool.
 - **Objektstorage:** Synchronisation der Buckets auf einen zweiten Speicherort (z. B. S3-Replikation, rsync bei MinIO).
 - **NATS JetStream:** Snapshots des Streams optional; für den MVP genügt die Wiederherstellung aus der Quelle (z. B. erneuter Export), da Events rekonstruierbar sind.
 - **Wiederherstellungstests:** Mindestens vierteljährlich durchführen.
 
-### 11.7 Monitoring & Logging
+### 12.7 Monitoring & Logging
 
 - **Logging:**
   - Rust-Kern: strukturierte Logs mit `tracing` (JSON-Format optional)
@@ -1268,13 +1409,13 @@ Jeder Dienst wird über eine eigene Konfigurationsdatei (z. B. `config.yaml` ode
   - Prometheus-Endpunkte im Kern und Worker (z. B. Anzahl Jobs, Event-Durchsatz, API-Latenz)
   - Grafana-Dashboards für Betriebsübersicht
 
-### 11.8 Deployment-Varianten
+### 12.8 Deployment-Varianten
 
 - **MVP (Standard):** Docker Compose auf einer einzelnen VM oder einem kleinen Server. Alle Dienste laufen gemeinsam, getrennt durch interne Netzwerke.
 - **Erweiterte Variante:** Aufteilung auf mehrere VMs (z. B. Datenbank auf separatem Server, Worker auf zweitem Server) mittels Docker Swarm oder manuellem Setup.
 - **Zukunft:** Migration zu Kubernetes (k3s) für automatische Skalierung und Self-Healing.
 
-### 11.9 Ressourcenbedarf (Richtwerte für KMU)
+### 12.9 Ressourcenbedarf (Richtwerte für KMU)
 
 | Dienst          | CPU     | RAM   | Speicher (Volumen) |
 |-----------------|---------|-------|--------------------|
@@ -1290,11 +1431,11 @@ Diese Werte sind als Ausgangspunkt gedacht und hängen stark von Objektanzahl, S
 
 ---
 
-## 12. Versionierung & Audit
+## 13. Versionierung & Audit
 
 Meadow PIM setzt auf eine **schlanke Versionierung** und ein **einfaches Audit-Log**, um Änderungen nachvollziehbar zu machen, ohne die Komplexität einer vollständigen Revisionshistorie zu tragen. Die Prämisse „einfach und performant“ bleibt dabei erhalten.
 
-### 12.1 Versionierung von Objekten
+### 13.1 Versionierung von Objekten
 
 - Jedes Objekt besitzt ein `version`-Feld (Integer), das bei **jeder Änderung** automatisch inkrementiert wird.
 - Zusätzlich werden `created_at`, `updated_at` und `updated_by` gepflegt:
@@ -1316,7 +1457,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** und ein **einfaches Audit-L
 }
 ```
 
-### 12.2 Audit-Log
+### 13.2 Audit-Log
 
 Für die Nachvollziehbarkeit von Änderungen wird eine separate Tabelle `audit_log` geführt. Sie protokolliert **wesentliche Ereignisse**, insbesondere:
 
@@ -1325,6 +1466,7 @@ Für die Nachvollziehbarkeit von Änderungen wird eine separate Tabelle `audit_l
 - Anlegen und Löschen von Objekten
 - Änderungen an Referenzen (z. B. Kategoriezuordnung, Vererbungsrelationen)
 - Konfigurationsänderungen (z. B. Priorität von Vererbungsrelationen)
+- Änderungen an Benutzern, Gruppen, Rollen und Daten-Scopes
 
 **Beispiel eines Audit-Eintrags:**
 
@@ -1352,7 +1494,7 @@ Für die Nachvollziehbarkeit von Änderungen wird eine separate Tabelle `audit_l
 - `timestamp`: Zeitpunkt der Änderung
 - `metadata`: zusätzliche Informationen (Request-ID, Quelle des Ereignisses)
 
-### 12.3 Beziehung zum Eventsystem
+### 13.3 Beziehung zum Eventsystem
 
 Das Eventsystem (Abschnitt 7.2) und das Audit-Log ergänzen sich:
 
@@ -1361,7 +1503,7 @@ Das Eventsystem (Abschnitt 7.2) und das Audit-Log ergänzen sich:
 
 Der Rust-Kern kann das Audit-Log direkt aus den internen CRUD-Operationen befüllen – unabhängig von den publizierten Events. Dadurch ist das Audit-Log auch dann vollständig, wenn Events nicht verarbeitet werden.
 
-### 12.4 Bewusster Verzicht auf vollständige Revisionshistorie
+### 13.4 Bewusster Verzicht auf vollständige Revisionshistorie
 
 Eine **vollständige Revisionshistorie** (Speicherung jedes alten Standes) ist **bewusst nicht** Teil des MVP. Sie würde:
 
@@ -1377,7 +1519,7 @@ Falls gesetzliche oder fachliche Anforderungen eine Revisionshistorie erfordern,
 
 ---
 
-## 13. Entwicklungsplan
+## 14. Entwicklungsplan
 
 ### Phase 1 – Grundgerüst & Datenmodell-Basis
 - Rust-Projekt aufsetzen (Axum, SurrealDB-Anbindung)
@@ -1386,6 +1528,7 @@ Falls gesetzliche oder fachliche Anforderungen eine Revisionshistorie erfordern,
 - **Datenmodell für Sprachbaum vorbereiten** (Tabelle `language_tree`, Fallback-Mechanismus in der API-Struktur)
 - **Attributdefinition um `inheritable`-Flag erweitern**
 - **Referenztypen für Vererbung (`inherits_from`), Kategorisierung (`category_member`) und spätere Collections (`collection_member`) als Konzept festlegen**
+- **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
 
 ### Phase 2 – Kernfunktionen: Metadaten, Suche, Vererbung
 - Flexible Attributgruppen und -definitionen vollständig implementieren
@@ -1423,7 +1566,7 @@ Falls gesetzliche oder fachliche Anforderungen eine Revisionshistorie erfordern,
 
 ### Phase 7 – Frontend (NiceGUI)
 - NiceGUI-Anwendung mit Login, Objektliste, Objektbearbeitung
-- Admin-Seiten für Attributdefinitionen, Jobs, Benutzer
+- Admin-Seiten für Attributdefinitionen, Jobs, Benutzer und Gruppen
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
 - **Anzeige von vererbten Werten und Herkunft in der Objektbearbeitung**
 - **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung**
@@ -1440,10 +1583,11 @@ Falls gesetzliche oder fachliche Anforderungen eine Revisionshistorie erfordern,
 - **Kanalspezifische Freigaben (`release`-Tabelle)**
 - **Unterstützung für externe Klassifizierungsstandards (z. B. ETIM)**
 - **Weitere Sprachen für die Oberfläche (Deutsch, Französisch, …)**
+- **SSO-Anbindung (OIDC) inkl. Gruppen-/Claim-Mapping**
 
 ---
 
-## 14. Zusammenfassung
+## 15. Zusammenfassung
 
 Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB für flexible Dokumente und Graphen, NATS JetStream für zuverlässige Hintergrundverarbeitung und Python für Business Rules sowie die Benutzeroberfläche (NiceGUI). Durch die lose Kopplung der Dienste bleibt das System einfach, wartbar und skalierbar – exakt passend für die Anforderungen eines KMUs.
 
