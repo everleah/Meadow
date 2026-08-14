@@ -135,7 +135,11 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 - **Redis** ist im MVP nicht zwingend, da die Vererbungs- und Sprachauflösung bei geringen Hierarchietiefen auch ohne Cache performant ist. Es wird als optionale Komponente geführt.
 - **Meilisearch/Elasticsearch** sind nicht vorgesehen, da SurrealDB über integrierte Volltextsuche verfügt. Erst bei sehr komplexen Suchanforderungen (z. B. Facetten, Synonyme) könnte eine externe Suchmaschine ergänzt werden.
 - **ETIM/Klassifizierungsstandards** benötigen keine eigene Technologie, sondern werden später als Datenmodell-Erweiterung im Kern abgebildet.
-- **SurrealDB-Lizenz:** Der SurrealDB-Serverkern ist unter der **Business Source License 1.1 (BSL)** lizenziert (SDKs/Clients unter Apache/MIT). Für den produktiven Betrieb bei Kunden sollte die BSL kurz rechtlich geprüft werden – für KMU-Szenarien in der Regel unkritisch, aber dokumentierenswert.
+- **SurrealDB-Lizenz (BSL 1.1):** Der SurrealDB-Serverkern (v3.x) ist unter der **Business Source License 1.1** lizenziert – „source-available“, kein OSI-Open-Source; SDKs/Clients sind dagegen unter Apache/MIT lizenziert. Die BSL erlaubt:
+  - **Entwicklung, Tests, Demo & Evaluierung kostenlos** (ausdrücklich erlaubt),
+  - **Produktivbetrieb kostenlos**, solange SurrealDB **nicht als „Database Service“** angeboten wird (d. h. Dritte dürfen über das Angebot keine Schemas/Tabellen erstellen oder verwalten),
+  - **Change Date 2030-01-01** → danach vollständig unter **Apache 2.0** (Open Source).
+  - Für Meadow PIM (selbst gehostet bei Kunden, normale Anwendungsnutzung) ist die erlaubte Produktionsnutzung damit abgedeckt. Erst bei einem Angebot mit direktem Datenbank-Zugriff für Dritte (DB-as-a-Service) wäre eine kommerzielle Lizenz erforderlich.
 - **jsonwebtoken (v10+/v11):** Bei der Dependency-Einrichtung muss eines der Crypto-Backend-Features gewählt werden (`aws_lc_rs` oder `rust_crypto`), sonst schlägt der Build fehl. Zudem liegt die MSRV des Crates bei 1.88.
 
 ---
