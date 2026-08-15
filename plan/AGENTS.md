@@ -8,6 +8,7 @@ Owns the architecture and technical planning documents for Meadow PIM. This fold
 
 - Owns all files under `plan/`.
 - Currently owned: `plan/meadow-pim-architektur.md`.
+- `plan/detail/` — funktionale Detaildokumente, die die Abschnitte 4–13 des Hauptdokuments vertiefen (Single Source of Truth; das Hauptdokument behält pro Abschnitt eine Zusammenfassung plus Inline-Link).
 
 ## Local Contracts
 
