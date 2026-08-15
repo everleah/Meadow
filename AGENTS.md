@@ -101,6 +101,12 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - When the plan changes, update `plan/meadow-pim-architektur.md` and `plan/AGENTS.md` together, and run the DOX pass.
 - The architecture and planning documents are written in German; keep new planning documents in German unless otherwise directed.
 
+## Coding Guidelines
+
+- All source code is written in English: identifiers (variables, functions, methods, classes, modules, types), comments, and documentation.
+- Code documentation is written in English, including Python docstrings and Rust doc comments (`///`, `//!`).
+- Choose self-documenting names for variables, functions, methods, and classes so code reads clearly without requiring excessive comments.
+
 ## Verification
 
 - No automated verification framework exists yet. Update this section once one exists (e.g. `cargo test`, `pytest`, CI).
