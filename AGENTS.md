@@ -1,7 +1,7 @@
-# DOX framework
+# Meadow PIM — Root DOX Contract
 
-- DOX is highly performant AGENTS.md hierarchy installed here
-- Agent must follow DOX instructions across any edits
+- DOX is a highly performant AGENTS.md hierarchy installed in this repository.
+- Agents must follow DOX instructions across any edits.
 
 ## Core Contract
 
@@ -74,11 +74,41 @@ Default section order:
 5. Run existing verification when relevant
 6. Report any docs intentionally left unchanged and why
 
+## Purpose
+
+Meadow PIM is a modern, performant Product Information Management (PIM) system for small and medium-sized enterprises (SMEs/KMUs). The high-performance core is written in Rust; flexible business logic and the user interface are written in Python. Design principles: simple, performant, and maintainable.
+
+## Ownership
+
+- The root AGENTS.md is the DOX rail for the whole repository.
+- Root-owned files: `README.md`, `LICENSE`, `.gitignore`, `.vsdcode/`, and root-level project documentation.
+- `plan/` is owned by `plan/AGENTS.md` (architecture and technical planning).
+
+## Local Contracts
+
+- `plan/meadow-pim-architektur.md` is the authoritative architecture and technical plan. Implementation decisions must stay consistent with it, or the plan must be updated in the same change.
+- Final technology stack (see plan sections 2–3):
+  - Core: Rust (Edition 2024), Axum + utoipa (OpenAPI), serde/serde_json, jsonwebtoken + argon2, surrealdb client, async-nats, tokio-cron-scheduler.
+  - Data & messaging: SurrealDB (documents + graph), NATS JetStream (queue + event bus), S3-compatible object storage, optional Redis cache.
+  - Python: Python 3.14, NiceGUI (frontend), asyncio + nats-py + httpx (worker), Pydantic (business rules).
+  - Operations: Docker + Docker Compose (MVP), optional Kubernetes (k3s).
+- SurrealDB server core is BSL 1.1 licensed (change date 2030-01-01 → Apache 2.0). Self-hosted production use for Meadow PIM is allowed; offering SurrealDB as a "Database Service" is not.
+- jsonwebtoken v10+/v11 requires a crypto backend feature (`aws_lc_rs` or `rust_crypto`); crate MSRV is 1.88.
+
+## Work Guidance
+
+- The project is currently in the planning phase: no source code exists yet. Keep all implementation work consistent with `plan/meadow-pim-architektur.md`.
+- When the plan changes, update `plan/meadow-pim-architektur.md` and `plan/AGENTS.md` together, and run the DOX pass.
+- The architecture and planning documents are written in German; keep new planning documents in German unless otherwise directed.
+
+## Verification
+
+- No automated verification framework exists yet. Update this section once one exists (e.g. `cargo test`, `pytest`, CI).
+
 ## User Preferences
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
 ## Child DOX Index
 
-- No child AGENTS.md files are needed for the current repository structure.
-- Root-owned files: `README.md`, `LICENSE`, `banner.jpg`, `video-thumbnail.jpg`, and root-level project documentation.
+- `plan/` — architecture & technical planning; owned by `plan/AGENTS.md`.
