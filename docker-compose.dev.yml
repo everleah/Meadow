@@ -1,0 +1,55 @@
+name: meadow-dev
+
+# Local development infrastructure for Meadow PIM.
+# Start with:  docker compose -f docker-compose.dev.yml up -d
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command:
+      - start
+      - --user
+      - root
+      - --pass
+      - root
+      - rocksdb:/data/meadow.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - surrealdb_data:/data
+    healthcheck:
+      test: ["CMD", "surreal", "isready", "--conn", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: nats:latest
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: meadow
+      MINIO_ROOT_PASSWORD: meadow-dev-password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  redis: # optional cache
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  surrealdb_data:
+  nats_data:
+  minio_data:

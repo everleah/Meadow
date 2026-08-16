@@ -1,0 +1,32 @@
+[project]
+name = "meadow-pim"
+version = "0.1.0"
+description = "Meadow PIM — Python services (worker and frontend) and shared business rules"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "nicegui>=3.0",
+    "pydantic>=2.10",
+    "nats-py>=2.9",
+    "httpx>=0.28",
+    "structlog>=24.4",
+    "babel>=2.16",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

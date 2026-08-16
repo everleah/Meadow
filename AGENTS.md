@@ -81,8 +81,9 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 ## Ownership
 
 - The root AGENTS.md is the DOX rail for the whole repository.
-- Root-owned files: `README.md`, `LICENSE`, `.gitignore`, `.vsdcode/`, and root-level project documentation.
+- Root-owned files: `README.md`, `LICENSE`, `.gitignore`, `.editorconfig`, `rustfmt.toml`, `.vscode/`, `Cargo.toml`, `pyproject.toml`, `uv.lock`, `docker-compose.dev.yml`, `scripts/`, and root-level project documentation.
 - `plan/` is owned by `plan/AGENTS.md` (architecture and technical planning).
+- `crates/` is owned by `crates/AGENTS.md` (Rust source code).
 - `tests/` is owned by `tests/AGENTS.md` (automated tests).
 - `docs/` is owned by `docs/AGENTS.md` (non-planning documentation).
 
@@ -99,7 +100,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 
 ## Work Guidance
 
-- The project is currently in the planning phase: no source code exists yet. Keep all implementation work consistent with `plan/meadow-pim-architektur.md`.
+- The repository contains the Rust workspace scaffold (`crates/pim-core/`) and Python packaging (`pyproject.toml` + `uv.lock`); keep all implementation work consistent with `plan/meadow-pim-architektur.md`.
 - When the plan changes, update `plan/meadow-pim-architektur.md` and `plan/AGENTS.md` together, and run the DOX pass.
 - The architecture and planning documents are written in German; keep new planning documents in German unless otherwise directed.
 
@@ -111,18 +112,21 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 
 ## Verification
 
-- No automated verification framework exists yet. Update this section once one exists (e.g. `cargo test`, `pytest`, CI).
+- Rust: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (workspace root).
+- Python: `ruff check`, `pytest` (dev dependencies via uv).
+- No CI pipeline yet; add one once the first tests exist.
 
 ## User Preferences
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
-- **Python-Paketmanager:** `uv` (statt pip). Projekt-venv liegt unter `.venv/`; neue Python-Abhängigkeiten über `uv pip install` verwalten.
+- **Python-Paketmanager:** `uv` (statt pip). Projekt-venv unter `.venv/`; Abhängigkeiten in `pyproject.toml` pflegen (`uv add`/`uv sync`, Lockfile `uv.lock`).
 - **Test-Ablage:** Neue Tests möglichst im `tests/`-Verzeichnis anlegen, um das Wurzelverzeichnis übersichtlich zu halten.
 - **Dokumentations-Ablage:** Dokumentation, die nicht zur Planung gehört, (idealerweise hierarchisch) im `docs/`-Verzeichnis anlegen.
 
 ## Child DOX Index
 
 - `plan/` — architecture & technical planning; owned by `plan/AGENTS.md`.
+- `crates/` — Rust source code; owned by `crates/AGENTS.md`.
 - `tests/` — automated tests; owned by `tests/AGENTS.md`.
 - `docs/` — non-planning documentation; owned by `docs/AGENTS.md`.

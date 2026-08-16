@@ -13,13 +13,17 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
 
 - All new tests are created under `tests/`, not in the repository root (root preference).
 - Test code is source code: identifiers, comments, and documentation in English (root Coding Guidelines).
-- The folder is pre-provisioned; content follows as development starts.
 
 ## Work Guidance
 
-- No concrete test conventions exist yet. When the first tests are added, define the structure (e.g. by layer: Rust core, Python worker, Python frontend) and frameworks (`cargo test`, `pytest`), then update this section.
+- Python tests live here as `test_*.py`, run with pytest (asyncio mode auto, configured in `pyproject.toml`).
+- Rust unit tests live in the crate's `#[cfg(test)]` module (`crates/pim-core/src/main.rs`); Rust integration tests may be added under `tests/`.
+- `test_smoke.py` verifies the core Python dependencies import; keep it as an environment sanity check.
 
 ## Verification
+
+- Python: `pytest` (dev dependencies via uv).
+- Rust: `cargo test` (workspace root).
 
 ## Child DOX Index
 

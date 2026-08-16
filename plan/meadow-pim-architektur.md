@@ -149,9 +149,17 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
 
 - **Python:** Python 3.14 mit Projekt-venv (`.venv/`), verwaltet mit **uv** (Python-Paketmanager in Rust).
-- **Rust:** Toolchain über **rustup** (stable), Edition 2024; MSRV ≥ 1.88 (jsonwebtoken v10+/v11). Stand beim Aufsetzen: rustc 1.97.1.
+- **Rust:** Toolchain über **rustup** (stable), Edition 2024; effektive MSRV ≥ 1.90 (`surrealdb` → `roaring`; `jsonwebtoken` selbst ≥ 1.88). Stand beim Aufsetzen: rustc 1.97.1.
 - **Windows-Linker:** MSVC Build Tools (Visual Studio Community mit Workload „Desktopentwicklung mit C++“) als Linker für `rustc`.
 - **Python-Abhängigkeiten (MVP):** `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel` – Installation in das venv mit `uv pip install --python .venv\Scripts\python.exe nicegui pydantic nats-py httpx structlog babel`.
+
+### 3.6 Repository-Struktur (Ausgangslage)
+
+- `Cargo.toml` (Workspace) + `crates/pim-core/` — Rust-Kern; weitere Rust-Crates unter `crates/`.
+- `pyproject.toml` + `uv.lock` — gemeinsame Python-Abhängigkeiten (Worker + Frontend) mit uv; Dienste später unter `services/`.
+- `docker-compose.dev.yml` — lokale Infrastruktur (SurrealDB, NATS JetStream, MinIO, optional Redis).
+- `scripts/` — Hilfsskripte (`setup.ps1` Dev-Setup, `run-dev.ps1` lokale Infrastruktur).
+- `.vscode/`, `.editorconfig`, `rustfmt.toml` — Editor- und Formatierungskonfiguration.
 
 ---
 
@@ -345,7 +353,9 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-16 – Lokale Entwicklungsumgebung ergänzt (Abschnitt 3.5) und Paketmanager `uv` in den Python-Stack aufgenommen (Abschnitt 3.2): Python-3.14-venv (`.venv/`) über uv verwaltet, Rust-Toolchain via rustup (stable, Edition 2024, MSRV ≥ 1.88), MSVC Build Tools als Windows-Linker; Python-MVP-Abhängigkeiten `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel`.*
+*Zuletzt geändert: 2026-08-16 – Repository-Ausgangslage für die Implementierung ergänzt (Abschnitt 3.6): Rust-Workspace (`Cargo.toml` + `crates/pim-core/`), Python-Paketierung (`pyproject.toml` + `uv.lock`), lokale Infrastruktur (`docker-compose.dev.yml`), Hilfsskripte (`scripts/`); Editor-Konfiguration (`.vscode/`, `.editorconfig`, `rustfmt.toml`).*
+
+*Zuvor geändert: 2026-08-16 – Lokale Entwicklungsumgebung ergänzt (Abschnitt 3.5) und Paketmanager `uv` in den Python-Stack aufgenommen (Abschnitt 3.2): Python-3.14-venv (`.venv/`) über uv verwaltet, Rust-Toolchain via rustup (stable, Edition 2024, MSRV ≥ 1.88), MSVC Build Tools als Windows-Linker; Python-MVP-Abhängigkeiten `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel`.*
 
 *Zuvor geändert: 2026-08-16 – Datentypwechsel-Konvention ergänzt (Abschnitt 4): Datentyp liegt in der Attributdefinition, Werte generisch als JSON; Wechsel als spätere Ausbaustufe (Phase 9) vorgesehen, Kompatibilitätsmatrix & Migrationsregeln im Detaildokument `datenmodell.md`; Entwicklungsplan Phase 9 entsprechend ergänzt.*
 
