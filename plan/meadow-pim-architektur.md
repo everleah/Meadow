@@ -111,6 +111,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 | Komponente                  | Technologie                          | Zweck                                                                 |
 |-----------------------------|--------------------------------------|-----------------------------------------------------------------------|
 | Python-Basis                | Python 3.14                          | Gemeinsame Laufzeit für Worker und Frontend                           |
+| Paketmanager                | uv                                   | Verwaltung der Python-Abhängigkeiten (venv, Lockfile)                 |
 | Business Logic              | Pydantic (Validierung), ggf. FastAPI | Business Rules, berechnete Attribute, Validierung von MEF-Dokumenten  |
 | Worker                      | asyncio, nats-py, httpx              | Ausführung von Jobs (Import/Export), Webhooks, Status-Updates         |
 | Frontend                    | NiceGUI                              | Rollenbasierte Web-Oberfläche                                         |
@@ -142,6 +143,15 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
   - **Change Date 2030-01-01** → danach vollständig unter **Apache 2.0** (Open Source).
   - Für Meadow PIM (selbst gehostet bei Kunden, normale Anwendungsnutzung) ist die erlaubte Produktionsnutzung damit abgedeckt. Erst bei einem Angebot mit direktem Datenbank-Zugriff für Dritte (DB-as-a-Service) wäre eine kommerzielle Lizenz erforderlich.
 - **jsonwebtoken (v10+/v11):** Bei der Dependency-Einrichtung muss eines der Crypto-Backend-Features gewählt werden (`aws_lc_rs` oder `rust_crypto`), sonst schlägt der Build fehl. Zudem liegt die MSRV des Crates bei 1.88.
+
+### 3.5 Lokale Entwicklungsumgebung
+
+Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
+
+- **Python:** Python 3.14 mit Projekt-venv (`.venv/`), verwaltet mit **uv** (Python-Paketmanager in Rust).
+- **Rust:** Toolchain über **rustup** (stable), Edition 2024; MSRV ≥ 1.88 (jsonwebtoken v10+/v11). Stand beim Aufsetzen: rustc 1.97.1.
+- **Windows-Linker:** MSVC Build Tools (Visual Studio Community mit Workload „Desktopentwicklung mit C++“) als Linker für `rustc`.
+- **Python-Abhängigkeiten (MVP):** `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel` – Installation in das venv mit `uv pip install --python .venv\Scripts\python.exe nicegui pydantic nats-py httpx structlog babel`.
 
 ---
 
@@ -335,7 +345,9 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-16 – Datentypwechsel-Konvention ergänzt (Abschnitt 4): Datentyp liegt in der Attributdefinition, Werte generisch als JSON; Wechsel als spätere Ausbaustufe (Phase 9) vorgesehen, Kompatibilitätsmatrix & Migrationsregeln im Detaildokument `datenmodell.md`; Entwicklungsplan Phase 9 entsprechend ergänzt.*
+*Zuletzt geändert: 2026-08-16 – Lokale Entwicklungsumgebung ergänzt (Abschnitt 3.5) und Paketmanager `uv` in den Python-Stack aufgenommen (Abschnitt 3.2): Python-3.14-venv (`.venv/`) über uv verwaltet, Rust-Toolchain via rustup (stable, Edition 2024, MSRV ≥ 1.88), MSVC Build Tools als Windows-Linker; Python-MVP-Abhängigkeiten `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel`.*
+
+*Zuvor geändert: 2026-08-16 – Datentypwechsel-Konvention ergänzt (Abschnitt 4): Datentyp liegt in der Attributdefinition, Werte generisch als JSON; Wechsel als spätere Ausbaustufe (Phase 9) vorgesehen, Kompatibilitätsmatrix & Migrationsregeln im Detaildokument `datenmodell.md`; Entwicklungsplan Phase 9 entsprechend ergänzt.*
 
 *Zuvor geändert: 2026-08-16 – Einheiten-Konvention ergänzt (Abschnitt 4): Speicherung in kanonischer SI-Einheit, Austausch als `{"value", "unit"}`, Umrechnung in der Darstellung; Detaildokument `einheiten.md` neu und um anglo-amerikanische Einheiten (imperial/US customary) ergänzt; `datenmodell.md`, `api-design.md`, `frontend.md`, `integration-eventsystem.md` und Entwicklungsplan (Phase 1, 6, 7) entsprechend ergänzt.*
 

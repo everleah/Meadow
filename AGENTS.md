@@ -115,6 +115,8 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
+- **Python-Paketmanager:** `uv` (statt pip). Projekt-venv liegt unter `.venv/`; neue Python-Abhängigkeiten über `uv pip install` verwalten.
+
 ## Child DOX Index
 
 - `plan/` — architecture & technical planning; owned by `plan/AGENTS.md`.
