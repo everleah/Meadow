@@ -150,6 +150,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:**
 > - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche (4.1–4.3)
+> - [einheiten.md](detail/einheiten.md) — Einheiten & Umrechnung für quantifizierte Werte (4)
 > - [sprachbaum-mehrsprachigkeit.md](detail/sprachbaum-mehrsprachigkeit.md) — Sprachbaum für sprachabhängige Daten (4.4)
 > - [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung & Konfliktlösung (4.5, 4.7)
 > - [kategorisierung.md](detail/kategorisierung.md) — Kategorisierung und Gruppierung (4.6)
@@ -161,6 +162,14 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 3. **Darstellung:** Die GUI zeigt Datums-/Zeitwerte **lokalisiert** (Zeitzone + Format des Benutzers) an; der gespeicherte Wert bleibt unverändert UTC.
 
 > **Details:** [datenmodell.md](detail/datenmodell.md#datumswerte) — Datumswerte-Konvention (Speicherung & Austausch); [frontend.md](detail/frontend.md) — lokalisierte Darstellung.
+
+**Einheiten-Konvention (verbindlich):**
+
+1. **Speicherung:** Werte mit Einheit werden **in der kanonischen SI-Einheit** der jeweiligen Dimension gespeichert (z. B. Länge in `m`, Spannung in `V`, Leistung in `W`, Temperatur in `K`). Gespeichert wird die reine Zahl; die Einheit ergibt sich aus der Attributdefinition (`unit_id`).
+2. **Austausch:** REST-API, MEF und Events übertragen quantifizierte Werte **immer mit Einheit** als `{"value": …, "unit": …}`; beim Empfang wird in die kanonische SI-Einheit umgerechnet, beim Senden in die angeforderte bzw. Standard-Einheit.
+3. **Darstellung:** Die GUI zeigt den Wert in der gewählten Einheit an (Umrechnung on-the-fly); Eingaben werden vor dem Speichern in die kanonische SI-Einheit umgerechnet. Alle SI-Einheiten, übliche Darstellungen und anglo-amerikanische Einheiten (imperial/US customary) werden per Default mitgeliefert; eigene Einheiten (Zeichen + Umrechnung) sind auf Basis einer SI-Einheit definierbar.
+
+> **Details:** [einheiten.md](detail/einheiten.md) — Einheiten-Katalog, Umrechnung & eigene Einheiten; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [frontend.md](detail/frontend.md) — Darstellung; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF.
 
 ---
 
@@ -244,6 +253,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Basis-CRUD für Objekte und Attributdefinitionen
 - OpenAPI-Dokumentation generieren
 - **Datenmodell für Sprachbaum vorbereiten** (Tabelle `language_tree`, Fallback-Mechanismus in der API-Struktur)
+- **Einheiten-Katalog (`unit`-Tabelle) mit allen SI-Einheiten und üblichen Darstellungen vorbereiten; Attributdefinition um `unit_id`/`display_unit_id` erweitern**
 - **Attributdefinition um `inheritable`-Flag erweitern**
 - **Referenztypen für Vererbung (`inherits_from`), Kategorisierung (`category_member`) und spätere Collections (`collection_member`) als Konzept festlegen**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
@@ -277,6 +287,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 
 ### Phase 6 – Integration & Eventsystem
 - **Meadow Exchange Format (MEF) als Standard-Import/Export-Format implementieren**
+- **Quantifizierte Werte im MEF (`{"value": …, "unit": …}`) mit Normalisierung auf die kanonische SI-Einheit unterstützen**
 - **Inbound-Konnektor `json_import` und Outbound-Konnektor `json_export` umsetzen**
 - **CRUD-Events im Rust-Kern erzeugen und in NATS JetStream publizieren**
 - **Webhook-Outbound-Konnektor mit Filterung und Retry-Logik zur Middleware entwickeln**
@@ -286,6 +297,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - NiceGUI-Anwendung mit Login, Objektliste, Objektbearbeitung
 - Admin-Seiten für Attributdefinitionen, Jobs, Benutzer und Gruppen
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
+- **Eingabe und Anzeige von Werten mit Einheit (Einheiten-Auswahl, automatische Umrechnung in der Darstellung)**
 - **Anzeige von vererbten Werten und Herkunft in der Objektbearbeitung**
 - **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung**
 
@@ -313,4 +325,6 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-16 – Datumswerte-Konvention ergänzt (Abschnitt 4): UTC-Speicherung in SurrealDB, ISO-8601-Austausch über API/Inbound/Outbound, lokalisierte Darstellung in der GUI; Detaildokumente `datenmodell.md`, `api-design.md`, `integration-eventsystem.md`, `frontend.md` entsprechend ergänzt.*
+*Zuletzt geändert: 2026-08-16 – Einheiten-Konvention ergänzt (Abschnitt 4): Speicherung in kanonischer SI-Einheit, Austausch als `{"value", "unit"}`, Umrechnung in der Darstellung; Detaildokument `einheiten.md` neu und um anglo-amerikanische Einheiten (imperial/US customary) ergänzt; `datenmodell.md`, `api-design.md`, `frontend.md`, `integration-eventsystem.md` und Entwicklungsplan (Phase 1, 6, 7) entsprechend ergänzt.*
+
+*Zuvor geändert: 2026-08-16 – Datumswerte-Konvention ergänzt (Abschnitt 4): UTC-Speicherung in SurrealDB, ISO-8601-Austausch über API/Inbound/Outbound, lokalisierte Darstellung in der GUI; Detaildokumente `datenmodell.md`, `api-design.md`, `integration-eventsystem.md`, `frontend.md` entsprechend ergänzt.*

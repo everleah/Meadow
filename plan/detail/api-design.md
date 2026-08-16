@@ -21,6 +21,11 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | GET     | `/objects/{id}/graph?depth=3`     | Graph-Traversierung ab Objekt                   |
 | GET     | `/attribute-groups`               | Attributgruppen verwalten                       |
 | POST    | `/attribute-definitions`          | Neue Attributdefinition anlegen                 |
+| GET     | `/units`                          | Einheiten-Katalog auflisten (Filter: `dimension`, `system`) |
+| POST    | `/units`                          | Benutzerdefinierte Einheit anlegen              |
+| PATCH   | `/units/{id}`                     | Benutzerdefinierte Einheit ändern               |
+| DELETE  | `/units/{id}`                     | Benutzerdefinierte Einheit löschen (nur `custom`) |
+| GET     | `/units/convert`                  | Wert zwischen Einheiten umrechnen (`value`, `from`, `to`) |
 | POST    | `/jobs/{job_def_id}/run`          | Job manuell starten                             |
 | GET     | `/jobs/{job_def_id}/runs`         | Job-Historie abrufen                            |
 | PATCH   | `/jobs/runs/{run_id}`             | Status eines Job-Runs aktualisieren (Worker)    |
@@ -44,3 +49,12 @@ Alle Zeitwerte in Requests und Responses folgen der Datumswerte-Konvention (Absc
 - Strings **ohne** Zeitzonenangabe werden mit **HTTP 400** abgelehnt.
 - Der Kern **normalisiert** eingehende Werte auf UTC; ausgehende Werte werden als UTC (`…Z`) geliefert.
 - Zeitwerte gelten für Systemfelder (`created_at`, `updated_at`, `started_at`, `finished_at`, `timestamp`) sowie für Attribute vom Typ `date`/`datetime` (Attributdefinitionen, Abschnitt 4).
+
+## Werte mit Einheiten in der API
+
+Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.md](einheiten.md)):
+
+- Werte mit Einheit werden **immer als Objekt** übertragen: `{"value": 12.5, "unit": "mm"}`. Fehlt `unit`, gilt die kanonische SI-Einheit der Dimension.
+- Beim **Schreiben** (z. B. `POST /objects`, `PATCH /objects/{id}`) rechnet der Kern in die kanonische SI-Einheit um; gespeichert wird die reine Zahl.
+- Beim **Lesen** liefert der Kern den Wert in der Standard-Anzeigeeinheit der Attributdefinition (`display_unit_id`); mit `?unit=<symbol>` kann eine andere Einheit derselben Dimension angefordert werden.
+- Der Einheiten-Katalog (`/units`) enthält alle SI-Einheiten und üblichen Darstellungen (schreibgeschützt) sowie benutzerdefinierte Einheiten. `GET /units/convert` rechnet einen Wert zwischen zwei Einheiten um und liefert `{"value": …, "unit": …}` zurück.

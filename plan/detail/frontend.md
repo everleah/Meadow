@@ -58,6 +58,12 @@ Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**
 - Die Anzeige erfolgt **lokalisiert**: Datum/Zeit werden in der Zeitzone und im Format des Benutzers dargestellt (über `babel`), z. B. `14.08.2026, 12:00` für `de-DE`.
 - Benutzereingaben werden zur Speicherung nach **UTC normalisiert** und als ISO-8601-String an die API gesendet; der gespeicherte Wert bleibt unverändert UTC.
 
+**Werte mit Einheiten in der Oberfläche:**
+
+- Die GUI erhält quantifizierte Werte von der API als `{"value": …, "unit": …}` – in der Standard-Anzeigeeinheit der Attributdefinition (`display_unit_id`) bzw. in der per `?unit=` angeforderten Einheit.
+- Die Anzeige erfolgt mit Symbol (z. B. `12,5 mm`); ein Einheiten-Umschalter am Eingabefeld erlaubt Darstellung und Eingabe in einer anderen Einheit derselben Dimension.
+- Eingaben werden vor dem Speichern in die kanonische SI-Einheit umgerechnet und als `{"value": …, "unit": …}` an die API gesendet; gespeichert wird die reine Zahl in der kanonischen Einheit.
+
 **Vorteile dieses Ansatzes:**
 
 - Neue Sprachen können später durch einfaches Hinzufügen einer Übersetzungsdatei ergänzt werden.
@@ -80,6 +86,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 3. **Objektbearbeitung**
    - Formular zur Anzeige und Bearbeitung der flexiblen Attribute
    - Mehrsprachige Eingabefelder gemäß Sprachbaum (z. B. Reiter pro Sprache)
+   - Eingabe und Anzeige quantifizierter Werte mit Einheit (Einheiten-Auswahl, automatische Umrechnung)
    - Anzeige **vererbter Werte** inkl. Herkunft (Quelle) und Warnhinweis bei Konflikten
    - Setzen von leeren Werten zur Vererbungsunterbrechung
    - Statuswechsel gemäß Zustandsmaschine (Workflow)
@@ -87,7 +94,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 
 4. **Attributdefinitionen & -gruppen**
    - Verwaltung von Attributgruppen und -definitionen (nur `admin` oder `editor`)
-   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit und `inheritable`-Flag
+   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag und Einheit (`unit_id`/`display_unit_id`)
 
 5. **Kategorien & Relationen**
    - Anlegen und Hierarchisieren von Kategorien als normale Objekte

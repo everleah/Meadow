@@ -9,6 +9,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
 - Owns all files under `plan/detail/`.
 - Owned documents, one per main-document section:
   - `datenmodell.md` — data model (section 4)
+  - `einheiten.md` — units & measurement units (section 4)
   - `sprachbaum-mehrsprachigkeit.md` — language tree & multilingual data (section 4.4)
   - `datenwertvererbung.md` — data value inheritance & conflict resolution (sections 4.5, 4.7)
   - `kategorisierung.md` — categorization & grouping (section 4.6)

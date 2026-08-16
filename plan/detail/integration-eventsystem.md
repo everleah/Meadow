@@ -26,7 +26,8 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
           "en": "Example product",
           "de": "Beispielprodukt"
         },
-        "price": 19.99
+        "price": 19.99,
+        "width": { "value": 12.5, "unit": "mm" }
       },
       "status": "draft",
       "references": [
@@ -58,6 +59,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 - Nicht übergebene Attribute bleiben unverändert (bei Update) bzw. leer (bei Neuanlage).
 - Die ID ist optional: Fehlt sie, wird eine neue vergeben. Vorhandene IDs ermöglichen Upserts.
 - Alle Datums- und Zeitwerte (z. B. `created_at`, Event-`timestamp`) werden als **ISO-8601-String mit Zeitzonenangabe** übertragen und beim Empfang nach UTC normalisiert (Konvention gemäß [datenmodell.md](datenmodell.md)).
+- Quantifizierte Werte (Zahl + Einheit) werden als Objekt `{"value": 12.5, "unit": "mm"}` übertragen; beim Import rechnet der Worker in die kanonische SI-Einheit um, beim Export wird in die Standard-Anzeigeeinheit (bzw. die angeforderte Einheit) umgerechnet (Konvention gemäß [einheiten.md](einheiten.md)).
 
 **Verwendung im Inbound:**
 
