@@ -84,6 +84,7 @@ Das System besteht aus mehreren Diensten, die lose gekoppelt über REST und eine
 **Abgrenzung zur Pflege- und Kategorienstruktur:**
 
 Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen wie Sprachbaum, Datenwertvererbung und Kategorisierung sind **logische Modelle innerhalb des Kerns** und erfordern keine zusätzlichen Dienste. Sie werden in den Abschnitten 4.4 bis 4.7 detailliert beschrieben.
+
 ---
 
 ## 3. Technologie-Stack (final, erweitert)
