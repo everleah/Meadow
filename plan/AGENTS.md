@@ -7,8 +7,8 @@ Owns the architecture and technical planning documents for Meadow PIM. This fold
 ## Ownership
 
 - Owns all files under `plan/`.
-- Currently owned: `plan/meadow-pim-architektur.md`.
-- `plan/detail/` — funktionale Detaildokumente, die die Abschnitte 4–13 des Hauptdokuments vertiefen (Single Source of Truth; das Hauptdokument behält pro Abschnitt eine Zusammenfassung plus Inline-Link).
+- `plan/meadow-pim-architektur.md` — main architecture and technical plan.
+- `plan/detail/` — owned by `plan/detail/AGENTS.md` (detail documents deepening main-document sections 4–13).
 
 ## Local Contracts
 
@@ -24,14 +24,17 @@ Owns the architecture and technical planning documents for Meadow PIM. This fold
   - deployment and operations (section 12)
   - development phases 1–9 (section 14)
 - The document is written in German; keep new planning documents in German unless otherwise directed.
+- Detail documents under `plan/detail/` deepen main-document sections 4–13. Each detail document is the single source of truth for its topic; the main document keeps a summary per section plus an inline link and must stay consistent with the detail document.
 
 ## Work Guidance
 
 - When the architecture changes, update `meadow-pim-architektur.md` in the same change and keep the existing section numbering and headings intact.
 - Record the change date at the end of the document when a substantive change is made.
+- When a main-document section outgrows a summary, move the detail into the matching file under `plan/detail/` and leave a summary plus inline link in the main document.
+- Keep each detail document's header block (`Hauptdokument`, `Relevante Phasen`, `Stand`) up to date.
 
 ## Verification
 
 ## Child DOX Index
 
-- No child AGENTS.md files are needed within `plan/`.
+- `detail/` — detail documents deepening main-document sections 4–13; owned by `detail/AGENTS.md`.

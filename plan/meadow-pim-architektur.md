@@ -215,7 +215,7 @@ Die Weboberfläche läuft als separater Docker-Container mit Python + NiceGUI un
 
 ## 12. Betrieb & Deployment
 
-Alle Komponenten werden als Docker-Container betrieben; die Standardauslieferung erfolgt als **Docker-Compose-Setup**, Kubernetes (k3s) ist vorbereitet. Details zu Containern, Netzwerk, Konfiguration, Skalierung, Backup und Monitoring stehen im Detaildokument.
+Alle Komponenten werden als Docker-Container betrieben; die Standardauslieferung erfolgt als **Docker-Compose-Setup**, Kubernetes (k3s) ist vorbereitet. Details zu Containern, Netzwerk, Konfiguration, Skalierung, Backup und Monitoring stehen im Detaildokument. Konkretes Ziel für das erste Produktions-Deployment ist der VPS unter `example.com` mit dem dort laufenden Traefik (externes Docker-Netz `traefik-net`); die Detail-Spezifikation inkl. Runbook steht im Detaildokument.
 
 > **Details:** [detail/betrieb-deployment.md](detail/betrieb-deployment.md)
 
