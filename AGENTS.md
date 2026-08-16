@@ -83,6 +83,8 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - The root AGENTS.md is the DOX rail for the whole repository.
 - Root-owned files: `README.md`, `LICENSE`, `.gitignore`, `.vsdcode/`, and root-level project documentation.
 - `plan/` is owned by `plan/AGENTS.md` (architecture and technical planning).
+- `tests/` is owned by `tests/AGENTS.md` (automated tests).
+- `docs/` is owned by `docs/AGENTS.md` (non-planning documentation).
 
 ## Local Contracts
 
@@ -116,7 +118,11 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 When the user requests a durable behavior change, record it here or in the relevant child AGENTS.md
 
 - **Python-Paketmanager:** `uv` (statt pip). Projekt-venv liegt unter `.venv/`; neue Python-Abhängigkeiten über `uv pip install` verwalten.
+- **Test-Ablage:** Neue Tests möglichst im `tests/`-Verzeichnis anlegen, um das Wurzelverzeichnis übersichtlich zu halten.
+- **Dokumentations-Ablage:** Dokumentation, die nicht zur Planung gehört, (idealerweise hierarchisch) im `docs/`-Verzeichnis anlegen.
 
 ## Child DOX Index
 
 - `plan/` — architecture & technical planning; owned by `plan/AGENTS.md`.
+- `tests/` — automated tests; owned by `tests/AGENTS.md`.
+- `docs/` — non-planning documentation; owned by `docs/AGENTS.md`.
