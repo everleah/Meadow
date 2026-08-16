@@ -1,7 +1,7 @@
 # Datenmodell
 
 - **Hauptdokument:** Abschnitt [4. Datenmodell](../meadow-pim-architektur.md#4-datenmodell)
-- **Relevante Phasen:** Phase 1–3
+- **Relevante Phasen:** Phase 1–3, 9
 - **Stand:** Entwurf
 
 ## Grundprinzip
@@ -21,6 +21,37 @@ Alle Datums- und Zeitwerte folgen einer einheitlichen, verbindlichen Konvention 
 ## Werte mit Einheiten
 
 Numerische technische Werte (z. B. Breite, Spannung, Leistung) können eine Einheit tragen. Der zugehörige **Einheiten-Katalog** liegt in der Tabelle `unit`; Speicher-Konvention (kanonische SI-Einheit), Umrechnung und benutzerdefinierte Einheiten sind im Detaildokument [einheiten.md](einheiten.md) beschrieben. In der Tabelle `object` werden solche Werte als **reine Zahlen in der kanonischen SI-Einheit** gespeichert; die Einheit ergibt sich aus der Attributdefinition (`unit_id`, optional `display_unit_id`).
+
+## Datentypwechsel
+
+Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `number`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate.
+
+**Grundsatz:** Der Datentyp ist eine **Eigenschaft der Definition, nicht der gespeicherten Werte**. Ein Wechsel des Datentyps (inkl. Umstellung aller vorhandenen Werte) ist daher konzeptionell möglich, wird aber in der ersten Version **nicht** unterstützt und ist als spätere Ausbaustufe (Phase 9) vorgesehen.
+
+**Entwurfsregeln (verbindlich – damit ein späterer Wechsel möglich und nicht erschwert wird):**
+
+1. Werte werden **roh und umkehrbar** als JSON gespeichert: Zahl als Zahl, Text als String, Mehrsprachig als Sprachobjekt, Einheitenbehaftet als kanonische SI-Zahl. Keine Stringifizierung von Zahlen, keine Auflösung des Sprachobjekts auf eine Einzelsprache beim Speichern.
+2. Der Typ wird **ausschließlich** in der `attribute_definition` geführt und nirgends redundant am Wert „festgeschrieben“.
+3. Validierung und Umrechnung erfolgen **zur Lese-/Schreibzeit** anhand der Definition; die gespeicherten Rohwerte bleiben dabei erhalten bzw. normalisiert, aber umkehrbar.
+4. Die `type`-Werteliste ist **offen und erweiterbar**: Neue Typen dürfen ergänzt, bestehende Typen nicht umbenannt werden (Stabilität für bestehende Daten, Exporte und Events).
+
+**Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Ein späterer Wechsel (Phase 9) umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und die Prüfung gegen die folgende Matrix:
+
+| von \ nach | `text` | `number` | `boolean` | `date` | `enum` | `reference` |
+|---|---|---|---|---|---|---|
+| `text` | — | ✅ nur parsebare Werte | ⚠️ nur `true`/`false`-konforme Werte | ⚠️ nur ISO-8601-parsebare Werte | ⚠️ nur Werte aus der Werteliste | ⚠️ nur gültige Objekt-IDs |
+| `number` | ✅ verlustfrei | — | ❌ | ❌ | ⚠️ nur Werte aus der Werteliste | ❌ |
+| `boolean` | ✅ verlustfrei | ❌ | — | ❌ | ⚠️ nur Werte aus der Werteliste | ❌ |
+| `date` | ✅ verlustfrei (ISO-8601) | ❌ | ❌ | — | ⚠️ nur Werte aus der Werteliste | ❌ |
+| `enum` | ✅ verlustfrei | ❌ | ❌ | ❌ | — | ❌ |
+| `reference` | ✅ verlustfrei (als ID-String) | ❌ | ❌ | ❌ | ❌ | — |
+
+- ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (bei nicht konformen Werten Ablehnung oder Teilmigration mit Löschung); ❌ = nicht sinnvoll / nicht unterstützt.
+
+**Modifikatoren gelten als Teil des Typs:**
+
+- **Mehrsprachigkeit** (`multilingual`): An- bzw. Abschalten ändert die **Wertstruktur** (String ↔ Sprachobjekt) und zählt daher als Datentypwechsel. `text → text (multilingual)` erfordert das Einpacken der Werte in ein Sprachobjekt (z. B. unter `root`); der Rückweg erfordert die Auswahl genau einer Sprache und ist für die übrigen Sprachen verlustbehaftet.
+- **Einheit** (`unit_id`/`display_unit_id`): `number → number (mit Einheit)` interpretiert die vorhandenen Zahlen als kanonische SI-Werte der gewählten Dimension (verlustfrei, sofern die Dimension passt); `number (mit Einheit) → number` entfernt die Einheits-Information aus der Definition, die Werte bleiben als kanonische SI-Zahlen erhalten.
 
 ## Tabellen in SurrealDB
 
@@ -75,6 +106,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 }
 ```
 
+- `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung (Abschnitt 4.5) einbezogen wird.
 - Weitere optionale Felder: `multilingual`, `enum_values`, `default_value`, `unit_id`, `display_unit_id`, `description`. Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 

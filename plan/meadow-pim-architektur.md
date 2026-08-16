@@ -171,6 +171,14 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:** [einheiten.md](detail/einheiten.md) — Einheiten-Katalog, Umrechnung & eigene Einheiten; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [frontend.md](detail/frontend.md) — Darstellung; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF.
 
+**Attribut-Datentypen & Datentypwechsel (vorgesehen, nicht im MVP):**
+
+1. **Typ liegt in der Definition:** Der Datentyp eines Attributs (`type` in `attribute_definition`: `text`, `number`, `boolean`, `date`, `enum`, `reference`) plus optionale Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) bestimmen Speicherung und Validierung. Die Werte werden **generisch als JSON** im `attributes`-Feld gespeichert – es gibt keine typgebundene Spaltenstruktur.
+2. **Wechsel später möglich:** Ein Wechsel des Datentyps ist eine **spätere Ausbaustufe** (Phase 9) und in der ersten Version **nicht** verfügbar. Datenmodell und API werden so angelegt, dass ein späterer Wechsel inkl. Umstellung vorhandener Werte **möglich bleibt** (keine typgebundenen Speicherformate, Typ als reine Definitionseigenschaft, Werte roh/umkehrbar im JSON).
+3. **Nicht jeder Wechsel ist möglich oder verlustfrei:** Zulässige bzw. verlustfreie Übergänge werden über eine Kompatibilitätsmatrix geregelt (z. B. `number → text` verlustfrei, `text → number` nur bei parsebaren Werten, `reference → text` id-basiert). Ein Wechsel erfordert eine **Migration der vorhandenen Werte** und einen **Audit-Log-Eintrag**.
+
+> **Details:** [datenmodell.md](detail/datenmodell.md#datentypwechsel) — Kompatibilitätsmatrix, Migration & Entwurfsregeln.
+
 ---
 
 ## 5. API-Design (OpenAPI REST)
@@ -312,6 +320,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Erweiterte Konfliktbehandlung in der UI (bevorzugte Quelle, visuelle Markierung)**
 - **Kanalspezifische Freigaben (`release`-Tabelle)**
 - **Unterstützung für externe Klassifizierungsstandards (z. B. ETIM)**
+- **Datentypwechsel für Attributdefinitionen inkl. Migration vorhandener Werte (Kompatibilitätsmatrix, verlustfreie vs. verlustbehaftete Übergänge)**
 - **Weitere Sprachen für die Oberfläche (Deutsch, Französisch, …)**
 - **SSO-Anbindung (OIDC) inkl. Gruppen-/Claim-Mapping**
 
@@ -325,6 +334,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-16 – Einheiten-Konvention ergänzt (Abschnitt 4): Speicherung in kanonischer SI-Einheit, Austausch als `{"value", "unit"}`, Umrechnung in der Darstellung; Detaildokument `einheiten.md` neu und um anglo-amerikanische Einheiten (imperial/US customary) ergänzt; `datenmodell.md`, `api-design.md`, `frontend.md`, `integration-eventsystem.md` und Entwicklungsplan (Phase 1, 6, 7) entsprechend ergänzt.*
+*Zuletzt geändert: 2026-08-16 – Datentypwechsel-Konvention ergänzt (Abschnitt 4): Datentyp liegt in der Attributdefinition, Werte generisch als JSON; Wechsel als spätere Ausbaustufe (Phase 9) vorgesehen, Kompatibilitätsmatrix & Migrationsregeln im Detaildokument `datenmodell.md`; Entwicklungsplan Phase 9 entsprechend ergänzt.*
+
+*Zuvor geändert: 2026-08-16 – Einheiten-Konvention ergänzt (Abschnitt 4): Speicherung in kanonischer SI-Einheit, Austausch als `{"value", "unit"}`, Umrechnung in der Darstellung; Detaildokument `einheiten.md` neu und um anglo-amerikanische Einheiten (imperial/US customary) ergänzt; `datenmodell.md`, `api-design.md`, `frontend.md`, `integration-eventsystem.md` und Entwicklungsplan (Phase 1, 6, 7) entsprechend ergänzt.*
 
 *Zuvor geändert: 2026-08-16 – Datumswerte-Konvention ergänzt (Abschnitt 4): UTC-Speicherung in SurrealDB, ISO-8601-Austausch über API/Inbound/Outbound, lokalisierte Darstellung in der GUI; Detaildokumente `datenmodell.md`, `api-design.md`, `integration-eventsystem.md`, `frontend.md` entsprechend ergänzt.*

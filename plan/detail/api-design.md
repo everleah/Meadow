@@ -58,3 +58,8 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 - Beim **Schreiben** (z. B. `POST /objects`, `PATCH /objects/{id}`) rechnet der Kern in die kanonische SI-Einheit um; gespeichert wird die reine Zahl.
 - Beim **Lesen** liefert der Kern den Wert in der Standard-Anzeigeeinheit der Attributdefinition (`display_unit_id`); mit `?unit=<symbol>` kann eine andere Einheit derselben Dimension angefordert werden.
 - Der Einheiten-Katalog (`/units`) enthält alle SI-Einheiten und üblichen Darstellungen (schreibgeschützt) sowie benutzerdefinierte Einheiten. `GET /units/convert` rechnet einen Wert zwischen zwei Einheiten um und liefert `{"value": …, "unit": …}` zurück.
+
+## Attributtypen & Datentypwechsel
+
+- Der Datentyp eines Attributs wird über `type` in der Attributdefinition festgelegt; die API behandelt `type` als **erweiterbare Werteliste** (neue Typen dürfen ergänzt, bestehende nicht umbenannt werden).
+- In der ersten Version ist **kein** Endpunkt zum Wechseln des Datentyps vorgesehen. Ein späterer Wechsel (Phase 9) erfordert eine Migration der vorhandenen Werte, einen Audit-Log-Eintrag und folgt der Kompatibilitätsmatrix in [datenmodell.md](datenmodell.md#datentypwechsel).
