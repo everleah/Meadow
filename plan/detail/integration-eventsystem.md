@@ -57,6 +57,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 - `status` am Objekt kann gesetzt werden, um Workflow-Status zu importieren. Fehlt es, gilt der Standard `draft`.
 - Nicht übergebene Attribute bleiben unverändert (bei Update) bzw. leer (bei Neuanlage).
 - Die ID ist optional: Fehlt sie, wird eine neue vergeben. Vorhandene IDs ermöglichen Upserts.
+- Alle Datums- und Zeitwerte (z. B. `created_at`, Event-`timestamp`) werden als **ISO-8601-String mit Zeitzonenangabe** übertragen und beim Empfang nach UTC normalisiert (Konvention gemäß [datenmodell.md](datenmodell.md)).
 
 **Verwendung im Inbound:**
 

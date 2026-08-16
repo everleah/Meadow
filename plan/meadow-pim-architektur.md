@@ -154,6 +154,14 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 > - [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung & Konfliktlösung (4.5, 4.7)
 > - [kategorisierung.md](detail/kategorisierung.md) — Kategorisierung und Gruppierung (4.6)
 
+**Datumswerte-Konvention (verbindlich):**
+
+1. **Speicherung:** Alle Datums- und Zeitwerte werden **immer als UTC** in SurrealDB gespeichert (`created_at`, `updated_at`, `started_at`, `finished_at`, Audit-`timestamp`, …). Lokale Zeitzonen sind keine Sache der Speicherung.
+2. **Austausch:** REST-API, Inbound und Outbound verwenden **immer ISO-8601-Strings** mit Zeitzonenangabe (z. B. `2026-08-14T10:00:00Z` bzw. `…+02:00`); Werte mit Offset werden beim Empfang nach UTC normalisiert.
+3. **Darstellung:** Die GUI zeigt Datums-/Zeitwerte **lokalisiert** (Zeitzone + Format des Benutzers) an; der gespeicherte Wert bleibt unverändert UTC.
+
+> **Details:** [datenmodell.md](detail/datenmodell.md#datumswerte) — Datumswerte-Konvention (Speicherung & Austausch); [frontend.md](detail/frontend.md) — lokalisierte Darstellung.
+
 ---
 
 ## 5. API-Design (OpenAPI REST)
@@ -305,4 +313,4 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-15 – Detaildokumente ausgelagert: `plan/detail/` (13 Dokumente); Abschnitte 4–13 im Hauptdokument auf Zusammenfassung + Inline-Link gekürzt.*
+*Zuletzt geändert: 2026-08-16 – Datumswerte-Konvention ergänzt (Abschnitt 4): UTC-Speicherung in SurrealDB, ISO-8601-Austausch über API/Inbound/Outbound, lokalisierte Darstellung in der GUI; Detaildokumente `datenmodell.md`, `api-design.md`, `integration-eventsystem.md`, `frontend.md` entsprechend ergänzt.*

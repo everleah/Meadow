@@ -52,6 +52,12 @@ Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**
 - Alle UI-Elemente (Labels, Buttons, Dialoge) verwenden diese Funktion.
 - Für Datums-, Zahlen- und Währungsformatierung werden die länderspezifischen Einstellungen der gewählten Sprache berücksichtigt (z. B. mit `babel`).
 
+**Datumswerte in der Oberfläche:**
+
+- Die GUI erhält Zeitwerte von der REST-API **immer als ISO-8601-UTC-String** (Konvention gemäß Abschnitt 4 / [datenmodell.md](datenmodell.md)).
+- Die Anzeige erfolgt **lokalisiert**: Datum/Zeit werden in der Zeitzone und im Format des Benutzers dargestellt (über `babel`), z. B. `14.08.2026, 12:00` für `de-DE`.
+- Benutzereingaben werden zur Speicherung nach **UTC normalisiert** und als ISO-8601-String an die API gesendet; der gespeicherte Wert bleibt unverändert UTC.
+
 **Vorteile dieses Ansatzes:**
 
 - Neue Sprachen können später durch einfaches Hinzufügen einer Übersetzungsdatei ergänzt werden.

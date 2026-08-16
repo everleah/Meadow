@@ -35,3 +35,12 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen.
+
+## Datums- & Zeitwerte in der API
+
+Alle Zeitwerte in Requests und Responses folgen der Datumswerte-Konvention (Abschnitt 4 / [datenmodell.md](datenmodell.md)):
+
+- Zeitwerte sind **immer ISO-8601-Strings** mit Zeitzonenangabe: `2026-08-14T10:00:00Z` (UTC) oder `2026-08-14T12:00:00+02:00` (Offset).
+- Strings **ohne** Zeitzonenangabe werden mit **HTTP 400** abgelehnt.
+- Der Kern **normalisiert** eingehende Werte auf UTC; ausgehende Werte werden als UTC (`…Z`) geliefert.
+- Zeitwerte gelten für Systemfelder (`created_at`, `updated_at`, `started_at`, `finished_at`, `timestamp`) sowie für Attribute vom Typ `date`/`datetime` (Attributdefinitionen, Abschnitt 4).

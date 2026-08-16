@@ -8,6 +8,16 @@
 
 Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** gespeichert. Unterschiede ergeben sich durch den Typ und flexible Metadaten. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell.
 
+## Datumswerte
+
+Alle Datums- und Zeitwerte folgen einer einheitlichen, verbindlichen Konvention (Abschnitt 4 des Hauptdokuments). Speicherung, Austausch und Darstellung sind strikt getrennt:
+
+1. **Speicherung (Datenbank):** Alle Datums- und Zeitwerte werden **immer als UTC** in SurrealDB gespeichert – ohne lokale Zeitzone. Betroffen sind u. a. `created_at`, `updated_at`, `started_at`, `finished_at`, Audit-`timestamp` und alle weiteren Zeitfelder (Datentyp `datetime` bzw. ISO-8601-String mit `Z`).
+2. **Austausch (API / Inbound / Outbound):** Zeitwerte werden über die REST-API, im MEF-Format und in Event-Nachrichten **immer als ISO-8601-String mit Zeitzonenangabe** übertragen, z. B. `2026-08-14T10:00:00Z` (UTC) oder `2026-08-14T12:00:00+02:00` (mit Offset). Strings **ohne** Zeitzonenangabe werden abgelehnt. Beim Empfang wird nach UTC normalisiert, bevor gespeichert wird; beim Senden wird UTC als `…Z` ausgegeben.
+3. **Darstellung (Frontend):** Die GUI zeigt Datums-/Zeitwerte **lokalisiert** an – in der Zeitzone und im Format des Benutzers (z. B. `14.08.2026, 12:00` für `de-DE`). Formatierung über `babel` (Details in [frontend.md](frontend.md)); der gespeicherte Wert bleibt unverändert UTC.
+
+> **Hinweis:** Alle Zeitfelder in den Beispielen dieses Dokuments sind als ISO-8601-UTC-Strings dargestellt.
+
 ## Tabellen in SurrealDB
 
 ### Tabelle `object`
@@ -26,8 +36,8 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
     },
     "status": "draft",               // draft | in_review | approved | rejected | published | archived
     "version": 3,
-    "created_at": "...",
-    "updated_at": "...",
+    "created_at": "2026-08-14T08:00:00Z",
+    "updated_at": "2026-08-14T11:30:00Z",
     "updated_by": "user_1"
 }
 ```
@@ -55,8 +65,8 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
         "multilingual": true                        // optional, kennzeichnet sprachabhängige Felder
     },
     "version": 1,
-    "created_at": "...",
-    "updated_at": "...",
+    "created_at": "2026-08-14T08:00:00Z",
+    "updated_at": "2026-08-14T11:30:00Z",
     "updated_by": "user_1"
 }
 ```
@@ -128,8 +138,8 @@ Definiert wiederkehrende oder manuell ausführbare Aufgaben (Details in Abschnit
         "filter": { "type": "product", "active": true }
     },
     "enabled": true,
-    "created_at": "...",
-    "updated_at": "..."
+    "created_at": "2026-08-14T08:00:00Z",
+    "updated_at": "2026-08-14T09:15:00Z"
 }
 ```
 
@@ -144,8 +154,8 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
     "trigger": "schedule",           // schedule | manual | event
     "status": "success",             // pending | running | success | failed | retry
     "attempt": 2,
-    "started_at": "...",
-    "finished_at": "...",
+    "started_at": "2026-08-14T09:00:00Z",
+    "finished_at": "2026-08-14T09:04:12Z",
     "result": { "exported_objects": 150 },
     "error": null,
     "worker_id": "worker-1"
@@ -164,7 +174,7 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
     "action": "status_changed",
     "from": "in_review",
     "to": "approved",
-    "timestamp": "...",
+    "timestamp": "2026-08-14T11:30:00Z",
     "metadata": {
         "request_id": "req_456"
     }
