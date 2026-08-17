@@ -1,6 +1,6 @@
 # Gespeicherte Suchen & Materialisierte Collections
 
-- **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections))
 - **Relevante Phasen:** Phase 9
 - **Stand:** Entwurf
 

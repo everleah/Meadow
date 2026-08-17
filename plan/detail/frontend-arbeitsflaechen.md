@@ -1,6 +1,6 @@
 # Arbeitsflächen der Benutzeroberfläche (Grid, Formular, Massendatenpflege)
 
-- **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 7, 9
 - **Stand:** Entwurf
 

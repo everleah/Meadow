@@ -49,7 +49,7 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 - Aggregationen verbinden Objekte lose (n:m). Ein Objekt kann an beliebig vielen Aggregationen teilnehmen.
 - Eingebaute Aggregationstypen:
   - `category_member` → Kategorisierung (siehe [kategorisierung.md](kategorisierung.md))
-  - `collection_member` → materialisierte Collections (Abschnitt 10.2, Phase 9)
+  - `collection_member` → materialisierte Collections (Phase 9, siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md))
   - `related` → allgemeine Verknüpfung
 - Aggregationen haben **keine** Vererbungswirkung und **keine** Löschkaskade.
 - Kanten-Metadaten bleiben möglich, z. B. `position` und `context` bei `category_member`.

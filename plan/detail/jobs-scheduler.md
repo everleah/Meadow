@@ -1,6 +1,6 @@
 # Hintergrundprozesse & Scheduler
 
-- **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
 - **Stand:** Entwurf
 

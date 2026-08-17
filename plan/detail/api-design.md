@@ -1,6 +1,6 @@
 # API-Design (OpenAPI REST)
 
-- **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md#5-api-design-openapi-rest))
 - **Relevante Phasen:** Phase 1–9
 - **Stand:** Entwurf
 

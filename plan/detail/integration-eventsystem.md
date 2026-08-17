@@ -1,6 +1,6 @@
 # Integration & Eventsystem
 
-- **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
 - **Stand:** Entwurf
 

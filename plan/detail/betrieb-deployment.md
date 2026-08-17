@@ -1,6 +1,6 @@
 # Betrieb & Deployment
 
-- **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 2, 4–5, 7, 8
 - **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt.
 

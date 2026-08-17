@@ -130,7 +130,7 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
 ```
 
 - `type` ist frei wählbar und bestimmt die fachliche Rolle des Objekts.
-- Sprachabhängige Werte werden als verschachtelte JSON-Objekte mit Sprachschlüsseln gemäß Sprachbaum (Abschnitt 4.4) gespeichert.
+- Sprachabhängige Werte werden als verschachtelte JSON-Objekte mit Sprachschlüsseln gemäß Sprachbaum (siehe [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md)) gespeichert.
 - `status` dient dem einfachen Workflow (Abschnitt 8).
 
 ### Tabelle `attribute_definition`
@@ -152,11 +152,11 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "computed_rule": "",             // Name der business_rule, die dieses Attribut setzt (nur bei computed)
     "dependencies": [],               // Eingabeattribute, die die Formel liest (für Recompute-Kaskade)
     "computed_reads_inherited": false,// true: Formel liest vererbte Werte -> async Kaskade auf Nachfahren
+    "multilingual": false,            // optional: kennzeichnet sprachabhängige Felder
     "constraints": {
         "min": 0,
         "max": 999999,
-        "enum_values": ["red", "green", "blue"],   // optional für geschlossene Wertelisten
-        "multilingual": true                        // optional, kennzeichnet sprachabhängige Felder
+        "enum_values": ["red", "green", "blue"]    // optional für geschlossene Wertelisten
     },
     "version": 1,
     "created_at": "2026-08-14T08:00:00Z",
@@ -166,12 +166,12 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 ```
 
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
-- `inheritable` steuert, ob das Attribut in die Datenwertvererbung (Abschnitt 4.5) einbezogen wird.
+- `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp über den Unique-Index `(type, attributes.<name>)`. Details siehe [Schlüssel (Business-Schlüssel)](#schluessel-business-schluessel).
 - `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
 - `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
 - `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` kennzeichnen **berechnete Attribute** (Abschnitt 8 / [business-rules.md](business-rules.md)): Der Wert wird beim Schreiben **synchron** von einer `computed`-Regel berechnet und gespeichert (stored-first, kein On-Read-Modus); `dependencies` deklarieren die Eingaben der Formel (Grundlage der Recompute-Kaskade; async bei `computed_reads_inherited`).
-- Weitere optionale Felder: `multilingual`, `enum_values`, `default_value`, `unit_id`, `display_unit_id`, `description`. Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
+- Weitere optionale Felder: `multilingual`, `default_value`, `unit_id`, `display_unit_id`, `description`; die geschlossene Werteliste `enum_values` liegt optional in `constraints` (siehe Beispiel). Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 
 ### Tabelle `business_rule`
 
@@ -181,7 +181,7 @@ Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, 
 {
     "id": "rule_001",
     "name": "gross_from_net",
-    "type": "computed",              // validation | computed | normalization | workflow_guard
+    "type": "computed",              // validation | computed | normalization | workflow_guard | bulk
     "applies_to": ["product"],       // optional: Objekttypen (leer = alle)
     "script": "def run(obj, ctx, result):\n    ...",
     "state": "active",               // draft | active | disabled
@@ -192,7 +192,7 @@ Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, 
 }
 ```
 
-- `type` bestimmt, wie das Skriptergebnis interpretiert wird (`validation`/`computed`/`normalization`/`workflow_guard`); nur `active`-Regeln werden ausgeführt.
+- `type` bestimmt, wie das Skriptergebnis interpretiert wird (`validation`/`computed`/`normalization`/`workflow_guard`/`bulk`); nur `active`-Regeln werden ausgeführt.
 - `applies_to` schränkt die Objekttypen ein (leer = alle); die Prüfung erfolgt bei der Auswertung.
 - `script` wird in einer RestrictedPython-Sandbox ausgeführt (Import-Whitelist, Timeout-/Speicher-/Größen-Limits, keine externe I/O); ein **Compile-Check bei jedem Speichern** lehnt unzulässige Skripte ab.
 - Seed-Regeln werden als Code ausgeliefert und beim Setup geseedet; danach werden sie als Daten im Admin-UI gepflegt.
@@ -214,9 +214,9 @@ Gruppiert Attributdefinitionen für die UI.
 
 Referenzen zwischen Objekten (Graph-Kanten) mit eigenen Metadaten. Der Relationstyp wird über `definition_id` aus der Tabelle `relation_definition` referenziert; `type` bleibt als denormalisierter Anzeigename erhalten. Das Relationenmodell ist in [relationen.md](relationen.md) spezifiziert:
 
-- `depends_on` (Komposition) → Datenwertvererbung (Abschnitt 4.5); genau eine Kante pro Objekt
-- `category_member` (Aggregation) → Kategorisierung (Abschnitt 4.6)
-- `collection_member` (Aggregation) → materialisierte Collections (Abschnitt 10.2)
+- `depends_on` (Komposition) → Datenwertvererbung (siehe [datenwertvererbung.md](datenwertvererbung.md)); genau eine Kante pro Objekt
+- `category_member` (Aggregation) → Kategorisierung (siehe [kategorisierung.md](kategorisierung.md))
+- `collection_member` (Aggregation) → materialisierte Collections (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md))
 - `related` (Aggregation) → lose Verknüpfung ohne Sonderlogik
 
 ```json
@@ -254,7 +254,7 @@ Definiert die Relationstypen des Systems (Details in [relationen.md](relationen.
 
 ### Tabelle `language_tree`
 
-Definiert den Sprachbaum für sprachabhängige Attributwerte (Details in Abschnitt 4.4).
+Definiert den Sprachbaum für sprachabhängige Attributwerte (Details in [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md)).
 
 ```json
 {
@@ -274,7 +274,7 @@ Definiert wiederkehrende oder manuell ausführbare Aufgaben (Details in Abschnit
 {
     "id": "job_def_123",
     "name": "Täglicher Produktexport",
-    "type": "outbound_export",       // outbound_export | inbound_import | business_rule
+    "type": "outbound_export",       // outbound_export | inbound_import | business_rule | bulk_operation
     "schedule": "0 0 3 * * *",       // Cron (6 Felder, Sekunden zuerst), null = nur manuell
     "parameters": {
         "connector_id": "conn_amazon",
@@ -349,9 +349,9 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
 
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
-- **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (Abschnitt 10.1); wird in der Tabelle `object` gespeichert.
-- **`collection`**: Objekttyp (`type: "collection"`) für materialisierte Ergebnislisten auf Basis gespeicherter Suchen (Abschnitt 10.2); wird in der Tabelle `object` gespeichert.
-- **`release`**: Eigene Tabelle für kanalspezifische Freigaben (Abschnitt 8.2, spätere Ausbaustufe).
+- **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.
+- **`collection`**: Objekttyp (`type: "collection"`) für materialisierte Ergebnislisten auf Basis gespeicherter Suchen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.
+- **`release`**: Eigene Tabelle für kanalspezifische Freigaben (Phase 9, siehe [workflow-freigaben.md](workflow-freigaben.md)).
 
 ## Indizes & Suche
 

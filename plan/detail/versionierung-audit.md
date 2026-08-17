@@ -1,7 +1,7 @@
 # Versionierung & Audit
 
-- **Hauptdokument:** Abschnitt 13 ([Versionierung & Audit](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 2, 8
+- **Hauptdokument:** Abschnitt 13 ([Versionierung & Audit](../meadow-pim-architektur.md#13-versionierung--audit))
+- **Relevante Phasen:** Phase 2, 7
 - **Stand:** Entwurf
 
 Meadow PIM setzt auf eine **schlanke Versionierung** und ein **einfaches Audit-Log**, um Änderungen nachvollziehbar zu machen, ohne die Komplexität einer vollständigen Revisionshistorie zu tragen. Die Prämisse „einfach und performant“ bleibt dabei erhalten.

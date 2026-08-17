@@ -1,6 +1,6 @@
 # Datenwertvererbung
 
-- **Hauptdokument:** Abschnitt 4.5 ([Datenwertvererbung](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 4 ([Datenwertvererbung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 1–3
 - **Stand:** Entwurf
 

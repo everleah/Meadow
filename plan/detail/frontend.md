@@ -1,7 +1,7 @@
 # Benutzeroberfläche (Frontend)
 
-- **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 7
+- **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
+- **Relevante Phasen:** Phase 7, 9
 - **Stand:** Entwurf
 
 Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprachigkeit der Oberfläche und die Modulübersicht. Die konkreten **Arbeitsflächen** (Grid, Produkt-Formular, Massendatenpflege, Dashboard) sind im Detaildokument [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) spezifiziert. Die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum) ist separat im Dokument [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md) beschrieben.
@@ -90,7 +90,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
    - Bulk-Edit-Wizard (definierter Operationssatz, Ausführung als Hintergrundjob + Report)
 
 5. **Attributdefinitionen & -gruppen**
-   - Verwaltung von Attributgruppen und -definitionen (nur `admin` oder `editor`)
+   - Verwaltung von Attributgruppen und -definitionen (nur `admin`/`superadmin`)
    - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag, Einheit (`unit_id`/`display_unit_id`), `is_key`-Markierung (Business-Schlüssel, z. B. SKU) sowie Template-Feldern (`applicable_types`/`required_types`)
 
 6. **Kategorien & Relationen**

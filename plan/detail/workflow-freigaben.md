@@ -1,7 +1,7 @@
 # Workflow & Freigaben
 
-- **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 2, 4, 9
+- **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules))
+- **Relevante Phasen:** Phase 4, 7, 9
 - **Stand:** Entwurf
 
 ## Workflows (Zustandsmaschine)

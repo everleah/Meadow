@@ -1,6 +1,6 @@
 # Sprachbaum & Mehrsprachigkeit der Daten
 
-- **Hauptdokument:** Abschnitt 4.4 ([Sprachbaum für sprachabhängige Daten](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 4 ([Sprachbaum für sprachabhängige Daten](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 1–2, 7
 - **Stand:** Entwurf
 

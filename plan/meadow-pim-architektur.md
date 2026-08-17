@@ -83,7 +83,7 @@ Das System besteht aus mehreren Diensten, die lose gekoppelt über REST und eine
 
 **Abgrenzung zur Pflege- und Kategorienstruktur:**
 
-Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen wie Komposition/Aggregation (Abschnitt 4), Sprachbaum, Datenwertvererbung und Kategorisierung sind **logische Modelle innerhalb des Kerns** und erfordern keine zusätzlichen Dienste. Sie werden in den Abschnitten 4.4 bis 4.7 detailliert beschrieben.
+Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen wie Komposition/Aggregation (Abschnitt 4), Sprachbaum, Datenwertvererbung und Kategorisierung sind **logische Modelle innerhalb des Kerns** und erfordern keine zusätzlichen Dienste. Sie werden in Abschnitt 4 und den zugehörigen Detaildokumenten beschrieben.
 
 ---
 
@@ -170,12 +170,12 @@ Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
 Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** mit flexiblen Metadaten gespeichert; Unterschiede entstehen durch den Typ. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Business Rules, Jobs, Audit-Log) ergänzen das Kernmodell. Details zu den Tabellen sowie zu Indizierung, Volltextsuche und Graph-Traversierung stehen im Detaildokument.
 
 > **Details:**
-> - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche (4.1–4.3)
-> - [relationen.md](detail/relationen.md) — Relationenmodell: Komposition & Aggregation (4)
-> - [einheiten.md](detail/einheiten.md) — Einheiten & Umrechnung für quantifizierte Werte (4)
-> - [sprachbaum-mehrsprachigkeit.md](detail/sprachbaum-mehrsprachigkeit.md) — Sprachbaum für sprachabhängige Daten (4.4)
-> - [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung & Konfliktlösung (4.5, 4.7)
-> - [kategorisierung.md](detail/kategorisierung.md) — Kategorisierung und Gruppierung (4.6)
+> - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche
+> - [relationen.md](detail/relationen.md) — Relationenmodell: Komposition & Aggregation
+> - [einheiten.md](detail/einheiten.md) — Einheiten & Umrechnung für quantifizierte Werte
+> - [sprachbaum-mehrsprachigkeit.md](detail/sprachbaum-mehrsprachigkeit.md) — Sprachbaum für sprachabhängige Daten
+> - [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung & Konfliktlösung
+> - [kategorisierung.md](detail/kategorisierung.md) — Kategorisierung und Gruppierung
 
 **Datumswerte-Konvention (verbindlich):**
 
@@ -376,6 +376,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung) **
 - **Typrestriktionen der `relation_definition` beim Anlegen jeder Relation erzwingen; Re-Parenting mit Zyklenschutz**
 - **Business-Schlüssel implementieren: Eindeutigkeit pro Typ beim Schreiben erzwingen, Validierung (`type: text`, nicht lokalisiert, nicht vererbbar), Key-Lookup-Endpunkt, Schlüssel in Suche/Filterung**
+- **Tabelle `audit_log` und Versionierung (`version`, `created_at`, `updated_at`, `updated_by`) implementieren (Abschnitt 13)**
 - **Logging-Basis im Kern: Tabelle `log_entry` mit Indizes, Endpunkte `POST/GET /system/logs`; Tabelle `system_setting` mit `GET/PUT /system/settings`; Logging-Konvention (Schema, No-Secrets) verankern**
 
 ### Phase 3 – Graph & Performance
@@ -460,6 +461,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Querverlinkungen & Phasenzuordnung bereinigt: Phantom-Unterabschnittsverweise (4.4–4.7, 8.2, 10.1/10.2) entfernt und durch Detaildokument-Links ersetzt; Anker in den „Hauptdokument“-Links der Detaildokumente ergänzt; Enum-Korrekturen (`bulk` in `business_rule`, `bulk_operation` in `job_definition`) und `multilingual`-Verortung in `datenmodell.md`; Rechte-Korrektur Attributdefinitionen (nur `admin`/`superadmin`) in `frontend.md`; `audit_log` + Versionierung als Phase-2-Punkt ergänzt; Header-Phasen in `business-rules.md` (Phase 1 statt 2), `workflow-freigaben.md` (4/7/9) und `versionierung-audit.md` (2/7) korrigiert.*
 
 *Zuletzt geändert: 2026-08-17 – Logging spezifiziert (Abschnitte 3.3, 12 & Phasen 2, 4–5, 7, 9): strukturierte stdout-Logs (tracing/structlog) als Basis; kuratierte System-Logs in SurrealDB (`log_entry`-Tabelle: Kategorien `app` ab WARN, `job`/`rule`/`auth`/`integration` auch INFO; Schema mit `trace_id`; Retention 30 Tage + Cleanup-Job; Rate-Limit) über `POST /system/logs` (Batch, non-blocking); Anzeige in der Admin-UI „System-Logs“ (nur `admin`/`superadmin`); No-Secrets-/Datenschutz-Konvention; Abgrenzung `audit_log` (fachlich, dauerhaft) vs. `log_entry` (technisch, flüchtig) vs. NATS-Events; Runtime-Konfiguration über `system_setting` (Default < ENV < DB, Admin-UI „System-Einstellungen“); Loki/Grafana als optionale Ausbaustufe (Phase 9). `betrieb-deployment.md` (§11), `datenmodell.md`, `api-design.md`, `frontend.md` und `benutzer-gruppen-rechte.md` entsprechend angepasst.*
 

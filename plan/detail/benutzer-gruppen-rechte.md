@@ -1,6 +1,6 @@
 # Benutzer, Gruppen & Rechte (RBAC + ABAC-Scopes)
 
-- **Hauptdokument:** Abschnitt 9 ([Benutzer, Gruppen & Rechte](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 9 ([Benutzer, Gruppen & Rechte](../meadow-pim-architektur.md#9-benutzer-gruppen--rechte-rbac--abac-scopes))
 - **Relevante Phasen:** Phase 1, 7, 9
 - **Stand:** Entwurf
 

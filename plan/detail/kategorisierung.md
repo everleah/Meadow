@@ -1,6 +1,6 @@
 # Kategorisierung und Gruppierung
 
-- **Hauptdokument:** Abschnitt 4.6 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 4 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 2, 9
 - **Stand:** Entwurf
 
