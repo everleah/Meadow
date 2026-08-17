@@ -39,6 +39,12 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
                      └─────────────────────┘
 ```
 
+## Worker-Konkurrenz & Parallelität
+
+- Der Python-Worker verarbeitet Nachrichten **parallel** (asyncio): getrennte Konsumenten für die **Job-Streams** (`jobs.*`) und den **Event-Stream** (`events.crud`), sodass ein langer Import die Webhook-Auslieferung nicht blockiert.
+- Die **Parallelität ist konfigurierbar** (max. gleichzeitig verarbeitete Nachrichten je Konsument). **Import-Jobs sind bewusst begrenzt** (z. B. max. 1–2 gleichzeitig), damit sie weder die Event-Auslieferung noch andere Jobs aushungern.
+- Skalierung über mehrere Worker-Container in einer NATS-Queue-Group bleibt möglich ([betrieb-deployment.md](betrieb-deployment.md)).
+
 ## Ablauf eines Jobs
 
 > **Cron-Format:** `tokio-cron-scheduler` nutzt ein **6-Felder-Format mit Sekunden an erster Stelle** (`sec min hour day month dow`). „Täglich um 03:00 Uhr“ lautet also `0 0 3 * * *` (nicht das übliche 5-Felder-Format `0 3 * * *`).
@@ -49,11 +55,13 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 4. Der Worker führt die eigentliche Aufgabe aus.
 5. Nach Abschluss aktualisiert der Worker den Status **per REST-Aufruf** (`PATCH /jobs/runs/{run_id}`) auf `success` oder `failed`.
 6. Bei Fehlern wird die Message nicht geackt; JetStream liefert sie nach einem Timeout erneut zu (Retry). Nach maximal 5 Versuchen wird die Message in den Dead-Letter-Stream verschoben. Der Rust-Kern überwacht diesen Stream und markiert den zugehörigen `job_run` als endgültig `failed`.
+7. **Idempotenz (verbindlich):** Da NATS at-least-once zustellt und eine Nachricht nach Teilausfall erneut geliefert wird, müssen Job-Typen, die Daten **schreiben** (Import, Business Rules mit Seiteneffekten), idempotent sein: Wiederholte Ausführung darf keine Duplikate erzeugen (Abgleich per Business-Schlüssel bzw. Quell-Referenz, [integration-eventsystem.md](integration-eventsystem.md)).
+8. **Trigger:** Im MVP sind `schedule` und `manual` aktiv; der Triggerwert `event` (Event-getriggerte Jobs) ist **reserviert** für Phase 5+ (gefilterte CRUD-Events erzeugen `job_run`-Einträge, Wiederverwendung des Eventsystems).
 
 ## Job-Typen
 
 - **outbound_export**: Exportiert Daten über einen Konnektor (CSV, JSON, API, SFTP).
-- **inbound_import**: Importiert Daten aus externen Quellen.
+- **inbound_import**: Importiert Daten aus externen Quellen (MEF, [integration-eventsystem.md](integration-eventsystem.md)); **idempotent** (Upsert per Business-Schlüssel bzw. Quell-Referenz). Konfigurierbar `emit_events`: Standard erzeugt pro Objekt CRUD-Events; bei großen Beständen kann auf „ein Summary-Event `import.completed`“ umgestellt werden, um Event-/Webhook-Flut zu vermeiden.
 - **business_rule**: Führt eine Business Rule auf gefilterten Objekten aus (z. B. Berechnung von Attributen).
 - **bulk_operation** (Phase 7): Führt eine **Massenoperation** aus dem Bulk-Edit-Wizard der Oberfläche auf einer Auswahl von Objekten aus (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Massen-Löschen). Ergebnis als **Report** im `job_run.result` (Erfolg/Fehler pro Objekt, Validierungsfehler). Siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#3-massendatenpflege) und [api-design.md](api-design.md) (`POST /objects/bulk`).
 
@@ -65,3 +73,4 @@ Für spätere Ausbaustufen sind weitere Job-Typen vorgesehen (z. B. `collection_
 - **Dead-Letter-Queue (DLQ)**: Nach Erreichen der maximalen Zustellversuche landet die Nachricht automatisch im DLQ-Stream. Der Rust-Kern abonniert diesen Stream und markiert die betroffenen `job_run`-Einträge als `failed`.
 - **Timeout**: Wird ein Worker nicht innerhalb der konfigurierten `AckWait`-Zeit aktiv, stellt JetStream die Nachricht erneut zu.
 - **Monitoring**: Alle Job-Runs und Dead-Letter-Ereignisse werden in SurrealDB gespeichert und können über die API ausgelesen werden.
+- **Stream-Retention:** Für `jobs.*` gilt eine **kurze Lebensdauer** (Max-Age/Max-Bytes, konfigurierbar): Der dauerhafte Job-Status liegt in `job_run` (SurrealDB), der Stream dient nur dem Transport. Der DLQ-Stream wird **manuell** überwacht und bereinigt (Operationen, [betrieb-deployment.md](betrieb-deployment.md)).

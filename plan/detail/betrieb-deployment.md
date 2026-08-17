@@ -108,6 +108,11 @@ NATS_URL=nats://nats:4222
 NATS_USER=CHANGE_ME
 NATS_PASS=CHANGE_ME
 
+# NATS Stream-Retention (Streams werden vom Kern/Worker angelegt)
+EVENTS_STREAM_MAX_AGE_DAYS=30
+EVENTS_STREAM_MAX_BYTES=1073741824   # 1 GiB
+JOBS_STREAM_MAX_AGE_MINUTES=1440
+
 # Objektstorage (MinIO)
 S3_ENDPOINT=http://object-storage:9000
 S3_ACCESS_KEY=CHANGE_ME
@@ -226,11 +231,12 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 - **Logging:** Rust-Kern mit `tracing` (JSON optional), Python-Dienste mit `structlog`; Ausgabe auf `stdout`, Sammlung über Docker-Logging-Treiber (max. 10 MB/5 Dateien je Container, wie the predecessor project) oder zentral (Loki/ELK).
 - **Health-Checks:** jeder Container stellt einen Health-Endpoint bereit (siehe 3.4); Compose startet Container bei Ausfall neu.
 - **Metriken (optional, ab Phase 8):** Prometheus-Endpunkte im Kern und Worker (Jobs, Event-Durchsatz, API-Latenz), Grafana-Dashboards.
+- **Queue-/Stream-Tiefe (verbindlich):** Die NATS-JetStream-Tiefe wird über den Monitoring-Port 8222 beobachtet (Pending-Messages je Consumer, Stream-Belegung vs. Max-Bytes, Outbox-Rückstau im Kern); Alarmschwellen bei anhaltender Queue-Tiefe (Worker-Stau) sind dokumentiert.
 
 ## 12. Skalierung
 
 - **Rust-Kern:** horizontal skalierbar; Scheduler nur in einer Instanz aktiv (`scheduler.enabled=true` oder Leader-Election).
-- **Python-Worker:** mehrere Container über eine NATS-Queue-Group (Lastverteilung).
+- **Python-Worker:** ein Container verarbeitet parallel (asyncio; getrennte Konsumenten für `jobs.*` und `events.*`, [jobs-scheduler.md](jobs-scheduler.md)); mehrere Container über eine NATS-Queue-Group (Lastverteilung).
 - **Frontend:** mehrere Instanzen nur mit Sticky Sessions (NiceGUI ist zustandsbehaftet); im MVP eine Instanz.
 - **SurrealDB:** im MVP Einzelinstanz; Cluster-Modus erst bei größerem Datenaufkommen.
 - **Hinweis:** Der example.com-Server teilt sich Ressourcen mit anderen Stacks (z. B. the predecessor project); Skalierung dort nur nach Kapazitätsprüfung.

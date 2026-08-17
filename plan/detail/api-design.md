@@ -37,6 +37,8 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/jobs/{job_def_id}/run`          | Job manuell starten                             |
 | GET     | `/jobs/{job_def_id}/runs`         | Job-Historie abrufen                            |
 | PATCH   | `/jobs/runs/{run_id}`             | Status eines Job-Runs aktualisieren (Worker)    |
+| POST    | `/imports`                        | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert `job_run`-ID (202) |
+| GET     | `/jobs/runs?ids=…`                | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling |
 | POST    | `/search`                         | Volltextsuche über Objekte                      |
 | GET     | `/auth/me`                        | Rollen, Berechtigungen & Scope des Nutzers      |
 | POST    | `/users`                          | Benutzer anlegen                                |
@@ -102,7 +104,12 @@ Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- un
 
 - **`POST /objects/bulk`** führt eine Massenoperation auf einer **Auswahl** aus („alle Treffer des Filters“ / „alle auf der Seite“ / explizite ID-Liste). Operationsarten: `set_attribute` (ersetzen), `clear_attribute` (auf „nicht gepflegt“ zurücksetzen), `change_status`, `add_category`/`remove_category`, `change_parent` (Re-Parenting, Zyklenschutz), `delete` (Soft-Delete-Kaskade).
 - Die Ausführung erfolgt **als Hintergrundjob** (siehe [jobs-scheduler.md](jobs-scheduler.md#job-typen), Typ `bulk_operation`): Der Endpunkt erzeugt ein `job_run` und liefert dessen ID; der Report (Erfolg/Fehler pro Objekt, Validierungsfehler) steht nach Abschluss am `job_run.result`.
-- **`POST /objects/batch-update`** wendet die **gesammelten Inline-Edits** aus dem Grid (Batch-Save) an – eine Liste von Teiländerungen (`{id, attributes, status, …}`) in einem Aufruf; Validierung erfolgt pro Objekt (Eindeutigkeit, Typrestriktionen, Workflow).
+- **`POST /objects/batch-update`** wendet die **gesammelten Inline-Edits** aus dem Grid (Batch-Save) an – eine Liste von Teiländerungen (`{id, attributes, status, …}`) in einem Aufruf; Validierung erfolgt pro Objekt (Eindeutigkeit, Typrestriktionen, Workflow). **Gedeckelt (verbindlich):** max. **500 Zeilen pro Aufruf** (HTTP 413 bei Überschreitung); größere Auswahlen laufen über `POST /objects/bulk` (async). Das Frontend paginiert große Batch-Saves entsprechend ([frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
+
+## Inbound-Import & Request-Limits
+
+- **`POST /imports`:** Nimmt ein MEF-Dokument entgegen (JSON-Body oder Datei-Upload → Objektstorage), validiert nur oberflächlich, legt sofort ein `job_run` an und liefert `202 Accepted` mit `{ "job_run_id": … }` (Details [integration-eventsystem.md](integration-eventsystem.md)). Der Aufrufer wartet nie auf die Verarbeitung; Status/Fortschritt/Report über `GET /jobs/runs?ids=…`.
+- **Request-Limits (verbindlich):** Für alle Endpunkte gelten **Body-/Upload-Limits** (z. B. JSON-Body max. 10 MB, Datei-Upload max. 100 MB, konfigurierbar) sowie ein **Rate-Limit** (z. B. pro Nutzer/JWT, konfigurierbar), damit Eingabe-Fluten über API/Inbound das System nicht stilllegen.
 
 ## Referenz-Picker-Suche
 

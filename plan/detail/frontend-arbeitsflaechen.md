@@ -37,6 +37,7 @@ Auswahl eines Knotens setzt den **Grid-Filter** auf den Teilbaum. Die Anzeige im
 
 - **Direktes Zellen-Editing** für einfache Attributtypen (AG-Grid-Cell-Editors): `text` (Input), `number` (Zahlenfeld), `boolean` (Toggle), `enum` (Select), `date` (Datums-Picker), quantifizierte Werte (Zahlenfeld mit Einheiten-Symbol).
 - **Batch-Save statt Einzel-Save:** Edits sammeln sich im Grid (gestaged). Ein **„Speichern"**-Button überträgt alle Änderungen **gesammelt** an den Kern; **„Verwerfen"** verwirft. **Geänderte Zellen werden markiert**, ein **„Ungespeicherte Änderungen"**-Zähler ist sichtbar. Gründe: wenig Requests, konsistente Validierung/Vererbung im Kern, sicheres Rückgängigmachen über mehrere Zellen.
+- **Deckelung des Batch-Saves (verbindlich):** Pro `POST /objects/batch-update`-Aufruf sind max. **500 Zeilen** erlaubt ([api-design.md](api-design.md)); das Grid speichert große, ungespeicherte Änderungsmengen in 500er-Blöcken, größere Auswahlen laufen über den Bulk-Wizard (async).
 - **Nicht inline editierbar** (Referenz-Picker, Medien/Assets, lange mehrzeilige Texte): Bearbeitung in einem **Modal-Editor direkt im Grid** – ohne die Grid-Position oder ungespeicherte Änderungen zu verlieren; der Modal-Edit landet wie ein Zellen-Edit im gestagten Batch. Das vollständige Formular bleibt per Zeilen-Aktion (z. B. Doppelklick / „Öffnen") erreichbar.
 - **Mehrsprachige Felder im Grid:** standardmäßig wird nur die **Arbeitssprache** inline bearbeitet; zusätzliche Sprach-Spalten folgen später über den Spalten-Picker.
 - **Vollständigkeits-Spalte & Filter:** Eine farbige **Vollständigkeits-Spalte** (grau <1 %, orange 1–99 %, grün 100 %) und Filter wie „nur unvollständige Produkte" (siehe Abschnitt 4).
@@ -88,6 +89,7 @@ Entlang der Kompositionskette `depends_on` ([datenwertvererbung.md](datenwertver
 
 - **Auswahl:** „Alle Treffer des aktuellen Filters" / „alle auf dieser Seite" / angehakte Zeilen (Mehrfachauswahl des Grids).
 - **Ablauf:** Operation wählen → konfigurieren → **Bestätigen** → Ausführung als **Hintergrundjob** mit Fortschritt und **Report** (Benachrichtigung; Anwender arbeitet weiter).
+- **Job-Status per Polling (verbindlich):** Solange ein Bulk-Job läuft, pollt das Frontend den `job_run` per REST (`GET /jobs/runs?ids=…`, [api-design.md](api-design.md)) und zeigt Status/Fortschritt an; nach Abschluss erscheint der **Report** (Erfolg/Fehler pro Objekt) aus `job_run.result` (Benachrichtigung).
 - **Operationssatz (passend zum Datenmodell):**
   - **Attributwert setzen** (ersetzt; für Text/Zahl/Boolean/Datum/Enum),
   - **Attributwert leeren** (auf „nicht gepflegt" zurücksetzen – beachtet die Vererbung: erbende Kinder fallen auf den vererbten Wert zurück),

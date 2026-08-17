@@ -241,6 +241,8 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
 }
 ```
 
+- Der Triggerwert `event` (Event-getriggerte Jobs) ist **reserviert** für Phase 5+; im MVP sind nur `schedule` und `manual` aktiv (Details [jobs-scheduler.md](jobs-scheduler.md)).
+
 ### Tabelle `audit_log`
 
 Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
@@ -259,6 +261,27 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
     }
 }
 ```
+
+### Tabelle `outbox_event`
+
+**Transactional Outbox** für CRUD-Events (Details in [integration-eventsystem.md](integration-eventsystem.md)): Events werden **atomar mit der CRUD-Operation** in dieser Tabelle geschrieben und anschließend asynchron durch ein **Relay im Kern** nach NATS JetStream publiziert. Dadurch ist die API nie von NATS abhängig; es geht kein Event verloren.
+
+```json
+{
+    "id": "outbox_001",
+    "event_type": "object.updated",
+    "object_type": "product",
+    "object_id": "object_123",
+    "changes": { "attributes.price": { "old": 19.99, "new": 24.99 } },
+    "metadata": { "user_id": "user_1", "request_id": "req_456" },
+    "status": "pending",           // pending | published
+    "created_at": "2026-08-14T11:30:00Z",
+    "published_at": null            // gesetzt, sobald das Relay publiziert hat
+}
+```
+
+- Das Relay liefert die ältesten `pending`-Einträge zuerst aus (Index `status` + `created_at`) und setzt nach erfolgreichem Publish `published_at`.
+- Publizierte Einträge werden nach Ablauf einer Haltefrist vom Relay aufgeräumt (Cleanup).
 
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 

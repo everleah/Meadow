@@ -59,13 +59,15 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 - Nicht übergebene Attribute bleiben unverändert (bei Update) bzw. leer (bei Neuanlage).
 - Die ID ist optional: Fehlt sie, wird eine neue vergeben. Vorhandene IDs ermöglichen Upserts.
 - **Business-Schlüssel (z. B. SKU):** Schlüsselattribute werden wie normale Attribute übertragen. Der Import kann per Schlüssel abgleichen (Upsert): Existiert im Ziel bereits ein Objekt mit gleichem Typ und gleichem Schlüsselwert, wird es aktualisiert statt neu angelegt (konfigurierbar pro Konnektor, z. B. `match_by_key: "sku"`). Das ermöglicht die Synchronisation mit Bestandssystemen und Datenübernahmen zwischen QA- und Produktivsystem.
+- **Idempotenz (verbindlich):** NATS liefert Nachrichten at-least-once; ein Import-Job kann nach Teilausfall erneut ausgeführt werden. Der Import ist deshalb **idempotent**: Objekte mit Business-Schlüssel werden per `match_by_key` (Upsert) abgeglichen; Objekte ohne Schlüssel deduplizieren über eine **Quell-Referenz** (`source_id`, optional mit `source`-System), gegen die beim erneuten Import derselbe Datensatz aktualisiert statt neu angelegt wird.
 - Alle Datums- und Zeitwerte (z. B. `created_at`, Event-`timestamp`) werden als **ISO-8601-String mit Zeitzonenangabe** übertragen und beim Empfang nach UTC normalisiert (Konvention gemäß [datenmodell.md](datenmodell.md)).
 - Quantifizierte Werte (Zahl + Einheit) werden als Objekt `{"value": 12.5, "unit": "mm"}` übertragen; beim Import rechnet der Worker in die kanonische SI-Einheit um, beim Export wird in die Standard-Anzeigeeinheit (bzw. die angeforderte Einheit) umgerechnet (Konvention gemäß [einheiten.md](einheiten.md)).
 
 **Verwendung im Inbound:**
 
-- Der Inbound-Konnektor `json_import` akzeptiert MEF-Dokumente (z. B. aus Datei oder HTTP).
-- Der Python-Worker validiert die Struktur, führt Business Rules aus und übergibt die Objekte/Referenzen an den Rust-Kern.
+- Der Inbound-Konnektor `json_import` akzeptiert MEF-Dokumente (z. B. aus Datei oder HTTP) und läuft als Hintergrundjob (Typ `inbound_import`, [jobs-scheduler.md](jobs-scheduler.md)).
+- **Einspeisung über `POST /imports` (verbindlich):** Die Middleware (oder die UI) reicht ein MEF-Dokument über den dedizierten Endpunkt `POST /imports` ein – als JSON-Body oder als Datei-Upload (Dateien werden nach dem Objektstorage abgelegt). Der Kern validiert nur oberflächlich, legt sofort ein `job_run` an und antwortet mit `202 Accepted` inkl. `job_run`-ID (Details [api-design.md](api-design.md)). Der Aufrufer ist nie blockiert; die eigentliche Verarbeitung übernimmt der Worker.
+- Der Python-Worker validiert die Struktur, führt Business Rules aus und übergibt die Objekte/Referenzen an den Rust-Kern; Fortschritt und Report stehen am `job_run`.
 
 **Verwendung im Outbound:**
 
@@ -107,11 +109,12 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 - `reference.deleted` – Referenz entfernt
 - `attribute_definition.created` / `updated` / `deleted` – Änderungen an Attributdefinitionen
 
-**Veröffentlichung:**
+**Veröffentlichung (Transactional Outbox, verbindlich):**
 
-- Der Rust-Kern publiziert Events auf einem eigenen JetStream-Subject (`events.crud`).
-- Events werden **persistent** gespeichert und erst nach erfolgreichem Acknowledgment durch den Consumer entfernt (WorkQueue-Prinzip).
-- Dadurch gehen keine Änderungen verloren, auch wenn die Middleware kurzfristig nicht erreichbar ist.
+- Der Rust-Kern schreibt das Event im **selben SurrealDB-Schreibvorgang** wie die CRUD-Operation in eine **Outbox-Tabelle** (`outbox_event`, [datenmodell.md](datenmodell.md)) – atomar, ohne verteilte Transaktion.
+- Ein **Relay-Prozess im Kern** publiziert abgeschlossene Outbox-Einträge asynchron auf dem JetStream-Subject `events.crud` und markiert sie als ausgeliefert (`published_at`).
+- Dadurch ist die API **nie von NATS abhängig**: Ist NATS nicht erreichbar, bleiben Requests funktionsfähig; die Events warten in der Outbox und werden nach Wiederherstellung nachgeliefert (Wiederanlauf-sicher).
+- Auf dem Stream gelten **Retention-Limits** (z. B. Max-Age 7–30 Tage / Max-Bytes, konfigurierbar, [betrieb-deployment.md](betrieb-deployment.md)); verarbeitete Events werden nach Acknowledgment entfernt (WorkQueue-Prinzip). Es gehen keine Änderungen verloren, auch wenn die Middleware kurzfristig nicht erreichbar ist – die **Outbox ist die Quelle**, der Stream nur der Transport.
 
 **Filterung:**
 
@@ -120,6 +123,11 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
   - Nach `object_type` (z. B. nur `product`, nicht `category`)
   - Nach bestimmten Attributen (z. B. nur wenn `price` geändert wurde)
   - Nach Statusübergängen (z. B. nur Freigaben)
+
+**Reihenfolge & Coalescing (verbindlich):**
+
+- Die Event-Reihenfolge ist **pro Objekt garantiert** (je `object_id` wird die Reihenfolge der Änderungen bewahrt); **global** ist sie bewusst ungeordnet (mehrere Worker-Konsumenten, [jobs-scheduler.md](jobs-scheduler.md)).
+- Der Webhook-Outbound kann pro Konnektor **Coalescing** aktivieren: Innerhalb eines Zeitfensters wird pro `object_id` + `event_type` nur das **letzte** Event gesendet (mit einem Flag, dass zwischenzeitliche Änderungen gebündelt wurden). Das verhindert Event-Stürme bei Bulk-Änderungen und Importen.
 
 ## Webhook-Outbound zur Middleware
 
@@ -147,20 +155,29 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
     "retry_policy": {
       "max_attempts": 5,
       "backoff_seconds": [30, 60, 120, 300]
+    },
+    "coalesce": {
+      "enabled": true,
+      "window_seconds": 30
     }
   }
 }
 ```
 
+- **`coalesce`:** Bündelt Events pro `object_id` + `event_type` innerhalb eines Fensters („letztes gewinnt“, inkl. Flag für gebündelte Änderungen); Standard aus.
+- **Quellseitige Steuerung (`emit_events`):** Bulk-Import-Jobs können per Konfiguration auf „nur ein Summary-Event `import.completed`“ umstellen, statt pro Objekt Einzelevents zu erzeugen (Details [jobs-scheduler.md](jobs-scheduler.md)); der Webhook-Filter bleibt davon unabhängig konfigurierbar.
+
 **Verarbeitungsablauf:**
 
-1. Der Rust-Kern publiziert jedes CRUD-Event in NATS JetStream.
-2. Ein Python-Worker abonniert den Event-Stream und prüft die Filterregeln des Webhook-Konnektors.
+1. Das Outbox-Relay des Kerns publiziert das Event in NATS JetStream (`events.crud`).
+2. Ein Python-Worker abonniert den Event-Stream und prüft die Filterregeln des Webhook-Konnektors (ggf. mit Coalescing, s. o.).
 3. Bei Übereinstimmung baut der Worker die HTTP-Anfrage an die Middleware zusammen:
    - Body: das gefilterte Event oder das vollständige Objekt (konfigurierbar)
    - ggf. zusätzliche Informationen wie `resolved_attributes` (nach Vererbung/Sprachbaum)
 4. Der Worker sendet die Anfrage mit Wiederholungslogik.
 5. Bei dauerhaftem Fehler wird das Event in eine Dead-Letter-Queue verschoben und kann später manuell verarbeitet werden.
+
+**Zustellvertrag (verbindlich):** Die Zustellung an die Middleware ist **at-least-once**. Jedes Event trägt eine eindeutige `event_id`; die Middleware muss Duplikate über `event_id` deduplizieren (Redelivery nach Timeout oder Fehler ist möglich und normal). Der Worker kann zusätzlich einen Zustell-Wasserstand je Konnektor führen, um nach einem Neustart am letzten Stand fortzufahren.
 
 **Vorteile dieser Architektur:**
 

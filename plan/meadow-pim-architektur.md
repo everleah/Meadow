@@ -237,6 +237,8 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestartete Aufgaben** zuständig. Der Rust-Kern erzeugt `job_run`-Einträge und publiziert sie an NATS JetStream; der Python-Worker führt die Jobs aus und meldet den Status per REST zurück. Architektur, Ablauf, Job-Typen und Fehlerbehandlung stehen im Detaildokument.
 
+Die Verarbeitung ist **asynchron und blockiert das System nicht**: Der Worker verarbeitet Job- und Event-Streams parallel (asyncio, konfigurierbare Parallelität, Importe begrenzt); Import-/Export-/Bulk-Jobs sind **idempotent** (Upsert per Business-Schlüssel bzw. Quell-Referenz); NATS-Streams haben **explizite Retention-Limits**. Event-getriggerte Jobs (`trigger: event`) sind für Phase 5+ **reserviert**.
+
 > **Details:** [detail/jobs-scheduler.md](detail/jobs-scheduler.md)
 
 ---
@@ -244,6 +246,8 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 ## 7. Integration & Eventsystem
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**: das einheitliche Austauschformat MEF für Import/Export, ein CRUD-Eventsystem über NATS JetStream und ein Webhook-Outbound an die Middleware. Details zu Format, Event-Typen und Konnektoren stehen im Detaildokument.
+
+Der Inbound erfolgt **asynchron über `POST /imports`** (MEF als JSON oder Datei-Upload; sofortige `job_run`-ID, nie blockierend). CRUD-Events werden per **Transactional Outbox** im selben Schreibvorgang wie die Daten persistiert und asynchron über ein Relay an NATS JetStream publiziert – die API ist damit nie von NATS abhängig und es gehen keine Events verloren. Die Event-Zustellung ist **at-least-once** (Deduplizierung über `event_id`), die Reihenfolge **pro Objekt garantiert**; der Webhook-Outbound kann **coalescen** (letztes Event pro Objekt+Typ im Fenster) und Bulk-Importe können auf ein Summary-Event umgestellt werden (`emit_events`).
 
 > **Details:** [detail/integration-eventsystem.md](detail/integration-eventsystem.md)
 
@@ -277,6 +281,8 @@ Komplexe Suchanfragen können als Objekt vom Typ `saved_search` gespeichert und 
 ## 11. Benutzeroberfläche (Frontend)
 
 Die Weboberfläche läuft als separater Docker-Container mit Python + NiceGUI und kommuniziert ausschließlich über die REST-API des Rust-Kerns. Ein Dienst für alle Benutzer; Menüs und Aktionen werden rollenbasiert ein-/ausgeblendet. Die Oberfläche ist **arbeitsflächen-orientiert**: Das **Grid** (`ui.aggrid`) ist die Hauptarbeitsfläche mit Inline-Editing und Bulk-Aktionen, das **Produkt-Formular** ein Drill-down, die **Massendatenpflege** (Bulk-Wizard) läuft als Hintergrundjob. Eine berechnete **Vollständigkeit** (pro Typ × Sprache) steuert Pflegeschwerpunkte. Details zu Architektur, Mehrsprachigkeit und Modulen stehen in den Detaildokumenten.
+
+Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s über die REST-API beobachtet (Status, Fortschritt, Report); der Grid-Batch-Save (`batch-update`) ist **gedeckelt** (max. 500 Zeilen/Aufruf) – größere Auswahlen laufen über den Bulk-Wizard.
 
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
@@ -339,15 +345,18 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Rust-Kern um Scheduler und Job-Verwaltung erweitern
 - Python Worker Service implementieren (Basisframework)
 - **Job-Typen für Business Rules, Inbound/Outbound und später für Collection-Refresh vorsehen**
+- **Worker mit paralleler Verarbeitung (asyncio): getrennte Konsumenten für Job- und Event-Streams, konfigurierbare Parallelität, Importe begrenzt; Idempotenz-Regeln für schreibende Jobs**
+- **Retention-Limits für NATS-Streams festlegen (Jobs kurzlebig, DLQ manuell); `trigger: event` als reservierten Trigger dokumentieren (Phase 5+)**
 
 ### Phase 6 – Integration & Eventsystem
 - **Meadow Exchange Format (MEF) als Standard-Import/Export-Format implementieren**
 - **Quantifizierte Werte im MEF (`{"value": …, "unit": …}`) mit Normalisierung auf die kanonische SI-Einheit unterstützen**
 - **Inbound-Konnektor `json_import` und Outbound-Konnektor `json_export` umsetzen**
-- **CRUD-Events im Rust-Kern erzeugen und in NATS JetStream publizieren**
-- **Webhook-Outbound-Konnektor mit Filterung und Retry-Logik zur Middleware entwickeln**
-- **Import-Abgleich per Business-Schlüssel (Upsert) im `json_import`-Konnektor; Schlüssel im MEF-Format und in Events abdecken**
-- **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken**
+- **Dedizierter Inbound-Endpunkt `POST /imports` (MEF als JSON oder Datei-Upload, asynchron mit `job_run`-ID)**
+- **CRUD-Events per Transactional Outbox (atomar mit dem DB-Write) erzeugen und über ein Relay asynchron nach NATS JetStream publizieren**
+- **Webhook-Outbound-Konnektor mit Filterung, Retry-Logik, at-least-once-Zustellvertrag (`event_id`-Dedup) und Coalescing zur Middleware entwickeln; konfigurierbares `emit_events` für Import-Jobs (Summary-Event)**
+- **Import-Abgleich per Business-Schlüssel (Upsert) im `json_import`-Konnektor; Idempotenz zusätzlich über Quell-Referenz für Objekte ohne Schlüssel; Schlüssel im MEF-Format und in Events abdecken**
+- **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken; Event-Reihenfolge pro Objekt garantieren**
 
 ### Phase 7 – Frontend (NiceGUI)
 - NiceGUI-Anwendung mit Login, Benutzerverwaltung und rollenbasierten Menüs
@@ -355,6 +364,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Produkt-Formular:** scrollbare Seite mit einklappbaren Attributgruppen, Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX (Override, „Zurück auf vererbt“), typspezifische Wertedarstellung (Tags, Toggles, Einheiten, lokalisierte Daten)
 - **Vollständigkeit (Completeness):** Berechnung im Kern (Typ × Sprache), Anzeige in Grid, Formular und Dashboard, Filter „unvollständige Produkte“ / „fehlende Pflichtfelder“
 - **Massendatenpflege:** Bulk-Edit-Wizard (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Massen-Löschen) als Hintergrundjob mit Report
+- **Job-Status per Polling über die REST-API (Status, Fortschritt, Report); Batch-Save gedeckelt (max. 500 Zeilen/Aufruf), größere Auswahlen über den Bulk-Wizard**
 - **Dashboard als Arbeitsübersicht** mit Vollständigkeits-Shortcuts, letzte Änderungen und Job-Status
 - Admin-Seiten für Attributdefinitionen (inkl. `applicable_types`/`required_types`), Jobs, Benutzer und Gruppen
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
@@ -364,6 +374,8 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Sicherheit, Monitoring, Logging, Backup
 - Load-Testing und Optimierung
 - **Dokumentation für MEF und Eventsystem**
+- **Request-/Upload-Limits und Rate-Limits an der API; NATS-Stream-Retention und Queue-Tiefen-Monitoring (Port 8222)**
+- **Backpressure-/Ausfalltests: NATS- und Worker-Ausfall ohne Blockade des Kerns (Outbox-Nachlieferung)**
 - **Bereitstellung als Docker-Compose-Setup für KMUs**
 
 ### Phase 9 – Spätere Ausbaustufen (nicht im MVP)
@@ -385,6 +397,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Asynchrone Verarbeitung präzisiert (Abschnitte 6, 7, 11 & Phasen 5–8): Transactional Outbox für CRUD-Events (API nie von NATS blockiert, kein Event-Verlust); dedizierter Inbound-Endpunkt `POST /imports` (MEF asynchron, `job_run`-ID); konfigurierbares `emit_events` + Webhook-Coalescing; Worker mit paralleler Verarbeitung (getrennte Consumer für Jobs/Events); Idempotenz (Upsert per Business-Schlüssel bzw. Quell-Referenz) und at-least-once-Zustellvertrag (`event_id`-Dedup); Event-Reihenfolge pro Objekt garantiert; Retention-Limits für NATS-Streams + API-Request-/Rate-Limits; `batch-update` gedeckelt (max. 500 Zeilen), größere Auswahlen über Bulk; UI-Job-Status per Polling; `trigger: event` als Phase-5+-Trigger reserviert. Detaildokumente `integration-eventsystem.md`, `jobs-scheduler.md`, `api-design.md`, `datenmodell.md`, `betrieb-deployment.md` und `frontend-arbeitsflaechen.md` entsprechend angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Frontend-Detailplanung (Abschnitt 11 & Phase 7): arbeitsflächen-orientierte UI (Grid-first mit `ui.aggrid`), Produkt-Formular mit Hybrid-Sprache und Vererbungs-UX, Vollständigkeit (Typ × Sprache), Massendatenpflege (Bulk-Wizard), Dashboard als Arbeitsübersicht; Attributdefinition um `applicable_types`/`required_types` erweitert (Produktvorlage); Detaildokument `frontend-arbeitsflaechen.md` neu; `frontend.md`, `datenmodell.md`, `api-design.md` und `jobs-scheduler.md` entsprechend angepasst.*
 
