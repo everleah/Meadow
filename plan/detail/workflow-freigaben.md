@@ -1,6 +1,6 @@
 # Workflow & Freigaben
 
-- **Hauptdokument:** Abschnitt 8 ([Workflow & Freigaben](../meadow-pim-architektur.md))
+- **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md))
 - **Relevante Phasen:** Phase 2, 4, 9
 - **Stand:** Entwurf
 
@@ -8,6 +8,7 @@
 
 - Es wird **keine schwere Workflow-Engine** eingesetzt.
 - Die Statuslogik ist eine einfache Zustandsmaschine, implementiert im Python Business-Rules-Service.
+- **Umsetzung über `workflow_guard`-Regeln:** Erlaubte Übergänge werden als Business Rules (Typ `workflow_guard`, Abschnitt 8 / [business-rules.md](business-rules.md)) geprüft – sie laufen **blockierend** bei Statuswechsel im Schreibpfad des Kerns und liefern das Übergangs-Verdikt (`result.allow(bool, reason)`); bei Fehlern greifen fail-closed + Circuit Breaker der Rule-Infrastruktur.
 - Erlaubte Übergänge werden zentral definiert, z. B.:
 
 ```

@@ -30,6 +30,7 @@ Rollen sind Bündel feingranularer Berechtigungen; Gruppen können weitere Berec
 object.read / create / update / delete / publish
 reference.read / create / delete
 attribute_definition.read / manage
+business_rule.read / manage
 attribute_group.manage
 language_tree.read / manage
 job.read / run / manage
@@ -38,6 +39,8 @@ user.read / manage
 group.read / manage
 system.manage
 ```
+
+**Business Rules (`business_rule.read` / `manage`):** `manage` (anlegen, bearbeiten, aktivieren/deaktivieren, Rule Lab/Dry-Run) ist nur für `admin`/`superadmin` freigeschaltet; `read` ist für alle Rollen sichtbar (Verhalten nachvollziehen). Jede Änderung und jeder Zustandswechsel ist im Audit-Log protokolliert (Abschnitt 8 / [business-rules.md](business-rules.md)).
 
 Zuordnung (Auszug):
 

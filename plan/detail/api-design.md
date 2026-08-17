@@ -46,10 +46,26 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | DELETE  | `/users/{id}`                     | Benutzer löschen (Superadmin-Schutz)            |
 | POST    | `/groups`                         | Gruppe anlegen                                  |
 | POST    | `/groups/{id}/members`            | Benutzer einer Gruppe zuordnen                  |
+| GET     | `/rules`                          | Business Rules auflisten (Filter: `type`, `state`, `applies_to`) |
+| POST    | `/rules`                          | Regel anlegen (Compile-Check beim Speichern)   |
+| GET     | `/rules/{id}`                     | Regel laden (inkl. `version`)                  |
+| PATCH   | `/rules/{id}`                     | Regel bearbeiten (Compile-Check; Version++ + Audit) |
+| POST    | `/rules/{id}/activate`            | Regel aktivieren (`draft`/`disabled` → `active`; nur `admin`/`superadmin`) |
+| POST    | `/rules/{id}/disable`             | Regel deaktivieren                             |
+| POST    | `/rules/{id}/dry-run`             | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren) |
+| POST    | `/rules/{id}/test-batch`          | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren) |
+| POST    | `/rules/{id}/recompute`           | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5) |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen.
+
+## Business Rules in der API
+
+- **CRUD & Lifecycle:** Regeln werden über `/rules` verwaltet (nur `admin`/`superadmin` für `manage`). Beim Speichern prüft der Kern den Script-Code (Compile-Check + Sandbox-Regeln) – unzulässige Skripte werden abgelehnt. Änderungen und Zustandswechsel sind auditiert.
+- **Dry-Run / Rule Lab:** `POST /rules/{id}/dry-run` (Beispielobjekt: reale Objekt-ID oder konstruierter Payload) und `POST /rules/{id}/test-batch` (Objektauswahl) führen Regeln **read-only ohne Persistenz** aus und liefern Verletzungen, berechnete Werte und Log (Abschnitt 8 / [business-rules.md](business-rules.md)).
+- **Schreibpfad (intern):** `validation`/`computed`/`workflow_guard` werden beim Schreiben durch einen **synchronen internen Rule-Evaluation-Aufruf** des Rust-Kerns an den Python-Service ausgewertet (nicht Teil der öffentlichen OpenAPI); der Kern erzwingt das Ergebnis atomar (fail-closed + Circuit Breaker).
+- **Recompute:** `POST /rules/{id}/recompute` stößt einen Recompute-/Bulk-Job über die betroffene Objektmenge an (R5, Report über `/jobs/runs`).
 
 ## Relationen & Komposition in der API
 

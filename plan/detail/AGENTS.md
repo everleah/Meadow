@@ -18,6 +18,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `jobs-scheduler.md` — background jobs & scheduler (section 6)
   - `integration-eventsystem.md` — integration & event system (section 7)
   - `workflow-freigaben.md` — workflow & releases (section 8)
+  - `business-rules.md` — Business Rules: Python scripting, sandbox, execution & lifecycle (section 8)
   - `benutzer-gruppen-rechte.md` — users, groups & permissions (section 9)
   - `gespeicherte-suchen-collections.md` — saved searches & collections (section 10)
   - `frontend.md` — frontend: architecture, i18n & module overview (section 11)

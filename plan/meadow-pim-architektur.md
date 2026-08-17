@@ -113,6 +113,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 | Python-Basis                | Python 3.14                          | Gemeinsame Laufzeit für Worker und Frontend                           |
 | Paketmanager                | uv                                   | Verwaltung der Python-Abhängigkeiten (venv, Lockfile)                 |
 | Business Logic              | Pydantic (Validierung), ggf. FastAPI | Business Rules, berechnete Attribute, Validierung von MEF-Dokumenten  |
+| Rule-Engine / Sandbox       | RestrictedPython                    | Sichere Ausführung von Business-Rule-Skripten (Python)                 |
 | Worker                      | asyncio, nats-py, httpx              | Ausführung von Jobs (Import/Export), Webhooks, Status-Updates         |
 | Frontend                    | NiceGUI                              | Rollenbasierte Web-Oberfläche                                         |
 | Frontend i18n               | gettext + Babel                      | UI-Übersetzungen, Datums-/Zahlen-/Währungsformatierung                |
@@ -165,7 +166,7 @@ Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
 
 ## 4. Datenmodell
 
-Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** mit flexiblen Metadaten gespeichert; Unterschiede entstehen durch den Typ. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell. Details zu den Tabellen sowie zu Indizierung, Volltextsuche und Graph-Traversierung stehen im Detaildokument.
+Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** mit flexiblen Metadaten gespeichert; Unterschiede entstehen durch den Typ. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Business Rules, Jobs, Audit-Log) ergänzen das Kernmodell. Details zu den Tabellen sowie zu Indizierung, Volltextsuche und Graph-Traversierung stehen im Detaildokument.
 
 > **Details:**
 > - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche (4.1–4.3)
@@ -202,6 +203,14 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:** [relationen.md](detail/relationen.md) — Komposition, Aggregation, Universal-Root & Relationstypen; [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API.
 
+**Business Rules & berechnete Attribute (verbindlich):**
+
+1. **Definition:** Business Rules sind Python-Skripte (Sandbox: RestrictedPython) in der Tabelle `business_rule` mit fünf Typen (`validation`, `computed`, `normalization`, `workflow_guard`, `bulk`); sie werden im Admin-UI gepflegt und in definierten Ausführungskontexten ausgeführt (Abschnitt 8).
+2. **Berechnete Attribute (stored-first):** Als `computed` markierte Attribute werden **gespeichert**; ihr Wert wird **beim Schreiben synchron** durch die zugehörige `computed`-Regel berechnet und atomar mit dem Save persistiert. Es gibt **keinen** On-Read-/Virtuell-Modus; Lese-Pfade (Grid, Export, Suche) lesen nur die Datenbank. Formeln sind **pure Funktionen** der aufgelösten Attributmenge (eigene + vererbte + sprachlich aufgelöste Werte) und deklarieren ihre Eingaben (`dependencies`).
+3. **Kaskade:** Vererbt-abhängige berechnete Werte von Nachfahren werden **asynchron per Recompute-Job** aktualisiert (eventual consistency); Änderungen an Regeln/Definitionen lösen einen Bulk-Recompute-Job aus (R5).
+
+> **Details:** [business-rules.md](detail/business-rules.md) — Regeln, Sandbox, Ausführung, Lebenszyklus & Rule Lab; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [jobs-scheduler.md](detail/jobs-scheduler.md) — Recompute-Jobs.
+
 #### Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU)
 
 1. **Definition:** Ein Business-Schlüssel ist eine markierte Attributdefinition (`is_key: true`) und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
@@ -237,6 +246,8 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestartete Aufgaben** zuständig. Der Rust-Kern erzeugt `job_run`-Einträge und publiziert sie an NATS JetStream; der Python-Worker führt die Jobs aus und meldet den Status per REST zurück. Architektur, Ablauf, Job-Typen und Fehlerbehandlung stehen im Detaildokument.
 
+Der Job-Typ `business_rule` (Bulk-/Recompute-Jobs über Objektmengen) sowie **Recompute-Jobs für vererbt-abhängige berechnete Attribute** nutzen die Business-Rules-Infrastruktur (Abschnitt 8).
+
 Die Verarbeitung ist **asynchron und blockiert das System nicht**: Der Worker verarbeitet Job- und Event-Streams parallel (asyncio, konfigurierbare Parallelität, Importe begrenzt); Import-/Export-/Bulk-Jobs sind **idempotent** (Upsert per Business-Schlüssel bzw. Quell-Referenz); NATS-Streams haben **explizite Retention-Limits**. Event-getriggerte Jobs (`trigger: event`) sind für Phase 5+ **reserviert**.
 
 > **Details:** [detail/jobs-scheduler.md](detail/jobs-scheduler.md)
@@ -247,17 +258,41 @@ Die Verarbeitung ist **asynchron und blockiert das System nicht**: Der Worker ve
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**: das einheitliche Austauschformat MEF für Import/Export, ein CRUD-Eventsystem über NATS JetStream und ein Webhook-Outbound an die Middleware. Details zu Format, Event-Typen und Konnektoren stehen im Detaildokument.
 
+Beim Inbound normalisieren **`normalization`-Regeln** (R3, Abschnitt 8) die MEF-Werte vor dem Schreiben.
+
 Der Inbound erfolgt **asynchron über `POST /imports`** (MEF als JSON oder Datei-Upload; sofortige `job_run`-ID, nie blockierend). CRUD-Events werden per **Transactional Outbox** im selben Schreibvorgang wie die Daten persistiert und asynchron über ein Relay an NATS JetStream publiziert – die API ist damit nie von NATS abhängig und es gehen keine Events verloren. Die Event-Zustellung ist **at-least-once** (Deduplizierung über `event_id`), die Reihenfolge **pro Objekt garantiert**; der Webhook-Outbound kann **coalescen** (letztes Event pro Objekt+Typ im Fenster) und Bulk-Importe können auf ein Summary-Event umgestellt werden (`emit_events`).
 
 > **Details:** [detail/integration-eventsystem.md](detail/integration-eventsystem.md)
 
 ---
 
-## 8. Workflow & Freigaben
+## 8. Workflow, Freigaben & Business Rules
 
 Es wird **keine schwere Workflow-Engine** eingesetzt. Die Statuslogik ist eine einfache Zustandsmaschine, die im Python Business-Rules-Service implementiert ist; der Rust-Kern speichert nur das Statusfeld (`status`) und protokolliert Änderungen im Audit-Log. Details zu Übergängen und Freigaben stehen im Detaildokument.
 
 > **Details:** [detail/workflow-freigaben.md](detail/workflow-freigaben.md)
+
+### 8.1 Business Rules (Python-Skripte)
+
+**Business Rules** sind anpassbare Geschäftslogik in **Python** als Skriptsprache: gespeichert in der Tabelle `business_rule`, bearbeitet im Admin-UI, ausgeführt in einer **gesicherten Sandbox** (RestrictedPython). Es gibt **einen** Autoren-Mechanismus; fünf Regeltypen unterscheiden sich nur durch Ausführungskontext und Ergebnisinterpretation:
+
+| Typ | Zweck | Ausführung |
+|-----|-------|------------|
+| `validation` | Prüfungen beim Schreiben (blockierend: `error`; annotierend: `warning`) | **synchron** im Schreibpfad |
+| `computed` | Berechnete/abgeleitete Attribute (gespeichert) | **synchron** im Schreibpfad |
+| `normalization` | Bereinigung/Transformation beim MEF-Import | Import-Pipeline (Worker) |
+| `workflow_guard` | Erlaubte Statusübergänge / Publish-Hürden | **synchron** bei Statuswechsel |
+| `bulk` | Regel über gefilterte Objektmenge (Recompute/Anreicherung) | Job (`business_rule`, async) |
+
+**Kernentscheidungen (verbindlich):**
+
+- **Schreibpfad:** Der Rust-Kern bleibt die DB-Autorität, ruft aber für `validation`/`computed`/`workflow_guard` **synchron** den internen Rule-Evaluation-Endpunkt des Python-Service auf; das Ergebnis (Fehler/Warnungen, berechnete Werte, Übergangs-Verdikt) wird atomar im selben Schreibvorgang erzwungen bzw. gespeichert.
+- **Berechnete Attribute (R2, stored-first):** gespeicherte Werte, beim Schreiben **synchron** berechnet – kein On-Read-/Virtuell-Modus im MVP, Lese-Pfade bleiben reine DB-Reads; pure Funktionen der aufgelösten Attributmenge; deklarierte `dependencies`; vererbt-abhängige Werte von Nachfahren werden **async per Recompute-Job** aktualisiert (eventual consistency); Definitionsänderung → Bulk-Recompute-Job.
+- **Sandbox:** RestrictedPython in-process; Import-Whitelist administrativ konfigurierbar; harte Limits (Timeout ~1–2 s blockierend / ~30 s Bulk, Speicher, Skriptgröße); keine externe I/O.
+- **Lebenszyklus & Sicherheit:** `draft`/`active`/`disabled`; Compile-Check bei jedem Speichern; Dry-Run + **Rule Lab** (interaktives Testmodus gegen reale Objekte, read-only, keine Persistenz) vor Aktivierung; Versionierung + Audit; **fail-closed** bei Regel-Fehlern + **Circuit Breaker** (Auto-`disabled` nach N Fehlern + Alert); RBAC: nur `admin`/`superadmin` dürfen Regeln pflegen/aktivieren.
+- **Abgrenzung:** Regeln rufen keine Webhooks/Events und keine externen Systeme auf (Aufgabe des Eventsystems, Abschnitt 7); keine schwere Workflow-Engine, keine externe Rule-Engine.
+
+> **Details:** [detail/business-rules.md](detail/business-rules.md)
 
 ---
 
@@ -281,6 +316,8 @@ Komplexe Suchanfragen können als Objekt vom Typ `saved_search` gespeichert und 
 ## 11. Benutzeroberfläche (Frontend)
 
 Die Weboberfläche läuft als separater Docker-Container mit Python + NiceGUI und kommuniziert ausschließlich über die REST-API des Rust-Kerns. Ein Dienst für alle Benutzer; Menüs und Aktionen werden rollenbasiert ein-/ausgeblendet. Die Oberfläche ist **arbeitsflächen-orientiert**: Das **Grid** (`ui.aggrid`) ist die Hauptarbeitsfläche mit Inline-Editing und Bulk-Aktionen, das **Produkt-Formular** ein Drill-down, die **Massendatenpflege** (Bulk-Wizard) läuft als Hintergrundjob. Eine berechnete **Vollständigkeit** (pro Typ × Sprache) steuert Pflegeschwerpunkte. Details zu Architektur, Mehrsprachigkeit und Modulen stehen in den Detaildokumenten.
+
+Das **Rule Lab** (interaktives Testmodus für Business Rules, read-only, keine Persistenz) ist Teil der Admin-Oberfläche (Abschnitt 8).
 
 Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s über die REST-API beobachtet (Status, Fortschritt, Report); der Grid-Batch-Save (`batch-update`) ist **gedeckelt** (max. 500 Zeilen/Aufruf) – größere Auswahlen laufen über den Bulk-Wizard.
 
@@ -315,6 +352,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Attributdefinition um `inheritable`-Flag erweitern**
 - **Attributdefinition um `applicable_types`/`required_types` erweitern (Produktvorlage pro Typ; Grundlage für Formular-Sichtbarkeit und Vollständigkeit)**
 - **Attributdefinition um `is_key`-Flag für Business-Schlüssel erweitern (Unique-Index `(type, attributes.<name>)` pro Objekttyp)**
+- **Business-Rules-Basis vorbereiten: Tabelle `business_rule`; Attributdefinition um `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` erweitern (berechnete Attribute, stored-first, Abschnitt 8)**
 - **Relationenmodell festlegen: Komposition (`depends_on`) vs. Aggregation (`category_member`, `collection_member`, `related`); Tabelle `relation_definition`; Universal-Root als reales Objekt**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
 
@@ -335,16 +373,21 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Indizes für Vererbungsrelationen und Kategorieabfragen sicherstellen**
 
 ### Phase 4 – Python-Integration & Business Rules
-- Python-Service für Business Rules (Statusmaschine, Validierungen) aufsetzen
+- **Python-Service für Business Rules aufsetzen (Sandbox: RestrictedPython, konfigurierbare Import-Whitelist, Timeout-/Speicher-/Größen-Limits, Script-Kontrakt `run(obj, ctx, result)`); Statusmaschine (`workflow_guard`) und Validierungen (`validation`) als Regeln**
+- **Synchronen Rule-Evaluation-Endpunkt für den Schreibpfad des Rust-Kerns implementieren (fail-closed, atomares Erzwingen von Fehlern/berechneten Werten/Übergangs-Verdikt; enge Timeouts; optionaler Degrade-Modus „Speichern + als unberechnet markieren“)**
+- **Berechnete Attribute (`computed`, stored-first) umsetzen: Berechnung beim Schreiben, pure Funktionen, deklarierte `dependencies`, async Recompute-Kaskade für vererbt-abhängige Werte, Bulk-Recompute bei Definitionsänderung**
+- **`normalization`-Regeln (R3) in die Import-Pipeline integrieren (MEF-Werte vor dem Schreiben bereinigen/transformieren)**
+- **Regel-Lebenszyklus implementieren: `draft`/`active`/`disabled`, Compile-Check bei jedem Speichern, Versionierung + Audit, Circuit Breaker (Auto-`disabled` + Alert), RBAC `admin`/`superadmin`**
+- **Rule Lab / Dry-Run umsetzen (interaktives Testmodus gegen reale/konstruierte Objekte, read-only, keine Persistenz, auditierte Lab-Läufe)**
 - Event-basierte Kommunikation vorbereiten
 - **Business Rules mit Zugriff auf vererbte und sprachlich aufgelöste Werte ausstatten**
-- **Schnittstelle für benutzerdefinierte Regeln definieren, die auf dem generischen Objektmodell arbeiten**
+- **Schnittstelle für benutzerdefinierte Regeln definieren, die auf dem generischen Objektmodell arbeiten (eine Skriptsprache, ein Mechanismus)**
 
 ### Phase 5 – Hintergrundverarbeitung & Scheduler
 - NATS JetStream in die Infrastruktur aufnehmen
 - Rust-Kern um Scheduler und Job-Verwaltung erweitern
 - Python Worker Service implementieren (Basisframework)
-- **Job-Typen für Business Rules, Inbound/Outbound und später für Collection-Refresh vorsehen**
+- **Job-Typen für Business Rules vorsehen (inkl. `recompute` für vererbt-abhängige berechnete Attribute und Bulk-Recompute bei Definitionsänderung), Inbound/Outbound und später für Collection-Refresh**
 - **Worker mit paralleler Verarbeitung (asyncio): getrennte Konsumenten für Job- und Event-Streams, konfigurierbare Parallelität, Importe begrenzt; Idempotenz-Regeln für schreibende Jobs**
 - **Retention-Limits für NATS-Streams festlegen (Jobs kurzlebig, DLQ manuell); `trigger: event` als reservierten Trigger dokumentieren (Phase 5+)**
 
@@ -352,6 +395,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Meadow Exchange Format (MEF) als Standard-Import/Export-Format implementieren**
 - **Quantifizierte Werte im MEF (`{"value": …, "unit": …}`) mit Normalisierung auf die kanonische SI-Einheit unterstützen**
 - **Inbound-Konnektor `json_import` und Outbound-Konnektor `json_export` umsetzen**
+- **MEF-Import mit `normalization`-Regeln (R3) verknüpfen (Werte vor dem Schreiben bereinigen/transformieren; gleiche Sandbox wie Schreibpfad-Regeln)**
 - **Dedizierter Inbound-Endpunkt `POST /imports` (MEF als JSON oder Datei-Upload, asynchron mit `job_run`-ID)**
 - **CRUD-Events per Transactional Outbox (atomar mit dem DB-Write) erzeugen und über ein Relay asynchron nach NATS JetStream publizieren**
 - **Webhook-Outbound-Konnektor mit Filterung, Retry-Logik, at-least-once-Zustellvertrag (`event_id`-Dedup) und Coalescing zur Middleware entwickeln; konfigurierbares `emit_events` für Import-Jobs (Summary-Event)**
@@ -367,6 +411,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Job-Status per Polling über die REST-API (Status, Fortschritt, Report); Batch-Save gedeckelt (max. 500 Zeilen/Aufruf), größere Auswahlen über den Bulk-Wizard**
 - **Dashboard als Arbeitsübersicht** mit Vollständigkeits-Shortcuts, letzte Änderungen und Job-Status
 - Admin-Seiten für Attributdefinitionen (inkl. `applicable_types`/`required_types`), Jobs, Benutzer und Gruppen
+- **Admin-Bereich „Business Rules“: Regel-Editor mit Compile-Check, Zustände (`draft`/`active`/`disabled`), Dry-Run und **Rule Lab** (Regel gegen Objektauswahl ausführen, read-only, keine Persistenz)**
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
 - **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung (mehrere Kategorie-Bäume)**
 
@@ -376,6 +421,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Dokumentation für MEF und Eventsystem**
 - **Request-/Upload-Limits und Rate-Limits an der API; NATS-Stream-Retention und Queue-Tiefen-Monitoring (Port 8222)**
 - **Backpressure-/Ausfalltests: NATS- und Worker-Ausfall ohne Blockade des Kerns (Outbox-Nachlieferung)**
+- **Fehlerfälle der Business Rules testen: Circuit Breaker (Auto-`disabled` nach N Fehlern + Alert) und Degrade-Modus (Speichern ohne Rules-Service) verifizieren**
 - **Bereitstellung als Docker-Compose-Setup für KMUs**
 
 ### Phase 9 – Spätere Ausbaustufen (nicht im MVP)
@@ -397,6 +443,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Business Rules (Abschnitt 8.1 & Phasen 1, 2, 4–8): Business Rules mit Python als Skriptsprache definiert – fünf Regeltypen (`validation`, `computed`, `normalization`, `workflow_guard`, `bulk`), ein Autoren-Mechanismus (`business_rule`-Tabelle, Admin-UI, RestrictedPython-Sandbox). Schreibpfad: synchroner interner Rule-Evaluation-Aufruf des Rust-Kerns an den Python-Service für `validation`/`computed`/`workflow_guard` (fail-closed, atomar, enge Timeouts, optionaler Degrade-Modus). Berechnete Attribute (R2) stored-first: gespeicherte Werte, synchron beim Schreiben berechnet, pure Funktionen, deklarierte `dependencies`, async Recompute-Kaskade für vererbt-abhängige Werte (eventual consistency), Bulk-Recompute bei Definitionsänderung. Import-Whitelist administrativ konfigurierbar; Lebenszyklus `draft`/`active`/`disabled` mit Compile-Check, Versionierung + Audit, Dry-Run und Rule Lab (interaktives Testmodus, read-only), Circuit Breaker + Alert; RBAC `admin`/`superadmin`. Detaildokument `business-rules.md` neu; `workflow-freigaben.md`, `jobs-scheduler.md`, `api-design.md`, `datenmodell.md`, `benutzer-gruppen-rechte.md` und `frontend.md` entsprechend angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Asynchrone Verarbeitung präzisiert (Abschnitte 6, 7, 11 & Phasen 5–8): Transactional Outbox für CRUD-Events (API nie von NATS blockiert, kein Event-Verlust); dedizierter Inbound-Endpunkt `POST /imports` (MEF asynchron, `job_run`-ID); konfigurierbares `emit_events` + Webhook-Coalescing; Worker mit paralleler Verarbeitung (getrennte Consumer für Jobs/Events); Idempotenz (Upsert per Business-Schlüssel bzw. Quell-Referenz) und at-least-once-Zustellvertrag (`event_id`-Dedup); Event-Reihenfolge pro Objekt garantiert; Retention-Limits für NATS-Streams + API-Request-/Rate-Limits; `batch-update` gedeckelt (max. 500 Zeilen), größere Auswahlen über Bulk; UI-Job-Status per Polling; `trigger: event` als Phase-5+-Trigger reserviert. Detaildokumente `integration-eventsystem.md`, `jobs-scheduler.md`, `api-design.md`, `datenmodell.md`, `betrieb-deployment.md` und `frontend-arbeitsflaechen.md` entsprechend angepasst.*
 

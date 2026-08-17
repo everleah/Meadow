@@ -113,6 +113,10 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "is_key": false,                 // true: Business-Schlüssel (z. B. SKU), eindeutig pro Typ
     "applicable_types": [],          // optional: Objekttypen, für die das Attribut gilt (leer = alle)
     "required_types": ["product"],   // optional: Objekttypen, für die das Attribut Pflicht ist (Vollständigkeit)
+    "computed": false,                // true: berechnetes Attribut – Wert wird von einer compute-Regel geschrieben
+    "computed_rule": "",             // Name der business_rule, die dieses Attribut setzt (nur bei computed)
+    "dependencies": [],               // Eingabeattribute, die die Formel liest (für Recompute-Kaskade)
+    "computed_reads_inherited": false,// true: Formel liest vererbte Werte -> async Kaskade auf Nachfahren
     "constraints": {
         "min": 0,
         "max": 999999,
@@ -131,7 +135,32 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp über den Unique-Index `(type, attributes.<name>)`. Details siehe [Schlüssel (Business-Schlüssel)](#schluessel-business-schluessel).
 - `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
 - `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
+- `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` kennzeichnen **berechnete Attribute** (Abschnitt 8 / [business-rules.md](business-rules.md)): Der Wert wird beim Schreiben **synchron** von einer `computed`-Regel berechnet und gespeichert (stored-first, kein On-Read-Modus); `dependencies` deklarieren die Eingaben der Formel (Grundlage der Recompute-Kaskade; async bei `computed_reads_inherited`).
 - Weitere optionale Felder: `multilingual`, `enum_values`, `default_value`, `unit_id`, `display_unit_id`, `description`. Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
+
+### Tabelle `business_rule`
+
+Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, Ausführung, Lebenszyklus und Rule Lab in [business-rules.md](business-rules.md) (Abschnitt 8).
+
+```json
+{
+    "id": "rule_001",
+    "name": "gross_from_net",
+    "type": "computed",              // validation | computed | normalization | workflow_guard
+    "applies_to": ["product"],       // optional: Objekttypen (leer = alle)
+    "script": "def run(obj, ctx, result):\n    ...",
+    "state": "active",               // draft | active | disabled
+    "version": 3,
+    "created_at": "2026-08-17T08:00:00Z",
+    "updated_at": "2026-08-17T11:30:00Z",
+    "updated_by": "user_1"
+}
+```
+
+- `type` bestimmt, wie das Skriptergebnis interpretiert wird (`validation`/`computed`/`normalization`/`workflow_guard`); nur `active`-Regeln werden ausgeführt.
+- `applies_to` schränkt die Objekttypen ein (leer = alle); die Prüfung erfolgt bei der Auswertung.
+- `script` wird in einer RestrictedPython-Sandbox ausgeführt (Import-Whitelist, Timeout-/Speicher-/Größen-Limits, keine externe I/O); ein **Compile-Check bei jedem Speichern** lehnt unzulässige Skripte ab.
+- Seed-Regeln werden als Code ausgeliefert und beim Setup geseedet; danach werden sie als Daten im Admin-UI gepflegt.
 
 ### Tabelle `attribute_group`
 

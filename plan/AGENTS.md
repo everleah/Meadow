@@ -16,7 +16,7 @@ Owns the architecture and technical planning documents for Meadow PIM. This fold
 - The document is the single source of truth for:
   - overall architecture (Rust core, Python worker and frontend, NATS JetStream, SurrealDB, object storage)
   - final technology stack (sections 2–3)
-  - data model (generic `object`, `attribute_definition`, `attribute_group`, `unit`, `reference`, `relation_definition`, `language_tree`, `job_definition`, `job_run`, `audit_log`)
+  - data model (generic `object`, `attribute_definition`, `attribute_group`, `unit`, `reference`, `relation_definition`, `language_tree`, `business_rule`, `job_definition`, `job_run`, `audit_log`)
   - REST API design (section 5)
   - jobs, events, and webhook integration (sections 6–7)
   - workflows and RBAC/ABAC (sections 8–9)

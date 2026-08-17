@@ -109,6 +109,11 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 9. **Dashboard (Arbeitsübersicht)**
    - Kacheln (Anzahl Objekte pro Typ/Status), Vollständigkeits-Shortcuts ins Grid, letzte Änderungen, Job-Status
 
+10. **Business Rules & Rule Lab** (nur `admin`/`superadmin`)
+    - Regel-Editor mit Compile-Check (unzulässige Skripte sind nicht speicherbar), Zustände `draft`/`active`/`disabled`, Versionierung
+    - **Rule Lab**: Regel gegen eine Objektauswahl (oder ein Beispielobjekt/konstruierten Payload) ausführen – read-only, keine Persistenz; Anzeige von Verletzungen, berechneten Werten vor/nach, `log()`-Ausgabe; Dry-Run vor Aktivierung
+    - Hinweis auf Circuit-Breaker-Auslösungen (debuggen nach Auto-`disabled`)
+
 **Spätere Ausbaustufen (nicht im MVP):**
 
 - Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections

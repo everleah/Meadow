@@ -93,7 +93,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - Final technology stack (see plan sections 2–3):
   - Core: Rust (Edition 2024), Axum + utoipa (OpenAPI), serde/serde_json, jsonwebtoken + argon2, surrealdb client, async-nats, tokio-cron-scheduler.
   - Data & messaging: SurrealDB (documents + graph), NATS JetStream (queue + event bus), S3-compatible object storage, optional Redis cache.
-  - Python: Python 3.14, NiceGUI (frontend), asyncio + nats-py + httpx (worker), Pydantic (business rules).
+  - Python: Python 3.14, NiceGUI (frontend), asyncio + nats-py + httpx (worker), Pydantic + RestrictedPython (Business Rules, Abschnitt 8).
   - Operations: Docker + Docker Compose (MVP), optional Kubernetes (k3s).
 - SurrealDB server core is BSL 1.1 licensed (change date 2030-01-01 → Apache 2.0). Self-hosted production use for Meadow PIM is allowed; offering SurrealDB as a "Database Service" is not.
 - jsonwebtoken v10+/v11 requires a crypto backend feature (`aws_lc_rs` or `rust_crypto`); crate MSRV is 1.88.
