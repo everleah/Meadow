@@ -14,9 +14,13 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/objects`                        | Neues Objekt anlegen                            |
 | GET     | `/objects/{id}`                   | Objekt inkl. Metadaten und Referenzen laden     |
 | PATCH   | `/objects/{id}`                   | Teilaktualisierung der Attribute/Status         |
-| DELETE  | `/objects/{id}`                   | Objekt löschen (soft delete)                    |
+| DELETE  | `/objects/{id}`                   | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt) |
 | GET     | `/objects?type=product&filter=...`| Suche & Filterung mit Pagination                |
-| POST    | `/references`                     | Referenz zwischen zwei Objekten erstellen       |
+| POST    | `/references`                     | Referenz zwischen zwei Objekten erstellen (Validierung gegen die Relation-Definition) |
+| GET     | `/relation-definitions`           | Relationstypen auflisten                        |
+| POST    | `/relation-definitions`           | Benutzerdefinierten Relationstyp anlegen (nur Aggregation, Phase 9) |
+| PATCH   | `/objects/{id}/parent`            | Kompositions-Elternteil ändern (Re-Parenting, Zyklenschutz) |
+| GET     | `/objects/{id}/children`          | Direkte Kompositions-Kinder eines Objekts       |
 | GET     | `/objects/{id}/references`        | Alle Referenzen eines Objekts (mit Metadaten)   |
 | GET     | `/objects/{id}/graph?depth=3`     | Graph-Traversierung ab Objekt                   |
 | GET     | `/attribute-groups`               | Attributgruppen verwalten                       |
@@ -40,6 +44,13 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen.
+
+## Relationen & Komposition in der API
+
+- Jede Relation referenziert eine Definition aus `/relation-definitions`; beim Anlegen prüft der Kern die `kind`-Semantik und die optionalen Typrestriktionen (`source_types`/`target_types`) gegen Quell- und Zielobjekt.
+- **Komposition (`depends_on`):** genau eine Kante pro Objekt. Beim Anlegen ohne expliziten Elternteil wird der Universal-Root als Kompositions-Elternteil gesetzt. `PATCH /objects/{id}/parent` verschiebt den Teilbaum (Zyklenschutz, Typrestriktionsprüfung, Audit-Eintrag, atomar).
+- **Aggregationen (n:m)** können frei angelegt und entfernt werden; ihre Entfernung kaskadiert nie.
+- **Löschen** (`DELETE /objects/{id}`) kaskadiert als Soft Delete über den gesamten Kompositionsteilbaum (`depends_on`).
 
 ## Datums- & Zeitwerte in der API
 

@@ -1,12 +1,14 @@
-# Datenwertvererbung & Konfliktlösung
+# Datenwertvererbung
 
-- **Hauptdokument:** Abschnitte 4.5 und 4.7 ([Datenwertvererbung](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 1–3, 9
+- **Hauptdokument:** Abschnitt 4.5 ([Datenwertvererbung](../meadow-pim-architektur.md))
+- **Relevante Phasen:** Phase 1–3
 - **Stand:** Entwurf
 
-## Datenwertvererbung über Objektrelationen
+## Datenwertvererbung über die Kompositionskette
 
-Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchischer Objektbeziehungen. Dies ist besonders relevant für Gruppierungsobjekte (z. B. ein Produkt) und darunterliegende Varianten (z. B. Produktvarianten). Dabei wird ein Wert **nicht kopiert**, sondern dynamisch aufgelöst – Änderungen am übergeordneten Objekt wirken sich sofort auf alle erbenden Kindobjekte aus, sofern diese keinen eigenen Wert gesetzt haben.
+Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Kompositionskette (`depends_on`). Dies ist besonders relevant für Gruppierungsobjekte (z. B. ein Produkt) und darunterliegende Varianten (z. B. Produktvarianten). Dabei wird ein Wert **nicht kopiert**, sondern dynamisch aufgelöst – Änderungen am übergeordneten Objekt wirken sich sofort auf alle erbenden Kindobjekte aus, sofern diese keinen eigenen Wert gesetzt haben.
+
+> **Hinweis:** Grundlagen des Relationenmodells (Komposition `depends_on`, Universal-Root, Aggregationen, Re-Parenting, Kaskade) stehen in [relationen.md](relationen.md).
 
 **Zielsetzung:**
 
@@ -16,23 +18,21 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
 
 **Modellierung der Vererbungsrelation:**
 
-- Die bestehende, leichtgewichtige `reference`-Tabelle bleibt für allgemeine Verknüpfungen erhalten.
-- Für die Vererbung wird ein eigener Relationstyp `inherits_from` verwendet. Die Richtung ist definiert als: **Kind verweist auf Elternteil**.
+- Jedes Objekt hat **genau eine** Kompositionskante vom Typ `depends_on` (Richtung: Kind verweist auf Elternteil). Die Vererbung folgt ausschließlich dieser Kette bis zum Universal-Root. Aggregationen (`category_member`, `collection_member`, `related`) haben keine Vererbungswirkung.
 
   ```json
   {
-    "id": "ref_inh_001",
+    "id": "ref_dep_001",
     "from": "variant_1",             // Kindobjekt
     "to": "product_1",               // Elternobjekt
-    "type": "inherits_from",         // spezieller Vererbungstyp
-    "attributes": {
-      "priority": 1                  // optional: Reihenfolge bei mehreren Eltern
-    }
+    "definition_id": "rel_depends_on",
+    "type": "depends_on",            // einziger Kompositionstyp
+    "attributes": {}
   }
   ```
 
-- Über SurrealDB-Graphfunktionen kann entlang dieser Relationen effizient traversiert werden. Da die Relationen in der generischen `reference`-Tabelle liegen, wird der Typ als Bedingung angegeben: `->(reference WHERE type = 'inherits_from')->object`.
-- Ein Objekt kann mehrere `inherits_from`-Relationen besitzen. In diesem Fall gilt die durch `priority` definierte Reihenfolge (niedriger Wert = höhere Priorität). Ist keine Priorität gesetzt, wird die zuerst gefundene Relation verwendet.
+- Da es **genau einen** Elternteil gibt, existieren keine Prioritäten oder Scope-Typen mehr; die Auflösung ist deterministisch über den einzigen Pfad nach oben.
+- Über SurrealDB-Graphfunktionen wird entlang dieser Relationen effizient traversiert. Da die Relationen in der generischen `reference`-Tabelle liegen, wird die Definition als Bedingung angegeben: `->(reference WHERE definition_id = 'rel_depends_on')->object`.
 
 **Attributkategorien:**
 
@@ -56,8 +56,8 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
 
 1. Für jedes Attribut wird zuerst der **eigene Wert** des Objekts geprüft.
 2. Ist der Schlüssel im `attributes`-Objekt **vorhanden** (auch mit `null` oder leerem String), gilt er als gesetzt – die Vererbung greift **nicht**. Ein leerer Wert unterbricht also bewusst die Vererbung.
-3. Fehlt der Schlüssel („nicht gepflegt“), wird entlang der `inherits_from`-Kette aufwärts gesucht. Der nächstgelegene Elternknoten, der das Attribut gesetzt hat, liefert den Wert.
-4. Wird kein gesetzter Wert in der gesamten Kette gefunden, bleibt das Attribut für das Kind **leer/nicht vorhanden**.
+3. Fehlt der Schlüssel („nicht gepflegt“), wird entlang der `depends_on`-Kette aufwärts gesucht. Der nächstgelegene Vorfahre, der das Attribut gesetzt hat, liefert den Wert.
+4. Wird in der gesamten Kette (bis einschließlich Universal-Root) kein gesetzter Wert gefunden, bleibt das Attribut für das Kind **leer/nicht vorhanden**.
 
 **Beispiel:**
 
@@ -91,10 +91,10 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
 
 **Technische Umsetzung in SurrealDB:**
 
-- Indizes auf `reference` (insbesondere `type` und `from`) beschleunigen die Traversierung.
+- Indizes auf `reference` (insbesondere `definition_id` und `from`) beschleunigen die Traversierung.
 - Die Vererbung wird über SurrealQL-Abfragen realisiert, z. B.:
   ```sql
-  SELECT ->(reference WHERE type = 'inherits_from')->object.attributes.brand AS inherited_brand
+  SELECT ->(reference WHERE definition_id = 'rel_depends_on')->object.attributes.brand AS inherited_brand
   FROM object:variant_1
   ```
   oder durch schrittweises Aufsteigen in der Applikationslogik.
@@ -113,91 +113,17 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang hierarchisc
 - Flexibilität: Durch explizites Setzen eines leeren Wertes kann die Vererbung punktuell ausgehebelt werden.
 - Performance: Nur vererbungsfähige Attribute werden in die Graph-Traversierung einbezogen.
 
-**Abgrenzung zu allgemeinen Relationen:**
+**Abgrenzung zu Aggregationen:**
 
-- Normale `reference`-Relationen (z. B. `related`, `parent`, `variant`) dienen rein der Verknüpfung und haben **keine** Vererbungswirkung.
-- Nur Relationen vom Typ `inherits_from` aktivieren die beschriebene Wertvererbung.
+- Aggregationsrelationen (`category_member`, `collection_member`, `related`) dienen rein der Verknüpfung und haben **keine** Vererbungswirkung.
+- Nur die Kompositionskette `depends_on` aktiviert die beschriebene Wertvererbung.
 
-## Konfliktlösung bei mehrfacher Vererbung
+## Konfliktlösung
 
-Durch die parallele Einordnung von Objekten in mehrere Strukturen (Pflegehierarchie, Kategorien, spätere Klassifizierung) kann der Fall auftreten, dass für dasselbe Attribut **mehrere potenzielle Erbquellen** existieren. Diese liefern dann möglicherweise unterschiedliche Werte. Meadow PIM löst solche Konflikte mit einer Kombination aus **deterministischen Regeln** und **manuellen Eingriffsmöglichkeiten**.
+Durch das Ein-Eltern-Modell existiert **genau eine** Vererbungsquelle pro Objekt. Konflikte durch mehrere Quellen entfallen damit.
 
-**Grundsatz:**
+- Die einzige Überschreibungsmöglichkeit ist ein **expliziter Wert am Kind** (inkl. leerem Wert zur Unterbrechung).
+- Die UI zeigt bei vererbten Werten an, **von welchem Vorfahren** der Wert stammt (`from_object` in der aufgelösten Antwort), damit die Herkunft nachvollziehbar bleibt.
+- Wird ein Objekt umgehängt (Re-Parenting, siehe [relationen.md](relationen.md)), lösen sich die Werte des Teilbaums ab sofort gegen die **neuen** Vorfahren auf – dynamisch, ohne Datenkopie.
 
-- Konflikte werden **nicht verhindert**, sondern kontrolliert aufgelöst.
-- Die Auflösung erfolgt **zur Lesezeit**, ohne Werte zu duplizieren.
-- Der Benutzer kann jederzeit einen **expliziten Wert am Kind** setzen, um die Vererbung gezielt zu überschreiben – das ist die mächtigste und üblichste Methode.
-
-**1. Deterministische Prioritätsregeln**
-
-Jede `inherits_from`-Relation kann eine Priorität erhalten:
-
-```json
-{
-  "id": "ref_inh_001",
-  "from": "variant_1",
-  "to": "product_1",
-  "type": "inherits_from",
-  "attributes": {
-    "priority": 10,
-    "scope": "maintenance"
-  }
-}
-```
-
-- **`priority`** (niedriger Wert = höhere Priorität) legt die Reihenfolge fest, wenn mehrere Relationen desselben Geltungsbereichs existieren.
-- **`scope`** unterscheidet die Art der Beziehung, z. B. `maintenance` (Pflegestruktur), `category` (Kategorisierung) oder `classification` (spätere Standards).
-- Bei der Auflösung wird zuerst die Relation mit dem **kleinsten `priority`-Wert** im **höchstpriorisierten `scope`** verwendet. Die `scope`-Reihenfolge ist systemweit definiert (z. B. `maintenance` vor `category` vor `classification`).
-- Sind mehrere Relationen gleich priorisiert, entscheidet die zuerst gefundene (stabile Reihenfolge, z. B. nach `id`).
-
-**2. Manuelle Konfliktbehandlung in der UI**
-
-Auch mit Prioritätsregeln kann es für Benutzer wichtig sein, die tatsächliche Quelle eines geerbten Wertes zu verstehen und bei Bedarf zu übersteuern.
-
-- Die Oberfläche zeigt bei vererbten Werten an, **von welchem Elternobjekt** der Wert stammt.
-- Besteht ein Konflikt (mehrere Quellen liefern unterschiedliche Werte), wird dies visuell markiert (z. B. Warnsymbol).
-- Der Benutzer hat dann zwei Möglichkeiten:
-  1. **Expliziten Wert am Kind setzen** – damit greift die Vererbung für dieses Attribut nicht mehr (Standard-Override).
-  2. **Bevorzugte Quelle wählen** – dies kann als dauerhafte Einstellung am Kind gespeichert werden, z. B. in einem Attribut `preferred_inheritance_source`, das die Relation-ID oder das Quellobjekt angibt. Zukünftige Lesevorgänge berücksichtigen diese Präferenz.
-
-**3. Vererbungsunterbrechung auf Relationsebene**
-
-Falls eine bestimmte `inherits_from`-Relation für einzelne Attribute oder generell nicht vererben soll, kann das über ein Flag an der Relation gesteuert werden:
-
-```json
-{
-  "attributes": {
-    "priority": 5,
-    "disabled_for": ["price", "description"]   // optional: Liste von Attributen, die nicht vererbt werden
-  }
-}
-```
-
-- `disabled_for` verhindert die Vererbung der genannten Attribute über diese Relation.
-- Ist die Liste leer oder nicht vorhanden, werden alle vererbbaren Attribute berücksichtigt.
-
-**4. Transparenz und Audit**
-
-- Jede Änderung an der Vererbungskonfiguration (Priorität, Deaktivierung, bevorzugte Quelle) wird im `audit_log` protokolliert.
-- In der API-Antwort kann das aufgelöste Attribut um Metadaten ergänzt werden, z. B.:
-
-  ```json
-  {
-    "brand": {
-      "value": "Acme",
-      "source": "inherited",
-      "from_object": "product_1",
-      "resolved_locale": "en"
-    }
-  }
-  ```
-
-  Dadurch bleibt die Herkunft nachvollziehbar.
-
-**Empfehlung für Meadow PIM:**
-
-- In der **ersten Version** genügt eine einfache Prioritätsregel (`priority` und `scope`) sowie die Möglichkeit, am Kind explizite Werte zu setzen. Das deckt die meisten KMU-Szenarien ab.
-- Die **UI-Konfliktanzeige** wird früh mitgeplant, kann aber in einer zweiten Ausbaustufe verfeinert werden.
-- Die Speicherung einer bevorzugten Quelle (`preferred_inheritance_source`) ist optional und kann später ergänzt werden, wenn die Praxis es erfordert.
-
-Durch diesen Ansatz bleibt die Vererbung flexibel, transparent und beherrschbar – ohne die Komplexität unnötig zu erhöhen.
+Durch diesen Ansatz bleibt die Vererbung einfach, transparent und beherrschbar.

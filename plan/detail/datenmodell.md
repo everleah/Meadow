@@ -125,25 +125,45 @@ Gruppiert Attributdefinitionen für die UI.
 
 ### Tabelle `reference`
 
-Referenzen zwischen Objekten (Graph-Kanten) mit eigenen Metadaten. Der `type` ist frei definierbar; bestimmte Typen aktivieren spezielle Verhaltensweisen:
+Referenzen zwischen Objekten (Graph-Kanten) mit eigenen Metadaten. Der Relationstyp wird über `definition_id` aus der Tabelle `relation_definition` referenziert; `type` bleibt als denormalisierter Anzeigename erhalten. Das Relationenmodell ist in [relationen.md](relationen.md) spezifiziert:
 
-- `inherits_from` → Datenwertvererbung (Abschnitt 4.5)
-- `category_member` → Kategorisierung (Abschnitt 4.6)
-- `collection_member` → materialisierte Collections (Abschnitt 10.2)
-- weitere Typen (z. B. `related`, `parent`, `variant`) sind reine Verknüpfungen ohne Sonderlogik.
+- `depends_on` (Komposition) → Datenwertvererbung (Abschnitt 4.5); genau eine Kante pro Objekt
+- `category_member` (Aggregation) → Kategorisierung (Abschnitt 4.6)
+- `collection_member` (Aggregation) → materialisierte Collections (Abschnitt 10.2)
+- `related` (Aggregation) → lose Verknüpfung ohne Sonderlogik
 
 ```json
 {
     "id": "ref_001",
     "from": "object_123",            // Quellobjekt-ID
     "to": "object_456",              // Zielobjekt-ID
-    "type": "inherits_from",         // oder related, category_member, collection_member, ...
+    "definition_id": "rel_depends_on",  // Referenz auf relation_definition
+    "type": "depends_on",            // Anzeigename (denormalisiert)
     "attributes": {                  // Metadaten an der Kante
-        "priority": 1,               // z. B. bei Vererbung: niedriger Wert = höhere Priorität
         "position": 3                // z. B. bei Kategorien: Sortierung
     }
 }
 ```
+
+### Tabelle `relation_definition`
+
+Definiert die Relationstypen des Systems (Details in [relationen.md](relationen.md)).
+
+```json
+{
+    "id": "rel_depends_on",
+    "name": "depends_on",            // einziger Kompositionstyp
+    "kind": "composition",           // composition | aggregation
+    "source_types": [],              // optional: erlaubte Quell-Objekttypen (leer = alle)
+    "target_types": [],              // optional: erlaubte Ziel-Objekttypen (leer = alle)
+    "label": { "de": "Abhängig von", "en": "Depends on" },
+    "system": true                   // eingebaut (true) oder benutzerdefiniert (false)
+}
+```
+
+- `kind` bestimmt die Semantik: `composition` (1:n inkl. 1:1, genau eine Kante pro Objekt, Vererbung & Kaskade) oder `aggregation` (n:m, lose Verknüpfung).
+- `source_types`/`target_types` schränken die erlaubten Objekttypen ein (leer = alle Typen erlaubt); die Prüfung erfolgt beim Anlegen jeder Relation.
+- Eingebaute Typen (`system: true`) werden in Phase 1–2 geseedet: `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation). Benutzerdefinierte Typen (Phase 9) sind immer Aggregationen.
 
 ### Tabelle `language_tree`
 
@@ -230,15 +250,15 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
   - auf häufig gefilterte Attributfelder, z. B. `attributes.name.de`, `attributes.price`
   - auf sprachabhängige Felder je nach Konfiguration (z. B. alle Sprachen oder nur `root`/`en`)
 - **Referenz-Indizes:**
-  - auf `type`, `from`, `to`
-  - kombinierte Indizes für `from` + `type` und `to` + `type` (z. B. für Kategorieabfragen)
-  - speziell für `inherits_from` und `category_member`
+  - auf `definition_id` (bzw. `type`), `from`, `to`
+  - kombinierte Indizes für `from` + `definition_id` und `to` + `definition_id` (z. B. für Kategorieabfragen)
+  - speziell für `depends_on` und `category_member`
 - **Volltextsuche:**
   - SurrealDB-eigene Volltextindizes auf ausgewählte Attributfelder (Syntax `FULLTEXT ANALYZER …`, seit SurrealDB 3.0; zuvor `SEARCH ANALYZER`)
   - Wichtig: Ein `FULLTEXT`-Index deckt **immer nur ein Feld** ab – pro Feld (bzw. pro Sprachfeld wie `attributes.description.de`) ist ein eigener `DEFINE INDEX` nötig
   - sprachspezifische Suche unter Berücksichtigung des Sprachbaums
 - **Graph-Traversierung:**
   - Indizes auf Relationen ermöglichen performante Traversierung in beide Richtungen
-  - Da alle Relationen in einer generischen `reference`-Tabelle mit `type`-Feld liegen, erfolgt die Traversierung über typisierte Edge-Queries, z. B. `->(reference WHERE type = 'inherits_from')->object` bzw. `<-()<-object` in Gegenrichtung
+  - Da alle Relationen in einer generischen `reference`-Tabelle liegen, erfolgt die Traversierung über typisierte Edge-Queries, z. B. `->(reference WHERE definition_id = 'rel_depends_on')->object` bzw. `<-()<-object` in Gegenrichtung
 - **Weitere Indizes (vorbereitet):**
   - auf `saved_search.status`, `collection.status` für spätere Funktionen

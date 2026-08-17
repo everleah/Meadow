@@ -9,13 +9,14 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 **Grundprinzip:**
 
 - Eine **Kategorie** wird als Objekt mit `type: "category"` (oder einem frei wählbaren Typ wie `grouping` oder `folder`) angelegt.
-- Die Zuordnung eines Objekts zu einer Kategorie erfolgt über eine Relation vom Typ `category_member`.
+- Die Zuordnung eines Objekts zu einer Kategorie erfolgt über eine Relation vom Typ `category_member` – eine **Aggregation** (n:m) ohne Vererbungswirkung. Die Relationstypen sind in [relationen.md](relationen.md) spezifiziert.
 
   ```json
   {
     "id": "ref_cat_001",
     "from": "object_123",          // das zugeordnete Objekt (z. B. Produkt)
     "to": "category_5",            // die Kategorie
+    "definition_id": "rel_category_member",
     "type": "category_member",
     "attributes": {
       "position": 3,               // optionale Sortierung innerhalb der Kategorie
@@ -28,16 +29,17 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 **Kategorien als normale Objekte:**
 
-- Kategorien besitzen selbst flexible Attribute und können über `inherits_from`-Relationen hierarchisch aufgebaut sein (z. B. `Elektronik` → `Audio` → `Kopfhörer`).
+- Kategorien besitzen selbst flexible Attribute und können über `depends_on`-Relationen hierarchisch aufgebaut sein (z. B. `Elektronik` → `Audio` → `Kopfhörer`); jede Kategorie hat genau einen Kompositions-Elternteil (Standard: Universal-Root).
 - Da sie reguläre Objekte sind, profitieren sie automatisch von:
   - Mehrsprachigkeit (z. B. Kategoriename in mehreren Sprachen über den Sprachbaum)
-  - Datenwertvererbung (z. B. Standardbeschreibung von übergeordneten Kategorien)
+  - Datenwertvererbung entlang der Kategorien-Hierarchie (z. B. Standardbeschreibung von übergeordneten Kategorien)
   - Status/Workflow (z. B. Kategorie erst nach Freigabe sichtbar)
   - Audit-Log und Versionierung
+- Die **Zuordnung** von Objekten zu Kategorien (`category_member`) ist eine reine Aggregation: Ein Produkt erbt **keine** Werte von einer Kategorie, der es zugeordnet ist. Vererbung läuft ausschließlich über die `depends_on`-Kette.
 
 **Abgrenzung zur Pflegestruktur:**
 
-- Die **Pflegestruktur** (z. B. Produkt → Varianten über `inherits_from`) dient der Datenhaltung und Wertvererbung.
+- Die **Pflegestruktur** (z. B. Produkt → Varianten über `depends_on`) dient der Datenhaltung und Wertvererbung.
 - Die **Kategorisierung** ordnet Objekte unabhängig von der Pflegestruktur neu an – etwa für Navigation, Marketing oder externe Klassifizierung.
 - Beide Strukturen können parallel existieren und sich überlagern. Ein Objekt kann gleichzeitig in einer Vererbungshierarchie und in mehreren Kategoriebäumen hängen.
 
@@ -49,8 +51,8 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 **Anforderungen an die Implementierung:**
 
-- **Indizes** auf `reference.type` und `reference.to` sorgen für schnelle Abfragen der Kategorien eines Objekts sowie aller Objekte einer Kategorie.
-- **Rekursive Abfragen** müssen effizient sein: z. B. alle Produkte inklusive Unterkategorien. SurrealDB bietet dafür Graph-Traversierung über die generische `reference`-Tabelle (z. B. `->(reference WHERE type = 'category_member')->object` in beide Richtungen).
+- **Indizes** auf `reference.definition_id` (bzw. `type`) und `reference.to` sorgen für schnelle Abfragen der Kategorien eines Objekts sowie aller Objekte einer Kategorie.
+- **Rekursive Abfragen** müssen effizient sein: z. B. alle Produkte inklusive Unterkategorien. SurrealDB bietet dafür Graph-Traversierung über die generische `reference`-Tabelle (z. B. `->(reference WHERE definition_id = 'rel_category_member')->object` in beide Richtungen).
 - **Sortierung:** Die optionale `position` an der Relation wird beim Lesen ausgewertet, um eine konfigurierbare Reihenfolge innerhalb der Kategorie zu ermöglichen.
 - **Caching:** Für häufig gelesene Kategoriebäume (Navigation) kann ein Cache eingesetzt werden. Für KMU-Größenordnungen ist das meist nicht erforderlich, da die Baumtiefen gering sind.
 

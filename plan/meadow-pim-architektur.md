@@ -83,7 +83,7 @@ Das System besteht aus mehreren Diensten, die lose gekoppelt über REST und eine
 
 **Abgrenzung zur Pflege- und Kategorienstruktur:**
 
-Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen wie Sprachbaum, Datenwertvererbung und Kategorisierung sind **logische Modelle innerhalb des Kerns** und erfordern keine zusätzlichen Dienste. Sie werden in den Abschnitten 4.4 bis 4.7 detailliert beschrieben.
+Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen wie Komposition/Aggregation (Abschnitt 4), Sprachbaum, Datenwertvererbung und Kategorisierung sind **logische Modelle innerhalb des Kerns** und erfordern keine zusätzlichen Dienste. Sie werden in den Abschnitten 4.4 bis 4.7 detailliert beschrieben.
 
 ---
 
@@ -169,6 +169,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:**
 > - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche (4.1–4.3)
+> - [relationen.md](detail/relationen.md) — Relationenmodell: Komposition & Aggregation (4)
 > - [einheiten.md](detail/einheiten.md) — Einheiten & Umrechnung für quantifizierte Werte (4)
 > - [sprachbaum-mehrsprachigkeit.md](detail/sprachbaum-mehrsprachigkeit.md) — Sprachbaum für sprachabhängige Daten (4.4)
 > - [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung & Konfliktlösung (4.5, 4.7)
@@ -189,6 +190,17 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 3. **Darstellung:** Die GUI zeigt den Wert in der gewählten Einheit an (Umrechnung on-the-fly); Eingaben werden vor dem Speichern in die kanonische SI-Einheit umgerechnet. Alle SI-Einheiten, übliche Darstellungen und anglo-amerikanische Einheiten (imperial/US customary) werden per Default mitgeliefert; eigene Einheiten (Zeichen + Umrechnung) sind auf Basis einer SI-Einheit definierbar.
 
 > **Details:** [einheiten.md](detail/einheiten.md) — Einheiten-Katalog, Umrechnung & eigene Einheiten; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [frontend.md](detail/frontend.md) — Darstellung; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF.
+
+**Relationen-Konvention (verbindlich):**
+
+1. **Komposition vs. Aggregation:** Relationen werden in `relation_definition` als `composition` (1:n inkl. 1:1) oder `aggregation` (n:m) definiert. Es gibt **genau einen** Kompositionstyp `depends_on`.
+2. **Ein-Eltern-Invariante:** Jedes Objekt hat **genau eine** `depends_on`-Kante („ich bin abhängig von“). Die Kompositionen bilden einen strikten, zyklenfreien Baum mit dem **Universal-Root** als Wurzel; Top-Level-Objekte hängen direkt am Root. Vererbung und Löschkaskade laufen ausschließlich über diese Kette.
+3. **Aggregationen:** `category_member`, `collection_member`, `related` und benutzerdefinierte Typen sind n:m-Verknüpfungen ohne Vererbungswirkung und ohne Kaskade.
+4. **Universal-Root:** Reales Objekt (`type: "root"`, feste ID), sichtbar, strukturell unveränderlich (nicht löschbar, nicht umhängbar); seine Attribute (globale Defaults) sind durch Admin/Superadmin editierbar.
+5. **Typrestriktionen:** Eine Relation kann optional nur bestimmte Quell- und Ziel-Objekttypen verbinden (`source_types`/`target_types`; leer = alle); die Prüfung erfolgt beim Anlegen jeder Relation.
+6. **Löschen & Umhängen:** Soft Delete kaskadiert über den Teilbaum (UI-Warnung mit Anzahl, API ohne Bestätigung); `depends_on` ist umhängbar (Re-Parenting) mit Zyklenschutz, Typrestriktionsprüfung und Audit-Eintrag.
+
+> **Details:** [relationen.md](detail/relationen.md) — Komposition, Aggregation, Universal-Root & Relationstypen; [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API.
 
 **Attribut-Datentypen & Datentypwechsel (vorgesehen, nicht im MVP):**
 
@@ -282,7 +294,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Datenmodell für Sprachbaum vorbereiten** (Tabelle `language_tree`, Fallback-Mechanismus in der API-Struktur)
 - **Einheiten-Katalog (`unit`-Tabelle) mit allen SI-Einheiten und üblichen Darstellungen vorbereiten; Attributdefinition um `unit_id`/`display_unit_id` erweitern**
 - **Attributdefinition um `inheritable`-Flag erweitern**
-- **Referenztypen für Vererbung (`inherits_from`), Kategorisierung (`category_member`) und spätere Collections (`collection_member`) als Konzept festlegen**
+- **Relationenmodell festlegen: Komposition (`depends_on`) vs. Aggregation (`category_member`, `collection_member`, `related`); Tabelle `relation_definition`; Universal-Root als reales Objekt**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
 
 ### Phase 2 – Kernfunktionen: Metadaten, Suche, Vererbung
@@ -290,9 +302,9 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Indizes und Volltextsuche konfigurieren
 - Referenzen mit Metadaten umsetzen
 - **Sprachabhängige Attributauflösung gemäß Sprachbaum implementieren (inkl. `fallback_order`)**
-- **Datenwertvererbung über `inherits_from` implementieren (Auflösungslogik, leere Werte als Unterbrechung)**
-- **Kategorisierung als normale Objekte mit `category_member`-Relationen umsetzen**
-- **Grundlegende Konfliktlösung bei mehrfacher Vererbung (Priorität/Scope)**
+- **Datenwertvererbung über `depends_on` implementieren (Ein-Eltern-Auflösung, leere Werte als Unterbrechung) **
+- **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung) **
+- **Typrestriktionen der `relation_definition` beim Anlegen jeder Relation erzwingen; Re-Parenting mit Zyklenschutz**
 
 ### Phase 3 – Graph & Performance
 - Graph-Traversierung optimieren, Benchmarks durchführen
@@ -336,7 +348,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 
 ### Phase 9 – Spätere Ausbaustufen (nicht im MVP)
 - **Gespeicherte Suchen (`saved_search`) und Materialisierte Collections (`collection_member`) vollständig umsetzen**
-- **Erweiterte Konfliktbehandlung in der UI (bevorzugte Quelle, visuelle Markierung)**
+- **Benutzerdefinierte Relationstypen (immer Aggregationen) über die API anlegen und Typrestriktionen verwalten**
 - **Kanalspezifische Freigaben (`release`-Tabelle)**
 - **Unterstützung für externe Klassifizierungsstandards (z. B. ETIM)**
 - **Datentypwechsel für Attributdefinitionen inkl. Migration vorhandener Werte (Kompatibilitätsmatrix, verlustfreie vs. verlustbehaftete Übergänge)**
@@ -352,6 +364,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Relationenmodell spezifiziert (Abschnitt 4): Komposition (`depends_on`) vs. Aggregation, Universal-Root als reales Objekt, Tabelle `relation_definition` mit Typrestriktionen, Kaskaden-Soft-Delete und Re-Parenting mit Zyklenschutz; Detaildokument `relationen.md` neu, `datenwertvererbung.md`, `datenmodell.md`, `kategorisierung.md` und `api-design.md` entsprechend angepasst (Multi-Parent, `scope`, `priority` entfernt).*
 
 *Zuletzt geändert: 2026-08-16 – Repository-Ausgangslage für die Implementierung ergänzt (Abschnitt 3.6): Rust-Workspace (`Cargo.toml` + `crates/pim-core/`), Python-Paketierung (`pyproject.toml` + `uv.lock`), lokale Infrastruktur (`docker-compose.dev.yml`), Hilfsskripte (`scripts/`); Editor-Konfiguration (`.vscode/`, `.editorconfig`, `rustfmt.toml`).*
 
