@@ -1,12 +1,47 @@
 # Datenmodell
 
 - **Hauptdokument:** Abschnitt [4. Datenmodell](../meadow-pim-architektur.md#4-datenmodell)
-- **Relevante Phasen:** Phase 1–3, 6, 9
+- **Relevante Phasen:** Phase 1–3, 5–7, 9
 - **Stand:** Entwurf
 
 ## Grundprinzip
 
 Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** gespeichert. Unterschiede ergeben sich durch den Typ und flexible Metadaten. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell.
+
+## System-Log (`log_entry`) & Systemeinstellungen (`system_setting`)
+
+Zwei technische Tabellen ergänzen das Kernmodell für Betrieb und Administration (Konvention gemäß Abschnitt 12 des Hauptdokuments; Detail [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging)).
+
+**`log_entry` – kuratierte System-Logs (flüchtig, nur Admin-UI):**
+
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `id` | string | Eindeutige ID |
+| `created_at` | datetime (UTC) | Zeitpunkt (ISO-8601, Datumswerte-Konvention) |
+| `service` | string | Herkunft: `pim-core`, `pim-worker`, `pim-frontend` |
+| `level` | string | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `CRITICAL` |
+| `category` | string | `app` \| `job` \| `rule` \| `auth` \| `integration` |
+| `message` | string | Klartext-Meldung (Pflicht) |
+| `trace_id` | string? | Korrelations-ID über Dienste hinweg (`trace_id`/`request_id`) |
+| `context` | object? | Optional: `object_id`, `job_run_id`, `rule_id`, `user_id`, `status_code`, … |
+
+- **Charakter:** reine Append-Tabelle, kein Update, kein Soft-Delete; Einträge schreibt der Kern (Empfang über `POST /system/logs` von allen Komponenten).
+- **Indizes:** `(service, level, created_at)` für die UI-Filter; `trace_id` für Korrelationssuche. Keine Volltextsuche im MVP.
+- **Aufbewahrung:** flüchtig, Standard 30 Tage (konfigurierbar über `system_setting`); Cleanup als periodischer Job; Rate-Limit-Cap gegen Log-Fluten.
+- **Datenschutz:** keine Secrets/PII – Regeln in [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging).
+
+**`system_setting` – persistierte Runtime-Einstellungen:**
+
+| Feld | Typ | Beschreibung |
+|------|-----|--------------|
+| `key` | string | Einstellungsname (z. B. `log_retention_days`) |
+| `value` | any (JSON) | Wert |
+| `updated_at` | datetime (UTC) | Letzte Änderung |
+| `updated_by` | string | Auslöser (`user_id` oder Systemkennung) |
+
+- **Auflösung:** Code-Default < ENV < DB (Runtime). Ein fehlender Eintrag bedeutet „Default/ENV gilt“.
+- **Verwendung (MVP):** Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); das Schema ist generisch und für weitere Laufzeit-Einstellungen erweiterbar.
+- **Zugriff:** `GET/PUT /system/settings` (nur `admin`/`superadmin`); Änderungen im Audit-Log.
 
 ## Datumswerte
 

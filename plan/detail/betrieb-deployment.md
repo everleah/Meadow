@@ -1,8 +1,8 @@
 # Betrieb & Deployment
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 8
-- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8
+- **Relevante Phasen:** Phase 2, 4–5, 7, 8
+- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt.
 
 Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**. Konkretes Ziel für das erste Deployment ist der **VPS unter `example.com`**, auf dem bereits Traefik als Reverse Proxy läuft. Die Deployment-Organisation folgt dabei dem erprobten VPS-Muster von **the predecessor project** (`deploy-vps-*.sh`, `.env.vps`, Traefik-Labels, Healthchecks, Backup/Restore). Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
 
@@ -228,7 +228,31 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 
 ## 11. Monitoring & Logging
 
-- **Logging:** Rust-Kern mit `tracing` (JSON optional), Python-Dienste mit `structlog`; Ausgabe auf `stdout`, Sammlung über Docker-Logging-Treiber (max. 10 MB/5 Dateien je Container, wie the predecessor project) oder zentral (Loki/ELK).
+### 11.1 Logging (verbindliche Spezifikation)
+
+**Grundprinzip (12-Factor):** Jede Komponente schreibt strukturierte Logs als Event-Stream auf `stdout` – Rust-Kern mit `tracing` (JSON), Python-Dienste mit `structlog`. Sammlung über den Docker-Logging-Treiber (max. 10 MB/5 Dateien je Container, wie the predecessor project) für den Ops-Workflow (Diagnose-Skripte). DEBUG/TRACE bleiben ausschließlich hier.
+
+**Kuratierte System-Logs in SurrealDB (`log_entry`):** Für die Admin-UI wird ein kuratierter Teil persistiert:
+
+- **Kategorien & Schwelle:** `app` ab WARN; `job`, `rule`, `auth`, `integration` auch auf INFO. DEBUG/TRACE werden nie in die DB geschrieben.
+- **Transport (verbindlich):** Komponenten senden Einträge als **Batch** über `POST /system/logs` an den Kern (Flush ≈ alle 2 s oder ≥ N Einträge; non-blocking, bounded Buffer, drop-oldest). Logging **blockiert nie den Geschäftspfad**; Fehler beim Senden werden nur auf `stdout` geloggt (bei `ERROR`/`CRITICAL` nach einem Retry verworfen). Direkter DB-Zugriff ist nur dem Kern erlaubt.
+- **Schema (`log_entry`):** `id`, `created_at` (UTC, ISO-8601), `service` (`pim-core`, `pim-worker`, `pim-frontend`), `level` (`DEBUG|INFO|WARN|ERROR|CRITICAL`, einheitlich gemappt), `category`, `message`, `trace_id`/`request_id` (Korrelation über Dienste; beim REST-Request bzw. der NATS-Message gesetzt), `context` (JSON, optional: `object_id`, `job_run_id`, `rule_id`, `user_id`, …). Reine Append-Tabelle; Indizes `(service, level, created_at)` und `trace_id`; keine Volltextsuche im MVP (Filter + `CONTAINS` auf `message`).
+- **Aufbewahrung:** `log_entry` ist **flüchtig** – Standard **30 Tage** (konfigurierbar 7–90), periodischer Cleanup-Job im Kern (batch-weise, außerhalb der Lastspitze). **Rate-Limit-Cap** pro Dienst gegen Log-Fluten (bei Überschreitung nur auf `stdout`).
+- **RBAC:** Anzeige/Lesen nur `admin`/`superadmin`; Rechteprüfung im Kern. Kontext-Links zu Job/Objekt/Rule, wo `context` IDs trägt.
+- **Datenschutz (verbindlich):** keine Passwörter/Tokens/JWT-Secrets/API-Keys in Meldungen oder `context`; Benutzer als `user_id` (kein Klarname/E-Mail); IP-Adressen nur bei Bedarf (z. B. wiederholte fehlgeschlagene Logins). Auth-Events ohne Passwort/Token-Payload; fehlgeschlagene Logins ohne enumerierbare Benutzerliste.
+- **Abgrenzung:** `audit_log` (fachliche, dauerhafte Änderungshistorie, [versionierung-audit.md](versionierung-audit.md)) ≠ `log_entry` (technisch/operativ, flüchtig) ≠ NATS-Events (Nachrichten für asynchrone Verarbeitung). Fachliche Datenänderungen → nur `audit_log`; technische Fehler/Ops → nur `log_entry`.
+
+**Runtime-Konfiguration (`system_setting`):** Logging-Einstellungen sind im Betrieb per Admin-UI änderbar und persistiert:
+
+- Einstellungen: `log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit` (als Key/Value in `system_setting`, `value` JSON).
+- **Auflösung:** Code-Default < ENV (Inbetriebnahme) < DB (Runtime). „Auf Default zurücksetzen“ löscht den DB-Eintrag. `LOG_LEVEL` (stdout-Schwelle) bleibt ENV-only.
+- **Verteilung:** Worker/Frontend laden die Konfiguration beim Start und periodisch per REST vom Kern; der Cleanup-Job liest `log_retention_days` bei jedem Lauf. Änderungen werden im Audit-Log protokolliert.
+- **Env-Variablen (Default/Inbetriebnahme):** `LOG_LEVEL`, `LOG_PERSIST_LEVEL`, `LOG_PERSIST_CATEGORIES`, `LOG_RETENTION_DAYS`, `LOG_RATE_LIMIT`.
+
+**Optionale Ausbaustufe (nicht im MVP):** Zentrale Log-Aggregation mit **Loki + Grafana** (Promtail/Alloy-Collector auf `stdout`) für Volltextsuche und Dashboards, falls später benötigt – ersetzt die DB-Sicht dann nicht, sondern ergänzt sie.
+
+### 11.2 Health-Checks, Metriken & Queue-Tiefe
+
 - **Health-Checks:** jeder Container stellt einen Health-Endpoint bereit (siehe 3.4); Compose startet Container bei Ausfall neu.
 - **Metriken (optional, ab Phase 8):** Prometheus-Endpunkte im Kern und Worker (Jobs, Event-Durchsatz, API-Latenz), Grafana-Dashboards.
 - **Queue-/Stream-Tiefe (verbindlich):** Die NATS-JetStream-Tiefe wird über den Monitoring-Port 8222 beobachtet (Pending-Messages je Consumer, Stream-Belegung vs. Max-Bytes, Outbox-Rückstau im Kern); Alarmschwellen bei anhaltender Queue-Tiefe (Worker-Stau) sind dokumentiert.

@@ -114,6 +114,16 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
     - **Rule Lab**: Regel gegen eine Objektauswahl (oder ein Beispielobjekt/konstruierten Payload) ausführen – read-only, keine Persistenz; Anzeige von Verletzungen, berechneten Werten vor/nach, `log()`-Ausgabe; Dry-Run vor Aktivierung
     - Hinweis auf Circuit-Breaker-Auslösungen (debuggen nach Auto-`disabled`)
 
+11. **System-Logs** (nur `admin`/`superadmin`)
+    - Tabelle mit Zeit (lokalisiert), Dienst, Kategorie, Level, Message – neueste zuerst; Level farblich markiert (WARN/ERROR)
+    - Filterleiste: Dienst, Kategorie, Level, Zeitraum, Textsuche auf `message`
+    - Auto-Refresh per **Polling** (≈ 5 s, analog Job-Status); Detailansicht per Klick (volle `message`, `context` als JSON, `trace_id`) mit Kontext-Links zu Job/Objekt/Rule, sofern `context` IDs trägt
+    - CSV-Export der gefilterten Ansicht (optional, Phase 8)
+
+12. **System-Einstellungen** (nur `admin`/`superadmin`)
+    - Logging-Einstellungen im Betrieb ändern (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); Anzeige der Herkunft (Default/ENV/DB), „Auf Default zurücksetzen“
+    - Änderungen werden im Audit-Log protokolliert
+
 **Spätere Ausbaustufen (nicht im MVP):**
 
 - Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections

@@ -55,6 +55,10 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/rules/{id}/dry-run`             | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren) |
 | POST    | `/rules/{id}/test-batch`          | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren) |
 | POST    | `/rules/{id}/recompute`           | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5) |
+| POST    | `/system/logs`                    | Kuratierte Log-Einträge aus Komponenten entgegennehmen (Batch, non-blocking; Service-Account/API-Key) |
+| GET     | `/system/logs`                    | System-Logs abrufen (Filter: `service`, `category`, `level`, `from`/`to`, `q`; Pagination; nur `admin`/`superadmin`) |
+| GET     | `/system/settings`                | Systemeinstellungen lesen (aufgelöster Wert: Default < ENV < DB) |
+| PUT     | `/system/settings/{key}`          | Systemeinstellung ändern (persistiert, Audit; nur `admin`/`superadmin`) |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
@@ -82,6 +86,20 @@ Ein **Business-Schlüssel** (z. B. SKU) ist ein Attribut, dessen Definition mit 
 - **Regeln:** Nur `text`, nicht lokalisiert, nicht vererbbar; optional (Objekte dürfen ohne Schlüssel existieren); Werte sind änderbar (Eindeutigkeitsprüfung + Audit).
 - **Key-Lookup:** `GET /objects/by-key?type=<typ>&key=<attribut>&value=<wert>` lädt genau ein Objekt über einen Business-Schlüssel (z. B. die SKU). Existiert kein Objekt, wird 404 geliefert.
 - **Suche/Filterung:** Schlüsselattribute sind über die normale Suche/Filterung und den Index abfragbar.
+
+## System-Logs & Systemeinstellungen in der API
+
+**System-Logs** (Konvention Abschnitt 12 / [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging), Tabellen [datenmodell.md](datenmodell.md)):
+
+- **`POST /system/logs`:** Nimmt einen **Batch** kuratierter Log-Einträge entgegen (`[{service, level, category, message, trace_id?, context?}, …]`; `created_at` setzt der Kern auf Empfangszeit, UTC). Authentifizierung über Service-Account/API-Key (Machine-to-Machine); non-blocking, begrenzt durch Rate-Limit. Die Antwort ist für den Sender ohne fachliche Bedeutung – Logging darf nie blockieren/fehlschlagen.
+- **`GET /system/logs`:** Liefert persistierte Einträge mit Filterung (`service`, `category`, `level`, `from`/`to` als ISO-8601-UTC, `q` als `CONTAINS`-Textsuche auf `message`) und Cursor-Pagination; Sortierung neueste zuerst. Nur `admin`/`superadmin` (`log.read`).
+- **Zugriffsschutz:** Technische Logs sind **kein** fachliches Arbeitsmittel – `editor`/`viewer` erhalten 403.
+
+**Systemeinstellungen:**
+
+- **`GET /system/settings`:** Liefert alle Einstellungen inkl. **aufgelöstem** Wert (Code-Default < ENV < DB) und Quelle. Nur `admin`/`superadmin`.
+- **`PUT /system/settings/{key}`:** Setzt/persistiert eine Runtime-Einstellung (z. B. `log_retention_days`); validiert gegen erlaubte Schlüssel/Werte; schreibt einen Audit-Eintrag. „Auf Default zurücksetzen“ = `DELETE /system/settings/{key}` (löscht den DB-Eintrag, dann gilt ENV/Default).
+- **MVP-Umfang:** nur Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); das Schema ist generisch erweiterbar.
 
 ## Datums- & Zeitwerte in der API
 

@@ -35,12 +35,15 @@ attribute_group.manage
 language_tree.read / manage
 job.read / run / manage
 audit.read
+log.read / manage
 user.read / manage
 group.read / manage
 system.manage
 ```
 
 **Business Rules (`business_rule.read` / `manage`):** `manage` (anlegen, bearbeiten, aktivieren/deaktivieren, Rule Lab/Dry-Run) ist nur für `admin`/`superadmin` freigeschaltet; `read` ist für alle Rollen sichtbar (Verhalten nachvollziehen). Jede Änderung und jeder Zustandswechsel ist im Audit-Log protokolliert (Abschnitt 8 / [business-rules.md](business-rules.md)).
+
+**System-Logs & -Einstellungen (`log.read` / `log.manage`):** Technische System-Logs (`log_entry`) und die persistierten Runtime-Einstellungen (`system_setting`, Abschnitt 12 / [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging)) sind **nur** für `admin`/`superadmin` sichtbar bzw. änderbar (`log.read` = Lesen von System-Logs + Einstellungen, `log.manage` = Ändern der Logging-Einstellungen). `editor`/`viewer` sehen keine technischen Logs. Jede Änderung an `system_setting` wird im Audit-Log protokolliert.
 
 Zuordnung (Auszug):
 
@@ -54,6 +57,7 @@ Zuordnung (Auszug):
 | `job.run` / `job.manage` | – | – | ✓ | ✓ |
 | `user.manage` / `group.manage` | – | – | ✓ | ✓ |
 | `audit.read` | – | – | ✓ | ✓ |
+| `log.read` / `log.manage` | – | – | ✓ | ✓ |
 | `system.manage` | – | – | – | ✓ |
 
 ## Gruppen & Vererbung

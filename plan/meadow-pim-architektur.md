@@ -127,9 +127,10 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 | Containerisierung         | Docker                             | Einheitliche Auslieferung aller Dienste              |
 | Orchestrierung (MVP)      | Docker Compose                     | Lokaler Betrieb und KMU-Deployment                   |
 | Orchestrierung (optional) | Kubernetes (k3s)                   | Skalierung bei wachsenden Anforderungen              |
-| Observability             | tracing (Rust), structlog (Python) | Strukturiertes Logging und Tracing                   |
+| Observability             | tracing (Rust), structlog (Python) | Strukturiertes Logging (JSON) auf stdout             |
 | Metriken (optional)       | Prometheus + Grafana               | Überwachung von Jobs, Events, API-Performance        |
-| Logging (optional)        | Loki / ELK                         | Zentrale Log-Aggregation                             |
+| Logging (UI-Sicht)        | SurrealDB (`log_entry` + `system_setting`) | Kuratierte System-Logs, in der Admin-UI einsehbar    |
+| Logging (optional, später)| Loki + Grafana                     | Zentrale Log-Aggregation/Volltextsuche (Phase 9)     |
 | Backup                    | SurrealDB-Export + S3-Sync         | Datensicherung für Objektdatenbank und Objektstorage |
 
 ### 3.4 Abgrenzung & Hinweise
@@ -329,7 +330,17 @@ Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s übe
 
 Alle Komponenten werden als Docker-Container betrieben; die Standardauslieferung erfolgt als **Docker-Compose-Setup**, Kubernetes (k3s) ist vorbereitet. Details zu Containern, Netzwerk, Konfiguration, Skalierung, Backup und Monitoring stehen im Detaildokument. Konkretes Ziel für das erste Produktions-Deployment ist der VPS unter `example.com` mit dem dort laufenden Traefik (externes Docker-Netz `traefik-net`); die Detail-Spezifikation inkl. Runbook steht im Detaildokument.
 
-> **Details:** [detail/betrieb-deployment.md](detail/betrieb-deployment.md)
+**Logging-Konvention (verbindlich):**
+
+1. **Strukturiert auf `stdout`:** Jede Komponente loggt strukturiert (Rust `tracing`, Python `structlog`) als Event-Stream auf `stdout` (12-Factor-Prinzip); Sammlung über den Docker-Logging-Treiber. DEBUG/TRACE bleiben ausschließlich hier (Diagnose-Skripte).
+2. **Kuratierte System-Logs (`log_entry`):** Jede Komponente sendet einen kuratierten Teil – Kategorien `app` ab WARN sowie `job`, `rule`, `auth`, `integration` auch auf INFO – asynchron per REST (`POST /system/logs`, Batch, non-blocking, bounded Buffer) an den Kern; dieser persistiert sie in der Tabelle `log_entry`. Anzeige in der Admin-UI („System-Logs“), nur `admin`/`superadmin`.
+3. **Schema:** `created_at` (UTC, ISO-8601), `service`, `level`, `category`, `message`, `trace_id`/`request_id` (Korrelation über Dienste), `context` (JSON, optional). Keine Volltextsuche im MVP (Filter über Felder + `CONTAINS`).
+4. **Aufbewahrung:** `log_entry` ist **flüchtig** – Standard 30 Tage (konfigurierbar), Cleanup als periodischer Job; Rate-Limit-Cap gegen Log-Fluten.
+5. **Datenschutz (verbindlich):** keine Passwörter, Tokens, JWT-Secrets oder API-Keys in Meldungen oder `context`; Benutzer als `user_id` statt Klarname/E-Mail; IP-Adressen nur bei Bedarf (z. B. wiederholte fehlgeschlagene Logins).
+6. **Abgrenzung:** `audit_log` = fachliche, dauerhafte Änderungshistorie (wer/was/wann); `log_entry` = technische/operative Einträge (flüchtig); NATS-Events = Nachrichten für asynchrone Verarbeitung. Fachliche Änderungen landen nur in `audit_log`, technische Fehler/Ops nur in `log_entry`.
+7. **Konfiguration:** Logging-Einstellungen sind im Betrieb per Admin-UI änderbar und persistiert (Tabelle `system_setting`; Auflösung Default < ENV < DB, „Auf Default zurücksetzen“); `LOG_LEVEL` (stdout) bleibt ENV-only.
+
+> **Details:** [detail/betrieb-deployment.md](detail/betrieb-deployment.md#11-monitoring--logging) – Logging-Spezifikation; [detail/datenmodell.md](detail/datenmodell.md) – `log_entry`/`system_setting`; [detail/api-design.md](detail/api-design.md) – `POST/GET /system/logs`, `GET/PUT /system/settings`; [detail/frontend.md](detail/frontend.md) – Admin-Seiten.
 
 ---
 
@@ -365,6 +376,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung) **
 - **Typrestriktionen der `relation_definition` beim Anlegen jeder Relation erzwingen; Re-Parenting mit Zyklenschutz**
 - **Business-Schlüssel implementieren: Eindeutigkeit pro Typ beim Schreiben erzwingen, Validierung (`type: text`, nicht lokalisiert, nicht vererbbar), Key-Lookup-Endpunkt, Schlüssel in Suche/Filterung**
+- **Logging-Basis im Kern: Tabelle `log_entry` mit Indizes, Endpunkte `POST/GET /system/logs`; Tabelle `system_setting` mit `GET/PUT /system/settings`; Logging-Konvention (Schema, No-Secrets) verankern**
 
 ### Phase 3 – Graph & Performance
 - Graph-Traversierung optimieren, Benchmarks durchführen
@@ -382,6 +394,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Event-basierte Kommunikation vorbereiten
 - **Business Rules mit Zugriff auf vererbte und sprachlich aufgelöste Werte ausstatten**
 - **Schnittstelle für benutzerdefinierte Regeln definieren, die auf dem generischen Objektmodell arbeiten (eine Skriptsprache, ein Mechanismus)**
+- **Log-Sender im Worker: kuratierte Job-/Rule-Logs als Batch über `POST /system/logs` an den Kern senden (non-blocking, bounded Buffer, drop-oldest); Logging-Konfiguration periodisch vom Kern laden (`system_setting`)**
 
 ### Phase 5 – Hintergrundverarbeitung & Scheduler
 - NATS JetStream in die Infrastruktur aufnehmen
@@ -390,6 +403,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Job-Typen für Business Rules vorsehen (inkl. `recompute` für vererbt-abhängige berechnete Attribute und Bulk-Recompute bei Definitionsänderung), Inbound/Outbound und später für Collection-Refresh**
 - **Worker mit paralleler Verarbeitung (asyncio): getrennte Konsumenten für Job- und Event-Streams, konfigurierbare Parallelität, Importe begrenzt; Idempotenz-Regeln für schreibende Jobs**
 - **Retention-Limits für NATS-Streams festlegen (Jobs kurzlebig, DLQ manuell); `trigger: event` als reservierten Trigger dokumentieren (Phase 5+)**
+- **Log-Retention: periodischer Cleanup-Job für `log_entry` (Standard 30 Tage, konfigurierbar über `system_setting`); Rate-Limit-Cap gegen Log-Fluten**
 
 ### Phase 6 – Integration & Eventsystem
 - **Meadow Exchange Format (MEF) als Standard-Import/Export-Format implementieren**
@@ -414,6 +428,8 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Admin-Bereich „Business Rules“: Regel-Editor mit Compile-Check, Zustände (`draft`/`active`/`disabled`), Dry-Run und **Rule Lab** (Regel gegen Objektauswahl ausführen, read-only, keine Persistenz)**
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
 - **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung (mehrere Kategorie-Bäume)**
+- **Admin-Seite „System-Logs“ (nur `admin`/`superadmin`):** Tabelle (Zeit lokalisiert, Dienst, Kategorie, Level, Message, neueste zuerst), Filter (Dienst, Kategorie, Level, Zeitraum, Textsuche), Polling (≈5 s), Detailansicht mit `context`/`trace_id` und Kontext-Links zu Job/Objekt/Rule; CSV-Export optional (Phase 8)
+- **Admin-Seite „System-Einstellungen“ (nur `admin`/`superadmin`):** Logging-Einstellungen im Betrieb änderbar und persistiert (`system_setting`), „Auf Default zurücksetzen“, Änderungen im Audit-Log
 
 ### Phase 8 – Produktionsreife & MVP-Abschluss
 - Sicherheit, Monitoring, Logging, Backup
@@ -433,6 +449,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Weitere Sprachen für die Oberfläche (Deutsch, Französisch, …)**
 - **Frontend-Ausbau: Pinned Attributes, Attribut-Suchleiste im Formular, Find & Replace, sequenzielles Editieren, Send-for-approval bei Bulk-Änderungen, per-Kanal-Vollständigkeit**
 - **SSO-Anbindung (OIDC) inkl. Gruppen-/Claim-Mapping**
+- **Optionale zentrale Log-Aggregation (Loki + Grafana) für Volltextsuche und Dashboards – dokumentiert, im MVP nicht umgesetzt**
 
 ---
 
@@ -443,6 +460,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Logging spezifiziert (Abschnitte 3.3, 12 & Phasen 2, 4–5, 7, 9): strukturierte stdout-Logs (tracing/structlog) als Basis; kuratierte System-Logs in SurrealDB (`log_entry`-Tabelle: Kategorien `app` ab WARN, `job`/`rule`/`auth`/`integration` auch INFO; Schema mit `trace_id`; Retention 30 Tage + Cleanup-Job; Rate-Limit) über `POST /system/logs` (Batch, non-blocking); Anzeige in der Admin-UI „System-Logs“ (nur `admin`/`superadmin`); No-Secrets-/Datenschutz-Konvention; Abgrenzung `audit_log` (fachlich, dauerhaft) vs. `log_entry` (technisch, flüchtig) vs. NATS-Events; Runtime-Konfiguration über `system_setting` (Default < ENV < DB, Admin-UI „System-Einstellungen“); Loki/Grafana als optionale Ausbaustufe (Phase 9). `betrieb-deployment.md` (§11), `datenmodell.md`, `api-design.md`, `frontend.md` und `benutzer-gruppen-rechte.md` entsprechend angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Business Rules (Abschnitt 8.1 & Phasen 1, 2, 4–8): Business Rules mit Python als Skriptsprache definiert – fünf Regeltypen (`validation`, `computed`, `normalization`, `workflow_guard`, `bulk`), ein Autoren-Mechanismus (`business_rule`-Tabelle, Admin-UI, RestrictedPython-Sandbox). Schreibpfad: synchroner interner Rule-Evaluation-Aufruf des Rust-Kerns an den Python-Service für `validation`/`computed`/`workflow_guard` (fail-closed, atomar, enge Timeouts, optionaler Degrade-Modus). Berechnete Attribute (R2) stored-first: gespeicherte Werte, synchron beim Schreiben berechnet, pure Funktionen, deklarierte `dependencies`, async Recompute-Kaskade für vererbt-abhängige Werte (eventual consistency), Bulk-Recompute bei Definitionsänderung. Import-Whitelist administrativ konfigurierbar; Lebenszyklus `draft`/`active`/`disabled` mit Compile-Check, Versionierung + Audit, Dry-Run und Rule Lab (interaktives Testmodus, read-only), Circuit Breaker + Alert; RBAC `admin`/`superadmin`. Detaildokument `business-rules.md` neu; `workflow-freigaben.md`, `jobs-scheduler.md`, `api-design.md`, `datenmodell.md`, `benutzer-gruppen-rechte.md` und `frontend.md` entsprechend angepasst.*
 
