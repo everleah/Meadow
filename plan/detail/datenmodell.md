@@ -1,7 +1,7 @@
 # Datenmodell
 
 - **Hauptdokument:** Abschnitt [4. Datenmodell](../meadow-pim-architektur.md#4-datenmodell)
-- **Relevante Phasen:** Phase 1–3, 9
+- **Relevante Phasen:** Phase 1–3, 6, 9
 - **Stand:** Entwurf
 
 ## Grundprinzip
@@ -21,6 +21,23 @@ Alle Datums- und Zeitwerte folgen einer einheitlichen, verbindlichen Konvention 
 ## Werte mit Einheiten
 
 Numerische technische Werte (z. B. Breite, Spannung, Leistung) können eine Einheit tragen. Der zugehörige **Einheiten-Katalog** liegt in der Tabelle `unit`; Speicher-Konvention (kanonische SI-Einheit), Umrechnung und benutzerdefinierte Einheiten sind im Detaildokument [einheiten.md](einheiten.md) beschrieben. In der Tabelle `object` werden solche Werte als **reine Zahlen in der kanonischen SI-Einheit** gespeichert; die Einheit ergibt sich aus der Attributdefinition (`unit_id`, optional `display_unit_id`).
+
+## Schlüssel (Business-Schlüssel)
+
+Ein **Business-Schlüssel** (z. B. SKU) ist eine markierte Attributdefinition und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
+
+**Regeln (verbindlich, Konvention gemäß Abschnitt 4 des Hauptdokuments):**
+
+1. **Markierung:** Ein Attribut wird durch `is_key: true` in der `attribute_definition` zum Business-Schlüssel.
+2. **Eindeutigkeit pro Typ:** Der Kern erzwingt Eindeutigkeit pro Objekttyp über einen kompositen Unique-Index `(type, attributes.<name>)`. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
+3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
+4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
+5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive), beim Speichern wird getrimmt.
+6. **Keine Vererbung:** Schlüssel sind nie vererbbar – `is_key: true` erzwingt `inheritable: false` (eine Vererbung würde Identitäten duplizieren).
+7. **Änderbar:** Schlüsselwerte sind änderbar; bei jeder Änderung prüft der Kern die Eindeutigkeit neu und protokolliert die Änderung im Audit-Log.
+8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert) – Details in [api-design.md](api-design.md) und [integration-eventsystem.md](integration-eventsystem.md).
+
+> **Hinweis:** Der Datentypwechsel-Abschnitt unten gilt auch für Schlüsselattribute: Ein Wechsel von `is_key` oder des Typs ist eine spätere Ausbaustufe (Phase 9) und erfordert eine Migration vorhandener Werte.
 
 ## Datentypwechsel
 
@@ -93,6 +110,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "type": "number",                // text, number, boolean, date, enum, reference, ...
     "group_id": "attr_group_01",
     "inheritable": true,             // true: Wert kann über Vererbung bezogen werden
+    "is_key": false,                 // true: Business-Schlüssel (z. B. SKU), eindeutig pro Typ
     "constraints": {
         "min": 0,
         "max": 999999,
@@ -108,6 +126,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung (Abschnitt 4.5) einbezogen wird.
+- `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp über den Unique-Index `(type, attributes.<name>)`. Details siehe [Schlüssel (Business-Schlüssel)](#schluessel-business-schluessel).
 - Weitere optionale Felder: `multilingual`, `enum_values`, `default_value`, `unit_id`, `display_unit_id`, `description`. Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 
 ### Tabelle `attribute_group`
@@ -249,6 +268,7 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
   - auf `type`, `status`, `created_at`, `updated_at`
   - auf häufig gefilterte Attributfelder, z. B. `attributes.name.de`, `attributes.price`
   - auf sprachabhängige Felder je nach Konfiguration (z. B. alle Sprachen oder nur `root`/`en`)
+  - **Unique-Index pro Business-Schlüssel** (`is_key: true`): komposit auf `type` + `attributes.<name>`, z. B. `(type, attributes.sku)` – erzwingt Eindeutigkeit pro Objekttyp
 - **Referenz-Indizes:**
   - auf `definition_id` (bzw. `type`), `from`, `to`
   - kombinierte Indizes für `from` + `definition_id` und `to` + `definition_id` (z. B. für Kategorieabfragen)

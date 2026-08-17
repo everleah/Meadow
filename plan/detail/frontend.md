@@ -94,7 +94,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 
 4. **Attributdefinitionen & -gruppen**
    - Verwaltung von Attributgruppen und -definitionen (nur `admin` oder `editor`)
-   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag und Einheit (`unit_id`/`display_unit_id`)
+   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag, Einheit (`unit_id`/`display_unit_id`) und ggf. `is_key`-Markierung (Business-Schlüssel, z. B. SKU)
 
 5. **Kategorien & Relationen**
    - Anlegen und Hierarchisieren von Kategorien als normale Objekte

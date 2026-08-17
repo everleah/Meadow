@@ -16,6 +16,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PATCH   | `/objects/{id}`                   | Teilaktualisierung der Attribute/Status         |
 | DELETE  | `/objects/{id}`                   | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt) |
 | GET     | `/objects?type=product&filter=...`| Suche & Filterung mit Pagination                |
+| GET     | `/objects/by-key?type=product&key=sku&value=SKU-123` | Objekt über einen Business-Schlüssel laden (z. B. SKU; eindeutig pro Objekttyp) |
 | POST    | `/references`                     | Referenz zwischen zwei Objekten erstellen (Validierung gegen die Relation-Definition) |
 | GET     | `/relation-definitions`           | Relationstypen auflisten                        |
 | POST    | `/relation-definitions`           | Benutzerdefinierten Relationstyp anlegen (nur Aggregation, Phase 9) |
@@ -51,6 +52,15 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 - **Komposition (`depends_on`):** genau eine Kante pro Objekt. Beim Anlegen ohne expliziten Elternteil wird der Universal-Root als Kompositions-Elternteil gesetzt. `PATCH /objects/{id}/parent` verschiebt den Teilbaum (Zyklenschutz, Typrestriktionsprüfung, Audit-Eintrag, atomar).
 - **Aggregationen (n:m)** können frei angelegt und entfernt werden; ihre Entfernung kaskadiert nie.
 - **Löschen** (`DELETE /objects/{id}`) kaskadiert als Soft Delete über den gesamten Kompositionsteilbaum (`depends_on`).
+
+## Business-Schlüssel in der API
+
+Ein **Business-Schlüssel** (z. B. SKU) ist ein Attribut, dessen Definition mit `is_key: true` markiert ist (Konvention gemäß Abschnitt 4 / [datenmodell.md](datenmodell.md)):
+
+- **Eindeutigkeit pro Typ:** Beim Schreiben (`POST /objects`, `PATCH /objects/{id}`) prüft der Kern die Eindeutigkeit pro Objekttyp (Unique-Index `(type, attributes.<name>)`); Verstöße werden mit einem entsprechenden Fehler abgelehnt.
+- **Regeln:** Nur `text`, nicht lokalisiert, nicht vererbbar; optional (Objekte dürfen ohne Schlüssel existieren); Werte sind änderbar (Eindeutigkeitsprüfung + Audit).
+- **Key-Lookup:** `GET /objects/by-key?type=<typ>&key=<attribut>&value=<wert>` lädt genau ein Objekt über einen Business-Schlüssel (z. B. die SKU). Existiert kein Objekt, wird 404 geliefert.
+- **Suche/Filterung:** Schlüsselattribute sind über die normale Suche/Filterung und den Index abfragbar.
 
 ## Datums- & Zeitwerte in der API
 

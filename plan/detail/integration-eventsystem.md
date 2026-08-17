@@ -58,6 +58,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 - `status` am Objekt kann gesetzt werden, um Workflow-Status zu importieren. Fehlt es, gilt der Standard `draft`.
 - Nicht übergebene Attribute bleiben unverändert (bei Update) bzw. leer (bei Neuanlage).
 - Die ID ist optional: Fehlt sie, wird eine neue vergeben. Vorhandene IDs ermöglichen Upserts.
+- **Business-Schlüssel (z. B. SKU):** Schlüsselattribute werden wie normale Attribute übertragen. Der Import kann per Schlüssel abgleichen (Upsert): Existiert im Ziel bereits ein Objekt mit gleichem Typ und gleichem Schlüsselwert, wird es aktualisiert statt neu angelegt (konfigurierbar pro Konnektor, z. B. `match_by_key: "sku"`). Das ermöglicht die Synchronisation mit Bestandssystemen und Datenübernahmen zwischen QA- und Produktivsystem.
 - Alle Datums- und Zeitwerte (z. B. `created_at`, Event-`timestamp`) werden als **ISO-8601-String mit Zeitzonenangabe** übertragen und beim Empfang nach UTC normalisiert (Konvention gemäß [datenmodell.md](datenmodell.md)).
 - Quantifizierte Werte (Zahl + Einheit) werden als Objekt `{"value": 12.5, "unit": "mm"}` übertragen; beim Import rechnet der Worker in die kanonische SI-Einheit um, beim Export wird in die Standard-Anzeigeeinheit (bzw. die angeforderte Einheit) umgerechnet (Konvention gemäß [einheiten.md](einheiten.md)).
 

@@ -202,6 +202,19 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:** [relationen.md](detail/relationen.md) — Komposition, Aggregation, Universal-Root & Relationstypen; [datenwertvererbung.md](detail/datenwertvererbung.md) — Vererbung; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API.
 
+#### Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU)
+
+1. **Definition:** Ein Business-Schlüssel ist eine markierte Attributdefinition (`is_key: true`) und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
+2. **Eindeutigkeit:** Gilt pro Objekttyp – kompositer Unique-Index `(type, attributes.<name>)`. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
+3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
+4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
+5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive) mit Trim.
+6. **Keine Vererbung:** Schlüssel sind nie vererbbar (`is_key: true` erzwingt `inheritable: false`).
+7. **Änderbar:** Schlüsselwerte sind änderbar; der Kern prüft die Eindeutigkeit bei jeder Änderung und protokolliert sie im Audit-Log.
+8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert).
+
+> **Details:** [datenmodell.md](detail/datenmodell.md#schluessel-business-schluessel) — Datenmodell & Unique-Index; [api-design.md](detail/api-design.md) — Key-Lookup; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF & Import-Abgleich.
+
 **Attribut-Datentypen & Datentypwechsel (vorgesehen, nicht im MVP):**
 
 1. **Typ liegt in der Definition:** Der Datentyp eines Attributs (`type` in `attribute_definition`: `text`, `number`, `boolean`, `date`, `enum`, `reference`) plus optionale Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) bestimmen Speicherung und Validierung. Die Werte werden **generisch als JSON** im `attributes`-Feld gespeichert – es gibt keine typgebundene Spaltenstruktur.
@@ -294,6 +307,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Datenmodell für Sprachbaum vorbereiten** (Tabelle `language_tree`, Fallback-Mechanismus in der API-Struktur)
 - **Einheiten-Katalog (`unit`-Tabelle) mit allen SI-Einheiten und üblichen Darstellungen vorbereiten; Attributdefinition um `unit_id`/`display_unit_id` erweitern**
 - **Attributdefinition um `inheritable`-Flag erweitern**
+- **Attributdefinition um `is_key`-Flag für Business-Schlüssel erweitern (Unique-Index `(type, attributes.<name>)` pro Objekttyp)**
 - **Relationenmodell festlegen: Komposition (`depends_on`) vs. Aggregation (`category_member`, `collection_member`, `related`); Tabelle `relation_definition`; Universal-Root als reales Objekt**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
 
@@ -305,6 +319,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Datenwertvererbung über `depends_on` implementieren (Ein-Eltern-Auflösung, leere Werte als Unterbrechung) **
 - **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung) **
 - **Typrestriktionen der `relation_definition` beim Anlegen jeder Relation erzwingen; Re-Parenting mit Zyklenschutz**
+- **Business-Schlüssel implementieren: Eindeutigkeit pro Typ beim Schreiben erzwingen, Validierung (`type: text`, nicht lokalisiert, nicht vererbbar), Key-Lookup-Endpunkt, Schlüssel in Suche/Filterung**
 
 ### Phase 3 – Graph & Performance
 - Graph-Traversierung optimieren, Benchmarks durchführen
@@ -330,6 +345,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Inbound-Konnektor `json_import` und Outbound-Konnektor `json_export` umsetzen**
 - **CRUD-Events im Rust-Kern erzeugen und in NATS JetStream publizieren**
 - **Webhook-Outbound-Konnektor mit Filterung und Retry-Logik zur Middleware entwickeln**
+- **Import-Abgleich per Business-Schlüssel (Upsert) im `json_import`-Konnektor; Schlüssel im MEF-Format und in Events abdecken**
 - **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken**
 
 ### Phase 7 – Frontend (NiceGUI)
@@ -364,6 +380,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Schlüssel-Konvention (Abschnitt 4): Business-Schlüssel (z. B. SKU) als markierte Attributdefinition (`is_key: true`), Eindeutigkeit pro Objekttyp via Unique-Index `(type, attributes.<name>)`, optional, nur `text`, nicht lokalisiert, nicht vererbbar, änderbar mit Audit, Key-Lookup-Endpunkt und Import-Abgleich (Upsert); `datenmodell.md`, `api-design.md` und `integration-eventsystem.md` entsprechend ergänzt; Phasen 1, 2 und 6 angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Relationenmodell spezifiziert (Abschnitt 4): Komposition (`depends_on`) vs. Aggregation, Universal-Root als reales Objekt, Tabelle `relation_definition` mit Typrestriktionen, Kaskaden-Soft-Delete und Re-Parenting mit Zyklenschutz; Detaildokument `relationen.md` neu, `datenwertvererbung.md`, `datenmodell.md`, `kategorisierung.md` und `api-design.md` entsprechend angepasst (Multi-Parent, `scope`, `priority` entfernt).*
 
