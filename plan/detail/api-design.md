@@ -15,12 +15,15 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | GET     | `/objects/{id}`                   | Objekt inkl. Metadaten und Referenzen laden     |
 | PATCH   | `/objects/{id}`                   | Teilaktualisierung der Attribute/Status         |
 | DELETE  | `/objects/{id}`                   | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt) |
-| GET     | `/objects?type=product&filter=...`| Suche & Filterung mit Pagination                |
+| GET     | `/objects?type=product&filter=...`| Suche & Filterung mit Pagination; optional `completeness_lt`/`missing_required` (Vollständigkeits-Filter) |
+| GET     | `/objects/picker?q=...&types=...`| Such-Endpunkt für den Referenz-Picker (Label-Suche, optional Zieltyp-Filter) |
 | GET     | `/objects/by-key?type=product&key=sku&value=SKU-123` | Objekt über einen Business-Schlüssel laden (z. B. SKU; eindeutig pro Objekttyp) |
 | POST    | `/references`                     | Referenz zwischen zwei Objekten erstellen (Validierung gegen die Relation-Definition) |
 | GET     | `/relation-definitions`           | Relationstypen auflisten                        |
 | POST    | `/relation-definitions`           | Benutzerdefinierten Relationstyp anlegen (nur Aggregation, Phase 9) |
 | PATCH   | `/objects/{id}/parent`            | Kompositions-Elternteil ändern (Re-Parenting, Zyklenschutz) |
+| POST    | `/objects/bulk`                   | Massenoperation über eine Auswahl (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Löschen) – Ausführung als Hintergrundjob (`job_run`) |
+| POST    | `/objects/batch-update`           | Gesammelte Inline-Edits aus dem Grid (Batch-Save) in einem Aufruf anwenden |
 | GET     | `/objects/{id}/children`          | Direkte Kompositions-Kinder eines Objekts       |
 | GET     | `/objects/{id}/references`        | Alle Referenzen eines Objekts (mit Metadaten)   |
 | GET     | `/objects/{id}/graph?depth=3`     | Graph-Traversierung ab Objekt                   |
@@ -84,3 +87,23 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 
 - Der Datentyp eines Attributs wird über `type` in der Attributdefinition festgelegt; die API behandelt `type` als **erweiterbare Werteliste** (neue Typen dürfen ergänzt, bestehende nicht umbenannt werden).
 - In der ersten Version ist **kein** Endpunkt zum Wechseln des Datentyps vorgesehen. Ein späterer Wechsel (Phase 9) erfordert eine Migration der vorhandenen Werte, einen Audit-Log-Eintrag und folgt der Kompatibilitätsmatrix in [datenmodell.md](datenmodell.md#datentypwechsel).
+
+## Vollständigkeit (Completeness) in der API
+
+Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- und Detailantworten (nicht nur im Frontend), damit sie überall konsistent ist.
+
+- **Definition:** Anteil der **Pflichtattribute des Objekttyps** (aus `required_types` der Attributdefinition, siehe [datenmodell.md](datenmodell.md)), die gesetzt sind – inklusive **vererbter** Werte (entlang `depends_on`). Granularität im MVP: **pro (Objekttyp × Sprache)**.
+- **Lieferung:** `GET /objects` liefert pro Objekt ein Feld `completeness: { "<sprache>": <0–100> }` (bzw. für die angeforderte Arbeitssprache). `GET /objects/{id}` liefert zusätzlich die **Liste fehlender Pflichtattribute** (für das Formular-Widget).
+- **Filterung:** Query-Parameter, z. B. `?completeness_lt=100` bzw. `?missing_required=true` („nur unvollständige Produkte“), optional mit `?language=<code>`.
+- **Berechnungsbasis:** Aufgelöste Sicht (`?resolve_inheritance=true`); leere Werte (Vererbungsunterbrechung) zählen als „gesetzt“.
+- Details zur UI-Darstellung: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness).
+
+## Massenoperationen (Bulk) & Batch-Save
+
+- **`POST /objects/bulk`** führt eine Massenoperation auf einer **Auswahl** aus („alle Treffer des Filters“ / „alle auf der Seite“ / explizite ID-Liste). Operationsarten: `set_attribute` (ersetzen), `clear_attribute` (auf „nicht gepflegt“ zurücksetzen), `change_status`, `add_category`/`remove_category`, `change_parent` (Re-Parenting, Zyklenschutz), `delete` (Soft-Delete-Kaskade).
+- Die Ausführung erfolgt **als Hintergrundjob** (siehe [jobs-scheduler.md](jobs-scheduler.md#job-typen), Typ `bulk_operation`): Der Endpunkt erzeugt ein `job_run` und liefert dessen ID; der Report (Erfolg/Fehler pro Objekt, Validierungsfehler) steht nach Abschluss am `job_run.result`.
+- **`POST /objects/batch-update`** wendet die **gesammelten Inline-Edits** aus dem Grid (Batch-Save) an – eine Liste von Teiländerungen (`{id, attributes, status, …}`) in einem Aufruf; Validierung erfolgt pro Objekt (Eindeutigkeit, Typrestriktionen, Workflow).
+
+## Referenz-Picker-Suche
+
+Der **suchbare Referenz-Picker** der Oberfläche nutzt `GET /objects/picker` (Label-Volltextsuche, optional eingeschränkt auf erlaubte Zieltypen aus `relation_definition.target_types` bzw. der Attributdefinition). Die Antwort enthält kompakte Treffer (ID, Typ, aufgelöstes Label, Status). Details zur UI: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#24-wertedarstellung).

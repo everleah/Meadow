@@ -4,7 +4,7 @@
 - **Relevante Phasen:** Phase 7
 - **Stand:** Entwurf
 
-Dieses Dokument beschreibt die Weboberfläche (NiceGUI). Die Mehrsprachigkeit der **Oberfläche** ist unten im Abschnitt „Mehrsprachigkeit der Oberfläche“ beschrieben; die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum) ist separat im Dokument [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md) beschrieben.
+Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprachigkeit der Oberfläche und die Modulübersicht. Die konkreten **Arbeitsflächen** (Grid, Produkt-Formular, Massendatenpflege, Dashboard) sind im Detaildokument [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) spezifiziert. Die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum) ist separat im Dokument [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md) beschrieben.
 
 ## Architektur
 
@@ -70,52 +70,50 @@ Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**
 - Die fachlichen Daten bleiben unberührt – Mehrsprachigkeit der Oberfläche ist strikt von der Datenmehrsprachigkeit getrennt.
 - Das System ist von Anfang an auf internationale Nutzer vorbereitet, ohne den Kern zu beeinträchtigen.
 
-## Kernfunktionen der Oberfläche (MVP)
+## Modulübersicht (MVP)
 
-Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbeitsabläufe. Folgende Module sind vorgesehen:
+Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbeitsabläufe. Die konkrete Ausgestaltung der Arbeitsflächen (Grid, Formular, Massendatenpflege, Dashboard) sowie Vollständigkeit, Vererbungs-UX und Sprach-Handling stehen in [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md).
 
 1. **Login & Benutzerverwaltung**
    - Anmeldung mit JWT, Passwort-Reset (optional)
    - Anzeige und Bearbeitung von Benutzern, Gruppen und Rollen (nur `admin`/`superadmin`)
 
-2. **Objektliste & Suche**
-   - Listenansicht aller Objekte, filterbar nach Typ, Status, Kategorie
-   - Einfache Volltextsuche
-   - Cursor-basierte Pagination
+2. **Grid & Suche (Hauptarbeitsfläche)**
+   - Grid-first mit `ui.aggrid`: Kategorien-/Strukturbaum, konfigurierbare/pinnbare Spalten, persönliche Ansichten
+   - Inline-Editing mit Batch-Save, Vollständigkeits-Spalte, Volltextsuche
 
-3. **Objektbearbeitung**
-   - Formular zur Anzeige und Bearbeitung der flexiblen Attribute
-   - Mehrsprachige Eingabefelder gemäß Sprachbaum (z. B. Reiter pro Sprache)
-   - Eingabe und Anzeige quantifizierter Werte mit Einheit (Einheiten-Auswahl, automatische Umrechnung)
-   - Anzeige **vererbter Werte** inkl. Herkunft (Quelle) und Warnhinweis bei Konflikten
-   - Setzen von leeren Werten zur Vererbungsunterbrechung
-   - Statuswechsel gemäß Zustandsmaschine (Workflow)
-   - Anzeige von Referenzen und Kategorien des Objekts
+3. **Produkt-Formular (Drill-down)**
+   - Eine scrollbare Seite mit einklappbaren Attributgruppen und Sprung-Menü
+   - Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX, typspezifische Wertedarstellung
 
-4. **Attributdefinitionen & -gruppen**
+4. **Massendatenpflege**
+   - Bulk-Edit-Wizard (definierter Operationssatz, Ausführung als Hintergrundjob + Report)
+
+5. **Attributdefinitionen & -gruppen**
    - Verwaltung von Attributgruppen und -definitionen (nur `admin` oder `editor`)
-   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag, Einheit (`unit_id`/`display_unit_id`) und ggf. `is_key`-Markierung (Business-Schlüssel, z. B. SKU)
+   - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag, Einheit (`unit_id`/`display_unit_id`), `is_key`-Markierung (Business-Schlüssel, z. B. SKU) sowie Template-Feldern (`applicable_types`/`required_types`)
 
-5. **Kategorien & Relationen**
-   - Anlegen und Hierarchisieren von Kategorien als normale Objekte
+6. **Kategorien & Relationen**
+   - Anlegen und Hierarchisieren von Kategorien als normale Objekte (mehrere Kategorie-Bäume möglich)
    - Zuordnung von Objekten zu Kategorien per Drag-and-Drop oder Auswahl
 
-6. **Jobs & Scheduler**
+7. **Jobs & Scheduler**
    - Anzeige laufender und abgeschlossener Jobs (Historie)
    - Manuelles Starten von Job-Definitionen
    - Anzeige von Dead-Letter-Einträgen (nur `admin`)
 
-7. **Sprachbaum-Administration**
+8. **Sprachbaum-Administration**
    - Anzeige und Pflege des Sprachbaums (Knoten, Eltern, Fallback-Order)
    - Aktivieren/Deaktivieren von Sprachen für die Oberfläche und Datenpflege
 
-8. **Einfache Dashboard-Ansicht**
-   - Überblick über Anzahl Objekte pro Typ/Status
-   - Letzte Änderungen (Audit-Log Auszug)
+9. **Dashboard (Arbeitsübersicht)**
+   - Kacheln (Anzahl Objekte pro Typ/Status), Vollständigkeits-Shortcuts ins Grid, letzte Änderungen, Job-Status
 
 **Spätere Ausbaustufen (nicht im MVP):**
 
-- Erweiterte Suche mit Query-Builder („Advanced Search“)
-- Verwaltung gespeicherter Suchen und materialisierter Collections
-- Kanalspezifische Freigaben
+- Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections
+- Pinned Attributes und Attribut-Suchleiste im Formular
+- Find & Replace, sequenzielles Editieren, Send-for-approval bei Bulk-Änderungen
+- Kanalspezifische Freigaben (per-Kanal-Vollständigkeit)
+- Starred-Entitäten, Work Areas/Aufgabenwarteschlangen
 - Echtzeit-Updates über Websockets/NATS

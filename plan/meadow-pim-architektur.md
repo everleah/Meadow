@@ -276,9 +276,9 @@ Komplexe Suchanfragen können als Objekt vom Typ `saved_search` gespeichert und 
 
 ## 11. Benutzeroberfläche (Frontend)
 
-Die Weboberfläche läuft als separater Docker-Container mit Python + NiceGUI und kommuniziert ausschließlich über die REST-API des Rust-Kerns. Ein Dienst für alle Benutzer; Menüs und Aktionen werden rollenbasiert ein-/ausgeblendet. Details zu Architektur, Mehrsprachigkeit und Kernfunktionen stehen im Detaildokument.
+Die Weboberfläche läuft als separater Docker-Container mit Python + NiceGUI und kommuniziert ausschließlich über die REST-API des Rust-Kerns. Ein Dienst für alle Benutzer; Menüs und Aktionen werden rollenbasiert ein-/ausgeblendet. Die Oberfläche ist **arbeitsflächen-orientiert**: Das **Grid** (`ui.aggrid`) ist die Hauptarbeitsfläche mit Inline-Editing und Bulk-Aktionen, das **Produkt-Formular** ein Drill-down, die **Massendatenpflege** (Bulk-Wizard) läuft als Hintergrundjob. Eine berechnete **Vollständigkeit** (pro Typ × Sprache) steuert Pflegeschwerpunkte. Details zu Architektur, Mehrsprachigkeit und Modulen stehen in den Detaildokumenten.
 
-> **Details:** [detail/frontend.md](detail/frontend.md)
+> **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
 ---
 
@@ -307,6 +307,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Datenmodell für Sprachbaum vorbereiten** (Tabelle `language_tree`, Fallback-Mechanismus in der API-Struktur)
 - **Einheiten-Katalog (`unit`-Tabelle) mit allen SI-Einheiten und üblichen Darstellungen vorbereiten; Attributdefinition um `unit_id`/`display_unit_id` erweitern**
 - **Attributdefinition um `inheritable`-Flag erweitern**
+- **Attributdefinition um `applicable_types`/`required_types` erweitern (Produktvorlage pro Typ; Grundlage für Formular-Sichtbarkeit und Vollständigkeit)**
 - **Attributdefinition um `is_key`-Flag für Business-Schlüssel erweitern (Unique-Index `(type, attributes.<name>)` pro Objekttyp)**
 - **Relationenmodell festlegen: Komposition (`depends_on`) vs. Aggregation (`category_member`, `collection_member`, `related`); Tabelle `relation_definition`; Universal-Root als reales Objekt**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
@@ -349,12 +350,15 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken**
 
 ### Phase 7 – Frontend (NiceGUI)
-- NiceGUI-Anwendung mit Login, Objektliste, Objektbearbeitung
-- Admin-Seiten für Attributdefinitionen, Jobs, Benutzer und Gruppen
+- NiceGUI-Anwendung mit Login, Benutzerverwaltung und rollenbasierten Menüs
+- **Grid-first-Arbeitsfläche (`ui.aggrid`):** Kategorien-/Strukturbaum, konfigurierbare/pinnbare Spalten, persönliche Ansichten, Inline-Editing mit Batch-Save, Modal-Editoren
+- **Produkt-Formular:** scrollbare Seite mit einklappbaren Attributgruppen, Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX (Override, „Zurück auf vererbt“), typspezifische Wertedarstellung (Tags, Toggles, Einheiten, lokalisierte Daten)
+- **Vollständigkeit (Completeness):** Berechnung im Kern (Typ × Sprache), Anzeige in Grid, Formular und Dashboard, Filter „unvollständige Produkte“ / „fehlende Pflichtfelder“
+- **Massendatenpflege:** Bulk-Edit-Wizard (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Massen-Löschen) als Hintergrundjob mit Report
+- **Dashboard als Arbeitsübersicht** mit Vollständigkeits-Shortcuts, letzte Änderungen und Job-Status
+- Admin-Seiten für Attributdefinitionen (inkl. `applicable_types`/`required_types`), Jobs, Benutzer und Gruppen
 - **Mehrsprachigkeit der Oberfläche (i18n) mit Übersetzungs-Keys umsetzen (Startsprache Englisch)**
-- **Eingabe und Anzeige von Werten mit Einheit (Einheiten-Auswahl, automatische Umrechnung in der Darstellung)**
-- **Anzeige von vererbten Werten und Herkunft in der Objektbearbeitung**
-- **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung**
+- **UI-Unterstützung für Sprachpflege (Sprachbaum) und Kategorisierung (mehrere Kategorie-Bäume)**
 
 ### Phase 8 – Produktionsreife & MVP-Abschluss
 - Sicherheit, Monitoring, Logging, Backup
@@ -369,6 +373,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Unterstützung für externe Klassifizierungsstandards (z. B. ETIM)**
 - **Datentypwechsel für Attributdefinitionen inkl. Migration vorhandener Werte (Kompatibilitätsmatrix, verlustfreie vs. verlustbehaftete Übergänge)**
 - **Weitere Sprachen für die Oberfläche (Deutsch, Französisch, …)**
+- **Frontend-Ausbau: Pinned Attributes, Attribut-Suchleiste im Formular, Find & Replace, sequenzielles Editieren, Send-for-approval bei Bulk-Änderungen, per-Kanal-Vollständigkeit**
 - **SSO-Anbindung (OIDC) inkl. Gruppen-/Claim-Mapping**
 
 ---
@@ -380,6 +385,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-17 – Frontend-Detailplanung (Abschnitt 11 & Phase 7): arbeitsflächen-orientierte UI (Grid-first mit `ui.aggrid`), Produkt-Formular mit Hybrid-Sprache und Vererbungs-UX, Vollständigkeit (Typ × Sprache), Massendatenpflege (Bulk-Wizard), Dashboard als Arbeitsübersicht; Attributdefinition um `applicable_types`/`required_types` erweitert (Produktvorlage); Detaildokument `frontend-arbeitsflaechen.md` neu; `frontend.md`, `datenmodell.md`, `api-design.md` und `jobs-scheduler.md` entsprechend angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Schlüssel-Konvention (Abschnitt 4): Business-Schlüssel (z. B. SKU) als markierte Attributdefinition (`is_key: true`), Eindeutigkeit pro Objekttyp via Unique-Index `(type, attributes.<name>)`, optional, nur `text`, nicht lokalisiert, nicht vererbbar, änderbar mit Audit, Key-Lookup-Endpunkt und Import-Abgleich (Upsert); `datenmodell.md`, `api-design.md` und `integration-eventsystem.md` entsprechend ergänzt; Phasen 1, 2 und 6 angepasst.*
 

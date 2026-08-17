@@ -20,7 +20,8 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `workflow-freigaben.md` — workflow & releases (section 8)
   - `benutzer-gruppen-rechte.md` — users, groups & permissions (section 9)
   - `gespeicherte-suchen-collections.md` — saved searches & collections (section 10)
-  - `frontend.md` — frontend (section 11)
+  - `frontend.md` — frontend: architecture, i18n & module overview (section 11)
+  - `frontend-arbeitsflaechen.md` — frontend working areas: grid, form, mass maintenance, completeness & dashboard (section 11)
   - `betrieb-deployment.md` — operations & deployment (section 12)
   - `versionierung-audit.md` — versioning & audit (section 13)
 

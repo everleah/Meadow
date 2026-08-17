@@ -1,7 +1,7 @@
 # Hintergrundprozesse & Scheduler
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md))
-- **Relevante Phasen:** Phase 5, 8
+- **Relevante Phasen:** Phase 5, 7, 8
 - **Stand:** Entwurf
 
 ## Architektur
@@ -55,6 +55,7 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - **outbound_export**: Exportiert Daten über einen Konnektor (CSV, JSON, API, SFTP).
 - **inbound_import**: Importiert Daten aus externen Quellen.
 - **business_rule**: Führt eine Business Rule auf gefilterten Objekten aus (z. B. Berechnung von Attributen).
+- **bulk_operation** (Phase 7): Führt eine **Massenoperation** aus dem Bulk-Edit-Wizard der Oberfläche auf einer Auswahl von Objekten aus (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Massen-Löschen). Ergebnis als **Report** im `job_run.result` (Erfolg/Fehler pro Objekt, Validierungsfehler). Siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#3-massendatenpflege) und [api-design.md](api-design.md) (`POST /objects/bulk`).
 
 Für spätere Ausbaustufen sind weitere Job-Typen vorgesehen (z. B. `collection_refresh` für materialisierte Collections). Der Mechanismus bleibt identisch.
 

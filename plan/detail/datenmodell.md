@@ -111,6 +111,8 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "group_id": "attr_group_01",
     "inheritable": true,             // true: Wert kann über Vererbung bezogen werden
     "is_key": false,                 // true: Business-Schlüssel (z. B. SKU), eindeutig pro Typ
+    "applicable_types": [],          // optional: Objekttypen, für die das Attribut gilt (leer = alle)
+    "required_types": ["product"],   // optional: Objekttypen, für die das Attribut Pflicht ist (Vollständigkeit)
     "constraints": {
         "min": 0,
         "max": 999999,
@@ -127,6 +129,8 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung (Abschnitt 4.5) einbezogen wird.
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp über den Unique-Index `(type, attributes.<name>)`. Details siehe [Schlüssel (Business-Schlüssel)](#schluessel-business-schluessel).
+- `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
+- `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
 - Weitere optionale Felder: `multilingual`, `enum_values`, `default_value`, `unit_id`, `display_unit_id`, `description`. Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 
 ### Tabelle `attribute_group`
