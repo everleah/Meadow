@@ -18,6 +18,24 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health::health))
         .route("/api-docs/openapi.json", get(openapi_json))
+        .route(
+            "/objects",
+            get(api::objects::list_objects).post(api::objects::create_object),
+        )
+        .route(
+            "/objects/{id}",
+            get(api::objects::get_object).patch(api::objects::update_object),
+        )
+        .route(
+            "/attribute-definitions",
+            get(api::attribute_definitions::list_attribute_definitions)
+                .post(api::attribute_definitions::create_attribute_definition),
+        )
+        .route(
+            "/attribute-definitions/{id}",
+            get(api::attribute_definitions::get_attribute_definition)
+                .patch(api::attribute_definitions::update_attribute_definition),
+        )
         .with_state(state)
 }
 
