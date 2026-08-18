@@ -1,0 +1,152 @@
+//! JWT issuing/verification, password hashing, and the authenticated-user extractor.
+
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
+use axum::extract::FromRequestParts;
+use axum::http::{header, request::Parts};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use serde::{Deserialize, Serialize};
+
+use crate::app::AppState;
+use crate::error::ApiError;
+
+/// Roles defined by the plan (section 9).
+pub const ROLE_SUPERADMIN: &str = "superadmin";
+pub const ROLE_ADMIN: &str = "admin";
+pub const ROLE_EDITOR: &str = "editor";
+pub const ROLE_VIEWER: &str = "viewer";
+
+/// JWT claims (plan: `sub`, `username`, `roles[]`, `token_version`, `exp`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub username: String,
+    pub roles: Vec<String>,
+    pub token_version: u64,
+    pub exp: usize,
+}
+
+impl Claims {
+    /// Whether the token carries the given role.
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles.iter().any(|r| r == role)
+    }
+
+    /// Whether the token has `admin` or `superadmin` privileges.
+    pub fn is_admin(&self) -> bool {
+        self.has_role(ROLE_ADMIN) || self.has_role(ROLE_SUPERADMIN)
+    }
+}
+
+/// Hashes a password with argon2id.
+pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+    let salt = SaltString::generate(OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+}
+
+/// Verifies a password against an argon2 hash.
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    PasswordHash::new(hash)
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
+        .unwrap_or(false)
+}
+
+/// Issues a signed HS256 token.
+pub fn issue(
+    secret: &str,
+    ttl_seconds: u64,
+    claims: Claims,
+) -> Result<String, jsonwebtoken::errors::Error> {
+    let exp = jsonwebtoken::get_current_timestamp() as usize + ttl_seconds as usize;
+    let mut claims = claims;
+    claims.exp = exp;
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+}
+
+/// Verifies a token and returns its claims.
+pub fn verify(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::new(Algorithm::HS256),
+    )?;
+    Ok(data.claims)
+}
+
+/// Extracted authenticated user (from the `Authorization: Bearer` header).
+pub struct AuthUser(pub Claims);
+
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
+
+        let claims = verify(&state.config.jwt_secret, token)
+            .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
+
+        Ok(AuthUser(claims))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_claims() -> Claims {
+        Claims {
+            sub: "user:admin".to_owned(),
+            username: "admin".to_owned(),
+            roles: vec![ROLE_SUPERADMIN.to_owned()],
+            token_version: 1,
+            exp: 0,
+        }
+    }
+
+    #[test]
+    fn password_hash_and_verify() {
+        let hash = hash_password("secret").expect("hash should succeed");
+        assert!(verify_password("secret", &hash));
+        assert!(!verify_password("wrong", &hash));
+    }
+
+    #[test]
+    fn jwt_roundtrip() {
+        let claims = sample_claims();
+        let token = issue("test-secret", 3600, claims.clone()).expect("issue should succeed");
+        let decoded = verify("test-secret", &token).expect("verify should succeed");
+        assert_eq!(decoded.sub, claims.sub);
+        assert_eq!(decoded.username, claims.username);
+        assert_eq!(decoded.roles, claims.roles);
+        assert_eq!(decoded.token_version, claims.token_version);
+        assert!(decoded.exp > 0);
+        assert!(decoded.has_role(ROLE_SUPERADMIN));
+        assert!(decoded.is_admin());
+    }
+
+    #[test]
+    fn jwt_rejects_wrong_secret() {
+        let token = issue("secret-a", 3600, sample_claims()).expect("issue should succeed");
+        assert!(verify("secret-b", &token).is_err());
+    }
+}

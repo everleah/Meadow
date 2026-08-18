@@ -4,7 +4,9 @@
 //! Records are seeded idempotently with `UPSERT`; system records are owned by
 //! this seed (they are `readonly`/`system` and must not be edited at runtime).
 
+use crate::auth;
 use crate::db::Db;
+use crate::error::ApiError;
 
 /// A unit-catalog entry. `factor`/`offset` are decimal strings that map the
 /// unit to its dimension's canonical SI unit: `canonical = value * factor + offset`.
@@ -740,4 +742,45 @@ pub async fn apply(db: &Db) -> Result<(), surrealdb::Error> {
         sql.push_str(&unit_upsert(unit));
     }
     db.inner().query(sql).await?.check().map(|_| ())
+}
+
+/// Ensures a default `superadmin` user exists (development bootstrap only).
+pub async fn ensure_default_admin(db: &Db) -> Result<(), ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT count() FROM user WHERE username = 'admin' GROUP ALL")
+        .await?
+        .check()?;
+    let counts: Vec<serde_json::Value> = response.take(0)?;
+    let count = counts
+        .first()
+        .and_then(|entry| entry.get("count"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if count > 0 {
+        return Ok(());
+    }
+
+    let password_hash =
+        auth::hash_password("admin").map_err(|error| ApiError::internal(error.to_string()))?;
+
+    let sql = "
+        UPSERT user:admin CONTENT {
+            username: 'admin',
+            email: 'admin@example.com',
+            password_hash: $password_hash,
+            auth_provider: 'local',
+            roles: ['superadmin'],
+            status: 'active',
+            token_version: 1,
+            locale: 'en'
+        };
+    ";
+    db.inner()
+        .query(sql)
+        .bind(("password_hash", password_hash))
+        .await?
+        .check()
+        .map(|_| ())
+        .map_err(ApiError::from)
 }

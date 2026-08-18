@@ -17,7 +17,7 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
 ## Work Guidance
 
 - Python tests live here as `test_*.py`, run with pytest (asyncio mode auto, configured in `pyproject.toml`).
-- Rust unit tests live in the crate's `#[cfg(test)]` module (`crates/pim-core/src/main.rs`); Rust integration tests may be added under `tests/`.
+- Rust unit tests live in `#[cfg(test)]` modules inside the crate's source files (`crates/pim-core/src/…`); Rust integration tests may be added under `tests/`.
 - `test_smoke.py` verifies the core Python dependencies import; keep it as an environment sanity check.
 
 ## Verification

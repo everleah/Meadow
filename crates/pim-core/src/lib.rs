@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod app;
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -24,13 +25,16 @@ pub async fn run() {
         .await
         .expect("failed to apply database schema");
     seed::apply(&db).await.expect("failed to seed system data");
-    let state = app::AppState { db };
+    seed::ensure_default_admin(&db)
+        .await
+        .expect("failed to seed default admin user");
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)
         .await
         .expect("failed to bind TCP listener");
     tracing::info!("pim-core listening on {}", config.bind_addr);
 
+    let state = app::AppState { db, config };
     axum::serve(listener, app::router(state))
         .await
         .expect("server error");

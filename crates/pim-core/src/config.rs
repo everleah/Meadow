@@ -15,6 +15,10 @@ pub struct Config {
     pub surrealdb_user: String,
     /// SurrealDB root password.
     pub surrealdb_pass: String,
+    /// Secret used to sign JWTs (HS256).
+    pub jwt_secret: String,
+    /// Access-token lifetime in seconds.
+    pub jwt_ttl_seconds: u64,
 }
 
 impl Config {
@@ -27,10 +31,19 @@ impl Config {
             surrealdb_database: env_or("SURREALDB_DATABASE", "meadow"),
             surrealdb_user: env_or("SURREALDB_USER", "root"),
             surrealdb_pass: env_or("SURREALDB_PASS", "root"),
+            jwt_secret: env_or("JWT_SECRET", "dev-secret-change-me"),
+            jwt_ttl_seconds: env_or_parse("JWT_TTL_SECONDS", 3600),
         }
     }
 }
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
+fn env_or_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
