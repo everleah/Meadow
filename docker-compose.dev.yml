@@ -6,6 +6,10 @@ name: meadow-dev
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
+    # The image runs as `nonroot`; on Docker Desktop Windows the named
+    # volume is root-owned, so RocksDB cannot create its directory. Run as
+    # root for local development only (production hardening is a later phase).
+    user: root
     command:
       - start
       - --user

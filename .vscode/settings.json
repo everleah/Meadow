@@ -25,5 +25,10 @@
     "files.eol": "\n",
     "files.trimTrailingWhitespace": true,
     "files.insertFinalNewline": true,
-    "editor.rulers": [100]
+    "editor.rulers": [
+        100
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "cargo run": true
+    }
 }
