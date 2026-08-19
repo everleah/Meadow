@@ -21,21 +21,21 @@ Der Rust-Kern ist die **einzige Instanz**, die Einheiten verwaltet und Umrechnun
 
 Jede Einheit gehört zu genau einer **Dimension** (physikalische Größe). Jede Dimension besitzt genau eine **kanonische SI-Einheit**, die als Speichereinheit dient.
 
-| Dimension | Kanonische SI-Einheit | Weitere Darstellungen (Auswahl) |
-|---|---|---|
-| Länge | `m` | `mm`, `cm`, `km`, `µm`, `in`, `ft`, `yd`, `mi` |
-| Fläche | `m²` | `cm²`, `mm²`, `sq in`, `sq ft` |
-| Volumen | `m³` | `l`, `ml`, `cm³`, `gal (US)`, `gal (imp)`, `fl oz` |
-| Masse | `kg` | `g`, `mg`, `t`, `lb`, `oz` |
-| Zeit | `s` | `ms`, `min`, `h` |
-| Elektrische Spannung | `V` | `mV`, `kV`, `MV` |
-| Elektrischer Strom | `A` | `mA`, `kA` |
-| Leistung | `W` | `mW`, `kW`, `MW`, `hp` |
-| Energie | `J` | `kJ`, `MJ`, `Wh`, `kWh` |
-| Frequenz | `Hz` | `kHz`, `MHz`, `GHz` |
-| Kraft | `N` | `kN`, `MN` |
-| Druck | `Pa` | `kPa`, `MPa`, `bar`, `mbar`, `psi` |
-| Temperatur | `K` | `°C`, `°F` |
+| Dimension            | Kanonische SI-Einheit | Weitere Darstellungen (Auswahl)                     |
+| -------------------- | --------------------- | --------------------------------------------------- |
+| Länge                | `m`                   | `mm`, `cm`, `km`, `µm`, `in`, `ft`, `yd`, `mi`      |
+| Fläche               | `m²`                  | `cm²`, `mm²`, `sq in`, `sq ft`                      |
+| Volumen              | `m³`                  | `l`, `ml`, `cm³`, `gal (US)`, `gal (imp)`, `fl oz`  |
+| Masse                | `kg`                  | `g`, `mg`, `t`, `lb`, `oz`                          |
+| Zeit                 | `s`                   | `ms`, `min`, `h`                                    |
+| Elektrische Spannung | `V`                   | `mV`, `kV`, `MV`                                    |
+| Elektrischer Strom   | `A`                   | `mA`, `kA`                                          |
+| Leistung             | `W`                   | `mW`, `kW`, `MW`, `hp`                              |
+| Energie              | `J`                   | `kJ`, `MJ`, `Wh`, `kWh`                             |
+| Frequenz             | `Hz`                  | `kHz`, `MHz`, `GHz`                                 |
+| Kraft                | `N`                   | `kN`, `MN`                                          |
+| Druck                | `Pa`                  | `kPa`, `MPa`, `bar`, `mbar`, `psi`                  |
+| Temperatur           | `K`                   | `°C`, `°F`                                          |
 
 Die vollständige Liste (alle SI-Basis- und abgeleiteten Einheiten sowie die üblichen Darstellungen inkl. Präfixen) wird **per Default mit dem System ausgeliefert** und liegt in der Tabelle `unit`.
 
@@ -45,25 +45,25 @@ Die vollständige Liste (alle SI-Basis- und abgeleiteten Einheiten sowie die üb
 
 Einheiten aus dem anglo-amerikanischen Raum (US customary / imperial) werden **genauso behandelt wie alle übrigen Einheiten**: Sie sind Einträge im Einheiten-Katalog (`unit`) mit `factor`/`offset` relativ zur kanonischen SI-Einheit und werden per Default mitgeliefert. **Gespeichert wird immer in SI**; imperial/US-Einheiten dienen nur als Eingabe- und Anzeigedarstellung. Eine Sonderlogik ist nicht erforderlich.
 
-| Dimension | Einheit | Symbol | Umrechnung (→ kanonische SI-Einheit) |
-|---|---|---|---|
-| Länge | Zoll (inch) | `in` | `1 in = 25.4 mm = 0.0254 m` |
-| Länge | Fuß (foot) | `ft` | `1 ft = 0.3048 m` |
-| Länge | Yard | `yd` | `1 yd = 0.9144 m` |
-| Länge | Meile (mile) | `mi` | `1 mi = 1609.344 m` |
-| Masse | Pfund (pound) | `lb` | `1 lb = 0.45359237 kg` |
-| Masse | Unze (ounce) | `oz` | `1 oz = 0.028349523125 kg` |
-| Fläche | Quadratzoll | `sq in` | `1 sq in = 0.00064516 m²` |
-| Fläche | Quadratfuß | `sq ft` | `1 sq ft = 0.09290304 m²` |
-| Volumen | Kubikzoll | `cu in` | `1 cu in = 16.387064 ml` |
-| Volumen | Kubikfuß | `cu ft` | `1 cu ft = 28.316846592 l` |
-| Volumen | Gallone (US) | `gal_us` | `1 gal_us = 3.785411784 l` |
-| Volumen | Gallone (imp.) | `gal_imp` | `1 gal_imp = 4.54609 l` |
-| Volumen | Fluid Ounce (US) | `fl_oz_us` | `1 fl_oz_us = 29.5735295625 ml` |
-| Volumen | Fluid Ounce (imp.) | `fl_oz_imp` | `1 fl_oz_imp = 28.4130625 ml` |
-| Druck | Pounds per square inch | `psi` | `1 psi = 6894.757 Pa` |
-| Leistung | Horsepower (mech.) | `hp` | `1 hp = 745.6999 W` |
-| Temperatur | Grad Fahrenheit | `°F` | `K = (°F + 459.67) · 5/9` (Offset!) |
+| Dimension  | Einheit                | Symbol      | Umrechnung (→ kanonische SI-Einheit) |
+| ---------- | ---------------------- | ----------- | ------------------------------------ |
+| Länge      | Zoll (inch)            | `in`        | `1 in = 25.4 mm = 0.0254 m`          |
+| Länge      | Fuß (foot)             | `ft`        | `1 ft = 0.3048 m`                    |
+| Länge      | Yard                   | `yd`        | `1 yd = 0.9144 m`                    |
+| Länge      | Meile (mile)           | `mi`        | `1 mi = 1609.344 m`                  |
+| Masse      | Pfund (pound)          | `lb`        | `1 lb = 0.45359237 kg`               |
+| Masse      | Unze (ounce)           | `oz`        | `1 oz = 0.028349523125 kg`           |
+| Fläche     | Quadratzoll            | `sq in`     | `1 sq in = 0.00064516 m²`            |
+| Fläche     | Quadratfuß             | `sq ft`     | `1 sq ft = 0.09290304 m²`            |
+| Volumen    | Kubikzoll              | `cu in`     | `1 cu in = 16.387064 ml`             |
+| Volumen    | Kubikfuß               | `cu ft`     | `1 cu ft = 28.316846592 l`           |
+| Volumen    | Gallone (US)           | `gal_us`    | `1 gal_us = 3.785411784 l`           |
+| Volumen    | Gallone (imp.)         | `gal_imp`   | `1 gal_imp = 4.54609 l`              |
+| Volumen    | Fluid Ounce (US)       | `fl_oz_us`  | `1 fl_oz_us = 29.5735295625 ml`      |
+| Volumen    | Fluid Ounce (imp.)     | `fl_oz_imp` | `1 fl_oz_imp = 28.4130625 ml`        |
+| Druck      | Pounds per square inch | `psi`       | `1 psi = 6894.757 Pa`                |
+| Leistung   | Horsepower (mech.)     | `hp`        | `1 hp = 745.6999 W`                  |
+| Temperatur | Grad Fahrenheit        | `°F`        | `K = (°F + 459.67) · 5/9` (Offset!)  |
 
 **Hinweise:**
 

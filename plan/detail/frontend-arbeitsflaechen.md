@@ -122,11 +122,11 @@ Entlang der Kompositionskette `depends_on` ([datenwertvererbung.md](datenwertver
 
 ## 6. Phasierung
 
-| Arbeitsfläche | MVP (Phase 7) | Später (Phase 9) |
-|---|---|---|
-| Grid | ui.aggrid, Kategorien-/Strukturbaum, Spalten + Pinning, persönliche Ansichten, Inline-Editing + Batch-Save, Modal-Editoren, Vollständigkeits-Spalte/Filter, Status-Badge | Sprach-Spalten im Grid (Spalten-Picker), Baum direkt im Grid (Enterprise/Tabulator, nur falls nötig) |
-| Formular | scrollbare Seite, einklappbare Gruppen, Sprung-Menü, Hybrid-Sprache, Vererbungs-UX, Wertedarstellung, Enum-Option-Creation, Referenz-Picker, Vollständigkeits-Widget | Pinned Attributes, Attribut-Suchleiste, Vollständigkeit im Referenz-Picker |
-| Massendatenpflege | Bulk-Wizard (definierter Operationssatz, Hintergrundjob + Report) | Find & Replace, sequenzielles Editieren, Send-for-approval |
-| Dashboard | Arbeitsübersicht mit Vollständigkeits-Shortcuts | Starred, Work Areas, Kanäle |
+| Arbeitsfläche     | MVP (Phase 7)                                                                                                                                                              | Später (Phase 9)                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Grid              | ui.aggrid, Kategorien-/Strukturbaum, Spalten + Pinning, persönliche Ansichten, Inline-Editing + Batch-Save, Modal-Editoren, Vollständigkeits-Spalte/Filter, Status-Badge   | Sprach-Spalten im Grid (Spalten-Picker), Baum direkt im Grid (Enterprise/Tabulator, nur falls nötig) |
+| Formular          | scrollbare Seite, einklappbare Gruppen, Sprung-Menü, Hybrid-Sprache, Vererbungs-UX, Wertedarstellung, Enum-Option-Creation, Referenz-Picker, Vollständigkeits-Widget       | Pinned Attributes, Attribut-Suchleiste, Vollständigkeit im Referenz-Picker                           |
+| Massendatenpflege | Bulk-Wizard (definierter Operationssatz, Hintergrundjob + Report)                                                                                                          | Find & Replace, sequenzielles Editieren, Send-for-approval                                           |
+| Dashboard         | Arbeitsübersicht mit Vollständigkeits-Shortcuts                                                                                                                            | Starred, Work Areas, Kanäle                                                                          |
 
 > **Abhängigkeiten zu anderen Dokumenten:** `datenmodell.md` (Template-Felder `applicable_types`/`required_types`), `api-design.md` (Vollständigkeit in Antworten/Filter, Bulk-Endpunkt, Such-Endpunkt für Referenz-Picker, Batch-Save), `jobs-scheduler.md` (Bulk als Job-Typ), `frontend.md` (Modulübersicht), Abschnitt 11 + Phase 7 im Hauptdokument.

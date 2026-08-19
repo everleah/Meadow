@@ -12,7 +12,7 @@ Der Projektname **Meadow PIM** steht für den Beginn auf der grünen Wiese: ein 
 
 Das System besteht aus mehreren Diensten, die lose gekoppelt über REST und eine Message Queue kommunizieren. Die folgende Darstellung zeigt die Komponenten und ihre Verbindungen.
 
-```
+```text
                         ┌─────────────────────────────────────────────┐
                         │            Web-Browser (Client)             │
                         └──────────────────────┬──────────────────────┘

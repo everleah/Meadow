@@ -8,7 +8,7 @@
 
 Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestartete Aufgaben** zuständig. CRUD-Events werden separat über das Eventsystem (Abschnitt 7 des Hauptdokuments) verarbeitet und sind nicht Teil dieses Abschnitts.
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                     Rust-Kern (Scheduler)                    │
 │                                                              │

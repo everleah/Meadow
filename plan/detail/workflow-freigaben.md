@@ -11,7 +11,7 @@
 - **Umsetzung über `workflow_guard`-Regeln:** Erlaubte Übergänge werden als Business Rules (Typ `workflow_guard`, Abschnitt 8 / [business-rules.md](business-rules.md)) geprüft – sie laufen **blockierend** bei Statuswechsel im Schreibpfad des Kerns und liefern das Übergangs-Verdikt (`result.allow(bool, reason)`); bei Fehlern greifen fail-closed + Circuit Breaker der Rule-Infrastruktur.
 - Erlaubte Übergänge werden zentral definiert, z. B.:
 
-```
+```text
 draft → in_review → approved → published → archived
                      ↓
                   rejected → draft

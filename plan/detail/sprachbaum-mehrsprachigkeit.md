@@ -18,7 +18,7 @@ Für sprachabhängige Attributwerte (z. B. `name`, `description`) wird ein **hie
 
 **Hierarchie:**
 
-```
+```text
 root
 ├── en
 │   ├── en-GB

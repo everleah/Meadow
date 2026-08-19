@@ -82,15 +82,15 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 
 Das frühere Modell kannte weitere Typen und Kanten-Attribute, die durch das Relationenmodell **ersatzlos entfallen**:
 
-| Bisher | Status |
-|---|---|
-| `inherits_from` | → ersetzt durch `depends_on` |
-| `parent` | entfällt (durch `depends_on` abgedeckt) |
-| `variant` | entfällt (Varianten = Kind via `depends_on`) |
-| `priority` (Kante) | entfällt (genau ein Elternteil) |
-| `scope` (Kante) | entfällt (genau ein Vererbungspfad) |
-| `preferred_inheritance_source` | entfällt (genau eine Quelle) |
-| `disabled_for` (Kante) | entfällt im MVP (optional spätere Ausbaustufe) |
+| Bisher                         | Status                                           |
+| ------------------------------ | ------------------------------------------------ |
+| `inherits_from`                | → ersetzt durch`depends_on`                      |
+| `parent`                       | entfällt (durch`depends_on` abgedeckt)           |
+| `variant`                      | entfällt (Varianten = Kind via`depends_on`)      |
+| `priority` (Kante)             | entfällt (genau ein Elternteil)                  |
+| `scope` (Kante)                | entfällt (genau ein Vererbungspfad)              |
+| `preferred_inheritance_source` | entfällt (genau eine Quelle)                     |
+| `disabled_for` (Kante)         | entfällt im MVP (optional spätere Ausbaustufe)   |
 
 ## Invarianten (Zusammenfassung)
 

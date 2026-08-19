@@ -10,13 +10,14 @@
 
 **Regeltypen (verbindlich):**
 
-| Typ | Zweck | Ausführung |
-|-----|-------|------------|
-| `validation` | Prüfungen beim Schreiben (Pflichtfelder, Formate, Bereiche, Querfeld-Plausibilität) – `error` blockt, `warning` annotiert | **blockierend** im Schreibpfad |
-| `computed` | Berechnete/abgeleitete Attribute (R2), z. B. Brutto aus Netto, zusammengesetzter Titel | **blockierend** im Schreibpfad, Wert wird gespeichert |
-| `normalization` | Bereinigung/Transformation von Werten beim **Import** (Trimmen, Einheiten vereinheitlichen, Synonyme mappen) | in der Import-Pipeline (Worker) |
-| `workflow_guard` | Erlaubte Statusübergänge / „darf nicht ohne X publiziert werden“ | **blockierend** bei Statuswechsel |
-| `bulk` | Regel über gefilterte Objektmenge (Neuberechnung, Anreicherung, Recompute) – Job `business_rule` | **Job** (async, R5) |
+
+| Typ              | Zweck                                                                                                                       | Ausführung                                            |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `validation`     | Prüfungen beim Schreiben (Pflichtfelder, Formate, Bereiche, Querfeld-Plausibilität) –`error` blockt, `warning` annotiert    | **blockierend** im Schreibpfad                        |
+| `computed`       | Berechnete/abgeleitete Attribute (R2), z. B. Brutto aus Netto, zusammengesetzter Titel                                      | **blockierend** im Schreibpfad, Wert wird gespeichert |
+| `normalization`  | Bereinigung/Transformation von Werten beim**Import** (Trimmen, Einheiten vereinheitlichen, Synonyme mappen)                 | in der Import-Pipeline (Worker)                       |
+| `workflow_guard` | Erlaubte Statusübergänge / „darf nicht ohne X publiziert werden“                                                            | **blockierend** bei Statuswechsel                     |
+| `bulk`           | Regel über gefilterte Objektmenge (Neuberechnung, Anreicherung, Recompute) – Job`business_rule`                             | **Job** (async, R5)                                   |
 
 Regeln mit **externen Seiteneffekten** (Webhooks, Erzeugen verwandter Objekte, Aufrufe der Middleware) sind **nicht** Teil der Business Rules – das ist Aufgabe des Eventsystems/Webhook-Outbound (Abschnitt 7). Die Sandbox erzwingt dies (keine externe I/O).
 
@@ -85,12 +86,12 @@ Die Interpretation des Ergebnisses hängt vom Regeltyp ab (gleiche Signatur, ein
 
 **Injizierte Globals (alle gesichert):**
 
-| Global | Inhalt |
-|--------|--------|
-| `obj` | **Aufgelöste Sicht** des Objekts: eigene + vererbte + sprachlich aufgelöste Attributwerte (gemäß Sprachbaum), plus `id`, `type`, `status` und **read-only** Relationen. Für computed/normalization wird über `result.set_value` geschrieben, nicht durch Mutation von `obj`. |
-| `ctx` | Kontext: `rule_type`, `object_type`, `language(s)`, `mode` (`save` \| `import` \| `transition` \| `bulk`), `actor` |
-| `result` | Typisierte Helfer (siehe oben) |
-| `log(message, level)` | Sicheres Logging (in Ergebnis/Audit sichtbar) |
+| Global                | Inhalt                                                                                                                                                                                                                                                                       |
+| --------------------- | -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `obj`                 | **Aufgelöste Sicht** des Objekts: eigene + vererbte + sprachlich aufgelöste Attributwerte (gemäß Sprachbaum), plus `id`, `type`, `status` und **read-only** Relationen. Für computed/normalization wird über `result.set_value` geschrieben, nicht durch Mutation von `obj`. |
+| `ctx`                 | Kontext:`rule_type`, `object_type`, `language(s)`, `mode` (`save` \| `import` \| `transition` \| `bulk`), `actor`                                                                                                                                                            |
+| `result`              | Typisierte Helfer (siehe oben)                                                                                                                                                                                                                                               |
+| `log(message, level)` | Sicheres Logging (in Ergebnis/Audit sichtbar)                                                                                                                                                                                                                                |
 
 - **Import-Whitelist:** zulässige Module sind administrativ konfigurierbar (Standard: `json`, `datetime`, `math`, `re`, `statistics`, `decimal`, `typing`, `uuid`, `collections`), analog zur Whitelist der Connector-Hub-Middleware. Nicht gelistete Module lassen sich nicht importieren.
 - **Explizite Bindings:** Zusätzliche Fähigkeiten (z. B. Einheitenumrechnung, String-Helfer) werden als explizite Bindings injiziert, nicht per Import. Weitere explizite Bindings dürfen später ergänzt werden (Muster: capability-limits der Connector-Hub-`source`/`target`-Proxies), falls sich der Bedarf zeigt – immer read-only bzw. explizit eingeschränkt.
@@ -173,17 +174,17 @@ Lab-Ausführungen werden **auditiert** (wer hat wann welche Regel gegen welche O
 
 ## API (Auszug)
 
-| Methode | Pfad | Beschreibung |
-|---------|------|--------------|
-| GET | `/rules` | Regeln auflisten (Filter: `type`, `state`, `applies_to`) |
-| POST | `/rules` | Regel anlegen (Compile-Check beim Speichern) |
-| GET | `/rules/{id}` | Regel laden (inkl. `version`, Historie über Audit) |
-| PATCH | `/rules/{id}` | Regel bearbeiten (Compile-Check; Version++ + Audit) |
-| POST | `/rules/{id}/activate` | Regel aktivieren (`draft`/`disabled` → `active`; RBAC `admin`/`superadmin`) |
-| POST | `/rules/{id}/disable` | Regel deaktivieren (`active` → `disabled`) |
-| POST | `/rules/{id}/dry-run` | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren) |
-| POST | `/rules/{id}/test-batch` | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren) |
-| POST | `/rules/{id}/recompute` | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5) |
+| Methode | Pfad                     | Beschreibung                                                                  |
+| ------- | ------------------------ | ------------------------------------------------------------------------------|
+| GET     | `/rules`                 | Regeln auflisten (Filter:`type`, `state`, `applies_to`)                       |
+| POST    | `/rules`                 | Regel anlegen (Compile-Check beim Speichern)                                  |
+| GET     | `/rules/{id}`            | Regel laden (inkl.`version`, Historie über Audit)                             |
+| PATCH   | `/rules/{id}`            | Regel bearbeiten (Compile-Check; Version++ + Audit)                           |
+| POST    | `/rules/{id}/activate`   | Regel aktivieren (`draft`/`disabled` → `active`; RBAC `admin`/`superadmin`)   |
+| POST    | `/rules/{id}/disable`    | Regel deaktivieren (`active` → `disabled`)                                    |
+| POST    | `/rules/{id}/dry-run`    | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren)|
+| POST    | `/rules/{id}/test-batch` | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren)       |
+| POST    | `/rules/{id}/recompute`  | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5)                  |
 
 Intern (nicht öffentlich): Rule-Evaluation-Endpunkt des Python-Service für den synchronen Schreibpfad des Kerns.
 

@@ -16,10 +16,11 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 
 ## 2. DNS & öffentliche Routen (Traefik)
 
-| Hostname                          | Compose-Service | Container-Port | Zweck                                  |
-|-----------------------------------|-----------------|----------------|----------------------------------------|
-| `meadow.pim.example.com`        | `pim-frontend`  | 8081           | Web-Oberfläche (NiceGUI)               |
-| `meadow.api.example.com`        | `pim-core`      | 8080           | REST-API (inkl. OpenAPI-Dokumentation) |
+
+| Hostname                   | Compose-Service | Container-Port | Zweck                                  |
+| -------------------------- | --------------- | -------------- | -------------------------------------- |
+| `meadow.pim.example.com` | `pim-frontend`  | 8081           | Web-Oberfläche (NiceGUI)               |
+| `meadow.api.example.com` | `pim-core`      | 8080           | REST-API (inkl. OpenAPI-Dokumentation) |
 
 - **DNS:** A-Records für beide Subdomains auf die IP des VPS.
 - **TLS:** ausschließlich am Traefik terminiert; beide Router über Entrypoint `websecure` + certresolver `letsencrypt`.
@@ -35,15 +36,15 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 
 ### 3.2 Dienste
 
-| Service           | Image                                        | Ports (intern)            | Netzwerke                       | Traefik                        |
-|-------------------|----------------------------------------------|---------------------------|---------------------------------|--------------------------------|
-| `pim-core`        | `${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}`   | 8080                      | traefik-net + meadow-backend  | `meadow.api.example.com`     |
-| `pim-frontend`    | `${PIM_REGISTRY}/pim-frontend:${PIM_FRONTEND_TAG}` | 8081                | traefik-net + meadow-backend  | `meadow.pim.example.com`     |
-| `pim-worker`      | `${PIM_REGISTRY}/pim-worker:${PIM_WORKER_TAG}` | –                        | meadow-backend                  | nein                           |
-| `surrealdb`       | `surrealdb/surrealdb:latest`                 | 8000                      | meadow-backend                  | nein                           |
-| `nats`            | `nats:latest` (JetStream)                    | 4222, 8222 (Monitoring)   | meadow-backend                  | nein                           |
-| `object-storage`  | `minio/minio:latest`                         | 9000 (S3), 9001 (Console) | meadow-backend                  | nein                           |
-| `redis` (optional)| `redis:7-alpine`                             | 6379                      | meadow-backend                  | nein                           |
+| Service            | Image                                              | Ports (intern)            | Netzwerke                      | Traefik                    |
+| ------------------ | -------------------------------------------------- | ------------------------- | ------------------------------ | -------------------------- |
+| `pim-core`         | `${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}`         | 8080                      | traefik-net + meadow-backend | `meadow.api.example.com` |
+| `pim-frontend`     | `${PIM_REGISTRY}/pim-frontend:${PIM_FRONTEND_TAG}` | 8081                      | traefik-net + meadow-backend | `meadow.pim.example.com` |
+| `pim-worker`       | `${PIM_REGISTRY}/pim-worker:${PIM_WORKER_TAG}`     | –                         | meadow-backend                 | nein                       |
+| `surrealdb`        | `surrealdb/surrealdb:latest`                       | 8000                      | meadow-backend                 | nein                       |
+| `nats`             | `nats:latest` (JetStream)                          | 4222, 8222 (Monitoring)   | meadow-backend                 | nein                       |
+| `object-storage`   | `minio/minio:latest`                               | 9000 (S3), 9001 (Console) | meadow-backend                 | nein                       |
+| `redis` (optional) | `redis:7-alpine`                                   | 6379                      | meadow-backend                 | nein                       |
 
 - Container-Namen mit `meadow-`-Präfix (z. B. `meadow-core`, `meadow-frontend`, `meadow-surrealdb`), um auf dem gemeinsamen Server Kollisionen zu vermeiden.
 - **Kommunikation (intern):** Frontend → Core: REST (JWT) · Worker → Core: REST (JWT) · Core → NATS: Publish · Worker → NATS: Subscribe · Core → SurrealDB: interner Treiber. Alle Dienste nur über das interne `meadow-backend`-Netz, öffentlich erreichbar sind ausschließlich `pim-frontend` und `pim-core` über Traefik.
@@ -158,16 +159,16 @@ AUTO_BASELINE_DB_MIGRATIONS=true
 
 Die Skripte werden in Phase 8 angelegt und spiegeln 1:1 die Connector-Hub-Skripte:
 
-| Skript (Meadow)          | Vorbild (the predecessor project)   | Aufgabe                                                            |
-|--------------------------|---------------------------|--------------------------------------------------------------------|
-| `deploy-vps-meadow.sh`   | `deploy-vps-chub.sh`      | Registry-Login, Compose-Validierung, Netz-Check, Pull, Migrationen, `up -d --remove-orphans` (kein `down`), Status + optional Healthcheck |
-| `healthcheck-vps.sh`     | `healthcheck-vps.sh`      | Wartezeit, Container-Health je Dienst, interne Endpoint-Checks     |
-| `backup-vps-db.sh`       | `backup-vps-db.sh`        | SurrealDB-Export nach `$BACKUP_DIR`                                |
-| `restore-vps-db.sh`      | `restore-vps-db.sh`       | SurrealDB-Import aus Backup (interaktiv / `--force`)               |
-| `cleanup-backups.sh`     | `cleanup-backups.sh`      | Löscht Backups älter als `BACKUP_RETENTION_DAYS`                   |
-| `bootstrap-vps-admin.sh` | `bootstrap-vps-admin.sh`  | Einmaliger Superadmin (Rolle `superadmin`) über `pim-core`         |
-| `collect-vps-diagnostics.sh` | `collect-vps-diagnostics.sh` | Zeitgestempeltes Diagnose-Bundle (Compose-Config, Health, Inspect, Logs, Host-Infos) |
-| `tail-vps-errors.sh`     | `tail-vps-errors.sh`      | Fehlerzeilen-Triage aus den Logs (optional `--follow`)             |
+| Skript (Meadow)              | Vorbild (the predecessor project)      | Aufgabe                                                                                                                                  |
+| ---------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy-vps-meadow.sh`       | `deploy-vps-chub.sh`         | Registry-Login, Compose-Validierung, Netz-Check, Pull, Migrationen,`up -d --remove-orphans` (kein `down`), Status + optional Healthcheck |
+| `healthcheck-vps.sh`         | `healthcheck-vps.sh`         | Wartezeit, Container-Health je Dienst, interne Endpoint-Checks                                                                           |
+| `backup-vps-db.sh`           | `backup-vps-db.sh`           | SurrealDB-Export nach`$BACKUP_DIR`                                                                                                       |
+| `restore-vps-db.sh`          | `restore-vps-db.sh`          | SurrealDB-Import aus Backup (interaktiv /`--force`)                                                                                      |
+| `cleanup-backups.sh`         | `cleanup-backups.sh`         | Löscht Backups älter als`BACKUP_RETENTION_DAYS`                                                                                          |
+| `bootstrap-vps-admin.sh`     | `bootstrap-vps-admin.sh`     | Einmaliger Superadmin (Rolle`superadmin`) über `pim-core`                                                                                |
+| `collect-vps-diagnostics.sh` | `collect-vps-diagnostics.sh` | Zeitgestempeltes Diagnose-Bundle (Compose-Config, Health, Inspect, Logs, Host-Infos)                                                     |
+| `tail-vps-errors.sh`         | `tail-vps-errors.sh`         | Fehlerzeilen-Triage aus den Logs (optional`--follow`)                                                                                    |
 
 **Wichtige Verträge des Deploy-Skripts (aus the predecessor project übernommen):**
 
@@ -267,15 +268,15 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 
 ## 13. Ressourcenbedarf (Richtwerte für example.com)
 
-| Dienst          | CPU     | RAM   | Speicher (Volumen) |
-|-----------------|---------|-------|--------------------|
-| pim-core        | 1–2 vCPU| 512 MB| –                  |
-| pim-frontend    | 1 vCPU  | 512 MB| –                  |
-| pim-worker      | 1 vCPU  | 512 MB| –                  |
-| surrealdb       | 1–2 vCPU| 1 GB  | 10–50 GB           |
-| nats            | 0.5 vCPU| 256 MB| 5–20 GB            |
-| object-storage  | 1 vCPU  | 512 MB| 50–500 GB          |
-| redis (opt.)    | 0.5 vCPU| 256 MB| 1–5 GB             |
+| Dienst         | CPU       | RAM    | Speicher (Volumen) |
+| -------------- | --------- | ------ | ------------------ |
+| pim-core       | 1–2 vCPU  | 512 MB | –                  |
+| pim-frontend   | 1 vCPU    | 512 MB | –                  |
+| pim-worker     | 1 vCPU    | 512 MB | –                  |
+| surrealdb      | 1–2 vCPU  | 1 GB   | 10–50 GB           |
+| nats           | 0.5 vCPU  | 256 MB | 5–20 GB            |
+| object-storage | 1 vCPU    | 512 MB | 50–500 GB          |
+| redis (opt.)   | 0.5 vCPU  | 256 MB | 1–5 GB             |
 
 Diese Werte sind als Ausgangspunkt gedacht; auf dem gemeinsamen Server ist die tatsächlich verfügbare Kapazität (VPS-Paket) zu berücksichtigen.
 
