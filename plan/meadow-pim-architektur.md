@@ -216,7 +216,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 **Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU):**
 
 1. **Definition:** Ein Business-Schlüssel ist eine markierte Attributdefinition (`is_key: true`) und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
-2. **Eindeutigkeit:** Gilt pro Objekttyp – kompositer Unique-Index `(type, attributes.<name>)`. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
+2. **Eindeutigkeit:** Gilt pro Objekttyp. Da Attributnamen dynamisch im flexiblen `attributes`-Objekt liegen, lässt sich die Eindeutigkeit nicht als statischer kompositer Schema-Index abbilden – der Kern erzwingt sie **beim Schreiben anwendungsseitig** (Abfrage `(type, attributes.<name>)`, exakt/case-sensitiv, getrimmt). Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
 3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
 4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
 5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive) mit Trim.
@@ -224,7 +224,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 7. **Änderbar:** Schlüsselwerte sind änderbar; der Kern prüft die Eindeutigkeit bei jeder Änderung und protokolliert sie im Audit-Log.
 8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert).
 
-> **Details:** [datenmodell.md](detail/datenmodell.md#schluessel-business-schluessel) — Datenmodell & Unique-Index; [api-design.md](detail/api-design.md) — Key-Lookup; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF & Import-Abgleich.
+> **Details:** [datenmodell.md](detail/datenmodell.md#schluessel-business-schluessel) — Datenmodell & Eindeutigkeit; [api-design.md](detail/api-design.md) — Key-Lookup; [integration-eventsystem.md](detail/integration-eventsystem.md) — MEF & Import-Abgleich.
 
 **Attribut-Datentypen & Datentypwechsel (vorgesehen, nicht im MVP):**
 
@@ -363,7 +363,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Einheiten-Katalog (`unit`-Tabelle) mit allen SI-Einheiten und üblichen Darstellungen vorbereiten; Attributdefinition um `unit_id`/`display_unit_id` erweitern**
 - **Attributdefinition um `inheritable`-Flag erweitern**
 - **Attributdefinition um `applicable_types`/`required_types` erweitern (Produktvorlage pro Typ; Grundlage für Formular-Sichtbarkeit und Vollständigkeit)**
-- **Attributdefinition um `is_key`-Flag für Business-Schlüssel erweitern (Unique-Index `(type, attributes.<name>)` pro Objekttyp)**
+- **Attributdefinition um `is_key`-Flag für Business-Schlüssel erweitern (Eindeutigkeit pro Objekttyp, anwendungsseitig beim Schreiben)**
 - **Business-Rules-Basis vorbereiten: Tabelle `business_rule`; Attributdefinition um `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` erweitern (berechnete Attribute, stored-first, Abschnitt 8)**
 - **Relationenmodell festlegen: Komposition (`depends_on`) vs. Aggregation (`category_member`, `collection_member`, `related`); Tabelle `relation_definition`; Universal-Root als reales Objekt**
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
@@ -387,6 +387,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - Caching einführen (Redis optional)
 - **Performance der Vererbungs- und Sprachauflösung messen und optimieren**
 - **Indizes für Vererbungsrelationen und Kategorieabfragen sicherstellen**
+- **Such-Performance verfeinern: Fulltext-Per-Feld-Indizes und ggf. dynamische Unique-Indizes für Business-Schlüssel (Phase-2-MVP: ein Fulltext-Index über `attributes`, Eindeutigkeit anwendungsseitig)**
 
 ### Phase 4 – Python-Integration & Business Rules
 
@@ -470,6 +471,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-19 – Phase-2-Implementierung nachgezogen (Abschnitte 4 & 12, Phase 3): Business-Schlüssel-Eindeutigkeit anwendungsseitig statt statischem Unique-Index (dynamische Attributnamen im flexiblen `attributes`-Objekt); Volltextsuche im MVP über einen Index auf `attributes` (Analyzer `meadow_std`) statt Per-Feld-Indizes; Re-Parenting als `DELETE` + `RELATE` (Richtung einer RELATION-Kante ist nicht per `UPDATE` änderbar); `POST /search`-Payload sowie `POST/GET /system/logs` (API-Key + Admin-JWT-Dev-Fallback, Offset-Pagination, Batchgrößen-Cap) präzisiert; `datenmodell.md`, `relationen.md` und `api-design.md` entsprechend angepasst.*
 
 *Zuletzt geändert: 2026-08-17 – Querverlinkungen & Phasenzuordnung bereinigt: Phantom-Unterabschnittsverweise (4.4–4.7, 8.2, 10.1/10.2) entfernt und durch Detaildokument-Links ersetzt; Anker in den „Hauptdokument“-Links der Detaildokumente ergänzt; Enum-Korrekturen (`bulk` in `business_rule`, `bulk_operation` in `job_definition`) und `multilingual`-Verortung in `datenmodell.md`; Rechte-Korrektur Attributdefinitionen (nur `admin`/`superadmin`) in `frontend.md`; `audit_log` + Versionierung als Phase-2-Punkt ergänzt; Header-Phasen in `business-rules.md` (Phase 1 statt 2), `workflow-freigaben.md` (4/7/9) und `versionierung-audit.md` (2/7) korrigiert.*
 

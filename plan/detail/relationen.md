@@ -39,6 +39,7 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
   - **Zyklenschutz:** Ein Objekt darf nicht in seinen eigenen Teilbaum gehängt werden.
   - **Typrestriktionen:** Der neue Elternteil muss den `target_types` der `depends_on`-Definition (bzw. einer restriktiven Definition) genügen.
 - Der Umzug ist **atomar** und wird im `audit_log` protokolliert.
+- **Technische Umsetzung:** SurrealDB kann die Richtung einer bestehenden RELATION-Kante nicht per `UPDATE` ändern; das Umhängen löscht die alte `depends_on`-Kante und legt die neue in derselben Transaktion an (`DELETE` + `RELATE`).
 - **Wirkung auf die Vererbung:** Geerbte Werte des Teilbaums lösen sich danach gegen die neuen Vorfahren auf (dynamisch, ohne Datenkopie).
 - In der UI ist beim Verschieben **keine** Bestätigung erforderlich (anders als beim Löschen).
 

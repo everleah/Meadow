@@ -83,17 +83,21 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 Ein **Business-Schlüssel** (z. B. SKU) ist ein Attribut, dessen Definition mit `is_key: true` markiert ist (Konvention gemäß Abschnitt 4 / [datenmodell.md](datenmodell.md)):
 
-- **Eindeutigkeit pro Typ:** Beim Schreiben (`POST /objects`, `PATCH /objects/{id}`) prüft der Kern die Eindeutigkeit pro Objekttyp (Unique-Index `(type, attributes.<name>)`); Verstöße werden mit einem entsprechenden Fehler abgelehnt.
+- **Eindeutigkeit pro Typ:** Beim Schreiben (`POST /objects`, `PATCH /objects/{id}`) prüft der Kern die Eindeutigkeit pro Objekttyp **anwendungsseitig** (konzeptionell `(type, attributes.<name>)`); Verstöße werden mit `409 Conflict` abgelehnt.
 - **Regeln:** Nur `text`, nicht lokalisiert, nicht vererbbar; optional (Objekte dürfen ohne Schlüssel existieren); Werte sind änderbar (Eindeutigkeitsprüfung + Audit).
 - **Key-Lookup:** `GET /objects/by-key?type=<typ>&key=<attribut>&value=<wert>` lädt genau ein Objekt über einen Business-Schlüssel (z. B. die SKU). Existiert kein Objekt, wird 404 geliefert.
-- **Suche/Filterung:** Schlüsselattribute sind über die normale Suche/Filterung und den Index abfragbar.
+- **Suche/Filterung:** Schlüsselattribute sind über die normale Suche/Filterung abfragbar.
+
+## Volltextsuche in der API
+
+- **`POST /search`** durchsucht die Attributwerte aller Objekte per Fulltext (Index über `attributes`, Analyzer `meadow_std`). Payload: `{ "q": string, "types"?: string[], "limit"?: number (default 100, max 1000), "start"?: number }`. Antwort: Treffer-Objekte inkl. `score` (Relevanz), absteigend sortiert. Zugriff wie `GET /objects` (aktuell ohne Auth).
 
 ## System-Logs & Systemeinstellungen in der API
 
 **System-Logs** (Konvention Abschnitt 12 / [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging), Tabellen [datenmodell.md](datenmodell.md)):
 
-- **`POST /system/logs`:** Nimmt einen **Batch** kuratierter Log-Einträge entgegen (`[{service, level, category, message, trace_id?, context?}, …]`; `created_at` setzt der Kern auf Empfangszeit, UTC). Authentifizierung über Service-Account/API-Key (Machine-to-Machine); non-blocking, begrenzt durch Rate-Limit. Die Antwort ist für den Sender ohne fachliche Bedeutung – Logging darf nie blockieren/fehlschlagen.
-- **`GET /system/logs`:** Liefert persistierte Einträge mit Filterung (`service`, `category`, `level`, `from`/`to` als ISO-8601-UTC, `q` als `CONTAINS`-Textsuche auf `message`) und Cursor-Pagination; Sortierung neueste zuerst. Nur `admin`/`superadmin` (`log.read`).
+- **`POST /system/logs`:** Nimmt einen **Batch** kuratierter Log-Einträge entgegen (`[{service, level, category, message, trace_id?, context?}, …]`; `created_at` setzt der Kern auf Empfangszeit, UTC). Authentifizierung über Service-Account/API-Key (`X-Api-Key`, Env `LOG_INGEST_API_KEY`); als Dev-Fallback zusätzlich Admin-JWT. Non-blocking; im MVP begrenzt die Batchgröße (max. 1000 Einträge) – ein echtes Rate-Limit folgt als Ausbaustufe. Die Antwort ist für den Sender ohne fachliche Bedeutung – Logging darf nie blockieren/fehlschlagen.
+- **`GET /system/logs`:** Liefert persistierte Einträge mit Filterung (`service`, `category`, `level`, `from`/`to` als ISO-8601-UTC, `q` als `CONTAINS`-Textsuche auf `message`) und Offset-Pagination (`limit`/`start`, wie übrige Listen in Phase 1–2); Sortierung neueste zuerst. Nur `admin`/`superadmin` (`log.read`).
 - **Zugriffsschutz:** Technische Logs sind **kein** fachliches Arbeitsmittel – `editor`/`viewer` erhalten 403.
 
 **Systemeinstellungen:**

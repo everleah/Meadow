@@ -71,7 +71,7 @@ Ein **Business-Schlüssel** (z. B. SKU) ist eine markierte Attributdefinition un
 **Regeln (verbindlich, Konvention gemäß Abschnitt 4 des Hauptdokuments):**
 
 1. **Markierung:** Ein Attribut wird durch `is_key: true` in der `attribute_definition` zum Business-Schlüssel.
-2. **Eindeutigkeit pro Typ:** Der Kern erzwingt Eindeutigkeit pro Objekttyp über einen kompositen Unique-Index `(type, attributes.<name>)`. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
+2. **Eindeutigkeit pro Typ:** Der Kern erzwingt Eindeutigkeit pro Objekttyp **beim Schreiben anwendungsseitig** (Abfrage `(type, attributes.<name>)`, exakt/case-sensitiv, getrimmt) – ein statischer kompositer Unique-Index ist wegen der dynamischen Attributnamen im flexiblen `attributes`-Objekt nicht möglich. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
 3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
 4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
 5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive), beim Speichern wird getrimmt.
@@ -174,7 +174,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
-- `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp über den Unique-Index `(type, attributes.<name>)`. Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
+- `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp (anwendungsseitig beim Schreiben erzwungen, konzeptionell `(type, attributes.<name>)`). Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
 - `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
 - `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
 - `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` kennzeichnen **berechnete Attribute** (Abschnitt 8 / [business-rules.md](business-rules.md)): Der Wert wird beim Schreiben **synchron** von einer `computed`-Regel berechnet und gespeichert (stored-first, kein On-Read-Modus); `dependencies` deklarieren die Eingaben der Formel (Grundlage der Recompute-Kaskade; async bei `computed_reads_inherited`).
@@ -366,15 +366,15 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
   - auf `type`, `status`, `created_at`, `updated_at`
   - auf häufig gefilterte Attributfelder, z. B. `attributes.name.de`, `attributes.price`
   - auf sprachabhängige Felder je nach Konfiguration (z. B. alle Sprachen oder nur `root`/`en`)
-  - **Unique-Index pro Business-Schlüssel** (`is_key: true`): komposit auf `type` + `attributes.<name>`, z. B. `(type, attributes.sku)` – erzwingt Eindeutigkeit pro Objekttyp
+  - **Eindeutigkeit pro Business-Schlüssel** (`is_key: true`): konzeptionell komposit `(type, attributes.<name>)`, z. B. `(type, attributes.sku)` – technisch **anwendungsseitig beim Schreiben** erzwungen (dynamische Attributnamen können nicht statisch indiziert werden); ein dynamischer Unique-Index ist eine spätere Ausbaustufe (Phase 3/9)
 - **Referenz-Indizes:**
   - auf `definition_id` (bzw. `type`), `in`, `out`
   - kombinierte Indizes für `in` + `definition_id` und `out` + `definition_id` (z. B. für Kategorieabfragen)
   - speziell für `depends_on` und `category_member`
 - **Volltextsuche:**
-  - SurrealDB-eigene Volltextindizes auf ausgewählte Attributfelder (Syntax `FULLTEXT ANALYZER …`, seit SurrealDB 3.0; zuvor `SEARCH ANALYZER`)
-  - Wichtig: Ein `FULLTEXT`-Index deckt **immer nur ein Feld** ab – pro Feld (bzw. pro Sprachfeld wie `attributes.description.de`) ist ein eigener `DEFINE INDEX` nötig
-  - sprachspezifische Suche unter Berücksichtigung des Sprachbaums
+  - SurrealDB-eigene Volltextindizes (Syntax `FULLTEXT ANALYZER …`, seit SurrealDB 3.0; zuvor `SEARCH ANALYZER`). **Analyzer existieren nicht vordefiniert** – zuerst `DEFINE ANALYZER … TOKENIZERS … FILTERS …` anlegen.
+  - **MVP (Phase 2):** ein einziger Fulltext-Index über das gesamte `attributes`-Objekt (`DEFINE INDEX … FIELDS attributes FULLTEXT ANALYZER meadow_std BM25`); Suche per `attributes @@ $q` mit `search::score`. Deckt alle Attributwerte/Sprachen ab, ohne die Attributnamen kennen zu müssen.
+  - Ein `FULLTEXT`-Index deckt **immer nur ein Feld** ab – pro Feld (bzw. pro Sprachfeld wie `attributes.description.de`) ist ein eigener `DEFINE INDEX` nötig. Per-Feld-Indizes und sprachspezifische Suche (Sprachbaum) sind eine spätere Verfeinerung (Phase 3/9).
 - **Graph-Traversierung:**
   - Indizes auf Relationen ermöglichen performante Traversierung in beide Richtungen
   - Da alle Relationen in einer generischen `reference`-Tabelle liegen, erfolgt die Traversierung über typisierte Edge-Queries, z. B. `->(reference WHERE definition_id = 'rel_depends_on')->object` bzw. `<-()<-object` in Gegenrichtung
