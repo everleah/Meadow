@@ -113,7 +113,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 | Python-Basis                | Python 3.14                          | Gemeinsame Laufzeit für Worker und Frontend                           |
 | Paketmanager                | uv                                   | Verwaltung der Python-Abhängigkeiten (venv, Lockfile)                 |
 | Business Logic              | Pydantic (Validierung), ggf. FastAPI | Business Rules, berechnete Attribute, Validierung von MEF-Dokumenten  |
-| Rule-Engine / Sandbox       | RestrictedPython                    | Sichere Ausführung von Business-Rule-Skripten (Python)                 |
+| Rule-Engine / Sandbox       | RestrictedPython                     | Sichere Ausführung von Business-Rule-Skripten (Python)                |
 | Worker                      | asyncio, nats-py, httpx              | Ausführung von Jobs (Import/Export), Webhooks, Status-Updates         |
 | Frontend                    | NiceGUI                              | Rollenbasierte Web-Oberfläche                                         |
 | Frontend i18n               | gettext + Babel                      | UI-Übersetzungen, Datums-/Zahlen-/Währungsformatierung                |
@@ -122,16 +122,16 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 
 ### 3.3 Infrastruktur & Betrieb
 
-| Komponente                | Technologie                        | Zweck                                                |
-|---------------------------|------------------------------------|------------------------------------------------------|
-| Containerisierung         | Docker                             | Einheitliche Auslieferung aller Dienste              |
-| Orchestrierung (MVP)      | Docker Compose                     | Lokaler Betrieb und KMU-Deployment                   |
-| Orchestrierung (optional) | Kubernetes (k3s)                   | Skalierung bei wachsenden Anforderungen              |
-| Observability             | tracing (Rust), structlog (Python) | Strukturiertes Logging (JSON) auf stdout             |
-| Metriken (optional)       | Prometheus + Grafana               | Überwachung von Jobs, Events, API-Performance        |
+| Komponente                | Technologie                                | Zweck                                                |
+|---------------------------|--------------------------------------------|------------------------------------------------------|
+| Containerisierung         | Docker                                     | Einheitliche Auslieferung aller Dienste              |
+| Orchestrierung (MVP)      | Docker Compose                             | Lokaler Betrieb und KMU-Deployment                   |
+| Orchestrierung (optional) | Kubernetes (k3s)                           | Skalierung bei wachsenden Anforderungen              |
+| Observability             | tracing (Rust), structlog (Python)         | Strukturiertes Logging (JSON) auf stdout             |
+| Metriken (optional)       | Prometheus + Grafana                       | Überwachung von Jobs, Events, API-Performance        |
 | Logging (UI-Sicht)        | SurrealDB (`log_entry` + `system_setting`) | Kuratierte System-Logs, in der Admin-UI einsehbar    |
-| Logging (optional, später)| Loki + Grafana                     | Zentrale Log-Aggregation/Volltextsuche (Phase 9)     |
-| Backup                    | SurrealDB-Export + S3-Sync         | Datensicherung für Objektdatenbank und Objektstorage |
+| Logging (optional, später)| Loki + Grafana                             | Zentrale Log-Aggregation/Volltextsuche (Phase 9)     |
+| Backup                    | SurrealDB-Export + S3-Sync                 | Datensicherung für Objektdatenbank und Objektstorage |
 
 ### 3.4 Abgrenzung & Hinweise
 
@@ -170,6 +170,7 @@ Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
 Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** mit flexiblen Metadaten gespeichert; Unterschiede entstehen durch den Typ. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Business Rules, Jobs, Audit-Log) ergänzen das Kernmodell. Details zu den Tabellen sowie zu Indizierung, Volltextsuche und Graph-Traversierung stehen im Detaildokument.
 
 > **Details:**
+>
 > - [datenmodell.md](detail/datenmodell.md) — Tabellen, Indizes & Suche
 > - [relationen.md](detail/relationen.md) — Relationenmodell: Komposition & Aggregation
 > - [einheiten.md](detail/einheiten.md) — Einheiten & Umrechnung für quantifizierte Werte
@@ -212,7 +213,7 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:** [business-rules.md](detail/business-rules.md) — Regeln, Sandbox, Ausführung, Lebenszyklus & Rule Lab; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [jobs-scheduler.md](detail/jobs-scheduler.md) — Recompute-Jobs.
 
-#### Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU)
+**Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU):**
 
 1. **Definition:** Ein Business-Schlüssel ist eine markierte Attributdefinition (`is_key: true`) und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
 2. **Eindeutigkeit:** Gilt pro Objekttyp – kompositer Unique-Index `(type, attributes.<name>)`. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
@@ -277,13 +278,13 @@ Es wird **keine schwere Workflow-Engine** eingesetzt. Die Statuslogik ist eine e
 
 **Business Rules** sind anpassbare Geschäftslogik in **Python** als Skriptsprache: gespeichert in der Tabelle `business_rule`, bearbeitet im Admin-UI, ausgeführt in einer **gesicherten Sandbox** (RestrictedPython). Es gibt **einen** Autoren-Mechanismus; fünf Regeltypen unterscheiden sich nur durch Ausführungskontext und Ergebnisinterpretation:
 
-| Typ | Zweck | Ausführung |
-|-----|-------|------------|
-| `validation` | Prüfungen beim Schreiben (blockierend: `error`; annotierend: `warning`) | **synchron** im Schreibpfad |
-| `computed` | Berechnete/abgeleitete Attribute (gespeichert) | **synchron** im Schreibpfad |
-| `normalization` | Bereinigung/Transformation beim MEF-Import | Import-Pipeline (Worker) |
-| `workflow_guard` | Erlaubte Statusübergänge / Publish-Hürden | **synchron** bei Statuswechsel |
-| `bulk` | Regel über gefilterte Objektmenge (Recompute/Anreicherung) | Job (`business_rule`, async) |
+| Typ              | Zweck                                                                   | Ausführung                     |
+|------------------|-------------------------------------------------------------------------|--------------------------------|
+| `validation`     | Prüfungen beim Schreiben (blockierend: `error`; annotierend: `warning`) | **synchron** im Schreibpfad    |
+| `computed`       | Berechnete/abgeleitete Attribute (gespeichert)                          | **synchron** im Schreibpfad    |
+| `normalization`  | Bereinigung/Transformation beim MEF-Import                              | Import-Pipeline (Worker)       |
+| `workflow_guard` | Erlaubte Statusübergänge / Publish-Hürden                               | **synchron** bei Statuswechsel |
+| `bulk`           | Regel über gefilterte Objektmenge (Recompute/Anreicherung)              | Job (`business_rule`, async)   |
 
 **Kernentscheidungen (verbindlich):**
 
@@ -310,7 +311,6 @@ Die Rechteprüfung erfolgt **ausschließlich im Rust-Kern** (autoritative Quelle
 Komplexe Suchanfragen können als Objekt vom Typ `saved_search` gespeichert und ihre Ergebnisse als refreshbare `collection` materialisiert werden. Dies ist nicht Teil der ersten Version, wird aber von Anfang an im Datenmodell und in der Architektur berücksichtigt. Details stehen im Detaildokument.
 
 > **Details:** [detail/gespeicherte-suchen-collections.md](detail/gespeicherte-suchen-collections.md)
-
 
 ---
 
@@ -355,6 +355,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 ## 14. Entwicklungsplan
 
 ### Phase 1 – Grundgerüst & Datenmodell-Basis
+
 - Rust-Projekt aufsetzen (Axum, SurrealDB-Anbindung)
 - Basis-CRUD für Objekte und Attributdefinitionen
 - OpenAPI-Dokumentation generieren
@@ -368,24 +369,27 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Tabellen `user` und `group` sowie JWT-Authentifizierung mit den Rollen `superadmin`, `admin`, `editor`, `viewer` vorbereiten**
 
 ### Phase 2 – Kernfunktionen: Metadaten, Suche, Vererbung
+
 - Flexible Attributgruppen und -definitionen vollständig implementieren
 - Indizes und Volltextsuche konfigurieren
 - Referenzen mit Metadaten umsetzen
 - **Sprachabhängige Attributauflösung gemäß Sprachbaum implementieren (inkl. `fallback_order`)**
-- **Datenwertvererbung über `depends_on` implementieren (Ein-Eltern-Auflösung, leere Werte als Unterbrechung) **
-- **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung) **
+- **Datenwertvererbung über `depends_on` implementieren (Ein-Eltern-Auflösung, leere Werte als Unterbrechung)**
+- **Kategorisierung als normale Objekte mit `category_member`-Aggregationen umsetzen (ohne Vererbungswirkung)**
 - **Typrestriktionen der `relation_definition` beim Anlegen jeder Relation erzwingen; Re-Parenting mit Zyklenschutz**
 - **Business-Schlüssel implementieren: Eindeutigkeit pro Typ beim Schreiben erzwingen, Validierung (`type: text`, nicht lokalisiert, nicht vererbbar), Key-Lookup-Endpunkt, Schlüssel in Suche/Filterung**
 - **Tabelle `audit_log` und Versionierung (`version`, `created_at`, `updated_at`, `updated_by`) implementieren (Abschnitt 13)**
 - **Logging-Basis im Kern: Tabelle `log_entry` mit Indizes, Endpunkte `POST/GET /system/logs`; Tabelle `system_setting` mit `GET/PUT /system/settings`; Logging-Konvention (Schema, No-Secrets) verankern**
 
 ### Phase 3 – Graph & Performance
+
 - Graph-Traversierung optimieren, Benchmarks durchführen
 - Caching einführen (Redis optional)
 - **Performance der Vererbungs- und Sprachauflösung messen und optimieren**
 - **Indizes für Vererbungsrelationen und Kategorieabfragen sicherstellen**
 
 ### Phase 4 – Python-Integration & Business Rules
+
 - **Python-Service für Business Rules aufsetzen (Sandbox: RestrictedPython, konfigurierbare Import-Whitelist, Timeout-/Speicher-/Größen-Limits, Script-Kontrakt `run(obj, ctx, result)`); Statusmaschine (`workflow_guard`) und Validierungen (`validation`) als Regeln**
 - **Synchronen Rule-Evaluation-Endpunkt für den Schreibpfad des Rust-Kerns implementieren (fail-closed, atomares Erzwingen von Fehlern/berechneten Werten/Übergangs-Verdikt; enge Timeouts; optionaler Degrade-Modus „Speichern + als unberechnet markieren“)**
 - **Berechnete Attribute (`computed`, stored-first) umsetzen: Berechnung beim Schreiben, pure Funktionen, deklarierte `dependencies`, async Recompute-Kaskade für vererbt-abhängige Werte, Bulk-Recompute bei Definitionsänderung**
@@ -398,6 +402,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Log-Sender im Worker: kuratierte Job-/Rule-Logs als Batch über `POST /system/logs` an den Kern senden (non-blocking, bounded Buffer, drop-oldest); Logging-Konfiguration periodisch vom Kern laden (`system_setting`)**
 
 ### Phase 5 – Hintergrundverarbeitung & Scheduler
+
 - NATS JetStream in die Infrastruktur aufnehmen
 - Rust-Kern um Scheduler und Job-Verwaltung erweitern
 - Python Worker Service implementieren (Basisframework)
@@ -407,6 +412,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Log-Retention: periodischer Cleanup-Job für `log_entry` (Standard 30 Tage, konfigurierbar über `system_setting`); Rate-Limit-Cap gegen Log-Fluten**
 
 ### Phase 6 – Integration & Eventsystem
+
 - **Meadow Exchange Format (MEF) als Standard-Import/Export-Format implementieren**
 - **Quantifizierte Werte im MEF (`{"value": …, "unit": …}`) mit Normalisierung auf die kanonische SI-Einheit unterstützen**
 - **Inbound-Konnektor `json_import` und Outbound-Konnektor `json_export` umsetzen**
@@ -418,6 +424,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken; Event-Reihenfolge pro Objekt garantieren**
 
 ### Phase 7 – Frontend (NiceGUI)
+
 - NiceGUI-Anwendung mit Login, Benutzerverwaltung und rollenbasierten Menüs
 - **Grid-first-Arbeitsfläche (`ui.aggrid`):** Kategorien-/Strukturbaum, konfigurierbare/pinnbare Spalten, persönliche Ansichten, Inline-Editing mit Batch-Save, Modal-Editoren
 - **Produkt-Formular:** scrollbare Seite mit einklappbaren Attributgruppen, Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX (Override, „Zurück auf vererbt“), typspezifische Wertedarstellung (Tags, Toggles, Einheiten, lokalisierte Daten)
@@ -433,6 +440,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Admin-Seite „System-Einstellungen“ (nur `admin`/`superadmin`):** Logging-Einstellungen im Betrieb änderbar und persistiert (`system_setting`), „Auf Default zurücksetzen“, Änderungen im Audit-Log
 
 ### Phase 8 – Produktionsreife & MVP-Abschluss
+
 - Sicherheit, Monitoring, Logging, Backup
 - Load-Testing und Optimierung
 - **Dokumentation für MEF und Eventsystem**
@@ -442,6 +450,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Bereitstellung als Docker-Compose-Setup für KMUs**
 
 ### Phase 9 – Spätere Ausbaustufen (nicht im MVP)
+
 - **Gespeicherte Suchen (`saved_search`) und Materialisierte Collections (`collection_member`) vollständig umsetzen**
 - **Benutzerdefinierte Relationstypen (immer Aggregationen) über die API anlegen und Typrestriktionen verwalten**
 - **Kanalspezifische Freigaben (`release`-Tabelle)**
