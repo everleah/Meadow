@@ -7,7 +7,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::api::keys::validate_key_definition;
 use crate::app::AppState;
+use crate::audit::{self, AuditEntry};
+use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 const TABLE: &str = "attribute_definition";
@@ -154,19 +157,26 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     request_body = CreateAttributeDefinition,
     responses(
         (status = 201, description = "Created attribute definition", body = Value),
-        (status = 400, description = "Invalid payload", body = Value)
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
     )
 )]
 pub async fn create_attribute_definition(
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Json(body): Json<CreateAttributeDefinition>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
     if body.definition_type.trim().is_empty() {
         return Err(ApiError::bad_request("`type` must not be empty"));
     }
+    let user_id = claims.sub.clone();
     let CreateAttributeDefinition {
         name,
         label,
@@ -187,6 +197,11 @@ pub async fn create_attribute_definition(
         default_value,
         description,
     } = body;
+
+    validate_key_definition(&definition_type, multilingual, is_key)?;
+    // Business keys are never inheritable (an inherited identity would
+    // duplicate). `is_key: true` forces `inheritable: false`.
+    let inheritable = if is_key { false } else { inheritable };
 
     let mut content = serde_json::Map::new();
     content.insert("name".to_owned(), Value::String(name));
@@ -234,6 +249,7 @@ pub async fn create_attribute_definition(
         content.insert("description".to_owned(), Value::String(description));
     }
     content.insert("version".to_owned(), Value::from(1));
+    content.insert("updated_by".to_owned(), Value::String(user_id.clone()));
     let content = Value::Object(content);
 
     // Statements: BEGIN(0), LET(1), CREATE(2), SELECT(3), COMMIT(4).
@@ -256,6 +272,23 @@ pub async fn create_attribute_definition(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::internal("created attribute definition was not returned"))?;
+    let definition_id = definition
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "attribute_definition_created",
+            object_id: Some(&definition_id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(definition)))
 }
 
@@ -335,15 +368,57 @@ pub async fn list_attribute_definitions(
     responses(
         (status = 200, description = "Updated attribute definition", body = Value),
         (status = 400, description = "Invalid id or payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
         (status = 404, description = "Not found", body = Value)
     )
 )]
 pub async fn update_attribute_definition(
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateAttributeDefinition>,
 ) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
     let key = parse_key(&id, TABLE)?;
+    let user_id = claims.sub.clone();
+
+    // Load the current definition to validate the merged business-key
+    // constraints (the data type is immutable and not part of the payload).
+    let existing_sql = "
+        LET $obj = type::record('attribute_definition', $key);
+        SELECT * FROM $obj;
+    ";
+    let mut existing_response = state
+        .db
+        .inner()
+        .query(existing_sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let existing_rows: Vec<Value> = existing_response.take(1)?;
+    let existing = existing_rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("attribute definition `{id}` not found")))?;
+    let existing_type = existing
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let existing_is_key = existing
+        .get("is_key")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let existing_multilingual = existing
+        .get("multilingual")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let existing_inheritable = existing
+        .get("inheritable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut changes = serde_json::Map::new();
     if let Some(name) = body.name {
@@ -409,6 +484,20 @@ pub async fn update_attribute_definition(
     if let Some(description) = body.description {
         changes.insert("description".to_owned(), Value::String(description));
     }
+
+    let effective_is_key = body.is_key.unwrap_or(existing_is_key);
+    let effective_multilingual = body.multilingual.unwrap_or(existing_multilingual);
+    let effective_inheritable = body.inheritable.unwrap_or(existing_inheritable);
+    validate_key_definition(existing_type, effective_multilingual, effective_is_key)?;
+    if effective_is_key && effective_inheritable {
+        // Business keys are never inheritable: force `inheritable: false`.
+        changes.insert("inheritable".to_owned(), Value::Bool(false));
+    }
+
+    if changes.is_empty() {
+        return Ok(Json(existing));
+    }
+
     let changes = Value::Object(changes);
 
     // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3), SELECT(4), COMMIT(5).
@@ -416,7 +505,7 @@ pub async fn update_attribute_definition(
         BEGIN TRANSACTION;
         LET $obj = type::record('attribute_definition', $key);
         UPDATE $obj MERGE $changes;
-        UPDATE $obj SET updated_at = time::now();
+        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -426,6 +515,7 @@ pub async fn update_attribute_definition(
         .query(sql)
         .bind(("key", key))
         .bind(("changes", changes))
+        .bind(("user", user_id.clone()))
         .await?
         .check()?;
     let definitions: Vec<Value> = response.take(4)?;
@@ -433,5 +523,19 @@ pub async fn update_attribute_definition(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("attribute definition `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "attribute_definition_updated",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
     Ok(Json(definition))
 }

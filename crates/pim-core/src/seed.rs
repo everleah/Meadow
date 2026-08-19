@@ -21,6 +21,16 @@ struct UnitSeed {
     en: &'static str,
 }
 
+/// A language-tree node. `parent` holds the parent's record key (e.g.
+/// `lang_en`); `fallback_order` lists the ancestor codes (excluding itself).
+struct LangSeed {
+    code: &'static str,
+    parent: Option<&'static str>,
+    fallback_order: &'static [&'static str],
+    de: &'static str,
+    en: &'static str,
+}
+
 /// System relation types: exactly one composition, the rest aggregations.
 const RELATION_DEFINITIONS: &str = r#"
 UPSERT relation_definition:rel_depends_on CONTENT { name: 'depends_on', kind: 'composition', source_types: [], target_types: [], label: { de: 'Abhängig von', en: 'Depends on' }, system: true, created_at: time::now(), updated_at: time::now() };
@@ -734,12 +744,107 @@ fn unit_upsert(u: &UnitSeed) -> String {
     )
 }
 
+/// Default language tree: `root` plus the main ISO 639-1 languages and their
+/// regional variants (see `plan/detail/sprachbaum-mehrsprachigkeit.md`).
+const LANG_TREE: &[LangSeed] = &[
+    LangSeed {
+        code: "root",
+        parent: None,
+        fallback_order: &[],
+        de: "Wurzel",
+        en: "Root",
+    },
+    LangSeed {
+        code: "en",
+        parent: Some("lang_root"),
+        fallback_order: &["root"],
+        de: "Englisch",
+        en: "English",
+    },
+    LangSeed {
+        code: "de",
+        parent: Some("lang_root"),
+        fallback_order: &["root"],
+        de: "Deutsch",
+        en: "German",
+    },
+    LangSeed {
+        code: "fr",
+        parent: Some("lang_root"),
+        fallback_order: &["root"],
+        de: "Französisch",
+        en: "French",
+    },
+    LangSeed {
+        code: "en-GB",
+        parent: Some("lang_en"),
+        fallback_order: &["en", "root"],
+        de: "Englisch (UK)",
+        en: "English (United Kingdom)",
+    },
+    LangSeed {
+        code: "en-US",
+        parent: Some("lang_en"),
+        fallback_order: &["en", "root"],
+        de: "Englisch (US)",
+        en: "English (United States)",
+    },
+    LangSeed {
+        code: "de-DE",
+        parent: Some("lang_de"),
+        fallback_order: &["de", "root"],
+        de: "Deutsch (Deutschland)",
+        en: "German (Germany)",
+    },
+    LangSeed {
+        code: "de-AT",
+        parent: Some("lang_de"),
+        fallback_order: &["de", "root"],
+        de: "Deutsch (Österreich)",
+        en: "German (Austria)",
+    },
+    LangSeed {
+        code: "fr-FR",
+        parent: Some("lang_fr"),
+        fallback_order: &["fr", "root"],
+        de: "Französisch (Frankreich)",
+        en: "French (France)",
+    },
+    LangSeed {
+        code: "fr-CA",
+        parent: Some("lang_fr"),
+        fallback_order: &["fr", "root"],
+        de: "Französisch (Kanada)",
+        en: "French (Canada)",
+    },
+];
+
+fn lang_upsert(lang: &LangSeed) -> String {
+    let parent = match lang.parent {
+        Some(parent) => format!("'{parent}'"),
+        None => "NONE".to_owned(),
+    };
+    let fallback_order = lang
+        .fallback_order
+        .iter()
+        .map(|code| format!("'{code}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "UPSERT type::record('language_tree', 'lang_{}') CONTENT {{ code: '{}', parent: {}, label: {{ de: '{}', en: '{}' }}, fallback_order: [{}] }};",
+        lang.code, lang.code, parent, lang.de, lang.en, fallback_order,
+    )
+}
+
 /// Seeds system data idempotently.
 pub async fn apply(db: &Db) -> Result<(), surrealdb::Error> {
     let mut sql = String::from(RELATION_DEFINITIONS);
     sql.push_str(ROOT_OBJECT);
     for unit in UNITS {
         sql.push_str(&unit_upsert(unit));
+    }
+    for lang in LANG_TREE {
+        sql.push_str(&lang_upsert(lang));
     }
     db.inner().query(sql).await?.check().map(|_| ())
 }

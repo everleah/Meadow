@@ -19,6 +19,8 @@ pub struct Config {
     pub jwt_secret: String,
     /// Access-token lifetime in seconds.
     pub jwt_ttl_seconds: u64,
+    /// API key for machine-to-machine log ingestion (`POST /system/logs`).
+    pub log_ingest_api_key: Option<String>,
 }
 
 impl Config {
@@ -33,6 +35,9 @@ impl Config {
             surrealdb_pass: env_or("SURREALDB_PASS", "root"),
             jwt_secret: env_or("JWT_SECRET", "dev-secret-change-me"),
             jwt_ttl_seconds: env_or_parse("JWT_TTL_SECONDS", 3600),
+            log_ingest_api_key: std::env::var("LOG_INGEST_API_KEY")
+                .ok()
+                .filter(|value| !value.is_empty()),
         }
     }
 }

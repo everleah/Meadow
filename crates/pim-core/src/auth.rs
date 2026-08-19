@@ -38,6 +38,11 @@ impl Claims {
     pub fn is_admin(&self) -> bool {
         self.has_role(ROLE_ADMIN) || self.has_role(ROLE_SUPERADMIN)
     }
+
+    /// Whether the token has `editor` privileges or above.
+    pub fn is_editor(&self) -> bool {
+        self.has_role(ROLE_EDITOR) || self.is_admin()
+    }
 }
 
 /// Hashes a password with argon2id.

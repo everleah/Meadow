@@ -13,8 +13,9 @@ Owns the Rust workspace (root `Cargo.toml`) and all Rust crates. The core servic
 
 - Implementation stays consistent with `plan/meadow-pim-architektur.md` (sections 4–7, 9) and its detail documents; otherwise the plan is updated in the same change.
 - Rust Edition 2024; MSRV 1.90 (`surrealdb` → `roaring`). `jsonwebtoken` requires a crypto backend feature (`rust_crypto` is used; `aws_lc_rs` is faster but needs NASM + CMake on Windows).
-- `pim-core` module layout: `src/lib.rs` + `src/main.rs` (thin entry); `config`, `db`, `error`, `auth`, `schema`, `seed`; `src/api/{health, auth, objects, attribute_definitions, users, groups}`.
+- `pim-core` module layout: `src/lib.rs` + `src/main.rs` (thin entry); top-level modules `config`, `db`, `error`, `audit`, `auth`, `language`, `inheritance`, `schema`, `seed`; API handlers in `src/api/{health, auth, objects, attribute_definitions, attribute_groups, keys, references, search, system, users, groups}`.
 - JWT auth (`auth.rs`): HS256 via `jsonwebtoken`; config through `JWT_SECRET`/`JWT_TTL_SECONDS`. Roles: `superadmin`, `admin`, `editor`, `viewer`. A default `superadmin` (`admin`/`admin`) is seeded in dev when no `user:admin` exists.
+- `POST /system/logs` accepts a machine-to-machine `X-Api-Key` (`LOG_INGEST_API_KEY`) or, as a dev fallback, an admin JWT. Full-text search (`POST /search`) uses analyzer `meadow_std` and index `idx_object_attributes_fulltext` over `object.attributes`.
 
 ## Work Guidance
 

@@ -6,10 +6,13 @@
 
 pub mod api;
 pub mod app;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod inheritance;
+pub mod language;
 pub mod schema;
 pub mod seed;
 

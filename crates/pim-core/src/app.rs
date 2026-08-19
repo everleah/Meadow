@@ -2,7 +2,7 @@
 
 use axum::{
     Json, Router,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use utoipa::OpenApi as _;
 use utoipa::openapi::OpenApi;
@@ -29,9 +29,24 @@ pub fn router(state: AppState) -> Router {
             "/objects",
             get(api::objects::list_objects).post(api::objects::create_object),
         )
+        .route("/objects/by-key", get(api::keys::get_by_key))
         .route(
             "/objects/{id}",
             get(api::objects::get_object).patch(api::objects::update_object),
+        )
+        .route("/references", post(api::references::create_reference))
+        .route("/search", post(api::search::search))
+        .route(
+            "/objects/{id}/references",
+            get(api::references::list_object_references),
+        )
+        .route(
+            "/objects/{id}/children",
+            get(api::references::list_object_children),
+        )
+        .route(
+            "/objects/{id}/parent",
+            axum::routing::patch(api::references::reparent_object),
         )
         .route(
             "/attribute-definitions",
@@ -42,6 +57,17 @@ pub fn router(state: AppState) -> Router {
             "/attribute-definitions/{id}",
             get(api::attribute_definitions::get_attribute_definition)
                 .patch(api::attribute_definitions::update_attribute_definition),
+        )
+        .route(
+            "/attribute-groups",
+            get(api::attribute_groups::list_attribute_groups)
+                .post(api::attribute_groups::create_attribute_group),
+        )
+        .route(
+            "/attribute-groups/{id}",
+            get(api::attribute_groups::get_attribute_group)
+                .patch(api::attribute_groups::update_attribute_group)
+                .delete(api::attribute_groups::delete_attribute_group),
         )
         .route(
             "/users",
@@ -62,6 +88,15 @@ pub fn router(state: AppState) -> Router {
             get(api::groups::get_group)
                 .patch(api::groups::update_group)
                 .delete(api::groups::delete_group),
+        )
+        .route(
+            "/system/logs",
+            get(api::system::list_logs).post(api::system::ingest_logs),
+        )
+        .route("/system/settings", get(api::system::list_settings))
+        .route(
+            "/system/settings/{key}",
+            put(api::system::put_setting).delete(api::system::delete_setting),
         )
         .with_state(state)
 }

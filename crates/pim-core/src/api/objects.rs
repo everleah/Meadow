@@ -10,7 +10,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::api::keys;
 use crate::app::AppState;
+use crate::audit::{self, AuditEntry};
+use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 const TABLE: &str = "object";
@@ -46,6 +49,17 @@ pub struct UpdateObject {
     /// Change the workflow status.
     #[serde(default)]
     pub status: Option<String>,
+}
+
+/// Query parameters for reading a single object.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct GetObjectQuery {
+    /// Resolve multilingual attributes to this language code (e.g. `en-US`).
+    pub locale: Option<String>,
+    /// Whether to resolve inherited attribute values along `depends_on`.
+    #[serde(default)]
+    pub resolve_inheritance: Option<bool>,
 }
 
 /// Query parameters for listing objects.
@@ -89,21 +103,41 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     responses(
         (status = 201, description = "Created object", body = Value),
         (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
         (status = 500, description = "Internal error", body = Value)
     )
 )]
 pub async fn create_object(
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Json(body): Json<CreateObject>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
     if body.object_type.trim().is_empty() {
         return Err(ApiError::bad_request("`type` must not be empty"));
     }
+    let CreateObject {
+        object_type,
+        attributes,
+        status,
+    } = body;
+    let object_type = object_type.trim().to_owned();
+    let user_id = claims.sub.clone();
+
+    let Value::Object(mut attributes) = attributes else {
+        return Err(ApiError::bad_request("`attributes` must be an object"));
+    };
+    keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
+
     let content = json!({
-        "type": body.object_type,
-        "attributes": body.attributes,
-        "status": body.status,
+        "type": object_type,
+        "attributes": Value::Object(attributes),
+        "status": status,
         "version": 1,
+        "updated_by": user_id.clone(),
     });
 
     // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), SELECT(4), COMMIT(5).
@@ -127,13 +161,31 @@ pub async fn create_object(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::internal("created object was not returned"))?;
+    let object_id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "object_created",
+            object_id: Some(&object_id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(object)))
 }
 
-/// Loads a single object by id.
+/// Loads a single object by id, optionally resolving multilingual attributes.
 #[utoipa::path(
     get,
     path = "/objects/{id}",
+    params(GetObjectQuery),
     responses(
         (status = 200, description = "Object", body = Value),
         (status = 400, description = "Invalid id", body = Value),
@@ -143,6 +195,7 @@ pub async fn create_object(
 pub async fn get_object(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<GetObjectQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let key = parse_key(&id, TABLE)?;
     // Statements: LET(0), SELECT(1).
@@ -158,10 +211,26 @@ pub async fn get_object(
         .await?
         .check()?;
     let objects: Vec<Value> = response.take(1)?;
-    let object = objects
+    let mut object = objects
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+
+    if let Some(attributes) = object.get_mut("attributes").and_then(Value::as_object_mut) {
+        if let Some(locale) = locale {
+            crate::language::resolve_attributes(&state.db, locale, attributes).await?;
+        }
+        if params.resolve_inheritance == Some(true) {
+            crate::inheritance::resolve_inheritance(&state.db, key, locale, attributes).await?;
+        }
+    }
+
     Ok(Json(object))
 }
 
@@ -206,31 +275,77 @@ pub async fn list_objects(
     responses(
         (status = 200, description = "Updated object", body = Value),
         (status = 400, description = "Invalid id or payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
         (status = 404, description = "Object not found", body = Value)
     )
 )]
 pub async fn update_object(
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateObject>,
 ) -> Result<Json<Value>, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
     let key = parse_key(&id, TABLE)?;
+    let user_id = claims.sub.clone();
 
+    // Load the current object: type for uniqueness checks, status for audit.
+    let current_sql = "
+        LET $obj = type::record('object', $key);
+        SELECT * FROM $obj;
+    ";
+    let mut current_response = state
+        .db
+        .inner()
+        .query(current_sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let current_rows: Vec<Value> = current_response.take(1)?;
+    let current = current_rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+    let object_type = current
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let old_status = current
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    let new_status = body.status.clone();
+
+    let mut changed_fields: Vec<&str> = Vec::new();
     let mut changes = serde_json::Map::new();
     if let Some(attributes) = body.attributes {
-        changes.insert("attributes".to_owned(), attributes);
+        let Value::Object(mut attributes) = attributes else {
+            return Err(ApiError::bad_request("`attributes` must be an object"));
+        };
+        keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, Some(key)).await?;
+        changes.insert("attributes".to_owned(), Value::Object(attributes));
+        changed_fields.push("attributes");
     }
     if let Some(status) = body.status {
         changes.insert("status".to_owned(), Value::String(status));
+        changed_fields.push("status");
     }
-    let changes = Value::Object(changes);
+
+    if changes.is_empty() {
+        return Ok(Json(current));
+    }
 
     // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3), SELECT(4), COMMIT(5).
     let sql = "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', $key);
         UPDATE $obj MERGE $changes;
-        UPDATE $obj SET updated_at = time::now();
+        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -239,7 +354,8 @@ pub async fn update_object(
         .inner()
         .query(sql)
         .bind(("key", key))
-        .bind(("changes", changes))
+        .bind(("changes", Value::Object(changes)))
+        .bind(("user", user_id.clone()))
         .await?
         .check()?;
     let objects: Vec<Value> = response.take(4)?;
@@ -247,5 +363,35 @@ pub async fn update_object(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+
+    let status_changed = changed_fields.contains(&"status");
+    let (from, to) = if status_changed {
+        (old_status.map(Value::String), new_status.map(Value::String))
+    } else {
+        (None, None)
+    };
+    let action = if changed_fields.len() == 1 && status_changed {
+        "status_changed"
+    } else {
+        "object_updated"
+    };
+    let metadata = if action == "object_updated" {
+        Some(json!({ "fields": changed_fields }))
+    } else {
+        None
+    };
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action,
+            object_id: Some(&id),
+            from,
+            to,
+            metadata,
+        },
+    )
+    .await;
+
     Ok(Json(object))
 }

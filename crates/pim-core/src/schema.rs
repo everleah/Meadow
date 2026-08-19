@@ -145,6 +145,45 @@ DEFINE FIELD IF NOT EXISTS deny_permissions ON TABLE group TYPE array;
 DEFINE FIELD IF NOT EXISTS scope ON TABLE group TYPE object;
 DEFINE FIELD IF NOT EXISTS branding ON TABLE group TYPE object;
 DEFINE INDEX IF NOT EXISTS idx_group_name ON TABLE group FIELDS name UNIQUE;
+
+-- Audit log: durable, domain-level change history (plan section 13).
+-- `from`/`to` carry optional old/new values; the `timestamp` defaults to the
+-- write time in UTC.
+DEFINE TABLE IF NOT EXISTS audit_log;
+DEFINE FIELD IF NOT EXISTS object_id ON TABLE audit_log TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS user_id ON TABLE audit_log TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS action ON TABLE audit_log TYPE string;
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE audit_log;
+DEFINE FIELD OVERWRITE timestamp ON TABLE audit_log TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_audit_object ON TABLE audit_log FIELDS object_id;
+DEFINE INDEX IF NOT EXISTS idx_audit_user ON TABLE audit_log FIELDS user_id;
+DEFINE INDEX IF NOT EXISTS idx_audit_action ON TABLE audit_log FIELDS action;
+DEFINE INDEX IF NOT EXISTS idx_audit_timestamp ON TABLE audit_log FIELDS timestamp;
+
+-- System logs: curated operational entries (append-only, flüchtig).
+DEFINE TABLE IF NOT EXISTS log_entry;
+DEFINE FIELD IF NOT EXISTS service ON TABLE log_entry TYPE string;
+DEFINE FIELD IF NOT EXISTS level ON TABLE log_entry TYPE string;
+DEFINE FIELD IF NOT EXISTS category ON TABLE log_entry TYPE string;
+DEFINE FIELD IF NOT EXISTS message ON TABLE log_entry TYPE string;
+DEFINE FIELD IF NOT EXISTS trace_id ON TABLE log_entry TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS context ON TABLE log_entry;
+DEFINE FIELD OVERWRITE created_at ON TABLE log_entry TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_log_service_level_created ON TABLE log_entry FIELDS service, level, created_at;
+DEFINE INDEX IF NOT EXISTS idx_log_trace ON TABLE log_entry FIELDS trace_id;
+
+-- System settings: persisted runtime configuration (Default < ENV < DB).
+DEFINE TABLE IF NOT EXISTS system_setting;
+DEFINE FIELD IF NOT EXISTS key ON TABLE system_setting TYPE string;
+DEFINE FIELD IF NOT EXISTS value ON TABLE system_setting;
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE system_setting TYPE option<string>;
+DEFINE FIELD OVERWRITE updated_at ON TABLE system_setting TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_system_setting_key ON TABLE system_setting FIELDS key UNIQUE;
+
+-- Full-text search: one shared analyzer plus an index over the flexible
+-- `attributes` object. Per-field indexes can be added for hot fields later.
+DEFINE ANALYZER IF NOT EXISTS meadow_std TOKENIZERS blank,class FILTERS lowercase;
+DEFINE INDEX IF NOT EXISTS idx_object_attributes_fulltext ON TABLE object FIELDS attributes FULLTEXT ANALYZER meadow_std BM25;
 "#;
 
 /// Applies the schema idempotently.
