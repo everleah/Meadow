@@ -87,6 +87,7 @@ root
 **Performance-Aspekte:**
 
 - Durch die gespeicherte `fallback_order` ist die Auflösung O(depth) mit sehr geringer Tiefe (max. 3–4 Ebenen). Dies ist vernachlässigbar gegenüber der Datenbankabfrage.
+- Die `fallback_order`-Ketten und die Liste der `multilingual`-Attributnamen hält der Kern in einem **In-Process-Cache** (Invalidierung bei Sprachbaum- bzw. Attributdefinitions-Änderungen); dadurch entfallen die Metadaten-Lookups pro Lesezugriff.
 - Optional kann ein Cache für aufgelöste Werte (z. B. Redis) eingesetzt werden, wenn sehr viele Lesevorgänge mit unterschiedlichen Sprachen auftreten. Für KMU-Szenarien ist das in der Regel nicht erforderlich.
 
 **Mehrsprachigkeit der Oberfläche vs. Daten:**

@@ -103,7 +103,8 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
   FROM object:variant_1
   ```
 
-  oder durch schrittweises Aufsteigen in der Applikationslogik.
+  oder durch schrittweises Aufsteigen in der Applikationslogik. Der MVP-Kern steigt pro Ebene eine Kante auf und liest Elternteil-ID samt `attributes` in **einer** Query (`SELECT out, out.attributes FROM reference WHERE in = $src AND definition_id = 'rel_depends_on'`), also eine Query pro Ebene.
+- Die Liste der vererbbaren Attributnamen hält der Kern in einem **In-Process-Cache**; sie wird bei Attributdefinitions-Änderungen invalidiert.
 - Optional kann ein Cache (z. B. Redis) die aufgelösten Werte für häufig gelesene Objekte zwischenspeichern. Für die meisten KMU-Szenarien ist das jedoch nicht erforderlich, da die Hierarchietiefen gering sind.
 
 **API-Verhalten:**
