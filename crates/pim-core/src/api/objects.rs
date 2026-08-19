@@ -224,10 +224,18 @@ pub async fn get_object(
 
     if let Some(attributes) = object.get_mut("attributes").and_then(Value::as_object_mut) {
         if let Some(locale) = locale {
-            crate::language::resolve_attributes(&state.db, locale, attributes).await?;
+            crate::language::resolve_attributes(&state.cache, &state.db, locale, attributes)
+                .await?;
         }
         if params.resolve_inheritance == Some(true) {
-            crate::inheritance::resolve_inheritance(&state.db, key, locale, attributes).await?;
+            crate::inheritance::resolve_inheritance(
+                &state.cache,
+                &state.db,
+                key,
+                locale,
+                attributes,
+            )
+            .await?;
         }
     }
 

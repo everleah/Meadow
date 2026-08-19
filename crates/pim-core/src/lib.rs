@@ -8,6 +8,7 @@ pub mod api;
 pub mod app;
 pub mod audit;
 pub mod auth;
+pub mod cache;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -37,7 +38,11 @@ pub async fn run() {
         .expect("failed to bind TCP listener");
     tracing::info!("pim-core listening on {}", config.bind_addr);
 
-    let state = app::AppState { db, config };
+    let state = app::AppState {
+        db,
+        config,
+        cache: std::sync::Arc::new(cache::MetaCache::default()),
+    };
     axum::serve(listener, app::router(state))
         .await
         .expect("server error");

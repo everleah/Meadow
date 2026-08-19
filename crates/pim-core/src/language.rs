@@ -3,95 +3,97 @@
 //! Multilingual values are stored as nested JSON objects in an object's
 //! `attributes` (keys = language codes). At read time, `?locale=` resolves
 //! each multilingual attribute to its effective value using the stored
-//! `fallback_order` of the locale's `language_tree` node.
+//! `fallback_order` of the locale's `language_tree` node (cached).
 
 use serde_json::{Map, Value};
 
+use crate::cache::MetaCache;
 use crate::db::Db;
 use crate::error::ApiError;
 
-/// Names of all attribute definitions marked `multilingual`.
-pub async fn multilingual_attribute_names(db: &Db) -> Result<Vec<String>, ApiError> {
-    let sql = "SELECT VALUE name FROM attribute_definition WHERE multilingual = true";
-    let mut response = db.inner().query(sql).await?.check()?;
-    let names: Vec<String> = response.take(0)?;
-    Ok(names)
-}
-
-/// Resolves a single multilingual value object for `locale`.
+/// Resolves a single multilingual value against a precomputed fallback chain.
 ///
-/// Exact match wins; otherwise the locale's `fallback_order` (ancestor codes)
-/// is walked, ending at `root`. Non-object values are returned unchanged.
-pub async fn resolve_value(
-    db: &Db,
+/// Exact match wins; otherwise the chain (ancestor codes, ending at `root`)
+/// is walked. Non-object values are returned unchanged.
+pub(crate) fn resolve_value_with_chain(
     locale: &str,
     value: &Value,
-) -> Result<Option<Value>, ApiError> {
+    chain: &[String],
+) -> Option<Value> {
     let Some(map) = value.as_object() else {
-        return Ok(Some(value.clone()));
+        return Some(value.clone());
     };
     if let Some(exact) = map.get(locale) {
-        return Ok(Some(exact.clone()));
+        return Some(exact.clone());
     }
-    let chain = fallback_chain(db, locale).await?;
     for code in chain {
-        if let Some(resolved) = map.get(&code) {
-            return Ok(Some(resolved.clone()));
+        if let Some(resolved) = map.get(code) {
+            return Some(resolved.clone());
         }
     }
-    Ok(None)
+    None
 }
 
 /// Resolves all multilingual attributes in `attributes` for `locale`.
 /// Attributes without a resolvable value become JSON `null`.
 pub async fn resolve_attributes(
+    cache: &MetaCache,
     db: &Db,
     locale: &str,
     attributes: &mut Map<String, Value>,
 ) -> Result<(), ApiError> {
-    let names = multilingual_attribute_names(db).await?;
-    for name in names {
-        let Some(value) = attributes.get(&name) else {
+    let names = cache.multilingual_names(db).await?;
+    let chain = cache.fallback_chain(db, locale).await?;
+    for name in names.iter() {
+        let Some(value) = attributes.get(name.as_str()) else {
             continue;
         };
-        let resolved = resolve_value(db, locale, value).await?;
+        let resolved = resolve_value_with_chain(locale, value, &chain);
         match resolved {
             Some(value) => {
-                attributes.insert(name, value);
+                attributes.insert(name.clone(), value);
             }
             None => {
-                attributes.insert(name, Value::Null);
+                attributes.insert(name.clone(), Value::Null);
             }
         }
     }
     Ok(())
 }
 
-/// Returns the ancestor codes of `locale` from its language-tree node,
-/// always ending with `root`.
-async fn fallback_chain(db: &Db, locale: &str) -> Result<Vec<String>, ApiError> {
-    let sql = "SELECT fallback_order FROM language_tree WHERE code = $code LIMIT 1";
-    let mut response = db
-        .inner()
-        .query(sql)
-        .bind(("code", locale.to_owned()))
-        .await?
-        .check()?;
-    let rows: Vec<Value> = response.take(0)?;
-    let mut chain: Vec<String> = rows
-        .first()
-        .and_then(|row| row.get("fallback_order"))
-        .and_then(Value::as_array)
-        .map(|order| {
-            order
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    if !chain.iter().any(|code| code == "root") {
-        chain.push("root".to_owned());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_value_exact_then_fallback_chain() {
+        let value = serde_json::json!({"root": "Produkt", "en": "Product", "en-GB": "Product UK"});
+        let en_us = vec!["en".to_owned(), "root".to_owned()];
+
+        assert_eq!(
+            resolve_value_with_chain("en-US", &value, &en_us).unwrap(),
+            Value::from("Product")
+        );
+        assert_eq!(
+            resolve_value_with_chain("en-GB", &value, &en_us).unwrap(),
+            Value::from("Product UK")
+        );
+
+        let fr = vec!["fr".to_owned(), "root".to_owned()];
+        assert_eq!(
+            resolve_value_with_chain("fr-FR", &value, &fr).unwrap(),
+            Value::from("Produkt")
+        );
+
+        // Non-object values pass through unchanged.
+        let scalar = Value::from("x");
+        assert_eq!(
+            resolve_value_with_chain("en", &scalar, &en_us).unwrap(),
+            scalar
+        );
+
+        // No resolvable value -> None.
+        let empty = serde_json::json!({});
+        assert!(resolve_value_with_chain("fr-FR", &empty, &fr).is_none());
     }
-    Ok(chain)
 }

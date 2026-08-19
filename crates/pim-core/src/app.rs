@@ -7,6 +7,7 @@ use axum::{
 use utoipa::OpenApi as _;
 use utoipa::openapi::OpenApi;
 
+use crate::cache::MetaCache;
 use crate::{api, config::Config, db::Db};
 
 /// Shared application state.
@@ -16,6 +17,8 @@ pub struct AppState {
     pub db: Db,
     /// Runtime configuration.
     pub config: Config,
+    /// In-memory cache for slow-changing metadata.
+    pub cache: std::sync::Arc<MetaCache>,
 }
 
 /// Builds the application router with the given state.

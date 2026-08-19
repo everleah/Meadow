@@ -289,6 +289,7 @@ pub async fn create_attribute_definition(
         },
     )
     .await;
+    state.cache.invalidate_attribute_definitions().await;
     Ok((StatusCode::CREATED, Json(definition)))
 }
 
@@ -536,6 +537,7 @@ pub async fn update_attribute_definition(
         },
     )
     .await;
+    state.cache.invalidate_attribute_definitions().await;
 
     Ok(Json(definition))
 }
