@@ -15,12 +15,12 @@
 
 Vier fest eingebaute Rollen; `admin` ist eine Sonderform des `editor`:
 
-| Rolle | Bedeutung | Besonderheit |
-|---|---|---|
-| `superadmin` | Darf alles, systemweit | Geschützt: nicht löschbar, mindestens einer existiert immer |
-| `admin` | `editor` + Verwaltung (Nutzer, Gruppen, Definitionen, Jobs/DLQ) | Sonderform des Editors |
-| `editor` | Pflege von Objekten, Referenzen, Kategorien, Statuswechsel | – |
-| `viewer` | Nur lesen (Read-only) | – |
+| Rolle        | Bedeutung                                                       | Besonderheit                                                  |
+| ------------ | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| `superadmin` | Darf alles, systemweit                                          | Geschützt: nicht löschbar, mindestens einer existiert immer   |
+| `admin`      | `editor` + Verwaltung (Nutzer, Gruppen, Definitionen, Jobs/DLQ) | Sonderform des Editors                                        |
+| `editor`     | Pflege von Objekten, Referenzen, Kategorien, Statuswechsel      | –                                                             |
+| `viewer`     | Nur lesen (Read-only)                                           | –                                                             |
 
 ## Berechtigungen
 
@@ -47,18 +47,18 @@ system.manage
 
 Zuordnung (Auszug):
 
-| Berechtigung | viewer | editor | admin | superadmin |
-|---|---|---|---|---|
-| `object.read` | ✓ | ✓ | ✓ | ✓ |
-| `object.create` / `update` / `delete` / `publish` | – | ✓ | ✓ | ✓ |
-| `reference.create` / `delete` | – | ✓ | ✓ | ✓ |
-| `attribute_definition.manage` | – | – | ✓ | ✓ |
-| `language_tree.manage` | – | – | ✓ | ✓ |
-| `job.run` / `job.manage` | – | – | ✓ | ✓ |
-| `user.manage` / `group.manage` | – | – | ✓ | ✓ |
-| `audit.read` | – | – | ✓ | ✓ |
-| `log.read` / `log.manage` | – | – | ✓ | ✓ |
-| `system.manage` | – | – | – | ✓ |
+| Berechtigung                                      | viewer | editor | admin | superadmin |
+| ------------------------------------------------- | ------ | ------ | ----- | ---------- |
+| `object.read`                                     | ✓      | ✓      | ✓     | ✓          |
+| `object.create` / `update` / `delete` / `publish` | –      | ✓      | ✓     | ✓          |
+| `reference.create` / `delete`                     | –      | ✓      | ✓     | ✓          |
+| `attribute_definition.manage`                     | –      | –      | ✓     | ✓          |
+| `language_tree.manage`                            | –      | –      | ✓     | ✓          |
+| `job.run` / `job.manage`                          | –      | –      | ✓     | ✓          |
+| `user.manage` / `group.manage`                    | –      | –      | ✓     | ✓          |
+| `audit.read`                                      | –      | –      | ✓     | ✓          |
+| `log.read` / `log.manage`                         | –      | –      | ✓     | ✓          |
+| `system.manage`                                   | –      | –      | –     | ✓          |
 
 ## Gruppen & Vererbung
 

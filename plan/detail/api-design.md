@@ -8,57 +8,57 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 ## Wichtige Endpunkte (Auszug)
 
-| Methode | Pfad                              | Beschreibung                                    |
-|---------|-----------------------------------|-------------------------------------------------|
-| POST    | `/auth/login`                     | JWT-Token erhalten                              |
-| POST    | `/objects`                        | Neues Objekt anlegen                            |
-| GET     | `/objects/{id}`                   | Objekt inkl. Metadaten und Referenzen laden     |
-| PATCH   | `/objects/{id}`                   | Teilaktualisierung der Attribute/Status         |
-| DELETE  | `/objects/{id}`                   | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt) |
-| GET     | `/objects?type=product&filter=...`| Suche & Filterung mit Pagination; optional `completeness_lt`/`missing_required` (Vollständigkeits-Filter) |
-| GET     | `/objects/picker?q=...&types=...`| Such-Endpunkt für den Referenz-Picker (Label-Suche, optional Zieltyp-Filter) |
-| GET     | `/objects/by-key?type=product&key=sku&value=SKU-123` | Objekt über einen Business-Schlüssel laden (z. B. SKU; eindeutig pro Objekttyp) |
-| POST    | `/references`                     | Referenz zwischen zwei Objekten erstellen (Validierung gegen die Relation-Definition) |
-| GET     | `/relation-definitions`           | Relationstypen auflisten                        |
-| POST    | `/relation-definitions`           | Benutzerdefinierten Relationstyp anlegen (nur Aggregation, Phase 9) |
-| PATCH   | `/objects/{id}/parent`            | Kompositions-Elternteil ändern (Re-Parenting, Zyklenschutz) |
-| POST    | `/objects/bulk`                   | Massenoperation über eine Auswahl (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Löschen) – Ausführung als Hintergrundjob (`job_run`) |
-| POST    | `/objects/batch-update`           | Gesammelte Inline-Edits aus dem Grid (Batch-Save) in einem Aufruf anwenden |
-| GET     | `/objects/{id}/children`          | Direkte Kompositions-Kinder eines Objekts       |
-| GET     | `/objects/{id}/references`        | Alle Referenzen eines Objekts (mit Metadaten)   |
-| GET     | `/objects/{id}/graph?depth=3`     | Graph-Traversierung ab Objekt                   |
-| GET     | `/attribute-groups`               | Attributgruppen verwalten                       |
-| POST    | `/attribute-definitions`          | Neue Attributdefinition anlegen                 |
-| GET     | `/units`                          | Einheiten-Katalog auflisten (Filter: `dimension`, `system`) |
-| POST    | `/units`                          | Benutzerdefinierte Einheit anlegen              |
-| PATCH   | `/units/{id}`                     | Benutzerdefinierte Einheit ändern               |
-| DELETE  | `/units/{id}`                     | Benutzerdefinierte Einheit löschen (nur `custom`) |
-| GET     | `/units/convert`                  | Wert zwischen Einheiten umrechnen (`value`, `from`, `to`) |
-| POST    | `/jobs/{job_def_id}/run`          | Job manuell starten                             |
-| GET     | `/jobs/{job_def_id}/runs`         | Job-Historie abrufen                            |
-| PATCH   | `/jobs/runs/{run_id}`             | Status eines Job-Runs aktualisieren (Worker)    |
-| POST    | `/imports`                        | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert `job_run`-ID (202) |
-| GET     | `/jobs/runs?ids=…`                | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling |
-| POST    | `/search`                         | Volltextsuche über Objekte                      |
-| GET     | `/auth/me`                        | Rollen, Berechtigungen & Scope des Nutzers      |
-| POST    | `/users`                          | Benutzer anlegen                                |
-| PATCH   | `/users/{id}`                     | Benutzer bearbeiten (Rolle, Status)             |
-| DELETE  | `/users/{id}`                     | Benutzer löschen (Superadmin-Schutz)            |
-| POST    | `/groups`                         | Gruppe anlegen                                  |
-| POST    | `/groups/{id}/members`            | Benutzer einer Gruppe zuordnen                  |
-| GET     | `/rules`                          | Business Rules auflisten (Filter: `type`, `state`, `applies_to`) |
-| POST    | `/rules`                          | Regel anlegen (Compile-Check beim Speichern)   |
-| GET     | `/rules/{id}`                     | Regel laden (inkl. `version`)                  |
-| PATCH   | `/rules/{id}`                     | Regel bearbeiten (Compile-Check; Version++ + Audit) |
-| POST    | `/rules/{id}/activate`            | Regel aktivieren (`draft`/`disabled` → `active`; nur `admin`/`superadmin`) |
-| POST    | `/rules/{id}/disable`             | Regel deaktivieren                             |
-| POST    | `/rules/{id}/dry-run`             | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren) |
-| POST    | `/rules/{id}/test-batch`          | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren) |
-| POST    | `/rules/{id}/recompute`           | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5) |
-| POST    | `/system/logs`                    | Kuratierte Log-Einträge aus Komponenten entgegennehmen (Batch, non-blocking; Service-Account/API-Key) |
-| GET     | `/system/logs`                    | System-Logs abrufen (Filter: `service`, `category`, `level`, `from`/`to`, `q`; Pagination; nur `admin`/`superadmin`) |
-| GET     | `/system/settings`                | Systemeinstellungen lesen (aufgelöster Wert: Default < ENV < DB) |
-| PUT     | `/system/settings/{key}`          | Systemeinstellung ändern (persistiert, Audit; nur `admin`/`superadmin`) |
+| Methode | Pfad                                                 | Beschreibung                                                                                                                                             |
+| ------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST    | `/auth/login`                                        | JWT-Token erhalten                                                                                                                                       |
+| POST    | `/objects`                                           | Neues Objekt anlegen                                                                                                                                     |
+| GET     | `/objects/{id}`                                      | Objekt inkl. Metadaten und Referenzen laden                                                                                                              |
+| PATCH   | `/objects/{id}`                                      | Teilaktualisierung der Attribute/Status                                                                                                                  |
+| DELETE  | `/objects/{id}`                                      | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt)                                                        |
+| GET     | `/objects?type=product&filter=...`                   | Suche & Filterung mit Pagination; optional`completeness_lt`/`missing_required` (Vollständigkeits-Filter)                                                 |
+| GET     | `/objects/picker?q=...&types=...`                    | Such-Endpunkt für den Referenz-Picker (Label-Suche, optional Zieltyp-Filter)                                                                             |
+| GET     | `/objects/by-key?type=product&key=sku&value=SKU-123` | Objekt über einen Business-Schlüssel laden (z. B. SKU; eindeutig pro Objekttyp)                                                                          |
+| POST    | `/references`                                        | Referenz zwischen zwei Objekten erstellen (Validierung gegen die Relation-Definition)                                                                    |
+| GET     | `/relation-definitions`                              | Relationstypen auflisten                                                                                                                                 |
+| POST    | `/relation-definitions`                              | Benutzerdefinierten Relationstyp anlegen (nur Aggregation, Phase 9)                                                                                      |
+| PATCH   | `/objects/{id}/parent`                               | Kompositions-Elternteil ändern (Re-Parenting, Zyklenschutz)                                                                                              |
+| POST    | `/objects/bulk`                                      | Massenoperation über eine Auswahl (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Löschen) – Ausführung als Hintergrundjob (`job_run`)     |
+| POST    | `/objects/batch-update`                              | Gesammelte Inline-Edits aus dem Grid (Batch-Save) in einem Aufruf anwenden                                                                               |
+| GET     | `/objects/{id}/children`                             | Direkte Kompositions-Kinder eines Objekts                                                                                                                |
+| GET     | `/objects/{id}/references`                           | Alle Referenzen eines Objekts (mit Metadaten)                                                                                                            |
+| GET     | `/objects/{id}/graph?depth=3`                        | Graph-Traversierung ab Objekt                                                                                                                            |
+| GET     | `/attribute-groups`                                  | Attributgruppen verwalten                                                                                                                                |
+| POST    | `/attribute-definitions`                             | Neue Attributdefinition anlegen                                                                                                                          |
+| GET     | `/units`                                             | Einheiten-Katalog auflisten (Filter:`dimension`, `system`)                                                                                               |
+| POST    | `/units`                                             | Benutzerdefinierte Einheit anlegen                                                                                                                       |
+| PATCH   | `/units/{id}`                                        | Benutzerdefinierte Einheit ändern                                                                                                                        |
+| DELETE  | `/units/{id}`                                        | Benutzerdefinierte Einheit löschen (nur`custom`)                                                                                                         |
+| GET     | `/units/convert`                                     | Wert zwischen Einheiten umrechnen (`value`, `from`, `to`)                                                                                                |
+| POST    | `/jobs/{job_def_id}/run`                             | Job manuell starten                                                                                                                                      |
+| GET     | `/jobs/{job_def_id}/runs`                            | Job-Historie abrufen                                                                                                                                     |
+| PATCH   | `/jobs/runs/{run_id}`                                | Status eines Job-Runs aktualisieren (Worker)                                                                                                             |
+| POST    | `/imports`                                           | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert`job_run`-ID (202)                                                                       |
+| GET     | `/jobs/runs?ids=…`                                   | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling                                                                                |
+| POST    | `/search`                                            | Volltextsuche über Objekte                                                                                                                               |
+| GET     | `/auth/me`                                           | Rollen, Berechtigungen & Scope des Nutzers                                                                                                               |
+| POST    | `/users`                                             | Benutzer anlegen                                                                                                                                         |
+| PATCH   | `/users/{id}`                                        | Benutzer bearbeiten (Rolle, Status)                                                                                                                      |
+| DELETE  | `/users/{id}`                                        | Benutzer löschen (Superadmin-Schutz)                                                                                                                     |
+| POST    | `/groups`                                            | Gruppe anlegen                                                                                                                                           |
+| POST    | `/groups/{id}/members`                               | Benutzer einer Gruppe zuordnen                                                                                                                           |
+| GET     | `/rules`                                             | Business Rules auflisten (Filter:`type`, `state`, `applies_to`)                                                                                          |
+| POST    | `/rules`                                             | Regel anlegen (Compile-Check beim Speichern)                                                                                                             |
+| GET     | `/rules/{id}`                                        | Regel laden (inkl.`version`)                                                                                                                             |
+| PATCH   | `/rules/{id}`                                        | Regel bearbeiten (Compile-Check; Version++ + Audit)                                                                                                      |
+| POST    | `/rules/{id}/activate`                               | Regel aktivieren (`draft`/`disabled` → `active`; nur `admin`/`superadmin`)                                                                               |
+| POST    | `/rules/{id}/disable`                                | Regel deaktivieren                                                                                                                                       |
+| POST    | `/rules/{id}/dry-run`                                | Dry-Run gegen Beispielobjekt(e) oder konstruierten Payload (kein Persistieren)                                                                           |
+| POST    | `/rules/{id}/test-batch`                             | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren)                                                                                  |
+| POST    | `/rules/{id}/recompute`                              | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5)                                                                                             |
+| POST    | `/system/logs`                                       | Kuratierte Log-Einträge aus Komponenten entgegennehmen (Batch, non-blocking; Service-Account/API-Key)                                                    |
+| GET     | `/system/logs`                                       | System-Logs abrufen (Filter:`service`, `category`, `level`, `from`/`to`, `q`; Pagination; nur `admin`/`superadmin`)                                      |
+| GET     | `/system/settings`                                   | Systemeinstellungen lesen (aufgelöster Wert: Default < ENV < DB)                                                                                         |
+| PUT     | `/system/settings/{key}`                             | Systemeinstellung ändern (persistiert, Audit; nur`admin`/`superadmin`)                                                                                   |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).

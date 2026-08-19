@@ -21,16 +21,16 @@ Zwei technische Tabellen ergänzen das Kernmodell für Betrieb und Administratio
 
 **`log_entry` – kuratierte System-Logs (flüchtig, nur Admin-UI):**
 
-| Feld | Typ | Beschreibung |
-|------|-----|--------------|
-| `id` | string | Eindeutige ID |
-| `created_at` | datetime (UTC) | Zeitpunkt (ISO-8601, Datumswerte-Konvention) |
-| `service` | string | Herkunft: `pim-core`, `pim-worker`, `pim-frontend` |
-| `level` | string | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `CRITICAL` |
-| `category` | string | `app` \| `job` \| `rule` \| `auth` \| `integration` |
-| `message` | string | Klartext-Meldung (Pflicht) |
-| `trace_id` | string? | Korrelations-ID über Dienste hinweg (`trace_id`/`request_id`) |
-| `context` | object? | Optional: `object_id`, `job_run_id`, `rule_id`, `user_id`, `status_code`, … |
+| Feld         | Typ            | Beschreibung                                                                |
+| ------------ | -------------- | --------------------------------------------------------------------------- |
+| `id`         | string         | Eindeutige ID                                                               |
+| `created_at` | datetime (UTC) | Zeitpunkt (ISO-8601, Datumswerte-Konvention)                                |
+| `service`    | string         | Herkunft:`pim-core`, `pim-worker`, `pim-frontend`                           |
+| `level`      | string         | `DEBUG` \| `INFO` \| `WARN` \| `ERROR` \| `CRITICAL`                        |
+| `category`   | string         | `app` \| `job` \| `rule` \| `auth` \| `integration`                         |
+| `message`    | string         | Klartext-Meldung (Pflicht)                                                  |
+| `trace_id`   | string?        | Korrelations-ID über Dienste hinweg (`trace_id`/`request_id`)               |
+| `context`    | object?        | Optional:`object_id`, `job_run_id`, `rule_id`, `user_id`, `status_code`, …  |
 
 - **Charakter:** reine Append-Tabelle, kein Update, kein Soft-Delete; Einträge schreibt der Kern (Empfang über `POST /system/logs` von allen Komponenten).
 - **Indizes:** `(service, level, created_at)` für die UI-Filter; `trace_id` für Korrelationssuche. Keine Volltextsuche im MVP.
@@ -39,12 +39,12 @@ Zwei technische Tabellen ergänzen das Kernmodell für Betrieb und Administratio
 
 **`system_setting` – persistierte Runtime-Einstellungen:**
 
-| Feld | Typ | Beschreibung |
-|------|-----|--------------|
-| `key` | string | Einstellungsname (z. B. `log_retention_days`) |
-| `value` | any (JSON) | Wert |
-| `updated_at` | datetime (UTC) | Letzte Änderung |
-| `updated_by` | string | Auslöser (`user_id` oder Systemkennung) |
+| Feld         | Typ            | Beschreibung                                 |
+| ------------ | -------------- | -------------------------------------------- |
+| `key`        | string         | Einstellungsname (z. B.`log_retention_days`) |
+| `value`      | any (JSON)     | Wert                                         |
+| `updated_at` | datetime (UTC) | Letzte Änderung                              |
+| `updated_by` | string         | Auslöser (`user_id` oder Systemkennung)      |
 
 - **Auflösung:** Code-Default < ENV < DB (Runtime). Ein fehlender Eintrag bedeutet „Default/ENV gilt“.
 - **Verwendung (MVP):** Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); das Schema ist generisch und für weitere Laufzeit-Einstellungen erweiterbar.
@@ -96,14 +96,14 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
 
 **Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Ein späterer Wechsel (Phase 9) umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und die Prüfung gegen die folgende Matrix:
 
-| von \ nach | `text` | `number` | `boolean` | `date` | `enum` | `reference` |
-|---|---|---|---|---|---|---|
-| `text` | — | ✅ nur parsebare Werte | ⚠️ nur `true`/`false`-konforme Werte | ⚠️ nur ISO-8601-parsebare Werte | ⚠️ nur Werte aus der Werteliste | ⚠️ nur gültige Objekt-IDs |
-| `number` | ✅ verlustfrei | — | ❌ | ❌ | ⚠️ nur Werte aus der Werteliste | ❌ |
-| `boolean` | ✅ verlustfrei | ❌ | — | ❌ | ⚠️ nur Werte aus der Werteliste | ❌ |
-| `date` | ✅ verlustfrei (ISO-8601) | ❌ | ❌ | — | ⚠️ nur Werte aus der Werteliste | ❌ |
-| `enum` | ✅ verlustfrei | ❌ | ❌ | ❌ | — | ❌ |
-| `reference` | ✅ verlustfrei (als ID-String) | ❌ | ❌ | ❌ | ❌ | — |
+| von \ nach  | `text`                         | `number`               | `boolean`                             | `date`                            | `enum`                            | `reference`                  |
+| ----------- | ------------------------------ | ---------------------- | ------------------------------------- | --------------------------------- | --------------------------------- | ---------------------------- |
+| `text`      | —                              | ✅ nur parsebare Werte | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-parsebare Werte   | ⚠️ nur Werte aus der Werteliste   | ⚠️ nur gültige Objekt-IDs    |
+| `number`    | ✅ verlustfrei                 | —                      | ❌                                    | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `boolean`   | ✅ verlustfrei                 | ❌                     | —                                     | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                     | ❌                                    | —                                 | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `enum`      | ✅ verlustfrei                 | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
+| `reference` | ✅ verlustfrei (als ID-String) | ❌                     | ❌                                    | ❌                                | ❌                                | —                            |
 
 - ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (bei nicht konformen Werten Ablehnung oder Teilmigration mit Löschung); ❌ = nicht sinnvoll / nicht unterstützt.
 

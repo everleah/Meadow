@@ -62,6 +62,7 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
 **Beispiel:**
 
 - Objekt `product_1` (Eltern) hat:
+
   ```json
   {
     "attributes": {
@@ -70,7 +71,9 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
     }
   }
   ```
+
 - Objekt `variant_1` (Kind) hat:
+
   ```json
   {
     "attributes": {
@@ -78,6 +81,7 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
     }
   }
   ```
+
 - Ergebnis für `variant_1`:
   - `brand` wird vererbt → `"Acme"`
   - `material` ist explizit leer → bleibt `null`
@@ -93,10 +97,12 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
 
 - Indizes auf `reference` (insbesondere `definition_id` und `in`) beschleunigen die Traversierung.
 - Die Vererbung wird über SurrealQL-Abfragen realisiert, z. B.:
+
   ```sql
   SELECT ->(reference WHERE definition_id = 'rel_depends_on')->object.attributes.brand AS inherited_brand
   FROM object:variant_1
   ```
+
   oder durch schrittweises Aufsteigen in der Applikationslogik.
 - Optional kann ein Cache (z. B. Redis) die aufgelösten Werte für häufig gelesene Objekte zwischenspeichern. Für die meisten KMU-Szenarien ist das jedoch nicht erforderlich, da die Hierarchietiefen gering sind.
 
