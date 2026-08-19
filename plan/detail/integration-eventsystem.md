@@ -32,7 +32,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
       "status": "draft",
       "references": [
         {
-          "to": "category_5",
+          "out": "category_5",
           "type": "category_member",
           "attributes": { "position": 3 }
         }
@@ -41,8 +41,8 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
   ],
   "references": [
     {
-      "from": "object_123",
-      "to": "object_456",
+      "in": "object_123",
+      "out": "object_456",
       "type": "related",
       "attributes": { "relation_strength": 0.8 }
     }

@@ -8,6 +8,13 @@
 
 Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, Collections, …) werden als **generische Objekte** gespeichert. Unterschiede ergeben sich durch den Typ und flexible Metadaten. Technische Tabellen (Benutzer, Gruppen, Attributdefinitionen, Sprachbaum, Jobs, Audit-Log) ergänzen das Kernmodell.
 
+## Record-IDs & Querverweise (verbindlich)
+
+1. **Record-IDs:** Jeder Datensatz hat eine SurrealDB-Record-ID `tabelle:key`. Beim Anlegen über die API vergibt der Kern **ULID-Keys** (z. B. `object:01M0…`, `user:<ulid>`). Feste Seed-Datensätze verwenden explizite Keys (`object:object_root`, `relation_definition:rel_depends_on`, `unit:unit_m`, `user:admin`).
+2. **Querverweis-Felder:** String-Felder, die auf einen anderen Datensatz verweisen (`definition_id`, `unit_id`, `display_unit_id`, `canonical_unit_id`, `group_id`, `parent`), speichern den **Record-Key** (z. B. `unit_m`, `rel_depends_on`) – das entspricht den Kurz-IDs in den Beispielen dieses Dokuments.
+3. **Graph-Kanten (`reference`):** `reference` ist eine **native SurrealDB-RELATION-Tabelle**; die Endpunktfelder heißen `in` (Quelle, früher `from`) und `out` (Ziel, früher `to`) und tragen volle Record-IDs (`object:<ulid>`). Traversierung über Edge-Queries (`->reference->object`).
+4. **JWT `sub`:** trägt die volle Record-ID des Benutzers (z. B. `user:admin`).
+
 ## System-Log (`log_entry`) & Systemeinstellungen (`system_setting`)
 
 Zwei technische Tabellen ergänzen das Kernmodell für Betrieb und Administration (Konvention gemäß Abschnitt 12 des Hauptdokuments; Detail [betrieb-deployment.md](betrieb-deployment.md#11-monitoring--logging)).
@@ -221,10 +228,10 @@ Referenzen zwischen Objekten (Graph-Kanten) mit eigenen Metadaten. Der Relations
 
 ```json
 {
-    "id": "ref_001",
-    "from": "object_123",            // Quellobjekt-ID
-    "to": "object_456",              // Zielobjekt-ID
-    "definition_id": "rel_depends_on",  // Referenz auf relation_definition
+    "id": "reference:01M0…",
+    "in": "object:01M0…",              // Quelle (früher `from`); volle Record-ID
+    "out": "object:01M0…",             // Ziel (früher `to`); volle Record-ID
+    "definition_id": "rel_depends_on", // Record-Key der relation_definition
     "type": "depends_on",            // Anzeigename (denormalisiert)
     "attributes": {                  // Metadaten an der Kante
         "position": 3                // z. B. bei Kategorien: Sortierung
@@ -361,8 +368,8 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
   - auf sprachabhängige Felder je nach Konfiguration (z. B. alle Sprachen oder nur `root`/`en`)
   - **Unique-Index pro Business-Schlüssel** (`is_key: true`): komposit auf `type` + `attributes.<name>`, z. B. `(type, attributes.sku)` – erzwingt Eindeutigkeit pro Objekttyp
 - **Referenz-Indizes:**
-  - auf `definition_id` (bzw. `type`), `from`, `to`
-  - kombinierte Indizes für `from` + `definition_id` und `to` + `definition_id` (z. B. für Kategorieabfragen)
+  - auf `definition_id` (bzw. `type`), `in`, `out`
+  - kombinierte Indizes für `in` + `definition_id` und `out` + `definition_id` (z. B. für Kategorieabfragen)
   - speziell für `depends_on` und `category_member`
 - **Volltextsuche:**
   - SurrealDB-eigene Volltextindizes auf ausgewählte Attributfelder (Syntax `FULLTEXT ANALYZER …`, seit SurrealDB 3.0; zuvor `SEARCH ANALYZER`)

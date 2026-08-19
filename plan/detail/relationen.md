@@ -13,6 +13,8 @@ Meadow PIM unterscheidet zwei Arten von Relationen zwischen Objekten:
 
 Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede Relation in `reference` referenziert eine Definition (`definition_id`).
 
+`reference` ist eine **native SurrealDB-RELATION-Tabelle**: `RELATE quelle->reference->ziel` erzeugt `in` = Quelle und `out` = Ziel (beides volle Record-IDs). Für `depends_on` gilt die Richtung **Kind → Elternteil**, also `RELATE kind->reference->elternteil` ⇒ `in` = Kind, `out` = Elternteil. Details in [datenmodell.md](datenmodell.md) („Record-IDs & Querverweise“).
+
 ## Komposition (`depends_on`)
 
 - Es gibt **genau einen** Kompositionstyp: `depends_on` („ich bin abhängig von“). Die Richtung ist **Kind → Elternteil**.

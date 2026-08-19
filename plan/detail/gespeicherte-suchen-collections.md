@@ -33,7 +33,7 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
       "references": [
         {
           "type": "category_member",
-          "to": "category_5",
+          "out": "category_5",
           "direction": "incoming"
         }
       ],
@@ -70,13 +70,13 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 **Modellierung:**
 
 - Das Collection-Objekt besitzt eine Referenz auf die zugrunde liegende `saved_search`.
-- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden. Analog zu `category_member` zeigt die Relation vom Mitgliedsobjekt (`from`) auf das Container-Objekt (`to`):
+- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden. Analog zu `category_member` zeigt die Relation vom Mitgliedsobjekt (`in`) auf das Container-Objekt (`out`):
 
   ```json
   {
-    "id": "ref_coll_001",
-    "from": "object_123",
-    "to": "collection_10",
+    "id": "reference:01M0…",
+    "in": "object:01M0…",
+    "out": "collection_10",
     "type": "collection_member",
     "attributes": {
       "rank": 1,

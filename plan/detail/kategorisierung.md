@@ -13,9 +13,9 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
   ```json
   {
-    "id": "ref_cat_001",
-    "from": "object_123",          // das zugeordnete Objekt (z. B. Produkt)
-    "to": "category_5",            // die Kategorie
+    "id": "reference:01M0…",
+    "in": "object:01M0…",           // das zugeordnete Objekt (z. B. Produkt)
+    "out": "category_5",            // die Kategorie (Ziel)
     "definition_id": "rel_category_member",
     "type": "category_member",
     "attributes": {

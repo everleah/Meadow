@@ -22,9 +22,9 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
 
   ```json
   {
-    "id": "ref_dep_001",
-    "from": "variant_1",             // Kindobjekt
-    "to": "product_1",               // Elternobjekt
+    "id": "reference:01M0…",
+    "in": "object:01M0…",             // Kindobjekt (Quelle)
+    "out": "object:01M0…",            // Elternobjekt (Ziel)
     "definition_id": "rel_depends_on",
     "type": "depends_on",            // einziger Kompositionstyp
     "attributes": {}
@@ -91,7 +91,7 @@ Meadow PIM unterstützt die **Vererbung von Attributwerten** entlang der Komposi
 
 **Technische Umsetzung in SurrealDB:**
 
-- Indizes auf `reference` (insbesondere `definition_id` und `from`) beschleunigen die Traversierung.
+- Indizes auf `reference` (insbesondere `definition_id` und `in`) beschleunigen die Traversierung.
 - Die Vererbung wird über SurrealQL-Abfragen realisiert, z. B.:
   ```sql
   SELECT ->(reference WHERE definition_id = 'rel_depends_on')->object.attributes.brand AS inherited_brand

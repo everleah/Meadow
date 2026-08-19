@@ -77,7 +77,7 @@ Berechtigungen regeln **Operationen**, Scopes regeln **Daten**:
   "subject": { "type": "group", "id": "group_webshop" },
   "rules": [
     { "field": "type", "operator": "in", "value": ["product"] },
-    { "reference": { "type": "category_member", "to": "category_webshop" } }
+    { "reference": { "type": "category_member", "out": "category_webshop" } }
   ]
 }
 ```
@@ -119,8 +119,9 @@ Der Kern übersetzt diese Regeln beim Lesen in SurrealQL-`WHERE`-Bedingungen (se
 
 ## JWT & API
 
-- JWT-Claims: `sub`, `username`, `roles[]`, `groups[]`, `perms[]`, `token_version`, `exp`.
+- JWT-Claims: `sub`, `username`, `roles[]`, `groups[]`, `perms[]`, `token_version`, `exp`. In Phase 1 trägt das Token `sub` (volle Record-ID, z. B. `user:admin`), `username`, `roles[]`, `token_version`, `exp`; `groups[]`/`perms[]` werden mit der Gruppenmitgliedschaft (Phase 7/9) ergänzt.
 - Kurzlebige Access-Tokens; `token_version` erlaubt sofortiges Sperren/Logout einzelner Benutzer.
+- **Dev-Bootstrap:** Beim ersten Start wird ein Standard-`superadmin` (`admin`/`admin`) angelegt, sofern `user:admin` nicht existiert; JWT-Config über `JWT_SECRET`/`JWT_TTL_SECONDS`.
 - Neue Endpunkte: `GET /auth/me`, `POST|PATCH|DELETE /users`, `POST|PATCH|DELETE /groups`, `POST /groups/{id}/members`, `POST /groups/{id}/children`.
 - **Service-Accounts:** Der Worker greift über API-Keys/Service-Accounts (Machine-to-Machine) auf den Kern zu, nicht über Personen-Logins.
 

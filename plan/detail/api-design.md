@@ -62,7 +62,8 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
-- **Pagination**: Cursor-basiert für große Listen.
+- **Pagination**: Cursor-basiert für große Listen (Ziel). Phase 1 nutzt vorläufig Offset-Pagination (`limit`/`start`); Cursor-Pagination folgt in einer späteren Phase.
+- **IDs**: Ressourcen-IDs sind SurrealDB-Record-IDs (`tabelle:key`); über die API angelegte Datensätze erhalten ULID-Keys (z. B. `object:01M0…`, `user:<ulid>`). Querverweis-Felder enthalten den Record-Key (z. B. `unit_id: "unit_m"`). Details in [datenmodell.md](datenmodell.md).
 
 ## Business Rules in der API
 
