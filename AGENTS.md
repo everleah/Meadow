@@ -84,6 +84,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - Root-owned files: `README.md`, `LICENSE`, `.gitignore`, `.editorconfig`, `rustfmt.toml`, `.vscode/`, `Cargo.toml`, `pyproject.toml`, `uv.lock`, `docker-compose.dev.yml`, `scripts/`, and root-level project documentation.
 - `plan/` is owned by `plan/AGENTS.md` (architecture and technical planning).
 - `crates/` is owned by `crates/AGENTS.md` (Rust source code).
+- `meadow/` is owned by `meadow/AGENTS.md` (Python source code: rules engine, later worker/frontend).
 - `tests/` is owned by `tests/AGENTS.md` (automated tests).
 - `docs/` is owned by `docs/AGENTS.md` (non-planning documentation).
 
@@ -128,5 +129,6 @@ When the user requests a durable behavior change, record it here or in the relev
 
 - `plan/` — architecture & technical planning; owned by `plan/AGENTS.md`.
 - `crates/` — Rust source code; owned by `crates/AGENTS.md`.
+- `meadow/` — Python source code; owned by `meadow/AGENTS.md`.
 - `tests/` — automated tests; owned by `tests/AGENTS.md`.
 - `docs/` — non-planning documentation; owned by `docs/AGENTS.md`.
