@@ -150,7 +150,8 @@ pub async fn create_object(
     )
     .await?;
     crate::rules::enforce(&outcome)?;
-    for (name, value) in outcome.computed_object() {
+    let computed = crate::rules::resolve_computed(&state.db, &outcome.computed_object()).await?;
+    for (name, value) in computed {
         attributes.insert(name, value);
     }
 
@@ -409,7 +410,7 @@ pub async fn update_object(
     )
     .await?;
     crate::rules::enforce(&outcome)?;
-    let computed = outcome.computed_object();
+    let computed = crate::rules::resolve_computed(&state.db, &outcome.computed_object()).await?;
     if !computed.is_empty() {
         let mut merged = candidate_attributes;
         for (name, value) in computed {

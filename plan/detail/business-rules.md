@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-4-Schritt 3: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check)
+- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker)
 
 ## Überblick
 
@@ -67,7 +67,7 @@ Ein Attribut wird als berechnet gekennzeichnet; die zugehörige Regel wird über
 
 - `computed: true` + `computed_rule` + `dependencies` sind das **Dependency-Metadatum** aus der Konvention (Abschnitt 4 / R2).
 - Berechnete Attribute sind **gespeicherte Werte** (stored-first), berechnet beim Schreiben; es gibt **kein** On-Read-/Virtuell-Modus im MVP. Lese-Pfade im Rust-Kern bleiben einfache DB-Reads.
-- Eine compute-Regel darf **nur** als `computed` deklarierte Attribute schreiben (`result.set_value`), nie beliebige Felder. **Enforcement (offen):** beim Mergen der `computed`-Werte im Kern gegen `attribute_definition.computed`/`computed_rule` prüfen – gehört in den Schritt „Berechnete Attribute“.
+- Eine compute-Regel darf **nur** als `computed` deklarierte Attribute schreiben (`result.set_value`), nie beliebige Felder. **Enforcement (implementiert):** der Kern prüft beim Mergen gegen `attribute_definition.computed` – jeder von einer `computed`-Regel geschriebene Wert muss als `computed: true` deklariert sein, sonst wird der Schreibvorgang mit 400 abgelehnt (fail-closed). Die `computed_rule`-Zuordnung wird mit der Recompute-Kaskade (R5) genutzt.
 
 ## Script-Kontrakt
 
@@ -174,7 +174,7 @@ Lab-Ausführungen werden **auditiert** (wer hat wann welche Regel gegen welche O
 ## Fehlerbehandlung & Betrieb
 
 - **Fail-closed im Schreibpfad:** Wirft eine aktive blockierende Regel eine Exception oder läuft in den Timeout, wird der Schreibvorgang abgelehnt („Regel X intern fehlgeschlagen“). Eine kaputte Validierung führt **nicht** stillschweigend zu einer Durchreichung.
-- **Circuit Breaker:** Nach **N aufeinanderfolgenden Fehlern** (konfigurierbar, Standard 3) wird die Regel **automatisch auf `disabled`** gesetzt und eine **Hochprioritäts-Meldung** ausgelöst (Event + UI-Benachrichtigung + Job-Log). Erfolgreiche Ausführung setzt den Zähler zurück.
+- **Circuit Breaker:** Nach **N aufeinanderfolgenden Fehlern** (konfigurierbar, Standard 3) wird die Regel **automatisch auf `disabled`** gesetzt und eine **Hochprioritäts-Meldung** ausgelöst (Event + UI-Benachrichtigung + Job-Log). Erfolgreiche Ausführung setzt den Zähler zurück. *(implementiert: `failure_count`-Zähler auf der Regel, Auto-`disabled` nach N Fehlern, Audit-Eintrag `rule_auto_disabled` + System-Log; Event/UI-Benachrichtigung folgen mit dem Eventsystem, Phase 6/7.)*
 - **Degrade-Modus (optional):** Ist der Python-Service nicht erreichbar, kann der Kern konfigurierbar auf „Speichern erlauben + Objekte als unberechnet markieren“ umschalten (bewusst kein Standard).
 - **Alerting/Monitoring:** Rule-Ausführungen (Timeout, Exception, Circuit-Breaker-Auslösung) gehen in die bestehende Observability (Job-Log, Events, Monitoring, Abschnitt 12).
 

@@ -176,16 +176,27 @@ pub async fn create_rule(
     ensure_unique_name(&state.db, &name, None).await?;
     compile_check(&state, &body.script).await?;
 
-    let content = json!({
-        "name": name,
-        "description": body.description,
-        "type": body.rule_type,
-        "applies_to": body.applies_to.unwrap_or_default(),
-        "script": body.script,
-        "state": "draft",
-        "version": 1,
-        "updated_by": claims.sub.clone(),
-    });
+    let mut content = serde_json::Map::new();
+    content.insert("name".to_owned(), Value::String(name));
+    if let Some(description) = body.description {
+        content.insert("description".to_owned(), Value::String(description));
+    }
+    content.insert("type".to_owned(), Value::String(body.rule_type));
+    content.insert(
+        "applies_to".to_owned(),
+        Value::Array(
+            body.applies_to
+                .unwrap_or_default()
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    content.insert("script".to_owned(), Value::String(body.script));
+    content.insert("state".to_owned(), Value::String("draft".to_owned()));
+    content.insert("version".to_owned(), Value::from(1));
+    content.insert("updated_by".to_owned(), Value::String(claims.sub.clone()));
+    let content = Value::Object(content);
 
     // Statements: LET(0), CREATE(1), SELECT(2).
     let sql = "
@@ -331,6 +342,7 @@ pub async fn update_rule(
 
     let mut changes = serde_json::Map::new();
     let mut changed: Vec<&str> = Vec::new();
+    let mut clear_description = false;
 
     if let Some(name) = body.name {
         let name = name.trim().to_owned();
@@ -347,7 +359,7 @@ pub async fn update_rule(
                 changes.insert("description".to_owned(), Value::String(value));
             }
             None => {
-                changes.insert("description".to_owned(), Value::Null);
+                clear_description = true;
             }
         }
         changed.push("description");
@@ -365,17 +377,26 @@ pub async fn update_rule(
         changed.push("script");
     }
 
-    if changes.is_empty() {
+    if changes.is_empty() && !clear_description {
         return Ok(Json(current));
     }
 
-    // Statements: LET(0), UPDATE MERGE(1), UPDATE SET(2), SELECT(3).
-    let sql = "
+    // Statements: LET(0), UPDATE MERGE(1), UPDATE SET(2), SELECT(3). Clearing
+    // `description` needs SurrealQL `NONE` (JSON null maps to the distinct NULL
+    // value, which `option<string>` rejects).
+    let set_clause = if clear_description {
+        "UPDATE $r SET description = NONE, version = version + 1, updated_at = time::now(), updated_by = $user;"
+    } else {
+        "UPDATE $r SET version = version + 1, updated_at = time::now(), updated_by = $user;"
+    };
+    let sql = format!(
+        "
         LET $r = type::record('business_rule', $key);
         UPDATE $r MERGE $changes;
-        UPDATE $r SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        {set_clause}
         SELECT * FROM $r;
-    ";
+        "
+    );
     let mut response = state
         .db
         .inner()

@@ -6,6 +6,7 @@
 //! outcome in the write path (fail-closed). See
 //! `plan/detail/business-rules.md`.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,7 @@ pub struct RulesClient {
     compile_subject: String,
     timeout: Duration,
     degrade: bool,
+    breaker_threshold: u64,
 }
 
 impl RulesClient {
@@ -100,12 +102,18 @@ impl RulesClient {
             compile_subject: config.rules_compile_subject.clone(),
             timeout: Duration::from_millis(config.rules_timeout_ms),
             degrade: config.rules_degrade,
+            breaker_threshold: config.rules_breaker_threshold,
         }
     }
 
     /// Whether a transport failure should degrade to "skip rules".
     pub fn degrade(&self) -> bool {
         self.degrade
+    }
+
+    /// Consecutive rule failures before the circuit breaker disables a rule.
+    pub fn breaker_threshold(&self) -> u64 {
+        self.breaker_threshold
     }
 
     /// Evaluates the given rules against the candidate object view.
@@ -252,7 +260,14 @@ pub async fn evaluate_for_write(
         .evaluate(&rules, object_view, mode, language, actor)
         .await
     {
-        Ok(outcome) => Ok(outcome),
+        Ok(outcome) => {
+            if let Err(error) =
+                account_failures(db, &rules, &outcome, client.breaker_threshold()).await
+            {
+                tracing::warn!(?error, "failed to update rule failure counters");
+            }
+            Ok(outcome)
+        }
         Err(error) => {
             if client.degrade() {
                 tracing::warn!(?error, "rule evaluation degraded; skipping rules");
@@ -292,4 +307,226 @@ pub fn enforce(outcome: &RuleOutcome) -> Result<(), ApiError> {
         )));
     }
     Ok(())
+}
+
+/// Updates consecutive-failure counters after an evaluation and auto-disables
+/// rules that reach the threshold (circuit breaker). Returns the names of the
+/// rules that were auto-disabled.
+async fn account_failures(
+    db: &Db,
+    rules: &[RuleSpec],
+    outcome: &RuleOutcome,
+    threshold: u64,
+) -> Result<Vec<String>, ApiError> {
+    let failed: HashSet<&str> = outcome.failed.iter().map(String::as_str).collect();
+    let mut auto_disabled = Vec::new();
+
+    for rule in rules {
+        if failed.contains(rule.name.as_str()) {
+            // Increment the consecutive-failure counter (statement 0), then
+            // read back the new counter and state (statement 1).
+            let sql = "
+                UPDATE business_rule
+                SET failure_count = IF failure_count IS NONE THEN 1 ELSE failure_count + 1 END
+                WHERE name = $name;
+                SELECT id, failure_count, state FROM business_rule WHERE name = $name;
+            ";
+            let mut response = db
+                .inner()
+                .query(sql)
+                .bind(("name", rule.name.clone()))
+                .await?
+                .check()?;
+            let rows: Vec<Value> = response.take(1)?;
+            let row = rows.into_iter().next();
+            let count = row
+                .as_ref()
+                .and_then(|r| r.get("failure_count"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let state = row
+                .as_ref()
+                .and_then(|r| r.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let rule_id = row
+                .as_ref()
+                .and_then(|r| r.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            if state == "active" && count >= threshold {
+                let disable_sql = "
+                    UPDATE business_rule
+                    SET state = 'disabled', failure_count = 0, version = version + 1, updated_at = time::now(), updated_by = 'system:circuit-breaker'
+                    WHERE name = $name AND state = 'active';
+                ";
+                db.inner()
+                    .query(disable_sql)
+                    .bind(("name", rule.name.clone()))
+                    .await?
+                    .check()?;
+                auto_disabled.push(rule.name.clone());
+
+                // High-priority alert: audit entry + system log entry.
+                crate::audit::record_best_effort(
+                    db,
+                    crate::audit::AuditEntry {
+                        user_id: "system:circuit-breaker",
+                        action: "rule_auto_disabled",
+                        object_id: if rule_id.is_empty() {
+                            None
+                        } else {
+                            Some(rule_id)
+                        },
+                        from: Some(Value::String("active".to_owned())),
+                        to: Some(Value::String("disabled".to_owned())),
+                        metadata: Some(json!({
+                            "rule": rule.name,
+                            "consecutive_failures": count,
+                            "threshold": threshold,
+                        })),
+                    },
+                )
+                .await;
+                record_rule_log(
+                    db,
+                    "ERROR",
+                    &format!(
+                        "rule `{}` auto-disabled by circuit breaker after {} consecutive failures",
+                        rule.name, count
+                    ),
+                    json!({ "rule": rule.name, "consecutive_failures": count }),
+                )
+                .await;
+            }
+        } else {
+            // Success resets the counter (no-op when it is already zero).
+            let sql = "UPDATE business_rule SET failure_count = 0 WHERE name = $name AND failure_count > 0;";
+            db.inner()
+                .query(sql)
+                .bind(("name", rule.name.clone()))
+                .await?
+                .check()?;
+        }
+    }
+    Ok(auto_disabled)
+}
+
+/// Writes a system log entry for rule events (best-effort).
+async fn record_rule_log(db: &Db, level: &str, message: &str, context: Value) {
+    let content = json!({
+        "service": "pim-core",
+        "level": level,
+        "category": "rules",
+        "message": message,
+        "context": context,
+    });
+    let result = db
+        .inner()
+        .query("CREATE log_entry CONTENT $content;")
+        .bind(("content", content))
+        .await
+        .and_then(|response| response.check());
+    if let Err(error) = result {
+        tracing::warn!(?error, "failed to write rule log entry");
+    }
+}
+
+/// Validates computed values against declared `computed` attribute definitions
+/// and returns them for merging (fail-closed on undeclared writes).
+pub async fn resolve_computed(
+    db: &Db,
+    computed: &serde_json::Map<String, Value>,
+) -> Result<serde_json::Map<String, Value>, ApiError> {
+    if computed.is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+
+    let names: Vec<Value> = computed
+        .keys()
+        .map(|name| Value::String(name.clone()))
+        .collect();
+    let sql = "SELECT name, computed FROM attribute_definition WHERE name IN $names";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("names", Value::Array(names)))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+
+    let mut declared: HashMap<String, bool> = HashMap::new();
+    for row in rows {
+        if let (Some(name), Some(is_computed)) = (
+            row.get("name").and_then(Value::as_str),
+            row.get("computed").and_then(Value::as_bool),
+        ) {
+            declared.insert(name.to_owned(), is_computed);
+        }
+    }
+
+    validate_declared(computed, &declared)?;
+    Ok(computed.clone())
+}
+
+/// Pure check: every computed key must be declared as `computed: true`.
+fn validate_declared(
+    computed: &serde_json::Map<String, Value>,
+    declared: &HashMap<String, bool>,
+) -> Result<(), ApiError> {
+    for name in computed.keys() {
+        match declared.get(name) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(ApiError::bad_request(format!(
+                    "computed rule wrote `{name}`, which is not declared as `computed`"
+                )));
+            }
+            None => {
+                return Err(ApiError::bad_request(format!(
+                    "computed rule wrote undeclared attribute `{name}`"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declared(map: &[(&str, bool)]) -> HashMap<String, bool> {
+        map.iter()
+            .map(|(name, flag)| (name.to_string(), *flag))
+            .collect()
+    }
+
+    fn computed(keys: &[&str]) -> serde_json::Map<String, Value> {
+        keys.iter()
+            .map(|name| (name.to_string(), Value::Null))
+            .collect()
+    }
+
+    #[test]
+    fn computed_accepts_declared_attribute() {
+        let result = validate_declared(
+            &computed(&["gross_price"]),
+            &declared(&[("gross_price", true)]),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn computed_rejects_undeclared_attribute() {
+        let result = validate_declared(&computed(&["unknown"]), &HashMap::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn computed_rejects_non_computed_attribute() {
+        let result = validate_declared(&computed(&["sku"]), &declared(&[("sku", false)]));
+        assert!(result.is_err());
+    }
 }

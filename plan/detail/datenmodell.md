@@ -193,6 +193,7 @@ Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, 
     "script": "def run(obj, ctx, result):\n    ...",
     "state": "active",               // draft | active | disabled
     "version": 3,
+    "failure_count": 0,              // Circuit-Breaker-Zähler (aufeinanderfolgende Fehler)
     "created_at": "2026-08-17T08:00:00Z",
     "updated_at": "2026-08-17T11:30:00Z",
     "updated_by": "user_1"
@@ -202,6 +203,7 @@ Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, 
 - `type` bestimmt, wie das Skriptergebnis interpretiert wird (`validation`/`computed`/`normalization`/`workflow_guard`/`bulk`); nur `active`-Regeln werden ausgeführt.
 - `applies_to` schränkt die Objekttypen ein (leer = alle); die Prüfung erfolgt bei der Auswertung.
 - `script` wird in einer RestrictedPython-Sandbox ausgeführt (Import-Whitelist, Timeout-/Speicher-/Größen-Limits, keine externe I/O); ein **Compile-Check bei jedem Speichern** lehnt unzulässige Skripte ab.
+- `failure_count` zählt aufeinanderfolgende Regel-Fehler; ab dem Schwellwert (Standard 3) wird die Regel automatisch auf `disabled` gesetzt (Circuit Breaker, siehe [business-rules.md](business-rules.md)). Erfolgreiche Ausführung setzt den Zähler zurück.
 - Seed-Regeln werden als Code ausgeliefert und beim Setup geseedet; danach werden sie als Daten im Admin-UI gepflegt.
 
 ### Tabelle `attribute_group`

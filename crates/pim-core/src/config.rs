@@ -31,6 +31,8 @@ pub struct Config {
     pub rules_timeout_ms: u64,
     /// Degrade mode: on transport failure, allow the write and skip rules.
     pub rules_degrade: bool,
+    /// Consecutive rule failures before the circuit breaker disables a rule.
+    pub rules_breaker_threshold: u64,
 }
 
 impl Config {
@@ -53,6 +55,7 @@ impl Config {
             rules_compile_subject: env_or("RULES_COMPILE_SUBJECT", "rules.compile"),
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),
             rules_degrade: env_or_bool("RULES_DEGRADE", false),
+            rules_breaker_threshold: env_or_parse("RULES_BREAKER_THRESHOLD", 3),
         }
     }
 }

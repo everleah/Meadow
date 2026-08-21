@@ -100,6 +100,7 @@ DEFINE FIELD IF NOT EXISTS applies_to ON TABLE business_rule TYPE array;
 DEFINE FIELD IF NOT EXISTS script ON TABLE business_rule TYPE string;
 DEFINE FIELD IF NOT EXISTS state ON TABLE business_rule TYPE string;
 DEFINE FIELD IF NOT EXISTS version ON TABLE business_rule TYPE int;
+DEFINE FIELD IF NOT EXISTS failure_count ON TABLE business_rule TYPE int DEFAULT 0;
 DEFINE FIELD OVERWRITE created_at ON TABLE business_rule TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON TABLE business_rule TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_by ON TABLE business_rule TYPE option<string>;

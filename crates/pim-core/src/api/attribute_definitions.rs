@@ -198,6 +198,21 @@ pub async fn create_attribute_definition(
         description,
     } = body;
 
+    // Reject duplicate names with a clean 409 instead of a transaction error.
+    let existing: Vec<Value> = state
+        .db
+        .inner()
+        .query("SELECT id FROM attribute_definition WHERE name = $name")
+        .bind(("name", name.clone()))
+        .await?
+        .check()?
+        .take(0)?;
+    if !existing.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "attribute `{name}` already exists"
+        )));
+    }
+
     validate_key_definition(&definition_type, multilingual, is_key)?;
     // Business keys are never inheritable (an inherited identity would
     // duplicate). `is_key: true` forces `inheritable: false`.
