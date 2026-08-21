@@ -123,11 +123,7 @@ def compile_script(request: EvaluationCompileRequest) -> EvaluationCompileRespon
     Returns `ok=True` when the script compiles and only imports whitelisted
     modules; otherwise `ok=False` with the compile errors.
     """
-    whitelist = (
-        frozenset(request.whitelist)
-        if request.whitelist is not None
-        else DEFAULT_WHITELIST
-    )
+    whitelist = frozenset(request.whitelist) if request.whitelist is not None else DEFAULT_WHITELIST
     try:
         compile_rule(request.script, whitelist=whitelist)
     except (RuleCompileError, SyntaxError) as exc:
