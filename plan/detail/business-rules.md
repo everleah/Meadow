@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf
+- **Stand:** Entwurf (implementiert bis Phase-4-Schritt 2: Sandbox + synchroner NATS-Write-Pfad)
 
 ## Überblick
 
@@ -30,7 +30,7 @@ Regeln mit **externen Seiteneffekten** (Webhooks, Erzeugen verwandter Objekte, A
     "id": "rule_001",
     "name": "gross_from_net",
     "description": "Berechnet den Bruttopreis aus dem Nettopreis.",
-    "type": "computed",              // validation | computed | normalization | workflow_guard
+    "type": "computed",              // validation | computed | normalization | workflow_guard | bulk
     "applies_to": ["product"],       // optional: Objekttypen (leer = alle), analog applicable_types
     "script": "def run(obj, ctx, result):\n    ...",
     "state": "active",               // draft | active | disabled
@@ -67,7 +67,7 @@ Ein Attribut wird als berechnet gekennzeichnet; die zugehörige Regel wird über
 
 - `computed: true` + `computed_rule` + `dependencies` sind das **Dependency-Metadatum** aus der Konvention (Abschnitt 4 / R2).
 - Berechnete Attribute sind **gespeicherte Werte** (stored-first), berechnet beim Schreiben; es gibt **kein** On-Read-/Virtuell-Modus im MVP. Lese-Pfade im Rust-Kern bleiben einfache DB-Reads.
-- Eine compute-Regel darf **nur** als `computed` deklarierte Attribute schreiben (`result.set_value`), nie beliebige Felder.
+- Eine compute-Regel darf **nur** als `computed` deklarierte Attribute schreiben (`result.set_value`), nie beliebige Felder. **Enforcement (offen):** beim Mergen der `computed`-Werte im Kern gegen `attribute_definition.computed`/`computed_rule` prüfen – gehört in den Schritt „Berechnete Attribute“.
 
 ## Script-Kontrakt
 
@@ -106,6 +106,7 @@ Die Interpretation des Ergebnisses hängt vom Regeltyp ab (gleiche Signatur, ein
   - **max. Skriptgröße** (~64 KB).
 - **Keine externe I/O:** Whitelist + RestrictedPython verhindern `socket`/`http`/`os`/`subprocess` etc.
 - Eine Regel, die ein nicht-whitelisted Modul oder eine unzulässige Operation nutzt, wird bereits beim **Speichern abgelehnt** (Compile-Check).
+- **Timeout-Mechanismus (bekannte Grenze):** Das Timeout wird per `sys.settrace` (Zeilen-Events) durchgesetzt und kann **C-Aufrufe nicht unterbrechen** – z. B. ein ReDoS-Regex über das gewhitelistete `re`-Modul blockiert den Worker-Thread bis zur Fertigstellung. Härtungsoption für Phase 8: Prozess-/Subprozess-Isolation je Regel.
 
 ## Ausführung
 
@@ -120,6 +121,11 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 5. Ergebnis: berechnete Attribute sind **synchron mit dem Save** korrekt (kein Staleness-Fenster, kein zweiter asynchroner Write, keine Feedback-Schleife).
 
 **Konsequenz:** Ein Save hängt davon ab, dass der Python-Service erreichbar ist und die Skripte terminieren. Mitigation: enge Timeouts, optionaler Degrade-Modus („Speichern erlauben + als unberechnet markieren“, konfigurierbar). Eine fehlerhafte Regel kann nie dauerhaft blockieren (siehe Fehlerbehandlung).
+
+**Umsetzungsstand (nach Phase-4-Schritt 2):**
+- Implementiert: NATS Request/Reply (`rules.evaluate`), fail-closed (400 Validation / 500 Regel-Fehler / 503 Service nicht erreichbar), optionaler Degrade-Modus (`RULES_DEGRADE`), atomares Mergen berechneter Werte in derselben Transaktion.
+- Noch offen: Die Kandidaten-Sicht enthält bisher nur die **eigenen** Attribute des Objekts; vererbte + sprachlich aufgelöste Werte folgen in einem eigenen Schritt (siehe „Berechnete Attribute“, Punkt 5). `language`/Locale wird noch nicht durchgereicht (Kern übergibt `null`).
+- Noch offen: `warnings` und `log()`-Ausgaben liefert der Worker bereits, der Kern verwirft sie aber noch – Ziel (Audit/Objekt-Metadaten bzw. `POST /system/logs` über den Worker-Log-Sender) ist zu definieren.
 
 ### Nicht-blockierende Kontexte
 
