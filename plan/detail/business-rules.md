@@ -114,7 +114,7 @@ Die Interpretation des Ergebnisses hängt vom Regeltyp ab (gleiche Signatur, ein
 Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung von einem synchronen internen Aufruf abhängig:
 
 1. Beim Schreiben (Anlegen/Ändern von Objekten, Statuswechsel) baut der Kern die aufgelöste Sicht des Kandidaten auf (eigene + vererbte + sprachlich aufgelöste Werte).
-2. Der Kern ruft **synchron** den internen Rule-Evaluation-Endpunkt des Python-Service auf (nicht Teil der öffentlichen OpenAPI): Request = Kandidat + aufgelöste Werte + Kontext.
+2. Der Kern ruft **synchron** den Python-Service per **NATS Request/Reply** auf (internes Subject `rules.evaluate`; nicht Teil der öffentlichen OpenAPI): Request = Kandidat + aufgelöste Werte + Kontext + die zutreffenden `active`-Regeln (Skriptquellen).
 3. Der Service führt die zutreffenden `active`-Regeln (R1/R2/R4) in der Sandbox aus und liefert: Validierungsfehler/-warnungen, berechnete Werte, Übergangs-Verdikt.
 4. Der Kern **erzwingt** das Ergebnis: blockierende Fehler brechen den Schreibvorgang ab; berechnete Werte werden **atomar in derselben Transaktion** gespeichert; der Statuswechsel wird nur bei Erlaubnis durchgeführt.
 5. Ergebnis: berechnete Attribute sind **synchron mit dem Save** korrekt (kein Staleness-Fenster, kein zweiter asynchroner Write, keine Feedback-Schleife).
@@ -186,7 +186,7 @@ Lab-Ausführungen werden **auditiert** (wer hat wann welche Regel gegen welche O
 | POST    | `/rules/{id}/test-batch` | Rule Lab: Ausführung gegen Objektauswahl (read-only, kein Persistieren)       |
 | POST    | `/rules/{id}/recompute`  | Recompute/Bulk-Job über betroffene Objektmenge anstoßen (R5)                  |
 
-Intern (nicht öffentlich): Rule-Evaluation-Endpunkt des Python-Service für den synchronen Schreibpfad des Kerns.
+Intern (nicht öffentlich): Rule-Evaluation per **NATS Request/Reply** (Subject `rules.evaluate`) für den synchronen Schreibpfad des Kerns.
 
 **RBAC:** Nur `admin`/`superadmin` dürfen Regeln anlegen, bearbeiten, aktivieren/deaktivieren und das Rule Lab nutzen. `editor`/`viewer` können Regeln lesen (Verhalten verstehen), aber nicht ändern. Änderungen/State-Wechsel sind im Audit-Log.
 

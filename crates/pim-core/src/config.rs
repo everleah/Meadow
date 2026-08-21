@@ -21,6 +21,14 @@ pub struct Config {
     pub jwt_ttl_seconds: u64,
     /// API key for machine-to-machine log ingestion (`POST /system/logs`).
     pub log_ingest_api_key: Option<String>,
+    /// NATS URL for the synchronous rule-evaluation request/reply.
+    pub rules_nats_url: String,
+    /// NATS subject for rule evaluation.
+    pub rules_subject: String,
+    /// Timeout for a rule-evaluation request, in milliseconds.
+    pub rules_timeout_ms: u64,
+    /// Degrade mode: on transport failure, allow the write and skip rules.
+    pub rules_degrade: bool,
 }
 
 impl Config {
@@ -38,6 +46,10 @@ impl Config {
             log_ingest_api_key: std::env::var("LOG_INGEST_API_KEY")
                 .ok()
                 .filter(|value| !value.is_empty()),
+            rules_nats_url: env_or("RULES_NATS_URL", "nats://localhost:4222"),
+            rules_subject: env_or("RULES_SUBJECT", "rules.evaluate"),
+            rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),
+            rules_degrade: env_or_bool("RULES_DEGRADE", false),
         }
     }
 }
@@ -50,5 +62,12 @@ fn env_or_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
     std::env::var(key)
         .ok()
         .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_or_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(default)
 }

@@ -14,6 +14,7 @@ pub mod db;
 pub mod error;
 pub mod inheritance;
 pub mod language;
+pub mod rules;
 pub mod schema;
 pub mod seed;
 
@@ -40,8 +41,9 @@ pub async fn run() {
 
     let state = app::AppState {
         db,
-        config,
         cache: std::sync::Arc::new(cache::MetaCache::default()),
+        rules: rules::RulesClient::from_config(&config),
+        config,
     };
     axum::serve(listener, app::router(state))
         .await

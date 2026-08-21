@@ -132,6 +132,28 @@ pub async fn create_object(
     };
     keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
 
+    // Evaluate active validation/computed rules against the candidate view.
+    let candidate = json!({
+        "id": "",
+        "type": object_type.clone(),
+        "status": status.clone(),
+        "attributes": Value::Object(attributes.clone()),
+    });
+    let outcome = crate::rules::evaluate_for_write(
+        &state.db,
+        &state.rules,
+        &candidate,
+        &["validation", "computed"],
+        "save",
+        None,
+        Some(&user_id),
+    )
+    .await?;
+    crate::rules::enforce(&outcome)?;
+    for (name, value) in outcome.computed_object() {
+        attributes.insert(name, value);
+    }
+
     let content = json!({
         "type": object_type,
         "attributes": Value::Object(attributes),
@@ -348,6 +370,72 @@ pub async fn update_object(
         return Ok(Json(current));
     }
 
+    let status_changed = changed_fields.contains(&"status");
+
+    // Candidate view for rule evaluation: current object + pending changes.
+    let candidate_attributes = changes
+        .get("attributes")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| {
+            current
+                .get("attributes")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default()
+        });
+    let candidate_status = changes
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| current.get("status").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let candidate = json!({
+        "id": id.clone(),
+        "type": object_type.clone(),
+        "status": candidate_status,
+        "attributes": Value::Object(candidate_attributes.clone()),
+    });
+
+    // validation + computed (save mode)
+    let outcome = crate::rules::evaluate_for_write(
+        &state.db,
+        &state.rules,
+        &candidate,
+        &["validation", "computed"],
+        "save",
+        None,
+        Some(&user_id),
+    )
+    .await?;
+    crate::rules::enforce(&outcome)?;
+    let computed = outcome.computed_object();
+    if !computed.is_empty() {
+        let mut merged = candidate_attributes;
+        for (name, value) in computed {
+            merged.insert(name, value);
+        }
+        changes.insert("attributes".to_owned(), Value::Object(merged));
+        if !changed_fields.contains(&"attributes") {
+            changed_fields.push("attributes");
+        }
+    }
+
+    // workflow_guard (transition mode) when the status changes
+    if status_changed {
+        let guard = crate::rules::evaluate_for_write(
+            &state.db,
+            &state.rules,
+            &candidate,
+            &["workflow_guard"],
+            "transition",
+            None,
+            Some(&user_id),
+        )
+        .await?;
+        crate::rules::enforce(&guard)?;
+    }
+
     // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3), SELECT(4), COMMIT(5).
     let sql = "
         BEGIN TRANSACTION;
@@ -372,7 +460,6 @@ pub async fn update_object(
         .next()
         .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
 
-    let status_changed = changed_fields.contains(&"status");
     let (from, to) = if status_changed {
         (old_status.map(Value::String), new_status.map(Value::String))
     } else {

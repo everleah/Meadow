@@ -13,6 +13,7 @@ pub enum ApiError {
     Conflict(String),
     Unauthorized(String),
     Forbidden(String),
+    Unavailable(String),
     Internal(String),
 }
 
@@ -37,6 +38,10 @@ impl ApiError {
         Self::Forbidden(message.into())
     }
 
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::Unavailable(message.into())
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
@@ -50,6 +55,7 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(message) => (StatusCode::CONFLICT, message),
             ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message),
             ApiError::Forbidden(message) => (StatusCode::FORBIDDEN, message),
+            ApiError::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
             ApiError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
         (status, Json(json!({ "error": message }))).into_response()

@@ -135,7 +135,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 
 ### 3.4 Abgrenzung & Hinweise
 
-- **FastAPI** ist nur dann erforderlich, wenn der Python-Dienst eigene REST-Endpunkte bereitstellen muss. Für die erste Version kommuniziert der Worker ausschließlich über NATS und ruft den Rust-Kern per REST auf; FastAPI kann daher optional bleiben.
+- **FastAPI** ist nur dann erforderlich, wenn der Python-Dienst eigene REST-Endpunkte bereitstellen muss. Für die erste Version kommuniziert der Worker ausschließlich über NATS (inkl. Rule-Evaluation per Request/Reply) und ruft den Rust-Kern per REST auf; FastAPI kann daher optional bleiben. Ein minimaler NATS-Server ist bereits in Phase 4 für die Rule-Evaluation erforderlich; die JetStream-Streams/Jobs folgen in Phase 5.
 - **Redis** ist im MVP nicht zwingend, da die Vererbungs- und Sprachauflösung bei geringen Hierarchietiefen auch ohne Cache performant ist. Es wird als optionale Komponente geführt.
 - **Meilisearch/Elasticsearch** sind nicht vorgesehen, da SurrealDB über integrierte Volltextsuche verfügt. Erst bei sehr komplexen Suchanforderungen (z. B. Facetten, Synonyme) könnte eine externe Suchmaschine ergänzt werden.
 - **ETIM/Klassifizierungsstandards** benötigen keine eigene Technologie, sondern werden später als Datenmodell-Erweiterung im Kern abgebildet.
@@ -288,7 +288,7 @@ Es wird **keine schwere Workflow-Engine** eingesetzt. Die Statuslogik ist eine e
 
 **Kernentscheidungen (verbindlich):**
 
-- **Schreibpfad:** Der Rust-Kern bleibt die DB-Autorität, ruft aber für `validation`/`computed`/`workflow_guard` **synchron** den internen Rule-Evaluation-Endpunkt des Python-Service auf; das Ergebnis (Fehler/Warnungen, berechnete Werte, Übergangs-Verdikt) wird atomar im selben Schreibvorgang erzwungen bzw. gespeichert.
+- **Schreibpfad:** Der Rust-Kern bleibt die DB-Autorität, ruft aber für `validation`/`computed`/`workflow_guard` **synchron per NATS Request/Reply** den Python-Service auf (Subject `rules.evaluate`); das Ergebnis (Fehler/Warnungen, berechnete Werte, Übergangs-Verdikt) wird atomar im selben Schreibvorgang erzwungen bzw. gespeichert.
 - **Berechnete Attribute (R2, stored-first):** gespeicherte Werte, beim Schreiben **synchron** berechnet – kein On-Read-/Virtuell-Modus im MVP, Lese-Pfade bleiben reine DB-Reads; pure Funktionen der aufgelösten Attributmenge; deklarierte `dependencies`; vererbt-abhängige Werte von Nachfahren werden **async per Recompute-Job** aktualisiert (eventual consistency); Definitionsänderung → Bulk-Recompute-Job.
 - **Sandbox:** RestrictedPython in-process; Import-Whitelist administrativ konfigurierbar; harte Limits (Timeout ~1–2 s blockierend / ~30 s Bulk, Speicher, Skriptgröße); keine externe I/O.
 - **Lebenszyklus & Sicherheit:** `draft`/`active`/`disabled`; Compile-Check bei jedem Speichern; Dry-Run + **Rule Lab** (interaktives Testmodus gegen reale Objekte, read-only, keine Persistenz) vor Aktivierung; Versionierung + Audit; **fail-closed** bei Regel-Fehlern + **Circuit Breaker** (Auto-`disabled` nach N Fehlern + Alert); RBAC: nur `admin`/`superadmin` dürfen Regeln pflegen/aktivieren.
@@ -392,7 +392,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 ### Phase 4 – Python-Integration & Business Rules
 
 - **Python-Service für Business Rules aufsetzen (Sandbox: RestrictedPython, konfigurierbare Import-Whitelist, Timeout-/Speicher-/Größen-Limits, Script-Kontrakt `run(obj, ctx, result)`); Statusmaschine (`workflow_guard`) und Validierungen (`validation`) als Regeln**
-- **Synchronen Rule-Evaluation-Endpunkt für den Schreibpfad des Rust-Kerns implementieren (fail-closed, atomares Erzwingen von Fehlern/berechneten Werten/Übergangs-Verdikt; enge Timeouts; optionaler Degrade-Modus „Speichern + als unberechnet markieren“)**
+- **Synchronen Rule-Evaluation-Endpunkt für den Schreibpfad des Rust-Kerns implementieren (NATS Request/Reply, Subject `rules.evaluate`; fail-closed, atomares Erzwingen von Fehlern/berechneten Werten/Übergangs-Verdikt; enge Timeouts; optionaler Degrade-Modus „Speichern + als unberechnet markieren“)**
 - **Berechnete Attribute (`computed`, stored-first) umsetzen: Berechnung beim Schreiben, pure Funktionen, deklarierte `dependencies`, async Recompute-Kaskade für vererbt-abhängige Werte, Bulk-Recompute bei Definitionsänderung**
 - **`normalization`-Regeln (R3) in die Import-Pipeline integrieren (MEF-Werte vor dem Schreiben bereinigen/transformieren)**
 - **Regel-Lebenszyklus implementieren: `draft`/`active`/`disabled`, Compile-Check bei jedem Speichern, Versionierung + Audit, Circuit Breaker (Auto-`disabled` + Alert), RBAC `admin`/`superadmin`**

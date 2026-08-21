@@ -8,6 +8,7 @@ use utoipa::OpenApi as _;
 use utoipa::openapi::OpenApi;
 
 use crate::cache::MetaCache;
+use crate::rules::RulesClient;
 use crate::{api, config::Config, db::Db};
 
 /// Shared application state.
@@ -19,6 +20,8 @@ pub struct AppState {
     pub config: Config,
     /// In-memory cache for slow-changing metadata.
     pub cache: std::sync::Arc<MetaCache>,
+    /// Synchronous rule-evaluation client (NATS request/reply).
+    pub rules: RulesClient,
 }
 
 /// Builds the application router with the given state.

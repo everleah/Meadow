@@ -47,7 +47,7 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 | `redis` (optional) | `redis:7-alpine`                                   | 6379                      | meadow-backend                 | nein                       |
 
 - Container-Namen mit `meadow-`-Präfix (z. B. `meadow-core`, `meadow-frontend`, `meadow-surrealdb`), um auf dem gemeinsamen Server Kollisionen zu vermeiden.
-- **Kommunikation (intern):** Frontend → Core: REST (JWT) · Worker → Core: REST (JWT) · Core → NATS: Publish · Worker → NATS: Subscribe · Core → SurrealDB: interner Treiber. Alle Dienste nur über das interne `meadow-backend`-Netz, öffentlich erreichbar sind ausschließlich `pim-frontend` und `pim-core` über Traefik.
+- **Kommunikation (intern):** Frontend → Core: REST (JWT) · Worker → Core: REST (JWT) · Core → NATS: Publish · Worker → NATS: Subscribe · Core ↔ Worker (Rules): NATS Request/Reply (`rules.evaluate`) · Core → SurrealDB: interner Treiber. Alle Dienste nur über das interne `meadow-backend`-Netz, öffentlich erreichbar sind ausschließlich `pim-frontend` und `pim-core` über Traefik.
 
 ### 3.3 Traefik-Labels (pim-core / pim-frontend)
 
