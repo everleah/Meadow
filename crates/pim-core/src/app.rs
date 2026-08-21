@@ -43,6 +43,16 @@ pub fn router(state: AppState) -> Router {
         .route("/references", post(api::references::create_reference))
         .route("/search", post(api::search::search))
         .route(
+            "/rules",
+            get(api::rules::list_rules).post(api::rules::create_rule),
+        )
+        .route(
+            "/rules/{id}",
+            get(api::rules::get_rule).patch(api::rules::update_rule),
+        )
+        .route("/rules/{id}/activate", post(api::rules::activate_rule))
+        .route("/rules/{id}/disable", post(api::rules::disable_rule))
+        .route(
             "/objects/{id}/references",
             get(api::references::list_object_references),
         )

@@ -14,7 +14,8 @@ logging.basicConfig(level=logging.INFO)
 async def main() -> None:
     nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
     subject = os.environ.get("RULES_EVALUATE_SUBJECT", "rules.evaluate")
-    await serve(nats_url, subject)
+    compile_subject = os.environ.get("RULES_COMPILE_SUBJECT", "rules.compile")
+    await serve(nats_url, subject, compile_subject)
 
 
 if __name__ == "__main__":

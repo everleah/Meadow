@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 #: Default NATS subject for the synchronous rule-evaluation request/reply.
 RULES_EVALUATE_SUBJECT = "rules.evaluate"
 
+#: Default NATS subject for the synchronous rule-script compile validation.
+RULES_COMPILE_SUBJECT = "rules.compile"
+
 
 class EvaluationRule(BaseModel):
     """A single rule to evaluate: the script source plus its metadata."""
@@ -67,3 +70,17 @@ class EvaluationResponse(BaseModel):
     deny_reason: str | None = None
     failed: list[str] = Field(default_factory=list)
     logs: list[EvaluationLog] = Field(default_factory=list)
+
+
+class EvaluationCompileRequest(BaseModel):
+    """Request from the Rust core: validate a script before persisting it."""
+
+    script: str
+    whitelist: list[str] | None = None
+
+
+class EvaluationCompileResponse(BaseModel):
+    """Reply to the Rust core: whether the script compiles under the sandbox."""
+
+    ok: bool
+    errors: list[str] = Field(default_factory=list)

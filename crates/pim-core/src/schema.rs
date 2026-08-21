@@ -94,6 +94,7 @@ DEFINE INDEX IF NOT EXISTS idx_lang_parent ON TABLE language_tree FIELDS parent;
 -- Business rules: Python scripts (validated in a later phase).
 DEFINE TABLE IF NOT EXISTS business_rule;
 DEFINE FIELD IF NOT EXISTS name ON TABLE business_rule TYPE string;
+DEFINE FIELD IF NOT EXISTS description ON TABLE business_rule TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS type ON TABLE business_rule TYPE string;
 DEFINE FIELD IF NOT EXISTS applies_to ON TABLE business_rule TYPE array;
 DEFINE FIELD IF NOT EXISTS script ON TABLE business_rule TYPE string;

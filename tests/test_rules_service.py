@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from meadow.worker.protocol import (
+    EvaluationCompileRequest,
     EvaluationObject,
     EvaluationRequest,
     EvaluationRule,
 )
-from meadow.worker.rules_service import evaluate
+from meadow.worker.rules_service import compile_script, evaluate
 
 
 def _obj() -> EvaluationObject:
@@ -107,3 +108,30 @@ def test_evaluate_merges_computed_values_from_multiple_rules() -> None:
     response = evaluate(request)
 
     assert response.computed == {"a": 1, "b": 2}
+
+
+def test_compile_script_valid() -> None:
+    response = compile_script(
+        EvaluationCompileRequest(
+            script="def run(obj, ctx, result):\n    result.set_value('a', 1)\n"
+        )
+    )
+
+    assert response.ok is True
+    assert response.errors == []
+
+
+def test_compile_script_reports_syntax_error() -> None:
+    response = compile_script(
+        EvaluationCompileRequest(script="def run(obj, ctx, result):\n    if True\n")
+    )
+
+    assert response.ok is False
+    assert response.errors
+
+
+def test_compile_script_rejects_unwhitelisted_import() -> None:
+    response = compile_script(EvaluationCompileRequest(script="import os\n"))
+
+    assert response.ok is False
+    assert any("os" in error for error in response.errors)

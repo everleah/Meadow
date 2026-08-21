@@ -25,6 +25,8 @@ pub struct Config {
     pub rules_nats_url: String,
     /// NATS subject for rule evaluation.
     pub rules_subject: String,
+    /// NATS subject for rule-script compile validation.
+    pub rules_compile_subject: String,
     /// Timeout for a rule-evaluation request, in milliseconds.
     pub rules_timeout_ms: u64,
     /// Degrade mode: on transport failure, allow the write and skip rules.
@@ -48,6 +50,7 @@ impl Config {
                 .filter(|value| !value.is_empty()),
             rules_nats_url: env_or("RULES_NATS_URL", "nats://localhost:4222"),
             rules_subject: env_or("RULES_SUBJECT", "rules.evaluate"),
+            rules_compile_subject: env_or("RULES_COMPILE_SUBJECT", "rules.compile"),
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),
             rules_degrade: env_or_bool("RULES_DEGRADE", false),
         }

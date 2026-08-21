@@ -11,11 +11,15 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from meadow.rules import Context, execute_rule
-from meadow.rules.errors import RuleError
+from meadow.rules import Context, compile_rule, execute_rule
+from meadow.rules.errors import RuleCompileError, RuleError
 from meadow.rules.sandbox import DEFAULT_MAX_MEMORY_BYTES, DEFAULT_TIMEOUT_SECONDS
+from meadow.rules.whitelist import DEFAULT_WHITELIST
 from meadow.worker.protocol import (
+    RULES_COMPILE_SUBJECT,
     RULES_EVALUATE_SUBJECT,
+    EvaluationCompileRequest,
+    EvaluationCompileResponse,
     EvaluationIssue,
     EvaluationLog,
     EvaluationRequest,
@@ -113,9 +117,39 @@ async def _handle(
     await msg.respond(response.model_dump_json().encode())
 
 
+def compile_script(request: EvaluationCompileRequest) -> EvaluationCompileResponse:
+    """Validates a rule script against the sandbox (compile + import whitelist).
+
+    Returns `ok=True` when the script compiles and only imports whitelisted
+    modules; otherwise `ok=False` with the compile errors.
+    """
+    whitelist = (
+        frozenset(request.whitelist)
+        if request.whitelist is not None
+        else DEFAULT_WHITELIST
+    )
+    try:
+        compile_rule(request.script, whitelist=whitelist)
+    except (RuleCompileError, SyntaxError) as exc:
+        return EvaluationCompileResponse(ok=False, errors=[str(exc)])
+    return EvaluationCompileResponse(ok=True)
+
+
+async def _handle_compile(msg) -> None:
+    try:
+        request = EvaluationCompileRequest.model_validate_json(msg.data)
+    except Exception as exc:  # noqa: BLE001 - reply with an error, never crash
+        reply = EvaluationCompileResponse(ok=False, errors=[f"invalid request: {exc}"])
+        await msg.respond(reply.model_dump_json().encode())
+        return
+    reply = compile_script(request)
+    await msg.respond(reply.model_dump_json().encode())
+
+
 async def serve(
     nats_url: str,
     subject: str = RULES_EVALUATE_SUBJECT,
+    compile_subject: str = RULES_COMPILE_SUBJECT,
     *,
     timeout_s: float | None = DEFAULT_TIMEOUT_SECONDS,
     max_memory_bytes: int | None = DEFAULT_MAX_MEMORY_BYTES,
@@ -125,13 +159,22 @@ async def serve(
 
     nc = await nats.connect(nats_url)
     logger.info("rule evaluation service subscribed to %r on %s", subject, nats_url)
-    sub = await nc.subscribe(subject)
-    try:
-        async for msg in sub.messages:
+    eval_sub = await nc.subscribe(subject)
+    compile_sub = await nc.subscribe(compile_subject)
+
+    async def eval_loop() -> None:
+        async for msg in eval_sub.messages:
             await _handle(
                 msg,
                 timeout_s=timeout_s,
                 max_memory_bytes=max_memory_bytes,
             )
+
+    async def compile_loop() -> None:
+        async for msg in compile_sub.messages:
+            await _handle_compile(msg)
+
+    try:
+        await asyncio.gather(eval_loop(), compile_loop())
     finally:
         await nc.close()

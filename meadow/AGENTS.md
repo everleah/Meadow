@@ -16,7 +16,7 @@ Owns the Python package `meadow`: the shared business-rules engine (`meadow.rule
 - The rules engine is a shared library; its consumers are the Rust core (synchronous evaluation endpoint, Phase 4) and the Python worker/frontend.
 - `meadow.rules` public API: `execute_rule`, `compile_rule`, `Context`, `Result`, `DEFAULT_WHITELIST`, and the `RuleError` hierarchy (`RuleCompileError`, `RuleTimeoutError`, `RuleMemoryError`).
 - Rule scripts use `def run(obj, ctx, result)`; injected globals are `obj` (read-only view), `ctx`, `result`, `log`, plus whitelisted modules (default: `json`, `datetime`, `math`, `re`, `statistics`, `decimal`, `typing`, `uuid`, `collections`).
-- `meadow.worker` (`protocol.py`, `rules_service.py`): NATS request/reply service on subject `rules.evaluate` (default) that validates `EvaluationRequest` payloads, evaluates them in the sandbox, and replies `EvaluationResponse`; rule exceptions are fail-closed (recorded in `failed`). Entry point `python -m meadow.worker`; env `NATS_URL` (default `nats://localhost:4222`), `RULES_EVALUATE_SUBJECT`.
+- `meadow.worker` (`protocol.py`, `rules_service.py`): NATS request/reply service on subjects `rules.evaluate` and `rules.compile` (defaults) that evaluates `EvaluationRequest` payloads and validates scripts via `EvaluationCompileRequest`; rule exceptions are fail-closed (recorded in `failed`). Entry point `python -m meadow.worker`; env `NATS_URL` (default `nats://localhost:4222`), `RULES_EVALUATE_SUBJECT`, `RULES_COMPILE_SUBJECT`.
 
 ## Work Guidance
 

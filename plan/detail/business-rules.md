@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-4-Schritt 2: Sandbox + synchroner NATS-Write-Pfad)
+- **Stand:** Entwurf (implementiert bis Phase-4-Schritt 3: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check)
 
 ## Überblick
 

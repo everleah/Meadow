@@ -1,0 +1,543 @@
+//! Business-rule CRUD handlers (admin/superadmin for writes).
+//!
+//! Rules are stored in `business_rule`; every create/update is compile-checked
+//! by the Python worker (subject `rules.compile`) before it is persisted. New
+//! rules start in `draft` and are activated explicitly.
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use utoipa::{IntoParams, ToSchema};
+
+use crate::app::AppState;
+use crate::audit::{self, AuditEntry};
+use crate::auth::AuthUser;
+use crate::db::Db;
+use crate::error::ApiError;
+
+const TABLE: &str = "business_rule";
+const VALID_RULE_TYPES: [&str; 5] = [
+    "validation",
+    "computed",
+    "normalization",
+    "workflow_guard",
+    "bulk",
+];
+
+/// Payload for creating a rule (always created as `draft`).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateRule {
+    /// Unique rule name (business identifier).
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Rule type: validation | computed | normalization | workflow_guard | bulk.
+    #[serde(rename = "type")]
+    pub rule_type: String,
+    /// Object types the rule applies to (empty = all).
+    #[serde(default)]
+    pub applies_to: Option<Vec<String>>,
+    /// Python script source (must compile under the sandbox).
+    pub script: String,
+}
+
+/// Payload for a partial rule update (`type` and `state` are managed elsewhere).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateRule {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `null` clears the description, `"text"` sets it.
+    #[serde(default)]
+    pub description: Option<Option<String>>,
+    #[serde(default)]
+    pub applies_to: Option<Vec<String>>,
+    #[serde(default)]
+    pub script: Option<String>,
+}
+
+/// Query parameters for listing rules.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ListRules {
+    /// Filter by rule type.
+    #[serde(rename = "type")]
+    #[param(rename = "type")]
+    pub rule_type: Option<String>,
+    /// Filter by state (draft | active | disabled).
+    pub state: Option<String>,
+    /// Only rules that apply to this object type (empty rules always match).
+    pub applies_to: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub start: u32,
+}
+
+fn default_limit() -> u32 {
+    100
+}
+
+/// Splits a `table:key` path segment and verifies the expected table.
+fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
+    let (actual_table, key) = id
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request(format!("invalid id `{id}`")))?;
+    if actual_table != table {
+        return Err(ApiError::bad_request(format!(
+            "id `{id}` does not reference table `{table}`"
+        )));
+    }
+    Ok(key)
+}
+
+/// Loads a single rule record.
+async fn fetch_rule(db: &Db, key: &str) -> Result<Option<Value>, ApiError> {
+    let sql = "
+        LET $r = type::record('business_rule', $key);
+        SELECT * FROM $r;
+    ";
+    let mut response = db.inner().query(sql).bind(("key", key)).await?.check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Checks that a rule name is not already taken (ignores the record `except`).
+async fn ensure_unique_name(db: &Db, name: &str, except: Option<&str>) -> Result<(), ApiError> {
+    let sql = "SELECT id FROM business_rule WHERE name = $name";
+    let rows: Vec<Value> = db
+        .inner()
+        .query(sql)
+        .bind(("name", name.to_owned()))
+        .await?
+        .check()?
+        .take(0)?;
+    let conflict = rows
+        .iter()
+        .any(|row| row.get("id").and_then(Value::as_str) != except);
+    if conflict {
+        return Err(ApiError::conflict(format!(
+            "rule name `{name}` already exists"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates a script via the Python worker and maps failures to API errors.
+async fn compile_check(state: &AppState, script: &str) -> Result<(), ApiError> {
+    match state.rules.compile_script(script).await {
+        Ok(errors) if errors.is_empty() => Ok(()),
+        Ok(errors) => Err(ApiError::bad_request(format!(
+            "script does not compile: {}",
+            errors.join("; ")
+        ))),
+        Err(error) => Err(ApiError::unavailable(format!(
+            "rule validation unavailable: {error}"
+        ))),
+    }
+}
+
+/// Creates a new rule as `draft` after a compile check.
+#[utoipa::path(
+    post,
+    path = "/rules",
+    request_body = CreateRule,
+    responses(
+        (status = 201, description = "Created rule", body = Value),
+        (status = 400, description = "Invalid payload or script", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 409, description = "Name already exists", body = Value),
+        (status = 503, description = "Rule service unavailable", body = Value)
+    )
+)]
+pub async fn create_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateRule>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let name = body.name.trim().to_owned();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("`name` must not be empty"));
+    }
+    if !VALID_RULE_TYPES.contains(&body.rule_type.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "unknown rule type `{}`",
+            body.rule_type
+        )));
+    }
+    if body.script.trim().is_empty() {
+        return Err(ApiError::bad_request("`script` must not be empty"));
+    }
+    ensure_unique_name(&state.db, &name, None).await?;
+    compile_check(&state, &body.script).await?;
+
+    let content = json!({
+        "name": name,
+        "description": body.description,
+        "type": body.rule_type,
+        "applies_to": body.applies_to.unwrap_or_default(),
+        "script": body.script,
+        "state": "draft",
+        "version": 1,
+        "updated_by": claims.sub.clone(),
+    });
+
+    // Statements: LET(0), CREATE(1), SELECT(2).
+    let sql = "
+        LET $r = type::record('business_rule', rand::ulid());
+        CREATE $r CONTENT $content;
+        SELECT * FROM $r;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let rule = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("created rule was not returned"))?;
+    let rule_id = rule
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_created",
+            object_id: Some(&rule_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "name": rule.get("name") })),
+        },
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(rule)))
+}
+
+/// Loads a single rule.
+#[utoipa::path(
+    get,
+    path = "/rules/{id}",
+    responses(
+        (status = 200, description = "Rule", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Rule not found", body = Value)
+    )
+)]
+pub async fn get_rule(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let key = parse_key(&id, TABLE)?;
+    let rule = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    Ok(Json(rule))
+}
+
+/// Lists rules, optionally filtered by type, state, or applies_to.
+#[utoipa::path(
+    get,
+    path = "/rules",
+    params(ListRules),
+    responses((status = 200, description = "Rules", body = Vec<Value>))
+)]
+pub async fn list_rules(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<ListRules>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let limit = params.limit.clamp(1, 1000) as i64;
+    let start = params.start as i64;
+
+    let mut sql = String::from("SELECT * FROM business_rule");
+    let mut conditions: Vec<&str> = Vec::new();
+    if params.rule_type.is_some() {
+        conditions.push("type = $type");
+    }
+    if params.state.is_some() {
+        conditions.push("state = $state");
+    }
+    if params.applies_to.is_some() {
+        conditions.push("(applies_to = [] OR applies_to CONTAINS $applies_to)");
+    }
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+    sql.push_str(" ORDER BY name LIMIT $limit START $start");
+
+    let mut query = state.db.inner().query(sql);
+    if let Some(rule_type) = &params.rule_type {
+        query = query.bind(("type", rule_type.clone()));
+    }
+    if let Some(state_value) = &params.state {
+        query = query.bind(("state", state_value.clone()));
+    }
+    if let Some(applies_to) = &params.applies_to {
+        query = query.bind(("applies_to", applies_to.clone()));
+    }
+    let mut response = query
+        .bind(("limit", limit))
+        .bind(("start", start))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(Json(rows))
+}
+
+/// Partially updates a rule (name, description, applies_to, script).
+#[utoipa::path(
+    patch,
+    path = "/rules/{id}",
+    request_body = UpdateRule,
+    responses(
+        (status = 200, description = "Updated rule", body = Value),
+        (status = 400, description = "Invalid id, payload or script", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value),
+        (status = 409, description = "Name already exists", body = Value),
+        (status = 503, description = "Rule service unavailable", body = Value)
+    )
+)]
+pub async fn update_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateRule>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let current = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+
+    let mut changes = serde_json::Map::new();
+    let mut changed: Vec<&str> = Vec::new();
+
+    if let Some(name) = body.name {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("`name` must not be empty"));
+        }
+        ensure_unique_name(&state.db, &name, Some(id.as_str())).await?;
+        changes.insert("name".to_owned(), Value::String(name));
+        changed.push("name");
+    }
+    if let Some(description) = body.description {
+        match description {
+            Some(value) => {
+                changes.insert("description".to_owned(), Value::String(value));
+            }
+            None => {
+                changes.insert("description".to_owned(), Value::Null);
+            }
+        }
+        changed.push("description");
+    }
+    if let Some(applies_to) = body.applies_to {
+        changes.insert("applies_to".to_owned(), json!(applies_to));
+        changed.push("applies_to");
+    }
+    if let Some(script) = body.script {
+        if script.trim().is_empty() {
+            return Err(ApiError::bad_request("`script` must not be empty"));
+        }
+        compile_check(&state, &script).await?;
+        changes.insert("script".to_owned(), Value::String(script));
+        changed.push("script");
+    }
+
+    if changes.is_empty() {
+        return Ok(Json(current));
+    }
+
+    // Statements: LET(0), UPDATE MERGE(1), UPDATE SET(2), SELECT(3).
+    let sql = "
+        LET $r = type::record('business_rule', $key);
+        UPDATE $r MERGE $changes;
+        UPDATE $r SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        SELECT * FROM $r;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("changes", Value::Object(changes)))
+        .bind(("user", claims.sub.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(3)?;
+    let rule = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_updated",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "fields": changed })),
+        },
+    )
+    .await;
+
+    Ok(Json(rule))
+}
+
+/// Activates a rule (`draft`/`disabled` → `active`) after re-checking its script.
+#[utoipa::path(
+    post,
+    path = "/rules/{id}/activate",
+    responses(
+        (status = 200, description = "Activated rule", body = Value),
+        (status = 400, description = "Invalid id or script", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value),
+        (status = 503, description = "Rule service unavailable", body = Value)
+    )
+)]
+pub async fn activate_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let current = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    let old_state = current
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    if let Some(script) = current.get("script").and_then(Value::as_str) {
+        compile_check(&state, script).await?;
+    }
+
+    // Statements: LET(0), UPDATE SET(1), SELECT(2).
+    let sql = "
+        LET $r = type::record('business_rule', $key);
+        UPDATE $r SET state = 'active', version = version + 1, updated_at = time::now(), updated_by = $user;
+        SELECT * FROM $r;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("user", claims.sub.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let rule = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_activated",
+            object_id: Some(&id),
+            from: old_state.map(Value::String),
+            to: Some(Value::String("active".to_owned())),
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(Json(rule))
+}
+
+/// Deactivates a rule (`active` → `disabled`).
+#[utoipa::path(
+    post,
+    path = "/rules/{id}/disable",
+    responses(
+        (status = 200, description = "Disabled rule", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value)
+    )
+)]
+pub async fn disable_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let current = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    let old_state = current
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    // Statements: LET(0), UPDATE SET(1), SELECT(2).
+    let sql = "
+        LET $r = type::record('business_rule', $key);
+        UPDATE $r SET state = 'disabled', version = version + 1, updated_at = time::now(), updated_by = $user;
+        SELECT * FROM $r;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("user", claims.sub.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let rule = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_disabled",
+            object_id: Some(&id),
+            from: old_state.map(Value::String),
+            to: Some(Value::String("disabled".to_owned())),
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(Json(rule))
+}

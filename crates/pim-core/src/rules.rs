@@ -86,6 +86,7 @@ impl std::fmt::Display for EvaluateError {
 pub struct RulesClient {
     nats_url: String,
     subject: String,
+    compile_subject: String,
     timeout: Duration,
     degrade: bool,
 }
@@ -96,6 +97,7 @@ impl RulesClient {
         Self {
             nats_url: config.rules_nats_url.clone(),
             subject: config.rules_subject.clone(),
+            compile_subject: config.rules_compile_subject.clone(),
             timeout: Duration::from_millis(config.rules_timeout_ms),
             degrade: config.rules_degrade,
         }
@@ -138,6 +140,49 @@ impl RulesClient {
 
         serde_json::from_slice(&reply.payload)
             .map_err(|error| EvaluateError::BadReply(error.to_string()))
+    }
+
+    /// Validates a rule script with the Python worker.
+    ///
+    /// Returns the list of compile errors (empty = valid).
+    pub async fn compile_script(&self, script: &str) -> Result<Vec<String>, EvaluateError> {
+        let payload = json!({ "script": script });
+        let bytes = serde_json::to_vec(&payload)
+            .map_err(|error| EvaluateError::BadReply(error.to_string()))?;
+
+        let client = async_nats::connect(&self.nats_url)
+            .await
+            .map_err(|error| EvaluateError::Transport(error.to_string()))?;
+        let request = async_nats::Request::new()
+            .payload(bytes.into())
+            .timeout(Some(self.timeout));
+        let reply = client
+            .send_request(self.compile_subject.clone(), request)
+            .await
+            .map_err(|error| EvaluateError::Transport(error.to_string()))?;
+
+        let value: Value = serde_json::from_slice(&reply.payload)
+            .map_err(|error| EvaluateError::BadReply(error.to_string()))?;
+        let ok = value
+            .get("ok")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| EvaluateError::BadReply("compile reply missing `ok`".to_owned()))?;
+        if ok {
+            Ok(Vec::new())
+        } else {
+            let errors = value
+                .get("errors")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["unknown compile error".to_owned()]);
+            Ok(errors)
+        }
     }
 }
 

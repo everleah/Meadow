@@ -8,6 +8,7 @@ pub mod health;
 pub mod keys;
 pub mod objects;
 pub mod references;
+pub mod rules;
 pub mod search;
 pub mod system;
 pub mod users;
@@ -30,6 +31,12 @@ use utoipa::OpenApi;
         references::list_object_references,
         references::list_object_children,
         references::reparent_object,
+        rules::create_rule,
+        rules::get_rule,
+        rules::list_rules,
+        rules::update_rule,
+        rules::activate_rule,
+        rules::disable_rule,
         attribute_definitions::create_attribute_definition,
         attribute_definitions::get_attribute_definition,
         attribute_definitions::list_attribute_definitions,
@@ -67,6 +74,9 @@ use utoipa::OpenApi;
         keys::ByKeyParams,
         references::CreateReference,
         references::ReparentObject,
+        rules::CreateRule,
+        rules::UpdateRule,
+        rules::ListRules,
         attribute_definitions::CreateAttributeDefinition,
         attribute_definitions::UpdateAttributeDefinition,
         attribute_definitions::ListAttributeDefinitions,
