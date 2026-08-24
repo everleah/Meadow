@@ -397,7 +397,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **`normalization`-Regeln (R3) in die Import-Pipeline integrieren (MEF-Werte vor dem Schreiben bereinigen/transformieren)**
 - **Regel-Lebenszyklus implementieren: `draft`/`active`/`disabled`, Compile-Check bei jedem Speichern, Versionierung + Audit, Circuit Breaker (Auto-`disabled` + Alert), RBAC `admin`/`superadmin`**
 - **Rule Lab / Dry-Run umsetzen (interaktives Testmodus gegen reale/konstruierte Objekte, read-only, keine Persistenz, auditierte Lab-Läufe)**
-- Event-basierte Kommunikation vorbereiten
+- **Event-basierte Kommunikation vorbereiten (Outbox-Grundlage: Tabelle `outbox_event` + Event-Modul; Relay + atomare Verdrahtung folgen in Phase 6)**
 - **Business Rules mit Zugriff auf vererbte und sprachlich aufgelöste Werte ausstatten**
 - **Schnittstelle für benutzerdefinierte Regeln definieren, die auf dem generischen Objektmodell arbeiten (eine Skriptsprache, ein Mechanismus)**
 - **Log-Sender im Worker: kuratierte Job-/Rule-Logs als Batch über `POST /system/logs` an den Kern senden (non-blocking, bounded Buffer, drop-oldest); Logging-Konfiguration periodisch vom Kern laden (`system_setting`)**

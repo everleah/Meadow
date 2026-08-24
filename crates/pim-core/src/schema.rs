@@ -182,6 +182,20 @@ DEFINE FIELD IF NOT EXISTS updated_by ON TABLE system_setting TYPE option<string
 DEFINE FIELD OVERWRITE updated_at ON TABLE system_setting TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS idx_system_setting_key ON TABLE system_setting FIELDS key UNIQUE;
 
+-- Outbox for CRUD events (transactional outbox; Phase 6 relays to NATS
+-- JetStream on `events.crud`). Events are written atomically with the CRUD
+-- operation and picked up oldest-pending-first by the relay.
+DEFINE TABLE IF NOT EXISTS outbox_event;
+DEFINE FIELD IF NOT EXISTS event_type ON TABLE outbox_event TYPE string;
+DEFINE FIELD IF NOT EXISTS object_type ON TABLE outbox_event TYPE string;
+DEFINE FIELD IF NOT EXISTS object_id ON TABLE outbox_event TYPE string;
+DEFINE FIELD IF NOT EXISTS changes ON TABLE outbox_event TYPE object;
+DEFINE FIELD IF NOT EXISTS metadata ON TABLE outbox_event TYPE object;
+DEFINE FIELD IF NOT EXISTS status ON TABLE outbox_event TYPE string;
+DEFINE FIELD OVERWRITE created_at ON TABLE outbox_event TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS published_at ON TABLE outbox_event TYPE option<datetime>;
+DEFINE INDEX IF NOT EXISTS idx_outbox_status_created ON TABLE outbox_event FIELDS status, created_at;
+
 -- Full-text search: one shared analyzer plus an index over the flexible
 -- `attributes` object. Per-field indexes can be added for hot fields later.
 DEFINE ANALYZER IF NOT EXISTS meadow_std TOKENIZERS blank,class FILTERS lowercase;
