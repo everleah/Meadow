@@ -126,7 +126,7 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 - Implementiert: NATS Request/Reply (`rules.evaluate`), fail-closed (400 Validation / 500 Regel-Fehler / 503 Service nicht erreichbar), optionaler Degrade-Modus (`RULES_DEGRADE`), atomares Mergen berechneter Werte in derselben Transaktion.
 - Implementiert: Die Kandidaten-Sicht für die Regelauswertung enthält vererbte + sprachlich aufgelöste Werte (`?locale=` im Write-Pfad); vererbt-abhängige Recompute-Kaskade (R5) bleibt async und offen.
 - Implementiert: Worker-Log-Sender – kuratierte Worker-Logs (Regel-Fehler, Lifecycle) als Batch an `POST /system/logs` (bounded Buffer, drop-oldest, non-blocking); Logging-Konfiguration wird periodisch aus `system_setting` geladen.
-- Noch offen: `warnings`/`log()`-Ausgaben der Regelauswertung (im synchronen `EvaluationResponse`) werden vom Kern noch nicht persistiert – Ziel (Audit/Objekt-Metadaten) ist zu definieren.
+- Implementiert: `warnings`/`log()`-Ausgaben der Regelauswertung werden vom Kern als kuratierte Log-Einträge persistiert (`service: pim-core`, `category: rule`; Warnings als WARN, `log()` mit dem Level aus dem Skript, best-effort).
 
 ### Nicht-blockierende Kontexte
 
@@ -196,6 +196,16 @@ Lab-Ausführungen werden **auditiert** (wer hat wann welche Regel gegen welche O
 Intern (nicht öffentlich): Rule-Evaluation per **NATS Request/Reply** (Subject `rules.evaluate`) für den synchronen Schreibpfad des Kerns.
 
 **RBAC:** Nur `admin`/`superadmin` dürfen Regeln anlegen, bearbeiten, aktivieren/deaktivieren und das Rule Lab nutzen. `editor`/`viewer` können Regeln lesen (Verhalten verstehen), aber nicht ändern. Änderungen/State-Wechsel sind im Audit-Log.
+
+## Phasengrenzen (Phase 4 vs. 5/6)
+
+Phase 4 liefert den **Regel-Mechanismus**: Autoren, Compile-Check, Sandbox, synchroner Schreibpfad, Lebenszyklus, Dry-Run, aufgelöste Sicht und Worker-Log-Sender. Die **Ausführung** der zwei asynchronen/Offline-Regeltypen ist bewusst später verortet:
+
+- **`bulk` + Recompute-Kaskade (R5):** als `business_rule`-Job über eine gefilterte Objektmenge – **Phase 5** (Jobs/Scheduler, [jobs-scheduler.md](jobs-scheduler.md)). Betrifft die vererbt-abhängige Kaskade (`computed_reads_inherited`) und den Bulk-Recompute bei Definitionsänderung.
+- **`normalization` (R3):** in der MEF-Import-Pipeline des Workers – **Phase 6** (Integration/Events, [integration-eventsystem.md](integration-eventsystem.md)).
+- **Event-getriggerte Recompute-Jobs:** der Trigger `event` bleibt reserviert (Phase 5+); das Eventsystem (Transactional Outbox + NATS JetStream) entsteht in Phase 6.
+
+Bis dahin sind `normalization`- und `bulk`-Regeln bereits **anlegbar, compile-geprüft und per Dry-Run testbar** (ein Kontrakt, fünf Typen).
 
 ## Abgrenzung
 

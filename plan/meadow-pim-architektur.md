@@ -402,6 +402,8 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Schnittstelle für benutzerdefinierte Regeln definieren, die auf dem generischen Objektmodell arbeiten (eine Skriptsprache, ein Mechanismus)**
 - **Log-Sender im Worker: kuratierte Job-/Rule-Logs als Batch über `POST /system/logs` an den Kern senden (non-blocking, bounded Buffer, drop-oldest); Logging-Konfiguration periodisch vom Kern laden (`system_setting`)**
 
+**Hinweis zur Phasenabgrenzung:** Autoren, Compile-Check und Dry-Run für `normalization`- und `bulk`-Regeln sind in Phase 4 umgesetzt (ein Kontrakt, fünf Regeltypen). Die **Ausführung** dieser Typen – `normalization` in der MEF-Import-Pipeline (Phase 6) sowie `bulk`/Recompute-Kaskade als `business_rule`-Jobs (Phase 5) – entsteht in den späteren Phasen; der Event-Trigger `event` bleibt reserviert (Phase 5+). Details: [jobs-scheduler.md](detail/jobs-scheduler.md), [integration-eventsystem.md](detail/integration-eventsystem.md).
+
 ### Phase 5 – Hintergrundverarbeitung & Scheduler
 
 - NATS JetStream in die Infrastruktur aufnehmen

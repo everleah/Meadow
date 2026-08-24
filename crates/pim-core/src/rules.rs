@@ -266,6 +266,7 @@ pub async fn evaluate_for_write(
             {
                 tracing::warn!(?error, "failed to update rule failure counters");
             }
+            persist_outcome_logs(db, &outcome).await;
             Ok(outcome)
         }
         Err(error) => {
@@ -430,6 +431,40 @@ async fn record_rule_log(db: &Db, level: &str, message: &str, context: Value) {
         .and_then(|response| response.check());
     if let Err(error) = result {
         tracing::warn!(?error, "failed to write rule log entry");
+    }
+}
+
+/// Persists rule warnings and `log()` output from an evaluation as curated log
+/// entries (best-effort; a failed write must not fail the save).
+async fn persist_outcome_logs(db: &Db, outcome: &RuleOutcome) {
+    if outcome.warnings.is_empty() && outcome.logs.is_empty() {
+        return;
+    }
+    for warning in &outcome.warnings {
+        record_rule_log(
+            db,
+            "WARN",
+            &format!(
+                "validation warning: {}: {} ({})",
+                warning.attr, warning.message, warning.code
+            ),
+            json!({ "attr": warning.attr, "code": warning.code }),
+        )
+        .await;
+    }
+    for entry in &outcome.logs {
+        let message = entry.get("message").and_then(Value::as_str).unwrap_or("");
+        if message.is_empty() {
+            continue;
+        }
+        let level = match entry.get("level").and_then(Value::as_str) {
+            Some("DEBUG") => "DEBUG",
+            Some("WARN") | Some("WARNING") => "WARN",
+            Some("ERROR") => "ERROR",
+            Some("CRITICAL") => "CRITICAL",
+            _ => "INFO",
+        };
+        record_rule_log(db, level, message, json!({})).await;
     }
 }
 
