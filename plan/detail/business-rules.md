@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker)
+- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker, Dry-Run)
 
 ## Überblick
 
@@ -157,7 +157,7 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 
 - **Compile-Check bei jedem Speichern:** Ein Skript, das nicht kompiliert oder Sandbox-Regeln verletzt (z. B. nicht-whitelisted Import), kann **nicht gespeichert werden** – auch nicht als Draft.
 - **Versionierung:** Jeder Edit erhöht `version`; das Audit-Log hält fest, wer wann was geändert hat (Diff).
-- **Dry-Run:** Vor der Aktivierung (und auf Abruf) lässt sich eine Regel gegen ein **Beispielobjekt** ausführen – ein reales Objekt aus der DB (realistische aufgelöste Werte) oder ein konstruierter Payload (Edge-Cases). Ergebnis: Verletzungen, Warnungen, berechnete Werte, Log – **ohne Persistenz**.
+- **Dry-Run:** Vor der Aktivierung (und auf Abruf) lässt sich eine Regel gegen ein **Beispielobjekt** ausführen – ein reales Objekt aus der DB (realistische aufgelöste Werte) oder ein konstruierter Payload (Edge-Cases). Ergebnis: Verletzungen, Warnungen, berechnete Werte, Log – **ohne Persistenz**. *(implementiert: `POST /rules/{id}/dry-run` – reales Objekt per `object_id` oder konstruierter Payload per `object`, read-only, Lab-Läufe auditiert.)*
 
 ### Rule Lab (interaktives Testmodus)
 

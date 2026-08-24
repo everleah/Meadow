@@ -17,7 +17,7 @@ use crate::db::Db;
 use crate::error::ApiError;
 
 /// A single validation error or warning from a rule.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RuleIssue {
     pub attr: String,
     pub code: String,
@@ -25,7 +25,7 @@ pub struct RuleIssue {
 }
 
 /// The outcome returned by the Python worker.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct RuleOutcome {
     #[serde(default)]
     pub errors: Vec<RuleIssue>,

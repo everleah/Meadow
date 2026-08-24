@@ -79,6 +79,37 @@ fn default_limit() -> u32 {
     100
 }
 
+fn default_status() -> String {
+    "draft".to_owned()
+}
+
+fn default_attributes() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
+/// A constructed candidate object for a dry run.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DryRunObject {
+    #[serde(rename = "type")]
+    pub object_type: String,
+    #[serde(default = "default_status")]
+    pub status: String,
+    #[serde(default = "default_attributes")]
+    pub attributes: Value,
+}
+
+/// Payload for a rule dry run: evaluate against a real object or a constructed
+/// candidate, without persisting anything.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DryRunRule {
+    /// Real object id to evaluate against (mutually exclusive with `object`).
+    #[serde(default)]
+    pub object_id: Option<String>,
+    /// Constructed candidate object (mutually exclusive with `object_id`).
+    #[serde(default)]
+    pub object: Option<DryRunObject>,
+}
+
 /// Splits a `table:key` path segment and verifies the expected table.
 fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     let (actual_table, key) = id
@@ -561,4 +592,137 @@ pub async fn disable_rule(
     .await;
 
     Ok(Json(rule))
+}
+
+/// Evaluates a rule against a real or constructed object, read-only (no
+/// persistence). Available to `admin`/`superadmin` for drafts and active rules.
+#[utoipa::path(
+    post,
+    path = "/rules/{id}/dry-run",
+    request_body = DryRunRule,
+    responses(
+        (status = 200, description = "Dry-run outcome", body = Value),
+        (status = 400, description = "Invalid id or payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value),
+        (status = 503, description = "Rule service unavailable", body = Value)
+    )
+)]
+pub async fn dry_run_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<DryRunRule>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let rule = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    let rule_name = rule
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let rule_type = rule
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let script = rule
+        .get("script")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let candidate = build_dry_run_candidate(&state, body).await?;
+    // A single-rule dry run derives the evaluation mode from the rule type so
+    // that e.g. `workflow_guard` rules run in transition mode.
+    let mode = match rule_type.as_str() {
+        "workflow_guard" => "transition",
+        "normalization" => "import",
+        "bulk" => "bulk",
+        _ => "save",
+    };
+    let spec = crate::rules::RuleSpec {
+        name: rule_name.clone(),
+        rule_type: rule_type.clone(),
+        script,
+    };
+    let outcome = state
+        .rules
+        .evaluate(&[spec], &candidate, mode, None, Some(&claims.sub))
+        .await
+        .map_err(|error| ApiError::unavailable(format!("rule service unavailable: {error}")))?;
+
+    // Audit the lab run (metadata only, never the payloads).
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_dry_run",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(json!({
+                "rule": rule_name,
+                "mode": mode,
+                "object_id": candidate.get("id"),
+                "object_type": candidate.get("type"),
+            })),
+        },
+    )
+    .await;
+
+    let outcome = serde_json::to_value(outcome).map_err(|error| {
+        ApiError::internal(format!("failed to serialize dry-run outcome: {error}"))
+    })?;
+    Ok(Json(outcome))
+}
+
+/// Builds the candidate object view for a dry run from a real or constructed
+/// object.
+async fn build_dry_run_candidate(state: &AppState, body: DryRunRule) -> Result<Value, ApiError> {
+    match (body.object_id, body.object) {
+        (Some(object_id), None) => {
+            let key = parse_key(&object_id, "object")?;
+            let sql = "
+                LET $o = type::record('object', $key);
+                SELECT * FROM $o;
+            ";
+            let mut response = state
+                .db
+                .inner()
+                .query(sql)
+                .bind(("key", key))
+                .await?
+                .check()?;
+            let rows: Vec<Value> = response.take(1)?;
+            let object = rows
+                .into_iter()
+                .next()
+                .ok_or_else(|| ApiError::not_found(format!("object `{object_id}` not found")))?;
+            Ok(json!({
+                "id": object_id,
+                "type": object.get("type").cloned().unwrap_or(Value::Null),
+                "status": object.get("status").cloned().unwrap_or(Value::Null),
+                "attributes": object.get("attributes").cloned().unwrap_or_else(|| json!({})),
+            }))
+        }
+        (None, Some(object)) => Ok(json!({
+            "id": "",
+            "type": object.object_type,
+            "status": object.status,
+            "attributes": object.attributes,
+        })),
+        (Some(_), Some(_)) => Err(ApiError::bad_request(
+            "provide either `object_id` or a constructed `object`, not both",
+        )),
+        (None, None) => Err(ApiError::bad_request(
+            "provide either `object_id` or a constructed `object`",
+        )),
+    }
 }
