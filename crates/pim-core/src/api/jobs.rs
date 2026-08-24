@@ -15,6 +15,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
+use crate::config::Config;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -583,13 +584,19 @@ pub async fn update_job_run(
     let mut extra = String::new();
     match body.status.as_str() {
         "running" => {
-            extra.push_str("UPDATE $r SET started_at = (IF started_at IS NONE THEN time::now() ELSE started_at END);");
+            // Fresh attempt: clear any stale error/result from a previous attempt.
+            extra.push_str(
+                "UPDATE $r SET started_at = (IF started_at IS NONE THEN time::now() ELSE started_at END), error = NONE, result = NONE;",
+            );
         }
-        "success" | "failed" => {
+        "success" => {
+            extra.push_str("UPDATE $r SET finished_at = time::now(), error = NONE;");
+        }
+        "failed" => {
             extra.push_str("UPDATE $r SET finished_at = time::now();");
         }
         "retry" => {
-            extra.push_str("UPDATE $r SET attempt = attempt + 1;");
+            extra.push_str("UPDATE $r SET attempt = attempt + 1, error = NONE, result = NONE;");
         }
         _ => {}
     }
@@ -642,6 +649,87 @@ async fn fail_run(db: &Db, run_id: &str, error: &str) {
     }
 }
 
+/// Creates a `job_run` and publishes its job message to NATS JetStream.
+///
+/// On a queue failure the run is marked `failed` and the error is returned.
+/// `job_definition_id` is `None` for ad-hoc jobs (e.g. a rule recompute).
+pub(crate) async fn queue_run(
+    db: &Db,
+    config: &Config,
+    job_definition_id: Option<&str>,
+    job_type: &str,
+    parameters: Value,
+    trigger: &str,
+    user_id: &str,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let mut content = json!({
+        "trigger": trigger,
+        "status": "pending",
+        "attempt": 1,
+    });
+    if let Some(definition_id) = job_definition_id {
+        content["job_definition_id"] = Value::String(definition_id.to_owned());
+    }
+    let sql = "
+        LET $r = type::record('job_run', rand::ulid());
+        CREATE $r CONTENT $content;
+        SELECT * FROM $r;
+    ";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let run = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("created job run was not returned"))?;
+    let run_id = run
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let payload = json!({
+        "run_id": run_id.clone(),
+        "job_definition_id": job_definition_id,
+        "type": job_type,
+        "parameters": parameters,
+    });
+    if let Err(error) = crate::jobqueue::publish_job(
+        &config.jobs_nats_url,
+        job_type,
+        config.jobs_stream_max_age_minutes,
+        payload,
+    )
+    .await
+    {
+        fail_run(db, &run_id, error.message()).await;
+        return Err(error);
+    }
+
+    let mut metadata = json!({ "trigger": trigger, "job_type": job_type });
+    if let Some(definition_id) = job_definition_id {
+        metadata["job_definition_id"] = Value::String(definition_id.to_owned());
+    }
+    audit::record_best_effort(
+        db,
+        AuditEntry {
+            user_id,
+            action: "job_run_created",
+            object_id: Some(&run_id),
+            from: None,
+            to: None,
+            metadata: Some(metadata),
+        },
+    )
+    .await;
+
+    Ok((StatusCode::ACCEPTED, Json(run)))
+}
+
 /// Manually triggers a job definition: creates a `job_run` and publishes it
 /// to the NATS JetStream job queue (`jobs.<type>`).
 #[utoipa::path(
@@ -685,65 +773,14 @@ pub async fn run_job(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let content = json!({
-        "job_definition_id": id.clone(),
-        "trigger": "manual",
-        "status": "pending",
-        "attempt": 1,
-    });
-    let sql = "
-        LET $r = type::record('job_run', rand::ulid());
-        CREATE $r CONTENT $content;
-        SELECT * FROM $r;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(sql)
-        .bind(("content", content))
-        .await?
-        .check()?;
-    let rows: Vec<Value> = response.take(2)?;
-    let run = rows
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::internal("created job run was not returned"))?;
-    let run_id = run
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-
-    let payload = json!({
-        "run_id": run_id.clone(),
-        "job_definition_id": id.clone(),
-        "type": job_type.clone(),
-        "parameters": parameters,
-    });
-    if let Err(error) = crate::jobqueue::publish_job(
-        &state.config.jobs_nats_url,
+    queue_run(
+        &state.db,
+        &state.config,
+        Some(&id),
         &job_type,
-        state.config.jobs_stream_max_age_minutes,
-        payload,
+        parameters,
+        "manual",
+        &claims.sub,
     )
     .await
-    {
-        fail_run(&state.db, &run_id, error.message()).await;
-        return Err(error);
-    }
-
-    audit::record_best_effort(
-        &state.db,
-        AuditEntry {
-            user_id: &claims.sub,
-            action: "job_run_created",
-            object_id: Some(&run_id),
-            from: None,
-            to: None,
-            metadata: Some(json!({ "job_definition_id": id })),
-        },
-    )
-    .await;
-
-    Ok((StatusCode::ACCEPTED, Json(run)))
 }

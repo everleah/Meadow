@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
             "/objects/{id}",
             get(api::objects::get_object).patch(api::objects::update_object),
         )
+        .route(
+            "/objects/{id}/computed",
+            axum::routing::patch(api::objects::update_computed),
+        )
         .route("/references", post(api::references::create_reference))
         .route("/search", post(api::search::search))
         .route(
@@ -53,6 +57,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rules/{id}/activate", post(api::rules::activate_rule))
         .route("/rules/{id}/disable", post(api::rules::disable_rule))
         .route("/rules/{id}/dry-run", post(api::rules::dry_run_rule))
+        .route("/rules/{id}/recompute", post(api::rules::recompute_rule))
         .route(
             "/objects/{id}/references",
             get(api::references::list_object_references),

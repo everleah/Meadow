@@ -5,7 +5,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -531,6 +531,126 @@ pub async fn update_object(
             from,
             to,
             metadata,
+        },
+    )
+    .await;
+
+    Ok(Json(object))
+}
+
+/// Payload for persisting worker-computed attribute values.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateComputed {
+    /// Declared-computed attribute values to merge into the object.
+    pub values: Value,
+}
+
+/// Persists declared-computed values computed by the worker (recompute job).
+///
+/// This is the machine-to-machine write-back path for `business_rule`
+/// recompute jobs: it merges only attributes that are declared `computed:
+/// true` and does **not** re-run the synchronous rule evaluation. Accepts an
+/// `X-Api-Key` (`LOG_INGEST_API_KEY`) or an admin JWT.
+#[utoipa::path(
+    patch,
+    path = "/objects/{id}/computed",
+    request_body = UpdateComputed,
+    responses(
+        (status = 200, description = "Updated object", body = Value),
+        (status = 400, description = "Invalid id or undeclared computed value", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Object not found", body = Value)
+    )
+)]
+pub async fn update_computed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateComputed>,
+) -> Result<Json<Value>, ApiError> {
+    // Machine-to-machine API key or admin JWT (same policy as job-run updates).
+    let api_key_ok = match &state.config.log_ingest_api_key {
+        Some(expected) => headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|provided| provided == expected),
+        None => false,
+    };
+    let jwt_ok = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
+        .is_some_and(|claims| claims.is_admin());
+    if !api_key_ok && !jwt_ok {
+        return Err(ApiError::forbidden("requires API key or admin role"));
+    }
+
+    let key = parse_key(&id, TABLE)?;
+    let Value::Object(values) = body.values else {
+        return Err(ApiError::bad_request("`values` must be an object"));
+    };
+    // Enforce: every value must be declared as `computed: true`.
+    let computed = crate::rules::resolve_computed(&state.db, &values).await?;
+    if computed.is_empty() {
+        return Err(ApiError::bad_request("`values` must not be empty"));
+    }
+
+    // Load current attributes and merge the computed values.
+    let current_sql = "
+        LET $obj = type::record('object', $key);
+        SELECT * FROM $obj;
+    ";
+    let mut current_response = state
+        .db
+        .inner()
+        .query(current_sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let current_rows: Vec<Value> = current_response.take(1)?;
+    let current = current_rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+    let mut attributes = current
+        .get("attributes")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (name, value) in computed {
+        attributes.insert(name, value);
+    }
+
+    let sql = "
+        LET $obj = type::record('object', $key);
+        UPDATE $obj SET attributes = $attributes, updated_at = time::now(), updated_by = 'system';
+        SELECT * FROM $obj;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("attributes", Value::Object(attributes)))
+        .await?
+        .check()?;
+    let objects: Vec<Value> = response.take(2)?;
+    let object = objects
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: "system",
+            action: "object_computed",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
         },
     )
     .await;

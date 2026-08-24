@@ -1,4 +1,4 @@
-"""Entry point: `python -m meadow.worker` starts the rule-evaluation service."""
+"""Entry point: `python -m meadow.worker` starts the rule-evaluation and job services."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import contextlib
 import logging
 import os
 
+from meadow.worker.business_rules import build_business_rule_handler
+from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
 from meadow.worker.rules_service import serve
 
@@ -24,6 +26,13 @@ async def main() -> None:
     flush_interval = float(os.environ.get("LOG_FLUSH_INTERVAL_S", "5.0"))
     config_refresh = float(os.environ.get("LOG_CONFIG_REFRESH_INTERVAL_S", "60.0"))
 
+    # Job consumer configuration.
+    jobs_subject = os.environ.get("JOBS_SUBJECT", "jobs.*")
+    jobs_stream = os.environ.get("JOBS_STREAM", "JOBS")
+    jobs_durable = os.environ.get("JOBS_CONSUMER_DURABLE", "job-worker")
+    jobs_ack_wait = float(os.environ.get("JOBS_ACK_WAIT_S", "300"))
+    jobs_max_deliver = int(os.environ.get("JOBS_MAX_DELIVER", "5"))
+
     log_sender = LogSender(
         core_url,
         api_key=api_key,
@@ -31,13 +40,35 @@ async def main() -> None:
         config_refresh_interval_s=config_refresh,
     )
     sender_task = asyncio.create_task(log_sender.run())
+    rules_task = asyncio.create_task(
+        serve(nats_url, subject, compile_subject, log_sender=log_sender)
+    )
+    jobs_task = asyncio.create_task(
+        serve_jobs(
+            nats_url,
+            core_url,
+            api_key=api_key,
+            subject=jobs_subject,
+            stream=jobs_stream,
+            durable=jobs_durable,
+            ack_wait=jobs_ack_wait,
+            max_deliver=jobs_max_deliver,
+            handlers={
+                "business_rule": build_business_rule_handler(core_url, api_key=api_key)
+            },
+            log_sender=log_sender,
+        )
+    )
     try:
-        await serve(nats_url, subject, compile_subject, log_sender=log_sender)
+        await asyncio.gather(rules_task, jobs_task)
     finally:
-        sender_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sender_task
+        for task in (sender_task, rules_task, jobs_task):
+            task.cancel()
+        for task in (sender_task, rules_task, jobs_task):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+

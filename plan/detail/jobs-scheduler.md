@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 2: Job-Schema + Definition-CRUD + Run-Status + Manual-Run (`POST /jobs/{id}/run`) mit NATS-JetStream-Publish (`JOBS`-Stream). Python-Worker-Jobkonsument, Cron-Scheduler, DLQ-Überwachung und Log-Retention folgen.
+- **Stand:** Implementiert bis Phase-5-Schritt 4: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute). Cron-Scheduler, parallele Verarbeitung, DLQ-Überwachung und Log-Retention folgen.
 
 ## Architektur
 
@@ -64,6 +64,21 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - Deaktivierte Definitionen werden mit 400 abgelehnt, unbekannte IDs mit 404.
 - Schlägt der Publish fehl (NATS nicht erreichbar), setzt der Kern den `job_run` auf `failed` (mit Fehlermeldung und `finished_at`) und antwortet mit 503. Es bleibt kein verwaister `pending`-Run zurück.
 - Antwort: `202 Accepted` mit dem erzeugten `job_run`.
+
+## Python-Worker-Jobkonsument (implementiert, Schritt 3)
+
+- `python -m meadow.worker` startet neben dem Rule-Service einen **JetStream-Pull-Konsumenten** (`jobs.*`, Stream `JOBS`, Durable `job-worker`; `meadow/worker/jobs.py`).
+- Ablauf je Message: Payload parsen (`JobMessage`) → Status `running` per `PATCH /jobs/runs/{run_id}` → Dispatch an den für `job_type` registrierten Handler → `success` (mit `result`) + Ack oder `failed` + Negative-Ack (Retry).
+- **WorkQueue-Hinweis:** Ein WorkQueue-Stream erlaubt nur **einen** gefilterten Konsumenten; mehrere Worker-Instanzen binden sich an denselben Durable (`job-worker`) und teilen sich die Verarbeitung (Queue-Group). Temporäre Verifikations-Konsumenten müssen gelöscht werden.
+- Unbekannte `job_type` und nicht parsebare Messages werden terminiert (`term`); der `job_run` wird auf `failed` gesetzt („no handler registered for job type …“).
+- Status-Updates sind best-effort (Core nicht erreichbar → Log-Warnung, kein Crash); der Ack/Nak basiert auf dem Handler-Ergebnis.
+
+## `business_rule`-Handler (implementiert, Schritt 4)
+
+- `POST /rules/{id}/recompute` (Kern, `admin`/`superadmin`) queue't einen `business_rule`-Job (ohne `job_definition`); nur `active`-Regeln vom Typ `computed` oder `bulk` sind zulässig. Die Message-Parameter enthalten `{rule_id, rule:{name,type,script}, applies_to, object_ids}`.
+- Der Worker (`meadow/worker/business_rules.py`) lädt die Objekte (`object_ids` oder alle Objekte der `applies_to`-Typen via `GET /objects`), führt das Skript je Objekt in der Sandbox aus (Bulk-Modus, ~30 s Budget) und schreibt deklariert-berechnete Werte über `PATCH /objects/{id}/computed` zurück (kein erneutes Regel-Triggering).
+- Report je Objekt in `job_run.result` (`{processed, succeeded, failed, results:[{object_id, status, computed, errors, warnings, error}]}`); Objekt-Fehler sind isoliert (ein fehlgeschlagenes Objekt bricht den Lauf nicht ab).
+- **Kaskade (`computed_reads_inherited`) noch offen:** Der Handler wertet gegen die **eigenen** Attribute aus (kein `resolve_inheritance`); die vererbt-abhängige Recompute-Kaskade bleibt ein späterer Schritt.
 
 ## Job-Typen
 

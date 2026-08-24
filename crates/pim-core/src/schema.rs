@@ -212,7 +212,7 @@ DEFINE INDEX IF NOT EXISTS idx_job_def_name ON TABLE job_definition FIELDS name 
 DEFINE INDEX IF NOT EXISTS idx_job_def_type ON TABLE job_definition FIELDS type;
 
 DEFINE TABLE IF NOT EXISTS job_run;
-DEFINE FIELD IF NOT EXISTS job_definition_id ON TABLE job_run TYPE string;
+DEFINE FIELD OVERWRITE job_definition_id ON TABLE job_run TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS trigger ON TABLE job_run TYPE string;
 DEFINE FIELD IF NOT EXISTS status ON TABLE job_run TYPE string;
 DEFINE FIELD IF NOT EXISTS attempt ON TABLE job_run TYPE int;

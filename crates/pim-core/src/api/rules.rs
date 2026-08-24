@@ -726,3 +726,86 @@ async fn build_dry_run_candidate(state: &AppState, body: DryRunRule) -> Result<V
         )),
     }
 }
+
+/// Query parameters for a rule recompute job.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RecomputeRule {
+    /// Comma-separated object ids; if omitted, all objects of the rule's
+    /// `applies_to` types are recomputed.
+    pub object_ids: Option<String>,
+}
+
+/// Triggers a `business_rule` recompute job over the rule's object set.
+#[utoipa::path(
+    post,
+    path = "/rules/{id}/recompute",
+    params(RecomputeRule),
+    responses(
+        (status = 202, description = "Recompute job queued", body = Value),
+        (status = 400, description = "Rule not recomputable", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value),
+        (status = 503, description = "Job queue unavailable", body = Value)
+    )
+)]
+pub async fn recompute_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<RecomputeRule>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let rule = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    let rule_state = rule
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if rule_state != "active" {
+        return Err(ApiError::bad_request("only active rules can be recomputed"));
+    }
+    let rule_type = rule.get("type").and_then(Value::as_str).unwrap_or_default();
+    if rule_type != "computed" && rule_type != "bulk" {
+        return Err(ApiError::bad_request(format!(
+            "rule type `{rule_type}` is not a recompute job type"
+        )));
+    }
+    let object_ids = params
+        .object_ids
+        .map(|ids| {
+            ids.split(',')
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    let applies_to = rule.get("applies_to").cloned().unwrap_or_else(|| json!([]));
+    let parameters = json!({
+        "rule_id": id.clone(),
+        "rule": {
+            "name": rule.get("name").cloned().unwrap_or(Value::Null),
+            "type": rule_type,
+            "script": rule.get("script").cloned().unwrap_or(Value::Null),
+        },
+        "applies_to": applies_to,
+        "object_ids": object_ids,
+    });
+
+    crate::api::jobs::queue_run(
+        &state.db,
+        &state.config,
+        None,
+        "business_rule",
+        parameters,
+        "manual",
+        &claims.sub,
+    )
+    .await
+}
