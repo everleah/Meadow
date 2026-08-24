@@ -98,11 +98,11 @@ PIM_API_HOST=meadow.api.example.com
 TRAEFIK_NETWORK=traefik-net
 
 # SurrealDB
-SURREALDB_URL=http://surrealdb:8000
+SURREALDB_URL=surrealdb:8000
 SURREALDB_USER=CHANGE_ME
 SURREALDB_PASS=CHANGE_ME
-SURREALDB_NS=meadow
-SURREALDB_DB=meadow
+SURREALDB_NAMESPACE=meadow
+SURREALDB_DATABASE=meadow
 
 # NATS
 NATS_URL=nats://nats:4222
@@ -122,7 +122,7 @@ S3_BUCKET=meadow
 
 # JWT
 JWT_SECRET=CHANGE_ME
-JWT_EXPIRATION=3600
+JWT_TTL_SECONDS=3600
 
 # Core-URL für Frontend/Worker
 PIM_CORE_URL=http://pim-core:8080
@@ -134,6 +134,23 @@ UI_STORAGE_SECRET=CHANGE_ME
 LOG_LEVEL=INFO
 WEBHOOK_RETRY_MAX=5
 WEBHOOK_RETRY_BACKOFF=300
+
+# Business Rules (synchroner Write-Pfad, Kern)
+RULES_NATS_URL=nats://nats:4222
+RULES_SUBJECT=rules.evaluate
+RULES_COMPILE_SUBJECT=rules.compile
+RULES_TIMEOUT_MS=2000
+RULES_DEGRADE=false
+RULES_BREAKER_THRESHOLD=3
+
+# Log-Ingestion (Kern) & Worker-Log-Sender
+LOG_INGEST_API_KEY=CHANGE_ME
+LOG_FLUSH_INTERVAL_S=5
+LOG_CONFIG_REFRESH_INTERVAL_S=60
+LOG_PERSIST_LEVEL=WARN
+LOG_PERSIST_CATEGORIES=app,rule
+LOG_RETENTION_DAYS=30
+LOG_RATE_LIMIT=1000
 
 # Bootstrap (nur beim Erst-Deployment; danach entfernen)
 BOOTSTRAP_SUPERADMIN_USERNAME=superadmin
@@ -235,7 +252,7 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 
 **Kuratierte System-Logs in SurrealDB (`log_entry`):** Für die Admin-UI wird ein kuratierter Teil persistiert:
 
-- **Kategorien & Schwelle:** `app` ab WARN; `job`, `rule`, `auth`, `integration` auch auf INFO. DEBUG/TRACE werden nie in die DB geschrieben.
+- **Kategorien & Schwelle (implementiert):** einheitlicher Schwellwert `log_persist_level` (Standard `WARN`) + Kategorie-Whitelist `log_persist_categories` (Standard `['app']`); `job`/`rule`/`auth`/`integration` lassen sich per Konfiguration zuschalten. Die pro-Kategorie-Schwellen des Entwurfs (`app` ab WARN, übrige ab INFO) sind eine spätere Verfeinerung. `rule`-Logs des Kerns (Circuit Breaker, Warnungen, `log()`) werden direkt persistiert (ohne Whitelist). DEBUG/TRACE werden nie in die DB geschrieben.
 - **Transport (verbindlich):** Komponenten senden Einträge als **Batch** über `POST /system/logs` an den Kern (Flush ≈ alle 2 s oder ≥ N Einträge; non-blocking, bounded Buffer, drop-oldest). Logging **blockiert nie den Geschäftspfad**; Fehler beim Senden werden nur auf `stdout` geloggt (bei `ERROR`/`CRITICAL` nach einem Retry verworfen). Direkter DB-Zugriff ist nur dem Kern erlaubt.
 - **Schema (`log_entry`):** `id`, `created_at` (UTC, ISO-8601), `service` (`pim-core`, `pim-worker`, `pim-frontend`), `level` (`DEBUG|INFO|WARN|ERROR|CRITICAL`, einheitlich gemappt), `category`, `message`, `trace_id`/`request_id` (Korrelation über Dienste; beim REST-Request bzw. der NATS-Message gesetzt), `context` (JSON, optional: `object_id`, `job_run_id`, `rule_id`, `user_id`, …). Reine Append-Tabelle; Indizes `(service, level, created_at)` und `trace_id`; keine Volltextsuche im MVP (Filter + `CONTAINS` auf `message`).
 - **Aufbewahrung:** `log_entry` ist **flüchtig** – Standard **30 Tage** (konfigurierbar 7–90), periodischer Cleanup-Job im Kern (batch-weise, außerhalb der Lastspitze). **Rate-Limit-Cap** pro Dienst gegen Log-Fluten (bei Überschreitung nur auf `stdout`).

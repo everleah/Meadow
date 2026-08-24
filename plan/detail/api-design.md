@@ -61,6 +61,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PUT     | `/system/settings/{key}`                             | Systemeinstellung ändern (persistiert, Audit; nur`admin`/`superadmin`)                                                                                   |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
+- **Machine-to-Machine**: `POST /system/logs` und `GET /system/settings` akzeptieren zusätzlich zum Admin-JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen (Ziel). Phase 1 nutzt vorläufig Offset-Pagination (`limit`/`start`); Cursor-Pagination folgt in einer späteren Phase.
 - **IDs**: Ressourcen-IDs sind SurrealDB-Record-IDs (`tabelle:key`); über die API angelegte Datensätze erhalten ULID-Keys (z. B. `object:01M0…`, `user:<ulid>`). Querverweis-Felder enthalten den Record-Key (z. B. `unit_id: "unit_m"`). Details in [datenmodell.md](datenmodell.md).
@@ -70,6 +71,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 - **CRUD & Lifecycle:** Regeln werden über `/rules` verwaltet (nur `admin`/`superadmin` für `manage`). Beim Speichern prüft der Kern den Script-Code (Compile-Check + Sandbox-Regeln) – unzulässige Skripte werden abgelehnt. Änderungen und Zustandswechsel sind auditiert.
 - **Dry-Run / Rule Lab:** `POST /rules/{id}/dry-run` (Beispielobjekt: reale Objekt-ID oder konstruierter Payload) und `POST /rules/{id}/test-batch` (Objektauswahl) führen Regeln **read-only ohne Persistenz** aus und liefern Verletzungen, berechnete Werte und Log (Abschnitt 8 / [business-rules.md](business-rules.md)).
 - **Schreibpfad (intern):** `validation`/`computed`/`workflow_guard` werden beim Schreiben durch einen **synchronen NATS-Request/Reply-Aufruf** des Rust-Kerns an den Python-Service ausgewertet (Subject `rules.evaluate`, nicht Teil der öffentlichen OpenAPI); der Kern erzwingt das Ergebnis atomar (fail-closed + Circuit Breaker).
+- **Locale im Write-Pfad:** `POST /objects` und `PATCH /objects/{id}` akzeptieren `?locale=`; der Kern löst damit mehrsprachige + vererbte Werte für die **Regelauswertung** auf (nur Evaluation – vererbte Werte werden **nicht** als eigene Werte persistiert).
 - **Recompute:** `POST /rules/{id}/recompute` stößt einen Recompute-/Bulk-Job über die betroffene Objektmenge an (R5, Report über `/jobs/runs`).
 
 ## Relationen & Komposition in der API
