@@ -45,6 +45,19 @@ impl ApiError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
+
+    /// Returns the human-readable error message.
+    pub fn message(&self) -> &str {
+        match self {
+            ApiError::BadRequest(message)
+            | ApiError::NotFound(message)
+            | ApiError::Conflict(message)
+            | ApiError::Unauthorized(message)
+            | ApiError::Forbidden(message)
+            | ApiError::Unavailable(message)
+            | ApiError::Internal(message) => message,
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

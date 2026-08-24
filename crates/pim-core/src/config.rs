@@ -23,6 +23,10 @@ pub struct Config {
     pub log_ingest_api_key: Option<String>,
     /// NATS URL for the synchronous rule-evaluation request/reply.
     pub rules_nats_url: String,
+    /// NATS URL for publishing job messages to JetStream.
+    pub jobs_nats_url: String,
+    /// Retention window for the `JOBS` stream, in minutes.
+    pub jobs_stream_max_age_minutes: u64,
     /// NATS subject for rule evaluation.
     pub rules_subject: String,
     /// NATS subject for rule-script compile validation.
@@ -51,6 +55,8 @@ impl Config {
                 .ok()
                 .filter(|value| !value.is_empty()),
             rules_nats_url: env_or("RULES_NATS_URL", "nats://localhost:4222"),
+            jobs_nats_url: env_or("JOBS_NATS_URL", "nats://localhost:4222"),
+            jobs_stream_max_age_minutes: env_or_parse("JOBS_STREAM_MAX_AGE_MINUTES", 1440),
             rules_subject: env_or("RULES_SUBJECT", "rules.evaluate"),
             rules_compile_subject: env_or("RULES_COMPILE_SUBJECT", "rules.compile"),
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),

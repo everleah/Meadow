@@ -622,3 +622,128 @@ pub async fn update_job_run(
 
     Ok(Json(run))
 }
+
+/// Marks a job run as failed (best effort), used when queueing fails.
+async fn fail_run(db: &Db, run_id: &str, error: &str) {
+    let key = run_id.split_once(':').map(|(_, k)| k).unwrap_or(run_id);
+    let sql = "
+        LET $r = type::record('job_run', $key);
+        UPDATE $r SET status = 'failed', error = $error, finished_at = time::now(), updated_at = time::now();
+    ";
+    if let Err(err) = db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("error", error.to_owned()))
+        .await
+        .and_then(|response| response.check())
+    {
+        tracing::warn!(?err, run_id, "failed to mark job run as failed");
+    }
+}
+
+/// Manually triggers a job definition: creates a `job_run` and publishes it
+/// to the NATS JetStream job queue (`jobs.<type>`).
+#[utoipa::path(
+    post,
+    path = "/jobs/{id}/run",
+    responses(
+        (status = 202, description = "Job run queued", body = Value),
+        (status = 400, description = "Job disabled or invalid id", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Not found", body = Value),
+        (status = 503, description = "Job queue unavailable", body = Value)
+    )
+)]
+pub async fn run_job(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let definition = fetch_definition(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("job definition `{id}` not found")))?;
+    if !definition
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::bad_request("job definition is disabled"));
+    }
+    let job_type = definition
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let parameters = definition
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let content = json!({
+        "job_definition_id": id.clone(),
+        "trigger": "manual",
+        "status": "pending",
+        "attempt": 1,
+    });
+    let sql = "
+        LET $r = type::record('job_run', rand::ulid());
+        CREATE $r CONTENT $content;
+        SELECT * FROM $r;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let run = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("created job run was not returned"))?;
+    let run_id = run
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let payload = json!({
+        "run_id": run_id.clone(),
+        "job_definition_id": id.clone(),
+        "type": job_type.clone(),
+        "parameters": parameters,
+    });
+    if let Err(error) = crate::jobqueue::publish_job(
+        &state.config.jobs_nats_url,
+        &job_type,
+        state.config.jobs_stream_max_age_minutes,
+        payload,
+    )
+    .await
+    {
+        fail_run(&state.db, &run_id, error.message()).await;
+        return Err(error);
+    }
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "job_run_created",
+            object_id: Some(&run_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "job_definition_id": id })),
+        },
+    )
+    .await;
+
+    Ok((StatusCode::ACCEPTED, Json(run)))
+}

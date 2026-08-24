@@ -14,6 +14,7 @@ pub mod db;
 pub mod error;
 pub mod event;
 pub mod inheritance;
+pub mod jobqueue;
 pub mod language;
 pub mod rules;
 pub mod schema;

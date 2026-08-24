@@ -2690,6 +2690,7 @@ dependencies = [
  "argon2",
  "async-nats",
  "axum",
+ "bytes",
  "jsonwebtoken 11.0.0",
  "serde",
  "serde_json",

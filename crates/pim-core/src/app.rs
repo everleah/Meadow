@@ -129,6 +129,7 @@ pub fn router(state: AppState) -> Router {
             get(api::jobs::get_job_definition).patch(api::jobs::update_job_definition),
         )
         .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
+        .route("/jobs/{id}/run", post(api::jobs::run_job))
         .with_state(state)
 }
 

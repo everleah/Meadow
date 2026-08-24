@@ -30,6 +30,7 @@ use utoipa::OpenApi;
         jobs::list_definition_runs,
         jobs::list_job_runs,
         jobs::update_job_run,
+        jobs::run_job,
         objects::create_object,
         objects::get_object,
         objects::list_objects,

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-5-Schritt 1: Job-Schema + Definition-CRUD + Run-Status; Scheduler/Manual-Run + NATS JetStream folgen)
+- **Stand:** Implementiert bis Phase-5-Schritt 2: Job-Schema + Definition-CRUD + Run-Status + Manual-Run (`POST /jobs/{id}/run`) mit NATS-JetStream-Publish (`JOBS`-Stream). Python-Worker-Jobkonsument, Cron-Scheduler, DLQ-Überwachung und Log-Retention folgen.
 
 ## Architektur
 
@@ -58,6 +58,13 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 7. **Idempotenz (verbindlich):** Da NATS at-least-once zustellt und eine Nachricht nach Teilausfall erneut geliefert wird, müssen Job-Typen, die Daten **schreiben** (Import, Business Rules mit Seiteneffekten), idempotent sein: Wiederholte Ausführung darf keine Duplikate erzeugen (Abgleich per Business-Schlüssel bzw. Quell-Referenz, [integration-eventsystem.md](integration-eventsystem.md)).
 8. **Trigger:** Im MVP sind `schedule` und `manual` aktiv; der Triggerwert `event` (Event-getriggerte Jobs) ist **reserviert** für Phase 5+ (gefilterte CRUD-Events erzeugen `job_run`-Einträge, Wiederverwendung des Eventsystems).
 
+## Manueller Start (implementiert, Schritt 2)
+
+- `POST /jobs/{id}/run` (Rolle `editor`+, sonst 403) erzeugt ein `job_run` (`trigger: manual`, `status: pending`, `attempt: 1`) und publiziert eine JetStream-Message auf `jobs.<type>` mit Payload `{ run_id, job_definition_id, type, parameters }` (die `parameters` werden zum Triggerzeitpunkt aus der `job_definition` übernommen).
+- Deaktivierte Definitionen werden mit 400 abgelehnt, unbekannte IDs mit 404.
+- Schlägt der Publish fehl (NATS nicht erreichbar), setzt der Kern den `job_run` auf `failed` (mit Fehlermeldung und `finished_at`) und antwortet mit 503. Es bleibt kein verwaister `pending`-Run zurück.
+- Antwort: `202 Accepted` mit dem erzeugten `job_run`.
+
 ## Job-Typen
 
 - **outbound_export**: Exportiert Daten über einen Konnektor (CSV, JSON, API, SFTP).
@@ -73,4 +80,4 @@ Für spätere Ausbaustufen sind weitere Job-Typen vorgesehen (z. B. `collection_
 - **Dead-Letter-Queue (DLQ)**: Nach Erreichen der maximalen Zustellversuche landet die Nachricht automatisch im DLQ-Stream. Der Rust-Kern abonniert diesen Stream und markiert die betroffenen `job_run`-Einträge als `failed`.
 - **Timeout**: Wird ein Worker nicht innerhalb der konfigurierten `AckWait`-Zeit aktiv, stellt JetStream die Nachricht erneut zu.
 - **Monitoring**: Alle Job-Runs und Dead-Letter-Ereignisse werden in SurrealDB gespeichert und können über die API ausgelesen werden.
-- **Stream-Retention:** Für `jobs.*` gilt eine **kurze Lebensdauer** (Max-Age/Max-Bytes, konfigurierbar): Der dauerhafte Job-Status liegt in `job_run` (SurrealDB), der Stream dient nur dem Transport. Der DLQ-Stream wird **manuell** überwacht und bereinigt (Operationen, [betrieb-deployment.md](betrieb-deployment.md)).
+- **Stream-Retention:** Der `JOBS`-Stream (Subjects `jobs.*`) wird vom Kern bei der ersten Veröffentlichung angelegt: **WorkQueue-Retention** (Message wird nach dem ersten Worker-Ack entfernt) und **Max-Age** über `JOBS_STREAM_MAX_AGE_MINUTES` (Standard 1440 min). Der dauerhafte Job-Status liegt in `job_run` (SurrealDB); der Stream dient nur dem Transport. Der DLQ-Stream wird **manuell** überwacht und bereinigt (Operationen, [betrieb-deployment.md](betrieb-deployment.md)).
