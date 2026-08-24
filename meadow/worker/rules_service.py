@@ -15,6 +15,7 @@ from meadow.rules import Context, compile_rule, execute_rule
 from meadow.rules.errors import RuleCompileError, RuleError
 from meadow.rules.sandbox import DEFAULT_MAX_MEMORY_BYTES, DEFAULT_TIMEOUT_SECONDS
 from meadow.rules.whitelist import DEFAULT_WHITELIST
+from meadow.worker.log_sender import LogSender
 from meadow.worker.protocol import (
     RULES_COMPILE_SUBJECT,
     RULES_EVALUATE_SUBJECT,
@@ -97,10 +98,18 @@ async def _handle(
     *,
     timeout_s: float | None,
     max_memory_bytes: int | None,
+    log_sender: LogSender | None = None,
 ) -> None:
     try:
         request = EvaluationRequest.model_validate_json(msg.data)
     except Exception as exc:  # noqa: BLE001 - reply with an error, never crash
+        if log_sender is not None:
+            log_sender.enqueue(
+                service="pim-worker",
+                level="ERROR",
+                category="app",
+                message=f"invalid rule-evaluation request: {exc}",
+            )
         reply = EvaluationResponse(
             failed=["invalid_request"],
             logs=[EvaluationLog(level="ERROR", message=f"invalid request: {exc}")],
@@ -114,6 +123,14 @@ async def _handle(
         timeout_s=timeout_s,
         max_memory_bytes=max_memory_bytes,
     )
+    if log_sender is not None:
+        for name in response.failed:
+            log_sender.enqueue(
+                service="pim-worker",
+                level="ERROR",
+                category="rule",
+                message=f"rule `{name}` failed during evaluation",
+            )
     await msg.respond(response.model_dump_json().encode())
 
 
@@ -149,11 +166,19 @@ async def serve(
     *,
     timeout_s: float | None = DEFAULT_TIMEOUT_SECONDS,
     max_memory_bytes: int | None = DEFAULT_MAX_MEMORY_BYTES,
+    log_sender: LogSender | None = None,
 ) -> None:
     """Connects to NATS and serves rule-evaluation requests until cancelled."""
     import nats
 
     nc = await nats.connect(nats_url)
+    if log_sender is not None:
+        log_sender.enqueue(
+            service="pim-worker",
+            level="INFO",
+            category="app",
+            message=f"rule evaluation service subscribed to {subject}",
+        )
     logger.info("rule evaluation service subscribed to %r on %s", subject, nats_url)
     eval_sub = await nc.subscribe(subject)
     compile_sub = await nc.subscribe(compile_subject)
@@ -164,6 +189,7 @@ async def serve(
                 msg,
                 timeout_s=timeout_s,
                 max_memory_bytes=max_memory_bytes,
+                log_sender=log_sender,
             )
 
     async def compile_loop() -> None:

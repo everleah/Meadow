@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker, Dry-Run, aufgelöste Sicht im Write-Pfad)
+- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker, Dry-Run, aufgelöste Sicht im Write-Pfad, Worker-Log-Sender)
 
 ## Überblick
 
@@ -125,7 +125,8 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 **Umsetzungsstand (Phase 4):**
 - Implementiert: NATS Request/Reply (`rules.evaluate`), fail-closed (400 Validation / 500 Regel-Fehler / 503 Service nicht erreichbar), optionaler Degrade-Modus (`RULES_DEGRADE`), atomares Mergen berechneter Werte in derselben Transaktion.
 - Implementiert: Die Kandidaten-Sicht für die Regelauswertung enthält vererbte + sprachlich aufgelöste Werte (`?locale=` im Write-Pfad); vererbt-abhängige Recompute-Kaskade (R5) bleibt async und offen.
-- Noch offen: `warnings` und `log()`-Ausgaben liefert der Worker bereits, der Kern verwirft sie aber noch – Ziel (Audit/Objekt-Metadaten bzw. `POST /system/logs` über den Worker-Log-Sender) ist zu definieren.
+- Implementiert: Worker-Log-Sender – kuratierte Worker-Logs (Regel-Fehler, Lifecycle) als Batch an `POST /system/logs` (bounded Buffer, drop-oldest, non-blocking); Logging-Konfiguration wird periodisch aus `system_setting` geladen.
+- Noch offen: `warnings`/`log()`-Ausgaben der Regelauswertung (im synchronen `EvaluationResponse`) werden vom Kern noch nicht persistiert – Ziel (Audit/Objekt-Metadaten) ist zu definieren.
 
 ### Nicht-blockierende Kontexte
 

@@ -345,11 +345,25 @@ pub async fn list_logs(
     )
 )]
 pub async fn list_settings(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
+    // Machine-to-machine API key or admin JWT (same policy as log ingestion).
+    let api_key_ok = match &state.config.log_ingest_api_key {
+        Some(expected) => headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|provided| provided == expected),
+        None => false,
+    };
+    let jwt_ok = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
+        .is_some_and(|claims| claims.is_admin());
+    if !api_key_ok && !jwt_ok {
+        return Err(ApiError::forbidden("requires API key or admin role"));
     }
     resolve_settings(&state.db).await.map(Json)
 }

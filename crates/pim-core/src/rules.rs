@@ -418,7 +418,7 @@ async fn record_rule_log(db: &Db, level: &str, message: &str, context: Value) {
     let content = json!({
         "service": "pim-core",
         "level": level,
-        "category": "rules",
+        "category": "rule",
         "message": message,
         "context": context,
     });
