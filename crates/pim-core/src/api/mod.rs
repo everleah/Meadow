@@ -72,6 +72,7 @@ use utoipa::OpenApi;
         objects::UpdateObject,
         objects::ListObjects,
         objects::GetObjectQuery,
+        objects::WriteObjectQuery,
         keys::ByKeyParams,
         references::CreateReference,
         references::ReparentObject,

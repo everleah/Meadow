@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules sind die technische Grundlage des dort beschriebenen Python Business-Rules-Service; sie berühren außerdem die Abschnitte 4 (Datenmodell: `business_rule`, berechnete Attribute), 5 (API), 6 (Jobs) und 7 (Import/Normalisierung).
 - **Relevante Phasen:** Phase 1, 4, 5, 6, 7, 8
-- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker, Dry-Run)
+- **Stand:** Entwurf (implementiert bis Phase-4: Sandbox, synchroner NATS-Write-Pfad, Regel-CRUD + Compile-Check, computed-Declaration-Enforcement, Circuit Breaker, Dry-Run, aufgelöste Sicht im Write-Pfad)
 
 ## Überblick
 
@@ -122,9 +122,9 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 
 **Konsequenz:** Ein Save hängt davon ab, dass der Python-Service erreichbar ist und die Skripte terminieren. Mitigation: enge Timeouts, optionaler Degrade-Modus („Speichern erlauben + als unberechnet markieren“, konfigurierbar). Eine fehlerhafte Regel kann nie dauerhaft blockieren (siehe Fehlerbehandlung).
 
-**Umsetzungsstand (nach Phase-4-Schritt 2):**
+**Umsetzungsstand (Phase 4):**
 - Implementiert: NATS Request/Reply (`rules.evaluate`), fail-closed (400 Validation / 500 Regel-Fehler / 503 Service nicht erreichbar), optionaler Degrade-Modus (`RULES_DEGRADE`), atomares Mergen berechneter Werte in derselben Transaktion.
-- Noch offen: Die Kandidaten-Sicht enthält bisher nur die **eigenen** Attribute des Objekts; vererbte + sprachlich aufgelöste Werte folgen in einem eigenen Schritt (siehe „Berechnete Attribute“, Punkt 5). `language`/Locale wird noch nicht durchgereicht (Kern übergibt `null`).
+- Implementiert: Die Kandidaten-Sicht für die Regelauswertung enthält vererbte + sprachlich aufgelöste Werte (`?locale=` im Write-Pfad); vererbt-abhängige Recompute-Kaskade (R5) bleibt async und offen.
 - Noch offen: `warnings` und `log()`-Ausgaben liefert der Worker bereits, der Kern verwirft sie aber noch – Ziel (Audit/Objekt-Metadaten bzw. `POST /system/logs` über den Worker-Log-Sender) ist zu definieren.
 
 ### Nicht-blockierende Kontexte

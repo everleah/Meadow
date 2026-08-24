@@ -62,6 +62,14 @@ pub struct GetObjectQuery {
     pub resolve_inheritance: Option<bool>,
 }
 
+/// Query parameters for object writes: locale for rule evaluation.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct WriteObjectQuery {
+    /// Language code used to resolve multilingual + inherited values for rules.
+    pub locale: Option<String>,
+}
+
 /// Query parameters for listing objects.
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -100,6 +108,7 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     post,
     path = "/objects",
     request_body = CreateObject,
+    params(WriteObjectQuery),
     responses(
         (status = 201, description = "Created object", body = Value),
         (status = 400, description = "Invalid payload", body = Value),
@@ -111,6 +120,7 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
 pub async fn create_object(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    Query(params): Query<WriteObjectQuery>,
     Json(body): Json<CreateObject>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if !claims.is_editor() {
@@ -126,18 +136,31 @@ pub async fn create_object(
     } = body;
     let object_type = object_type.trim().to_owned();
     let user_id = claims.sub.clone();
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
 
     let Value::Object(mut attributes) = attributes else {
         return Err(ApiError::bad_request("`attributes` must be an object"));
     };
     keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
 
-    // Evaluate active validation/computed rules against the candidate view.
+    // Resolved view for rule evaluation. A new object has no inherited values
+    // yet; multilingual own values are resolved to `locale`.
+    let mut eval_attributes = attributes.clone();
+    if let Some(locale) = locale {
+        crate::language::resolve_attributes(&state.cache, &state.db, locale, &mut eval_attributes)
+            .await?;
+    }
+
+    // Evaluate active validation/computed rules against the resolved view.
     let candidate = json!({
         "id": "",
         "type": object_type.clone(),
         "status": status.clone(),
-        "attributes": Value::Object(attributes.clone()),
+        "attributes": Value::Object(eval_attributes),
     });
     let outcome = crate::rules::evaluate_for_write(
         &state.db,
@@ -145,7 +168,7 @@ pub async fn create_object(
         &candidate,
         &["validation", "computed"],
         "save",
-        None,
+        locale,
         Some(&user_id),
     )
     .await?;
@@ -303,6 +326,7 @@ pub async fn list_objects(
     patch,
     path = "/objects/{id}",
     request_body = UpdateObject,
+    params(WriteObjectQuery),
     responses(
         (status = 200, description = "Updated object", body = Value),
         (status = 400, description = "Invalid id or payload", body = Value),
@@ -315,6 +339,7 @@ pub async fn update_object(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<WriteObjectQuery>,
     Json(body): Json<UpdateObject>,
 ) -> Result<Json<Value>, ApiError> {
     if !claims.is_editor() {
@@ -372,9 +397,14 @@ pub async fn update_object(
     }
 
     let status_changed = changed_fields.contains(&"status");
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
 
-    // Candidate view for rule evaluation: current object + pending changes.
-    let candidate_attributes = changes
+    // Own attributes to persist (pending changes applied).
+    let own_attributes = changes
         .get("attributes")
         .and_then(Value::as_object)
         .cloned()
@@ -385,6 +415,22 @@ pub async fn update_object(
                 .cloned()
                 .unwrap_or_default()
         });
+
+    // Resolved view for rule evaluation: own + language-resolved + inherited.
+    let mut eval_attributes = own_attributes.clone();
+    if let Some(locale) = locale {
+        crate::language::resolve_attributes(&state.cache, &state.db, locale, &mut eval_attributes)
+            .await?;
+    }
+    crate::inheritance::resolve_inheritance(
+        &state.cache,
+        &state.db,
+        key,
+        locale,
+        &mut eval_attributes,
+    )
+    .await?;
+
     let candidate_status = changes
         .get("status")
         .and_then(Value::as_str)
@@ -395,7 +441,7 @@ pub async fn update_object(
         "id": id.clone(),
         "type": object_type.clone(),
         "status": candidate_status,
-        "attributes": Value::Object(candidate_attributes.clone()),
+        "attributes": Value::Object(eval_attributes),
     });
 
     // validation + computed (save mode)
@@ -405,14 +451,14 @@ pub async fn update_object(
         &candidate,
         &["validation", "computed"],
         "save",
-        None,
+        locale,
         Some(&user_id),
     )
     .await?;
     crate::rules::enforce(&outcome)?;
     let computed = crate::rules::resolve_computed(&state.db, &outcome.computed_object()).await?;
     if !computed.is_empty() {
-        let mut merged = candidate_attributes;
+        let mut merged = own_attributes;
         for (name, value) in computed {
             merged.insert(name, value);
         }
@@ -430,7 +476,7 @@ pub async fn update_object(
             &candidate,
             &["workflow_guard"],
             "transition",
-            None,
+            locale,
             Some(&user_id),
         )
         .await?;
