@@ -115,6 +115,20 @@ pub fn router(state: AppState) -> Router {
             "/system/settings/{key}",
             put(api::system::put_setting).delete(api::system::delete_setting),
         )
+        .route(
+            "/jobs",
+            get(api::jobs::list_job_definitions).post(api::jobs::create_job_definition),
+        )
+        .route("/jobs/runs", get(api::jobs::list_job_runs))
+        .route(
+            "/jobs/runs/{run_id}",
+            axum::routing::patch(api::jobs::update_job_run),
+        )
+        .route(
+            "/jobs/{id}",
+            get(api::jobs::get_job_definition).patch(api::jobs::update_job_definition),
+        )
+        .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
         .with_state(state)
 }
 

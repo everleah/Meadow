@@ -196,6 +196,37 @@ DEFINE FIELD OVERWRITE created_at ON TABLE outbox_event TYPE datetime DEFAULT ti
 DEFINE FIELD IF NOT EXISTS published_at ON TABLE outbox_event TYPE option<datetime>;
 DEFINE INDEX IF NOT EXISTS idx_outbox_status_created ON TABLE outbox_event FIELDS status, created_at;
 
+-- Jobs: definitions of recurring/manual tasks and their run history.
+-- The scheduler (tokio-cron-scheduler) triggers `schedule` definitions; the
+-- worker executes them and reports status back over REST.
+DEFINE TABLE IF NOT EXISTS job_definition;
+DEFINE FIELD IF NOT EXISTS name ON TABLE job_definition TYPE string;
+DEFINE FIELD IF NOT EXISTS type ON TABLE job_definition TYPE string;
+DEFINE FIELD IF NOT EXISTS schedule ON TABLE job_definition TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS parameters ON TABLE job_definition TYPE object;
+DEFINE FIELD IF NOT EXISTS enabled ON TABLE job_definition TYPE bool;
+DEFINE FIELD OVERWRITE created_at ON TABLE job_definition TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE job_definition TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE job_definition TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_job_def_name ON TABLE job_definition FIELDS name UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_job_def_type ON TABLE job_definition FIELDS type;
+
+DEFINE TABLE IF NOT EXISTS job_run;
+DEFINE FIELD IF NOT EXISTS job_definition_id ON TABLE job_run TYPE string;
+DEFINE FIELD IF NOT EXISTS trigger ON TABLE job_run TYPE string;
+DEFINE FIELD IF NOT EXISTS status ON TABLE job_run TYPE string;
+DEFINE FIELD IF NOT EXISTS attempt ON TABLE job_run TYPE int;
+DEFINE FIELD IF NOT EXISTS started_at ON TABLE job_run TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS finished_at ON TABLE job_run TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS result ON TABLE job_run;
+DEFINE FIELD IF NOT EXISTS error ON TABLE job_run TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS worker_id ON TABLE job_run TYPE option<string>;
+DEFINE FIELD OVERWRITE created_at ON TABLE job_run TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE job_run TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_job_run_definition ON TABLE job_run FIELDS job_definition_id;
+DEFINE INDEX IF NOT EXISTS idx_job_run_status ON TABLE job_run FIELDS status;
+DEFINE INDEX IF NOT EXISTS idx_job_run_created ON TABLE job_run FIELDS created_at;
+
 -- Full-text search: one shared analyzer plus an index over the flexible
 -- `attributes` object. Per-field indexes can be added for hot fields later.
 DEFINE ANALYZER IF NOT EXISTS meadow_std TOKENIZERS blank,class FILTERS lowercase;

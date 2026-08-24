@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Entwurf
+- **Stand:** Entwurf (implementiert bis Phase-5-Schritt 1: Job-Schema + Definition-CRUD + Run-Status; Scheduler/Manual-Run + NATS JetStream folgen)
 
 ## Architektur
 

@@ -5,6 +5,7 @@ pub mod attribute_groups;
 pub mod auth;
 pub mod groups;
 pub mod health;
+pub mod jobs;
 pub mod keys;
 pub mod objects;
 pub mod references;
@@ -22,6 +23,13 @@ use utoipa::OpenApi;
         auth::login,
         auth::me,
         health::health,
+        jobs::create_job_definition,
+        jobs::get_job_definition,
+        jobs::list_job_definitions,
+        jobs::update_job_definition,
+        jobs::list_definition_runs,
+        jobs::list_job_runs,
+        jobs::update_job_run,
         objects::create_object,
         objects::get_object,
         objects::list_objects,
@@ -68,6 +76,11 @@ use utoipa::OpenApi;
         auth::LoginRequest,
         auth::LoginResponse,
         auth::MeResponse,
+        jobs::CreateJobDefinition,
+        jobs::UpdateJobDefinition,
+        jobs::ListJobs,
+        jobs::ListJobRuns,
+        jobs::UpdateJobRun,
         objects::CreateObject,
         objects::UpdateObject,
         objects::ListObjects,
