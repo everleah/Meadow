@@ -17,6 +17,7 @@ pub mod inheritance;
 pub mod jobqueue;
 pub mod language;
 pub mod rules;
+pub mod scheduler;
 pub mod schema;
 pub mod seed;
 
@@ -47,6 +48,10 @@ pub async fn run() {
         rules: rules::RulesClient::from_config(&config),
         config,
     };
+
+    // Start the background scheduler (cron jobs from scheduled definitions).
+    tokio::spawn(scheduler::run(state.db.clone(), state.config.clone()));
+
     axum::serve(listener, app::router(state))
         .await
         .expect("server error");

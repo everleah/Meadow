@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 4: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute). Cron-Scheduler, parallele Verarbeitung, DLQ-Überwachung und Log-Retention folgen.
+- **Stand:** Implementiert bis Phase-5-Schritt 5: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler. Parallele Verarbeitung, DLQ-Überwachung und Log-Retention folgen.
 
 ## Architektur
 
@@ -79,6 +79,13 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - Der Worker (`meadow/worker/business_rules.py`) lädt die Objekte (`object_ids` oder alle Objekte der `applies_to`-Typen via `GET /objects`), führt das Skript je Objekt in der Sandbox aus (Bulk-Modus, ~30 s Budget) und schreibt deklariert-berechnete Werte über `PATCH /objects/{id}/computed` zurück (kein erneutes Regel-Triggering).
 - Report je Objekt in `job_run.result` (`{processed, succeeded, failed, results:[{object_id, status, computed, errors, warnings, error}]}`); Objekt-Fehler sind isoliert (ein fehlgeschlagenes Objekt bricht den Lauf nicht ab).
 - **Kaskade (`computed_reads_inherited`) noch offen:** Der Handler wertet gegen die **eigenen** Attribute aus (kein `resolve_inheritance`); die vererbt-abhängige Recompute-Kaskade bleibt ein späterer Schritt.
+
+## Cron-Scheduler (implementiert, Schritt 5)
+
+- Der Kern startet beim Hochfahren einen **Hintergrund-Scheduler** (`src/scheduler.rs`, `tokio_cron_scheduler`), der alle `SCHEDULER_INTERVAL_S` Sekunden (Standard 60) mit den **aktiven geplanten** `job_definition`-Einträgen abgeglichen wird.
+- Bei jedem Feuern erzeugt der Scheduler ein `job_run` (`trigger: schedule`, `status: pending`) und publiziert es in den `JOBS`-Stream (gleicher Pfad wie `queue_run`).
+- Cron-Format: **6 Felder mit Sekunden zuerst** (`sec min hour day month dow`); ungültige Ausdrücke werden beim Registrieren abgelehnt und als Log-Warnung sichtbar.
+- Änderungen an Definitionen werden beim nächsten Sync wirksam: neuer/geänderter Zeitplan → Job neu registrieren; deaktiviert/entfernt → Job abmelden. Beim Start wird sofort synchronisiert.
 
 ## Job-Typen
 

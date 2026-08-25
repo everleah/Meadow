@@ -37,6 +37,9 @@ pub struct Config {
     pub rules_degrade: bool,
     /// Consecutive rule failures before the circuit breaker disables a rule.
     pub rules_breaker_threshold: u64,
+    /// Scheduler sync interval, in seconds (how often job definitions are
+    /// reconciled with the cron scheduler).
+    pub scheduler_interval_seconds: u64,
 }
 
 impl Config {
@@ -62,6 +65,7 @@ impl Config {
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),
             rules_degrade: env_or_bool("RULES_DEGRADE", false),
             rules_breaker_threshold: env_or_parse("RULES_BREAKER_THRESHOLD", 3),
+            scheduler_interval_seconds: env_or_parse("SCHEDULER_INTERVAL_S", 60),
         }
     }
 }
