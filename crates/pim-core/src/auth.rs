@@ -5,11 +5,12 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use axum::extract::FromRequestParts;
-use axum::http::{header, request::Parts};
+use axum::http::{HeaderMap, header, request::Parts};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::config::Config;
 use crate::error::ApiError;
 
 /// Roles defined by the plan (section 9).
@@ -92,6 +93,41 @@ pub fn verify(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors:
 
 /// Extracted authenticated user (from the `Authorization: Bearer` header).
 pub struct AuthUser(pub Claims);
+
+/// Authorizes a request as either a machine-to-machine caller (matching the
+/// `X-Api-Key`) or a JWT bearer carrying at least `required_role`.
+///
+/// Returns the acting user id: `system` for the API-key path (workers such as
+/// the MEF import connector write without a person login) or the JWT `sub`.
+/// This is used by worker-facing write endpoints (`POST /objects`,
+/// `PATCH /objects/{id}`, `POST /references`) so the import connector can
+/// persist objects through the core with the same privileges as an editor.
+pub fn api_key_or_role(
+    headers: &HeaderMap,
+    config: &Config,
+    required_role: &str,
+) -> Result<String, ApiError> {
+    if let Some(expected) = &config.log_ingest_api_key {
+        let provided = headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if provided == expected {
+            return Ok("system".to_owned());
+        }
+    }
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
+    let claims = verify(&config.jwt_secret, token)
+        .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
+    if !claims.has_role(required_role) {
+        return Err(ApiError::forbidden("insufficient role"));
+    }
+    Ok(claims.sub)
+}
 
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;

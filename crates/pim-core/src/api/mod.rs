@@ -5,6 +5,7 @@ pub mod attribute_groups;
 pub mod auth;
 pub mod groups;
 pub mod health;
+pub mod imports;
 pub mod jobs;
 pub mod keys;
 pub mod objects;
@@ -31,6 +32,8 @@ use utoipa::OpenApi;
         jobs::list_job_runs,
         jobs::update_job_run,
         jobs::run_job,
+        imports::create_import,
+        imports::get_import_document,
         objects::create_object,
         objects::get_object,
         objects::list_objects,
@@ -84,6 +87,7 @@ use utoipa::OpenApi;
         jobs::ListJobs,
         jobs::ListJobRuns,
         jobs::UpdateJobRun,
+        imports::ImportParams,
         objects::CreateObject,
         objects::UpdateObject,
         objects::UpdateComputed,

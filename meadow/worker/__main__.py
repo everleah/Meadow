@@ -8,6 +8,7 @@ import logging
 import os
 
 from meadow.worker.business_rules import build_business_rule_handler
+from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
 from meadow.worker.rules_service import serve
@@ -55,7 +56,10 @@ async def main() -> None:
             ack_wait=jobs_ack_wait,
             max_deliver=jobs_max_deliver,
             concurrency=jobs_concurrency,
-            handlers={"business_rule": build_business_rule_handler(core_url, api_key=api_key)},
+            handlers={
+                "business_rule": build_business_rule_handler(core_url, api_key=api_key),
+                "inbound_import": build_import_handler(core_url, api_key=api_key),
+            },
             log_sender=log_sender,
         )
     )

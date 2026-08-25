@@ -135,6 +135,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
         .route("/jobs/{id}/run", post(api::jobs::run_job))
+        .route("/imports", post(api::imports::create_import))
+        .route(
+            "/imports/{document_id}",
+            get(api::imports::get_import_document),
+        )
         .with_state(state)
 }
 

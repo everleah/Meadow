@@ -227,6 +227,17 @@ DEFINE INDEX IF NOT EXISTS idx_job_run_definition ON TABLE job_run FIELDS job_de
 DEFINE INDEX IF NOT EXISTS idx_job_run_status ON TABLE job_run FIELDS status;
 DEFINE INDEX IF NOT EXISTS idx_job_run_created ON TABLE job_run FIELDS created_at;
 
+-- Import documents: raw MEF documents submitted via `POST /imports`. The
+-- core stores the document and queues an `inbound_import` job; the worker
+-- fetches it via `GET /imports/{document_id}` and performs the import.
+DEFINE TABLE IF NOT EXISTS import_document;
+DEFINE FIELD IF NOT EXISTS document ON TABLE import_document TYPE object;
+DEFINE FIELD IF NOT EXISTS format_version ON TABLE import_document TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS source ON TABLE import_document TYPE option<string>;
+DEFINE FIELD OVERWRITE created_at ON TABLE import_document TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS created_by ON TABLE import_document TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_import_document_created ON TABLE import_document FIELDS created_at;
+
 -- Full-text search: one shared analyzer plus an index over the flexible
 -- `attributes` object. Per-field indexes can be added for hot fields later.
 DEFINE ANALYZER IF NOT EXISTS meadow_std TOKENIZERS blank,class FILTERS lowercase;

@@ -13,7 +13,6 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::keys;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 const TABLE: &str = "object";
@@ -118,14 +117,11 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     )
 )]
 pub async fn create_object(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<CreateObject>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
     if body.object_type.trim().is_empty() {
         return Err(ApiError::bad_request("`type` must not be empty"));
     }
@@ -135,7 +131,7 @@ pub async fn create_object(
         status,
     } = body;
     let object_type = object_type.trim().to_owned();
-    let user_id = claims.sub.clone();
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let locale = params
         .locale
         .as_deref()
@@ -347,17 +343,14 @@ pub async fn list_objects(
     )
 )]
 pub async fn update_object(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<UpdateObject>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
     let key = parse_key(&id, TABLE)?;
-    let user_id = claims.sub.clone();
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
 
     // Load the current object: type for uniqueness checks, status for audit.
     let current_sql = "

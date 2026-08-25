@@ -43,6 +43,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | GET     | `/jobs/{id}`                                         | Job-Definition laden (nur `admin`/`superadmin`)                                                                                                         |
 | PATCH   | `/jobs/{id}`                                         | Job-Definition bearbeiten (`schedule` mit `null` löschbar; nur `admin`/`superadmin`)                                                                     |
 | POST    | `/imports`                                           | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert`job_run`-ID (202)                                                                       |
+| GET     | `/imports/{document_id}`                             | Gespeichertes MEF-Dokument laden (Worker, `X-Api-Key` oder Admin)                                                                                        |
 | GET     | `/jobs/runs?ids=…`                                   | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling                                                                                |
 | POST    | `/search`                                            | Volltextsuche über Objekte                                                                                                                               |
 | GET     | `/auth/me`                                           | Rollen, Berechtigungen & Scope des Nutzers                                                                                                               |
@@ -66,7 +67,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PUT     | `/system/settings/{key}`                             | Systemeinstellung ändern (persistiert, Audit; nur`admin`/`superadmin`)                                                                                   |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
-- **Machine-to-Machine**: `POST /system/logs`, `GET /system/settings`, `PATCH /jobs/runs/{run_id}` und `PATCH /objects/{id}/computed` akzeptieren zusätzlich zum Admin-JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts.
+- **Machine-to-Machine**: `POST /system/logs`, `GET /system/settings`, `PATCH /jobs/runs/{run_id}`, `PATCH /objects/{id}/computed`, `POST /imports`, `GET /imports/{document_id}` sowie – für den Import-Konnektor – `POST /objects`, `PATCH /objects/{id}` und `POST /references` akzeptieren zusätzlich zum JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts. API-Key-Schreibvorgänge werden dem Akteur `system` zugeschrieben.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen (Ziel). Phase 1 nutzt vorläufig Offset-Pagination (`limit`/`start`); Cursor-Pagination folgt in einer späteren Phase.
 - **IDs**: Ressourcen-IDs sind SurrealDB-Record-IDs (`tabelle:key`); über die API angelegte Datensätze erhalten ULID-Keys (z. B. `object:01M0…`, `user:<ulid>`). Querverweis-Felder enthalten den Record-Key (z. B. `unit_id: "unit_m"`). Details in [datenmodell.md](datenmodell.md).
@@ -155,6 +156,7 @@ Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- un
 ## Inbound-Import & Request-Limits
 
 - **`POST /imports`:** Nimmt ein MEF-Dokument entgegen (JSON-Body oder Datei-Upload → Objektstorage), validiert nur oberflächlich, legt sofort ein `job_run` an und liefert `202 Accepted` mit `{ "job_run_id": … }` (Details [integration-eventsystem.md](integration-eventsystem.md)). Der Aufrufer wartet nie auf die Verarbeitung; Status/Fortschritt/Report über `GET /jobs/runs?ids=…`.
+- **Implementiert (Schritt 2):** `POST /imports` akzeptiert den MEF-JSON-Body plus optionale Query-Parameter `match_by_key` (Business-Schlüssel für Upsert) und `source`; das Dokument wird in `import_document` gespeichert und ein `inbound_import`-Job gequeue't. `GET /imports/{document_id}` liefert das gespeicherte Dokument an den Worker (`X-Api-Key` oder Admin).
 - **Request-Limits (verbindlich):** Für alle Endpunkte gelten **Body-/Upload-Limits** (z. B. JSON-Body max. 10 MB, Datei-Upload max. 100 MB, konfigurierbar) sowie ein **Rate-Limit** (z. B. pro Nutzer/JWT, konfigurierbar), damit Eingabe-Fluten über API/Inbound das System nicht stilllegen.
 
 ## Referenz-Picker-Suche

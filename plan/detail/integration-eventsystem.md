@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 1: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`). MEF/Import, Webhook-Outbound, Filterung/Coalescing und `emit_events` folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 2: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`) **und** MEF-Import (`POST /imports` + `inbound_import`-Konnektor mit Business-Schlüssel-Upsert und Referenz-Anlage). Quantifizierte Werte/Normalisierung, Webhook-Outbound, Filterung/Coalescing und `emit_events` folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -66,6 +66,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 **Verwendung im Inbound:**
 
 - Der Inbound-Konnektor `json_import` akzeptiert MEF-Dokumente (z. B. aus Datei oder HTTP) und läuft als Hintergrundjob (Typ `inbound_import`, [jobs-scheduler.md](jobs-scheduler.md)).
+- **Implementiert (Schritt 2):** `POST /imports` (JSON-Body) speichert das MEF-Dokument in `import_document` und queue't einen `inbound_import`-Job; der Worker-Konnektor holt das Dokument (`GET /imports/{document_id}`), legt Objekte per Business-Schlüssel-Upsert (`match_by_key`, z. B. `sku`) an bzw. aktualisiert sie und legt Referenzen an (MEF-`type`-Name → Definitions-Key `rel_<name>`). Datei-Upload (Objektstorage), Quantifizierte-Werte-Normalisierung und `normalization`-Regeln folgen.
 - **Einspeisung über `POST /imports` (verbindlich):** Die Middleware (oder die UI) reicht ein MEF-Dokument über den dedizierten Endpunkt `POST /imports` ein – als JSON-Body oder als Datei-Upload (Dateien werden nach dem Objektstorage abgelegt). Der Kern validiert nur oberflächlich, legt sofort ein `job_run` an und antwortet mit `202 Accepted` inkl. `job_run`-ID (Details [api-design.md](api-design.md)). Der Aufrufer ist nie blockiert; die eigentliche Verarbeitung übernimmt der Worker.
 - Der Python-Worker validiert die Struktur, führt Business Rules aus und übergibt die Objekte/Referenzen an den Rust-Kern; Fortschritt und Report stehen am `job_run`.
 

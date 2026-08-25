@@ -357,6 +357,23 @@ Protokolliert Änderungen und Statuswechsel (Details in Abschnitt 13).
 - Das Relay liefert die ältesten `pending`-Einträge zuerst aus (Index `status` + `created_at`) und setzt nach erfolgreichem Publish `published_at`.
 - Publizierte Einträge werden nach Ablauf einer Haltefrist vom Relay aufgeräumt (Cleanup).
 
+### Tabelle `import_document`
+
+Speichert ein über `POST /imports` eingereichtes MEF-Dokument, bis es vom Worker-Konnektor verarbeitet wurde (Details [integration-eventsystem.md](integration-eventsystem.md)).
+
+```json
+{
+    "id": "import_document_123",
+    "document": { "format_version": "1.0", "objects": [ … ] },
+    "format_version": "1.0",
+    "source": "middleware",
+    "created_at": "2026-08-14T10:00:00Z",
+    "created_by": "user_admin"
+}
+```
+
+- `document` trägt das rohe MEF-JSON (Objekt); der Job-Message-Payload referenziert nur `document_id`, damit auch große Dokumente (bis zum Body-Limit) nicht durch NATS übertragen werden müssen.
+
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
 - **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.

@@ -5,7 +5,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::ToSchema;
@@ -156,13 +156,11 @@ fn check_type_restriction(
     )
 )]
 pub async fn create_reference(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<CreateReference>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let source_key = parse_object_key(&body.source)?;
     let target_key = parse_object_key(&body.target)?;
     if source_key == target_key {
@@ -219,7 +217,7 @@ pub async fn create_reference(
             "target": body.target.clone(),
             "definition_id": body.definition_id.clone(),
         }),
-        metadata: json!({ "user_id": claims.sub.clone() }),
+        metadata: json!({ "user_id": user_id.clone() }),
     });
 
     // Statements: BEGIN(0), LET(1), LET(2), RELATE(3), CREATE outbox(4),
@@ -254,7 +252,7 @@ pub async fn create_reference(
     audit::record_best_effort(
         &state.db,
         AuditEntry {
-            user_id: &claims.sub,
+            user_id: &user_id,
             action: "reference_created",
             object_id: Some(&body.source),
             from: None,

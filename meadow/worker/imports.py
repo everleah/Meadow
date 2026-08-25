@@ -1,0 +1,239 @@
+"""`inbound_import` job handler: MEF import with business-key upsert (Phase 6).
+
+The handler receives `parameters.document_id`, fetches the stored MEF document
+from the core (`GET /imports/{document_id}`), and imports its objects and
+references:
+
+- Objects are upserted by business key (`match_by_key`, e.g. `sku`): an
+  existing object with the same type + key value is updated, otherwise a new
+  object is created (idempotent for keyed objects).
+- References are created between the imported objects, mapping the MEF `id`
+  (and the key-based lookups) to the core's record ids.
+
+Per-object failures are isolated: one bad object does not abort the whole run;
+a report is returned and stored in `job_run.result`.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+
+from meadow.worker.jobs import JobHandler, JobMessage
+
+logger = logging.getLogger(__name__)
+
+#: The MEF object `id` is an external identifier, distinct from the core's
+#: `object:<ulid>` record id. It is only used to wire references, never as a
+#: dedup key (source-reference dedup follows in a later Phase 6 step).
+
+
+def _key_value(attributes: dict[str, Any], key: str) -> str | None:
+    """Returns the business-key value if it is a plain string, else `None`."""
+    value = attributes.get(key)
+    if isinstance(value, str):
+        return value.strip() or None
+    return None
+
+
+async def _fetch_document(
+    client: httpx.AsyncClient,
+    core_url: str,
+    document_id: str,
+) -> dict[str, Any]:
+    response = await client.get(f"{core_url}/imports/{document_id}")
+    response.raise_for_status()
+    record = response.json()
+    document = record.get("document")
+    if not isinstance(document, dict):
+        raise RuntimeError(f"import document `{document_id}` has no `document` object")
+    return document
+
+
+async def _upsert_object(
+    client: httpx.AsyncClient,
+    core_url: str,
+    entry: dict[str, Any],
+    match_by_key: str | None,
+) -> tuple[str, str]:
+    """Creates or updates one MEF object; returns `(record_id, action)`."""
+    object_type = str(entry.get("type") or "").strip()
+    if not object_type:
+        raise RuntimeError("MEF object is missing `type`")
+    attributes = entry.get("attributes") or {}
+    if not isinstance(attributes, dict):
+        raise RuntimeError("MEF object `attributes` must be an object")
+    status = entry.get("status") or "draft"
+
+    existing_id: str | None = None
+    if match_by_key:
+        key_value = _key_value(attributes, match_by_key)
+        if key_value:
+            response = await client.get(
+                f"{core_url}/objects/by-key",
+                params={
+                    "type": object_type,
+                    "key": match_by_key,
+                    "value": key_value,
+                },
+            )
+            if response.status_code == 200:
+                existing_id = str(response.json()["id"])
+            elif response.status_code != 404:
+                response.raise_for_status()
+
+    body = {"type": object_type, "attributes": attributes, "status": status}
+    if existing_id:
+        response = await client.patch(
+            f"{core_url}/objects/{existing_id}",
+            json={"attributes": attributes, "status": status},
+        )
+        response.raise_for_status()
+        return str(response.json()["id"]), "updated"
+    response = await client.post(f"{core_url}/objects", json=body)
+    response.raise_for_status()
+    return str(response.json()["id"]), "created"
+
+
+async def _import_references(
+    client: httpx.AsyncClient,
+    core_url: str,
+    references: list[dict[str, Any]],
+    id_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Creates MEF references, mapping external ids via `id_map`.
+
+    The MEF reference `type` is the relation-definition **name** (e.g.
+    `related`, `category_member`); the core's `POST /references` expects the
+    definition **record key** (seed convention `rel_<name>`, e.g.
+    `rel_related`). An already-prefixed id is passed through unchanged.
+    """
+    results: list[dict[str, Any]] = []
+    for reference in references:
+        source = id_map.get(str(reference.get("in") or ""))
+        target = id_map.get(str(reference.get("out") or ""))
+        definition_name = str(reference.get("type") or "")
+        definition_id = (
+            definition_name
+            if definition_name.startswith("rel_")
+            else f"rel_{definition_name}"
+        )
+        attributes = reference.get("attributes") or {}
+        try:
+            if not source or not target:
+                raise RuntimeError(
+                    f"cannot resolve reference `in={reference.get('in')} "
+                    f"out={reference.get('out')}`"
+                )
+            if not definition_name:
+                raise RuntimeError("reference is missing `type`")
+            response = await client.post(
+                f"{core_url}/references",
+                json={
+                    "source": source,
+                    "target": target,
+                    "definition_id": definition_id,
+                    "attributes": attributes,
+                },
+            )
+            response.raise_for_status()
+            results.append(
+                {"in": source, "out": target, "type": definition_name, "status": "created"}
+            )
+        except Exception as exc:  # noqa: BLE001 - per-reference isolation
+            logger.warning("reference import failed: %s", exc)
+            results.append(
+                {
+                    "in": source or reference.get("in"),
+                    "out": target or reference.get("out"),
+                    "type": definition_name,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+    return results
+
+
+def build_import_handler(
+    core_url: str,
+    *,
+    api_key: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> JobHandler:
+    """Builds the `inbound_import` job handler.
+
+    `client` may be injected for tests; otherwise a short-lived client is
+    created per job.
+    """
+    headers = {"x-api-key": api_key} if api_key else {}
+
+    async def run(active: httpx.AsyncClient, message: JobMessage) -> dict[str, Any]:
+        parameters = message.parameters
+        document_id = parameters.get("document_id")
+        if not document_id:
+            raise RuntimeError("inbound_import job is missing `parameters.document_id`")
+        match_by_key = parameters.get("match_by_key")
+        if match_by_key is not None:
+            match_by_key = str(match_by_key)
+
+        document = await _fetch_document(active, core_url, str(document_id))
+        objects = document.get("objects") or []
+        references = document.get("references") or []
+        if not isinstance(objects, list):
+            raise RuntimeError("MEF `objects` must be an array")
+        if not isinstance(references, list):
+            raise RuntimeError("MEF `references` must be an array")
+
+        id_map: dict[str, str] = {}
+        created = 0
+        updated = 0
+        failed = 0
+        object_results: list[dict[str, Any]] = []
+        for entry in objects:
+            external_id = str(entry.get("id") or "")
+            object_type = str(entry.get("type") or "<unknown>")
+            try:
+                record_id, action = await _upsert_object(
+                    active, core_url, entry, match_by_key
+                )
+                if external_id:
+                    id_map[external_id] = record_id
+                if action == "created":
+                    created += 1
+                else:
+                    updated += 1
+                object_results.append(
+                    {"id": record_id, "type": object_type, "status": action}
+                )
+            except Exception as exc:  # noqa: BLE001 - per-object isolation
+                logger.exception("object import failed for %r", external_id or object_type)
+                failed += 1
+                object_results.append(
+                    {"id": external_id, "type": object_type, "status": "failed", "error": str(exc)}
+                )
+
+        reference_results = await _import_references(
+            active, core_url, references, id_map
+        )
+
+        return {
+            "processed": len(objects),
+            "created": created,
+            "updated": updated,
+            "failed": failed,
+            "references": reference_results,
+            "results": object_results,
+        }
+
+    async def handle(message: JobMessage) -> dict[str, Any]:
+        if client is not None:
+            return await run(client, message)
+        async with httpx.AsyncClient(timeout=60.0, headers=headers) as active:
+            return await run(active, message)
+
+    return handle
+
+
+__all__ = ["build_import_handler"]
