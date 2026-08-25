@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 3: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`), MEF-Import (`POST /imports` + `inbound_import`-Konnektor mit Business-Schlüssel-Upsert und Referenz-Anlage) **sowie** quantifizierte Werte (SI-Normalisierung über `GET /units/convert`) und `normalization`-Regeln (R3) in der Import-Pipeline. Webhook-Outbound, Filterung/Coalescing, Datei-Upload und `emit_events` folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 4: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`), MEF-Import (`POST /imports` + `inbound_import`-Konnektor mit Business-Schlüssel-Upsert und Referenz-Anlage), quantifizierte Werte (SI-Normalisierung über `GET /units/convert`), `normalization`-Regeln (R3) **und** der Outbound-Konnektor `json_export` (`outbound_export`-Job, MEF-Dokument im `job_run.result`). Webhook-Outbound, Filterung/Coalescing, Datei-Upload und `emit_events` folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -73,6 +73,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 **Verwendung im Outbound:**
 
 - Der Outbound-Konnektor `json_export` erzeugt MEF-Dokumente aus ausgewählten Objekten (Filter wie Typ, Status, Kategorie).
+- **Implementiert (Schritt 4):** Der `outbound_export`-Job-Handler (`meadow/worker/exports.py`) filtert Objekte (`filter.type`/`filter.status`), baut das MEF-Dokument (`format_version`, `source`, `created_at`, `objects`) und legt es im `job_run.result` ab. Quantifizierte Werte werden vorerst als kanonische SI-Zahl exportiert; die Rück-Umrechnung in `{"value":…,"unit":…}` (Anzeigeeinheit) folgt.
 - Die Exportdatei kann per Datei, HTTP oder Messaging an die Middleware übergeben werden.
 
 ## Eventsystem
