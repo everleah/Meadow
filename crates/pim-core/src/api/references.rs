@@ -211,12 +211,27 @@ pub async fn create_reference(
     }
 
     let audit_definition_id = body.definition_id.clone();
+    let outbox = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_REFERENCE_CREATED,
+        object_type: source_type.to_owned(),
+        object_id: body.source.clone(),
+        changes: json!({
+            "target": body.target.clone(),
+            "definition_id": body.definition_id.clone(),
+        }),
+        metadata: json!({ "user_id": claims.sub.clone() }),
+    });
 
+    // Statements: BEGIN(0), LET(1), LET(2), RELATE(3), CREATE outbox(4),
+    // RETURN(5), COMMIT(6).
     let sql = "
+        BEGIN TRANSACTION;
         LET $src = type::record('object', $source_key);
         LET $tgt = type::record('object', $target_key);
         LET $edge = (RELATE $src->reference->$tgt SET definition_id = $definition_id, type = $definition_name, attributes = $attributes);
+        CREATE outbox_event CONTENT $outbox;
         RETURN $edge;
+        COMMIT TRANSACTION;
     ";
     let mut response = state
         .db
@@ -227,9 +242,10 @@ pub async fn create_reference(
         .bind(("definition_id", body.definition_id))
         .bind(("definition_name", name))
         .bind(("attributes", body.attributes))
+        .bind(("outbox", outbox))
         .await?
         .check()?;
-    let edges: Vec<Value> = response.take(3)?;
+    let edges: Vec<Value> = response.take(5)?;
     let edge = edges
         .into_iter()
         .next()
@@ -384,15 +400,33 @@ pub async fn reparent_object(
     // SurrealDB does not allow changing the direction (`out`) of an existing
     // relation record, so re-parenting deletes the old edge and creates a new
     // one inside a transaction.
-    //
+    let old_parent_id = format!("object:{old_parent_key}");
+    let outbox_deleted = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_REFERENCE_DELETED,
+        object_type: child_type.to_owned(),
+        object_id: id.clone(),
+        changes: json!({ "parent": old_parent_id.clone() }),
+        metadata: json!({ "user_id": claims.sub.clone() }),
+    });
+    let outbox_created = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_REFERENCE_CREATED,
+        object_type: child_type.to_owned(),
+        object_id: id.clone(),
+        changes: json!({ "parent": body.parent.clone() }),
+        metadata: json!({ "user_id": claims.sub.clone() }),
+    });
+
     // Statements: BEGIN(0), LET child(1), LET parent(2), DELETE(3),
-    // RELATE(4), SELECT(5), COMMIT(6).
+    // RELATE(4), CREATE outbox deleted(5), CREATE outbox created(6),
+    // SELECT(7), COMMIT(8).
     let sql = "
         BEGIN TRANSACTION;
         LET $child = type::record('object', $child_key);
         LET $parent = type::record('object', $parent_key);
         DELETE reference WHERE in = $child AND definition_id = 'rel_depends_on';
         RELATE $child->reference->$parent SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
+        CREATE outbox_event CONTENT $outbox_deleted;
+        CREATE outbox_event CONTENT $outbox_created;
         SELECT * FROM $child;
         COMMIT TRANSACTION;
     ";
@@ -402,9 +436,11 @@ pub async fn reparent_object(
         .query(sql)
         .bind(("child_key", child_key))
         .bind(("parent_key", new_parent_key))
+        .bind(("outbox_deleted", outbox_deleted))
+        .bind(("outbox_created", outbox_created))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(5)?;
+    let objects: Vec<Value> = response.take(7)?;
     let object = objects
         .into_iter()
         .next()
@@ -416,7 +452,7 @@ pub async fn reparent_object(
             user_id: &claims.sub,
             action: "reference_reparented",
             object_id: Some(&id),
-            from: Some(json!({ "parent": format!("object:{old_parent_key}") })),
+            from: Some(json!({ "parent": old_parent_id })),
             to: Some(json!({ "parent": body.parent })),
             metadata: None,
         },

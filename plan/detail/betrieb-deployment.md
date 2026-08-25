@@ -112,6 +112,10 @@ NATS_PASS=CHANGE_ME
 # Jobs (JetStream-Publish, Kern)
 JOBS_NATS_URL=nats://nats:4222
 
+# Events (Transactional Outbox + Relay, Kern)
+EVENTS_NATS_URL=nats://nats:4222
+EVENT_RELAY_INTERVAL_S=5
+
 # NATS Stream-Retention (Streams werden vom Kern/Worker angelegt)
 EVENTS_STREAM_MAX_AGE_DAYS=30
 EVENTS_STREAM_MAX_BYTES=1073741824   # 1 GiB

@@ -27,6 +27,14 @@ pub struct Config {
     pub jobs_nats_url: String,
     /// Retention window for the `JOBS` stream, in minutes.
     pub jobs_stream_max_age_minutes: u64,
+    /// NATS URL for the event relay (publishes CRUD events to JetStream).
+    pub events_nats_url: String,
+    /// Retention window for the `EVENTS` stream, in days.
+    pub events_stream_max_age_days: u64,
+    /// Maximum bytes of the `EVENTS` stream.
+    pub events_stream_max_bytes: i64,
+    /// Event-relay poll interval, in seconds.
+    pub event_relay_interval_seconds: u64,
     /// NATS subject for rule evaluation.
     pub rules_subject: String,
     /// NATS subject for rule-script compile validation.
@@ -62,6 +70,10 @@ impl Config {
             rules_nats_url: env_or("RULES_NATS_URL", "nats://localhost:4222"),
             jobs_nats_url: env_or("JOBS_NATS_URL", "nats://localhost:4222"),
             jobs_stream_max_age_minutes: env_or_parse("JOBS_STREAM_MAX_AGE_MINUTES", 1440),
+            events_nats_url: env_or("EVENTS_NATS_URL", "nats://localhost:4222"),
+            events_stream_max_age_days: env_or_parse("EVENTS_STREAM_MAX_AGE_DAYS", 30),
+            events_stream_max_bytes: env_or_parse("EVENTS_STREAM_MAX_BYTES", 1_073_741_824i64),
+            event_relay_interval_seconds: env_or_parse("EVENT_RELAY_INTERVAL_S", 5),
             rules_subject: env_or("RULES_SUBJECT", "rules.evaluate"),
             rules_compile_subject: env_or("RULES_COMPILE_SUBJECT", "rules.compile"),
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),

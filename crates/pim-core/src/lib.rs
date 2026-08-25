@@ -59,6 +59,8 @@ pub async fn run() {
     ));
     // Start the log-retention cleanup.
     tokio::spawn(log_cleanup::run(state.db.clone(), state.config.clone()));
+    // Start the event relay (publishes outbox events to NATS JetStream).
+    tokio::spawn(event::run_relay(state.db.clone(), state.config.clone()));
 
     axum::serve(listener, app::router(state))
         .await

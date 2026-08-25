@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::api::keys::validate_key_definition;
@@ -266,12 +266,14 @@ pub async fn create_attribute_definition(
     content.insert("version".to_owned(), Value::from(1));
     content.insert("updated_by".to_owned(), Value::String(user_id.clone()));
     let content = Value::Object(content);
+    let changes = json!({ "name": content.get("name").cloned().unwrap_or(Value::Null) });
 
-    // Statements: BEGIN(0), LET(1), CREATE(2), SELECT(3), COMMIT(4).
+    // Statements: BEGIN(0), LET(1), CREATE(2), CREATE outbox(3), SELECT(4), COMMIT(5).
     let sql = "
         BEGIN TRANSACTION;
         LET $obj = type::record('attribute_definition', rand::ulid());
         CREATE $obj CONTENT $content;
+        CREATE outbox_event SET event_type = 'attribute_definition.created', object_type = '', object_id = type::string($obj.id), changes = $changes, metadata = $metadata, status = 'pending';
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -280,9 +282,11 @@ pub async fn create_attribute_definition(
         .inner()
         .query(sql)
         .bind(("content", content))
+        .bind(("changes", changes))
+        .bind(("metadata", json!({ "user_id": user_id.clone() })))
         .await?
         .check()?;
-    let definitions: Vec<Value> = response.take(3)?;
+    let definitions: Vec<Value> = response.take(4)?;
     let definition = definitions
         .into_iter()
         .next()
@@ -514,14 +518,23 @@ pub async fn update_attribute_definition(
         return Ok(Json(existing));
     }
 
+    let outbox = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_ATTRIBUTE_DEFINITION_UPDATED,
+        object_type: String::new(),
+        object_id: id.clone(),
+        changes: Value::Object(changes.clone()),
+        metadata: json!({ "user_id": user_id.clone() }),
+    });
     let changes = Value::Object(changes);
 
-    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3), SELECT(4), COMMIT(5).
+    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
+    // CREATE outbox(4), SELECT(5), COMMIT(6).
     let sql = "
         BEGIN TRANSACTION;
         LET $obj = type::record('attribute_definition', $key);
         UPDATE $obj MERGE $changes;
         UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -532,9 +545,10 @@ pub async fn update_attribute_definition(
         .bind(("key", key))
         .bind(("changes", changes))
         .bind(("user", user_id.clone()))
+        .bind(("outbox", outbox))
         .await?
         .check()?;
-    let definitions: Vec<Value> = response.take(4)?;
+    let definitions: Vec<Value> = response.take(5)?;
     let definition = definitions
         .into_iter()
         .next()

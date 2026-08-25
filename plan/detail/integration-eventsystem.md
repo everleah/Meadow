@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Entwurf
+- **Stand:** Implementiert bis Phase-6-Schritt 1: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`). MEF/Import, Webhook-Outbound, Filterung/Coalescing und `emit_events` folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -115,6 +115,7 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 - Ein **Relay-Prozess im Kern** publiziert abgeschlossene Outbox-Einträge asynchron auf dem JetStream-Subject `events.crud` und markiert sie als ausgeliefert (`published_at`).
 - Dadurch ist die API **nie von NATS abhängig**: Ist NATS nicht erreichbar, bleiben Requests funktionsfähig; die Events warten in der Outbox und werden nach Wiederherstellung nachgeliefert (Wiederanlauf-sicher).
 - Auf dem Stream gelten **Retention-Limits** (z. B. Max-Age 7–30 Tage / Max-Bytes, konfigurierbar, [betrieb-deployment.md](betrieb-deployment.md)); verarbeitete Events werden nach Acknowledgment entfernt (WorkQueue-Prinzip). Es gehen keine Änderungen verloren, auch wenn die Middleware kurzfristig nicht erreichbar ist – die **Outbox ist die Quelle**, der Stream nur der Transport.
+- **Implementiert (Schritt 1):** Der Outbox-Write ist in die CRUD-Transaktionen gefaltet (`object.created`/`updated`, `reference.created`/`deleted` bei Re-Parenting, `attribute_definition.created`/`updated`); das Relay (`event.rs::run_relay`) publiziert `pending`-Einträge alle `EVENT_RELAY_INTERVAL_S` (Standard 5) sequenziell auf `events.crud` und markiert `published_at`. `object.deleted` folgt mit dem Soft-Delete (Phase 7).
 - **Umsetzungshinweis aus Phase 5:** Ein WorkQueue-Stream erlaubt nur **einen** gefilterten Konsumenten (Queue-Group über einen Durable). Die nats-py-Bibliothek unterstützt **keine** Consumer-seitige DLQ-Policy; die Dead-Letter-Behandlung erfolgt daher **manuell** (der Worker publiziert beim letzten Zustellversuch in einen dedizierten DLQ-Stream, siehe [jobs-scheduler.md](jobs-scheduler.md)) – dieses Muster wird auch für die Event-/Webhook-Zustellung in Phase 6 wiederverwendet.
 
 **Filterung:**

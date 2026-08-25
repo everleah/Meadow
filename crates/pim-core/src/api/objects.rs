@@ -179,19 +179,27 @@ pub async fn create_object(
     }
 
     let content = json!({
-        "type": object_type,
+        "type": object_type.clone(),
         "attributes": Value::Object(attributes),
         "status": status,
         "version": 1,
         "updated_by": user_id.clone(),
     });
+    let changes = json!({
+        "attributes": content
+            .get("attributes")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    });
 
-    // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), SELECT(4), COMMIT(5).
+    // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), CREATE outbox(4),
+    // SELECT(5), COMMIT(6).
     let sql = "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', rand::ulid());
         CREATE $obj CONTENT $content;
         RELATE $obj->reference->object:object_root SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
+        CREATE outbox_event SET event_type = 'object.created', object_type = $object_type, object_id = type::string($obj.id), changes = $changes, metadata = $metadata, status = 'pending';
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -200,9 +208,12 @@ pub async fn create_object(
         .inner()
         .query(sql)
         .bind(("content", content))
+        .bind(("object_type", object_type))
+        .bind(("changes", changes))
+        .bind(("metadata", json!({ "user_id": user_id.clone() })))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(4)?;
+    let objects: Vec<Value> = response.take(5)?;
     let object = objects
         .into_iter()
         .next()
@@ -483,12 +494,22 @@ pub async fn update_object(
         crate::rules::enforce(&guard)?;
     }
 
-    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3), SELECT(4), COMMIT(5).
+    let outbox = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_OBJECT_UPDATED,
+        object_type: object_type.clone(),
+        object_id: id.clone(),
+        changes: Value::Object(changes.clone()),
+        metadata: json!({ "user_id": user_id.clone() }),
+    });
+
+    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
+    // CREATE outbox(4), SELECT(5), COMMIT(6).
     let sql = "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', $key);
         UPDATE $obj MERGE $changes;
         UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
     ";
@@ -499,9 +520,10 @@ pub async fn update_object(
         .bind(("key", key))
         .bind(("changes", Value::Object(changes)))
         .bind(("user", user_id.clone()))
+        .bind(("outbox", outbox))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(4)?;
+    let objects: Vec<Value> = response.take(5)?;
     let object = objects
         .into_iter()
         .next()
