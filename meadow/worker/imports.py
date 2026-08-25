@@ -116,9 +116,7 @@ async def _import_references(
         target = id_map.get(str(reference.get("out") or ""))
         definition_name = str(reference.get("type") or "")
         definition_id = (
-            definition_name
-            if definition_name.startswith("rel_")
-            else f"rel_{definition_name}"
+            definition_name if definition_name.startswith("rel_") else f"rel_{definition_name}"
         )
         attributes = reference.get("attributes") or {}
         try:
@@ -195,18 +193,14 @@ def build_import_handler(
             external_id = str(entry.get("id") or "")
             object_type = str(entry.get("type") or "<unknown>")
             try:
-                record_id, action = await _upsert_object(
-                    active, core_url, entry, match_by_key
-                )
+                record_id, action = await _upsert_object(active, core_url, entry, match_by_key)
                 if external_id:
                     id_map[external_id] = record_id
                 if action == "created":
                     created += 1
                 else:
                     updated += 1
-                object_results.append(
-                    {"id": record_id, "type": object_type, "status": action}
-                )
+                object_results.append({"id": record_id, "type": object_type, "status": action})
             except Exception as exc:  # noqa: BLE001 - per-object isolation
                 logger.exception("object import failed for %r", external_id or object_type)
                 failed += 1
@@ -214,9 +208,7 @@ def build_import_handler(
                     {"id": external_id, "type": object_type, "status": "failed", "error": str(exc)}
                 )
 
-        reference_results = await _import_references(
-            active, core_url, references, id_map
-        )
+        reference_results = await _import_references(active, core_url, references, id_map)
 
         return {
             "processed": len(objects),
