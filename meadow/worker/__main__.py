@@ -53,9 +53,7 @@ async def main() -> None:
             durable=jobs_durable,
             ack_wait=jobs_ack_wait,
             max_deliver=jobs_max_deliver,
-            handlers={
-                "business_rule": build_business_rule_handler(core_url, api_key=api_key)
-            },
+            handlers={"business_rule": build_business_rule_handler(core_url, api_key=api_key)},
             log_sender=log_sender,
         )
     )
@@ -71,4 +69,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

@@ -191,4 +191,3 @@ def build_business_rule_handler(
             return await run(active, message)
 
     return handle
-
