@@ -402,7 +402,7 @@ Persistierte Konnektor-Konfiguration: die Datenbank ist die dauerhafte Quelle de
 ```
 
 - `name` ist eindeutig und dient zugleich als Konnektor-Schlüssel des Workers; `parameters` ist ein freies JSON-Objekt (je Konnektor-Typ anders belegt).
-- Verwaltung über `/connectors` (Admin) bzw. `GET /connectors` (Worker, `X-Api-Key`); Änderungen am Worker erfordern bis zum Live-Reload einen Neustart.
+- Verwaltung über `/connectors` (Admin) bzw. `GET /connectors` (Worker, `X-Api-Key`). Der Worker lädt Änderungen per **Live-Reload** nach (`serve_webhooks_dynamic`, Intervall `WEBHOOK_RELOAD_INTERVAL_S`, Standard 30 s) – ein Worker-Neustart ist nicht erforderlich.
 
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 

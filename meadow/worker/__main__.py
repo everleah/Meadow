@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 
 from meadow.worker.business_rules import build_business_rule_handler
-from meadow.worker.connectors import fetch_webhook_configs
+from meadow.worker.connectors import load_webhook_configs
 from meadow.worker.exports import build_export_handler
 from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
 from meadow.worker.rules_service import serve
-from meadow.worker.webhooks import WebhookCoalesce, WebhookConfig, WebhookFilter, serve_webhooks
+from meadow.worker.webhooks import serve_webhooks_dynamic
 
 logging.basicConfig(level=logging.INFO)
 # httpx logs every request at INFO; keep only warnings to avoid noise.
@@ -72,32 +71,19 @@ async def main() -> None:
     # Webhook outbound connector: DB-backed config with an env fallback for
     # the initial value. The persisted `connector` table is the durable source
     # of truth; `WEBHOOK_URL` only bootstraps when no connector exists yet.
+    # The consumer live-reloads on connector changes (no worker restart).
+    webhook_reload = float(os.environ.get("WEBHOOK_RELOAD_INTERVAL_S", "30"))
     tasks: list[asyncio.Task] = [rules_task, jobs_task]
-    webhook_configs = await fetch_webhook_configs(core_url, api_key=api_key)
-    if not webhook_configs:
-        webhook_url = os.environ.get("WEBHOOK_URL")
-        if webhook_url:
-            webhook_configs.append(
-                WebhookConfig(
-                    key="env",
-                    url=webhook_url,
-                    method=os.environ.get("WEBHOOK_METHOD", "POST"),
-                    headers=json.loads(os.environ.get("WEBHOOK_HEADERS", "{}")),
-                    filter=WebhookFilter(
-                        event_types=_csv(os.environ.get("WEBHOOK_FILTER_EVENT_TYPES")),
-                        object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
-                        attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
-                    ),
-                    coalesce=WebhookCoalesce(
-                        enabled=_env_bool(os.environ.get("WEBHOOK_COALESCE_ENABLED")),
-                        window_seconds=float(os.environ.get("WEBHOOK_COALESCE_WINDOW_S", "30")),
-                    ),
-                )
+    tasks.append(
+        asyncio.create_task(
+            serve_webhooks_dynamic(
+                nats_url,
+                lambda: load_webhook_configs(core_url, api_key=api_key),
+                reload_interval_s=webhook_reload,
+                log_sender=log_sender,
             )
-    if webhook_configs:
-        tasks.append(
-            asyncio.create_task(serve_webhooks(nats_url, webhook_configs, log_sender=log_sender))
         )
+    )
 
     try:
         await asyncio.gather(*tasks)
@@ -107,18 +93,6 @@ async def main() -> None:
         for task in (sender_task, *tasks):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-
-
-def _csv(value: str | None) -> list[str]:
-    """Splits a comma-separated env value into a trimmed list (empty tokens dropped)."""
-    if not value:
-        return []
-    return [token.strip() for token in value.split(",") if token.strip()]
-
-
-def _env_bool(value: str | None) -> bool:
-    """Parses a boolean environment variable."""
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

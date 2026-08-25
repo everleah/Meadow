@@ -11,6 +11,7 @@ import nats
 from meadow.worker.webhooks import (
     WebhookConfig,
     _CoalesceBuffer,
+    _config_signature,
     _Connector,
     _deliver_coalesced,
     _DeliveryTracker,
@@ -256,3 +257,15 @@ async def test_deliver_coalesced_sends_latest_with_flags_and_acks_all() -> None:
     assert body["bundled_count"] == 2
     assert msg1.acked is True
     assert msg2.acked is True
+
+
+def test_config_signature_is_order_independent() -> None:
+    one = config(url="https://one.example", key="one")
+    two = config(url="https://two.example", key="two")
+    assert _config_signature([one, two]) == _config_signature([two, one])
+
+
+def test_config_signature_changes_on_reconfiguration() -> None:
+    original = config(url="https://one.example", key="one")
+    changed = config(url="https://one.example/changed", key="one")
+    assert _config_signature([original]) != _config_signature([changed])

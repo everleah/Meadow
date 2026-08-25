@@ -3,18 +3,20 @@
 Connector configuration lives in the `connector` table (managed via the core's
 `/connectors` API and later the admin UI). Environment variables only seed the
 initial value; the database is the durable source of truth. The worker loads
-enabled connectors at startup through `GET /connectors` using the machine-to-
-machine API key.
+enabled connectors through `GET /connectors` using the machine-to-machine API
+key and can reload them at runtime (live reload).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Any
 
 import httpx
 
-from meadow.worker.webhooks import WebhookConfig
+from meadow.worker.webhooks import WebhookCoalesce, WebhookConfig, WebhookFilter
 
 logger = logging.getLogger(__name__)
 
@@ -25,20 +27,16 @@ CONNECTOR_TYPE_WEBHOOK = "webhook"
 async def fetch_webhook_configs(core_url: str, api_key: str | None) -> list[WebhookConfig]:
     """Loads all enabled `webhook` connectors from the core.
 
-    Returns an empty list when the core is unreachable or no connectors are
-    configured (the caller falls back to the environment-based bootstrap
-    configuration).
+    Raises on transport/HTTP failure so the caller can decide whether to keep
+    the current configuration (live reload) or fall back to the environment
+    bootstrap (initial load). Returns an empty list when no connector exists.
     """
     url = f"{core_url.rstrip('/')}/connectors?type={CONNECTOR_TYPE_WEBHOOK}&enabled=true"
     headers = {"x-api-key": api_key} if api_key else {}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            rows = response.json()
-    except Exception:  # noqa: BLE001 - the worker still starts without connectors
-        logger.exception("failed to load webhook connectors from %s", url)
-        return []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        rows = response.json()
 
     configs: list[WebhookConfig] = []
     for row in rows:
@@ -46,6 +44,46 @@ async def fetch_webhook_configs(core_url: str, api_key: str | None) -> list[Webh
         if config is not None:
             configs.append(config)
     return configs
+
+
+def env_bootstrap_config() -> WebhookConfig | None:
+    """Builds the legacy environment-based webhook config, or `None` if unset.
+
+    `WEBHOOK_URL` only bootstraps the initial value; the persisted `connector`
+    table is the durable source of truth.
+    """
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if not webhook_url:
+        return None
+    return WebhookConfig(
+        key="env",
+        url=webhook_url,
+        method=os.environ.get("WEBHOOK_METHOD", "POST"),
+        headers=json.loads(os.environ.get("WEBHOOK_HEADERS", "{}")),
+        filter=WebhookFilter(
+            event_types=_csv(os.environ.get("WEBHOOK_FILTER_EVENT_TYPES")),
+            object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
+            attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
+        ),
+        coalesce=WebhookCoalesce(
+            enabled=_env_bool(os.environ.get("WEBHOOK_COALESCE_ENABLED")),
+            window_seconds=float(os.environ.get("WEBHOOK_COALESCE_WINDOW_S", "30")),
+        ),
+    )
+
+
+async def load_webhook_configs(core_url: str, api_key: str | None) -> list[WebhookConfig]:
+    """Loads webhook connectors; the database is authoritative, env bootstraps.
+
+    Raises on transport failure (the live-reload caller keeps the current set
+    on failure). When no connector exists in the database, the environment
+    bootstrap config is returned instead.
+    """
+    configs = await fetch_webhook_configs(core_url, api_key)
+    if configs:
+        return configs
+    bootstrap = env_bootstrap_config()
+    return [bootstrap] if bootstrap else []
 
 
 def _webhook_config_from_row(row: dict[str, Any]) -> WebhookConfig | None:
@@ -97,3 +135,15 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [token.strip() for token in value.split(",") if token.strip()]
     return []
+
+
+def _csv(value: str | None) -> list[str]:
+    """Splits a comma-separated env value into a trimmed list (empty tokens dropped)."""
+    if not value:
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
+def _env_bool(value: str | None) -> bool:
+    """Parses a boolean environment variable."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}

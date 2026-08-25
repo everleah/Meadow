@@ -24,6 +24,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -49,6 +50,8 @@ WEBHOOK_ACK_WAIT_S = 300.0
 WEBHOOK_MAX_DELIVER = 5
 #: Delay before a failed event is redelivered after a negative ack.
 WEBHOOK_NAK_DELAY_S = 5.0
+#: Interval between connector-config reloads (live reload).
+WEBHOOK_RELOAD_INTERVAL_S = 30.0
 
 
 class WebhookFilter(BaseModel):
@@ -412,6 +415,77 @@ async def serve_webhooks(
             await nc.close()
 
 
+def _config_signature(configs: list[WebhookConfig]) -> tuple[str, ...]:
+    """Stable fingerprint of the connector set for change detection."""
+    return tuple(
+        json.dumps(config.model_dump(mode="json"), sort_keys=True)
+        for config in sorted(configs, key=lambda item: item.key)
+    )
+
+
+async def serve_webhooks_dynamic(
+    nats_url: str,
+    load_configs: Callable[[], Awaitable[list[WebhookConfig]]],
+    *,
+    reload_interval_s: float = WEBHOOK_RELOAD_INTERVAL_S,
+    subject: str = EVENTS_SUBJECT,
+    stream: str = EVENTS_STREAM,
+    durable: str = EVENTS_DURABLE,
+    ack_wait: float = WEBHOOK_ACK_WAIT_S,
+    max_deliver: int = WEBHOOK_MAX_DELIVER,
+    nak_delay: float = WEBHOOK_NAK_DELAY_S,
+    log_sender: LogSender | None = None,
+) -> None:
+    """Supervises the webhook consumer and live-reloads connector config.
+
+    Reloads enabled connectors every `reload_interval_s`. When the set changes
+    (added, removed, or reconfigured), the consumer task is restarted with the
+    new configuration, so no worker restart is required. The shared durable
+    JetStream consumer guarantees at-least-once delivery across restarts.
+    """
+    task: asyncio.Task | None = None
+    current_sig: tuple[str, ...] = ()
+    try:
+        while True:
+            try:
+                new_configs = await load_configs()
+            except Exception:  # noqa: BLE001 - keep the current config on failure
+                logger.exception("failed to load webhook connectors; keeping current config")
+            else:
+                new_sig = _config_signature(new_configs)
+                if new_sig != current_sig:
+                    logger.info(
+                        "webhook connector config changed (%d connector(s)); reloading consumer",
+                        len(new_configs),
+                    )
+                    if task is not None:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                        task = None
+                    current_sig = new_sig
+                    if new_configs:
+                        task = asyncio.create_task(
+                            serve_webhooks(
+                                nats_url,
+                                new_configs,
+                                subject=subject,
+                                stream=stream,
+                                durable=durable,
+                                ack_wait=ack_wait,
+                                max_deliver=max_deliver,
+                                nak_delay=nak_delay,
+                                log_sender=log_sender,
+                            )
+                        )
+            await asyncio.sleep(reload_interval_s)
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 async def _handle_message(
     client: httpx.AsyncClient,
     js,
@@ -449,9 +523,11 @@ __all__ = [
     "EVENTS_DURABLE",
     "EVENTS_STREAM",
     "EVENTS_SUBJECT",
+    "WEBHOOK_RELOAD_INTERVAL_S",
     "WebhookCoalesce",
     "WebhookConfig",
     "WebhookFilter",
     "matches_filter",
     "serve_webhooks",
+    "serve_webhooks_dynamic",
 ]
