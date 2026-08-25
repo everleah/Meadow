@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 
@@ -13,6 +14,7 @@ from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
 from meadow.worker.rules_service import serve
+from meadow.worker.webhooks import WebhookConfig, WebhookFilter, serve_webhooks
 
 logging.basicConfig(level=logging.INFO)
 # httpx logs every request at INFO; keep only warnings to avoid noise.
@@ -65,14 +67,40 @@ async def main() -> None:
             log_sender=log_sender,
         )
     )
+
+    # Webhook outbound connector: optional, enabled by `WEBHOOK_URL`.
+    tasks: list[asyncio.Task] = [rules_task, jobs_task]
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        webhook_config = WebhookConfig(
+            url=webhook_url,
+            method=os.environ.get("WEBHOOK_METHOD", "POST"),
+            headers=json.loads(os.environ.get("WEBHOOK_HEADERS", "{}")),
+            filter=WebhookFilter(
+                event_types=_csv(os.environ.get("WEBHOOK_FILTER_EVENT_TYPES")),
+                object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
+                attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
+            ),
+        )
+        tasks.append(
+            asyncio.create_task(serve_webhooks(nats_url, webhook_config, log_sender=log_sender))
+        )
+
     try:
-        await asyncio.gather(rules_task, jobs_task)
+        await asyncio.gather(*tasks)
     finally:
-        for task in (sender_task, rules_task, jobs_task):
+        for task in (sender_task, *tasks):
             task.cancel()
-        for task in (sender_task, rules_task, jobs_task):
+        for task in (sender_task, *tasks):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+def _csv(value: str | None) -> list[str]:
+    """Splits a comma-separated env value into a trimmed list (empty tokens dropped)."""
+    if not value:
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
 
 
 if __name__ == "__main__":

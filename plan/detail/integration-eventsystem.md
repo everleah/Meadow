@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 4: Transactional Outbox (atomare Event-Erzeugung bei CRUD) + Event-Relay (`events.crud`), MEF-Import (`POST /imports` + `inbound_import`-Konnektor mit Business-Schlüssel-Upsert und Referenz-Anlage), quantifizierte Werte (SI-Normalisierung über `GET /units/convert`), `normalization`-Regeln (R3) **und** der Outbound-Konnektor `json_export` (`outbound_export`-Job, MEF-Dokument im `job_run.result`). Webhook-Outbound, Filterung/Coalescing, Datei-Upload und `emit_events` folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 5: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export` **und** Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ). Coalescing, Datei-Upload, `emit_events` und Quell-Referenz-Dedup folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -136,6 +136,8 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 ## Webhook-Outbound zur Middleware
 
 Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bestehende Middleware zu liefern. Er kombiniert das Eventsystem mit einem zuverlässigen HTTP-Versand.
+
+- **Implementiert (Schritt 5):** Der Worker startet bei gesetztem `WEBHOOK_URL` einen eigenen `events.crud`-Pull-Konsumenten (`meadow/worker/webhooks.py`, Durable `event-webhook`): Filter (`event_types`/`object_types`/`attribute_changes`), HTTP-Versand mit Retry (NATS-Redelivery per Negative-Ack) und manueller DLQ (`EVENTS_DLQ`, Subject `events.dlq.webhook`). Konfiguration über Env-Variablen (`WEBHOOK_URL`, `WEBHOOK_FILTER_*`, …); Coalescing und persistierte Konnektor-Konfiguration folgen.
 
 **Konfiguration (als `job_definition` oder Konnektor-Konfiguration):**
 
