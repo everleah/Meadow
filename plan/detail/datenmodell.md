@@ -315,6 +315,7 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
 ```
 
 - Der Triggerwert `event` (Event-getriggerte Jobs) ist **reserviert** für Phase 5+; im MVP sind nur `schedule` und `manual` aktiv (Details [jobs-scheduler.md](jobs-scheduler.md)).
+- `job_definition_id` ist **optional** (`option<string>`): Ad-hoc-Jobs ohne Definition (z. B. `POST /rules/{id}/recompute`) haben kein `job_definition_id`; im JSON wird das Feld weggelassen bzw. als `null` geliefert.
 
 ### Tabelle `audit_log`
 

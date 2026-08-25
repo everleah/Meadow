@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md#5-api-design-openapi-rest))
 - **Relevante Phasen:** Phase 1–9
-- **Stand:** Entwurf
+- **Stand:** Implementiert bis Phase 5 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs). Offene Endpunkte folgen in Phase 6/7/9 (Import/Export, Webhooks, Bulk, Picker/Graph).
 
 Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAPI 3.x.
 
@@ -14,6 +14,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/objects`                                           | Neues Objekt anlegen                                                                                                                                     |
 | GET     | `/objects/{id}`                                      | Objekt inkl. Metadaten und Referenzen laden                                                                                                              |
 | PATCH   | `/objects/{id}`                                      | Teilaktualisierung der Attribute/Status                                                                                                                  |
+| PATCH   | `/objects/{id}/computed`                            | Nur deklariert-berechnete Werte mergen (Worker-Schreibpfad, `X-Api-Key` oder Admin; ohne Regel-Triggering)                                                |
 | DELETE  | `/objects/{id}`                                      | Objekt löschen (Soft Delete, Kaskade über die Kompositionskette; Aggregationen bleiben unberührt)                                                        |
 | GET     | `/objects?type=product&filter=...`                   | Suche & Filterung mit Pagination; optional`completeness_lt`/`missing_required` (Vollständigkeits-Filter)                                                 |
 | GET     | `/objects/picker?q=...&types=...`                    | Such-Endpunkt für den Referenz-Picker (Label-Suche, optional Zieltyp-Filter)                                                                             |
@@ -37,6 +38,10 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/jobs/{job_def_id}/run`                             | Job manuell starten                                                                                                                                      |
 | GET     | `/jobs/{job_def_id}/runs`                            | Job-Historie abrufen                                                                                                                                     |
 | PATCH   | `/jobs/runs/{run_id}`                                | Status eines Job-Runs aktualisieren (Worker)                                                                                                             |
+| GET     | `/jobs`                                              | Job-Definitionen auflisten (Filter: `type`, `enabled`; nur `admin`/`superadmin`)                                                                        |
+| POST    | `/jobs`                                              | Job-Definition anlegen (nur `admin`/`superadmin`, Name eindeutig)                                                                                       |
+| GET     | `/jobs/{id}`                                         | Job-Definition laden (nur `admin`/`superadmin`)                                                                                                         |
+| PATCH   | `/jobs/{id}`                                         | Job-Definition bearbeiten (`schedule` mit `null` löschbar; nur `admin`/`superadmin`)                                                                     |
 | POST    | `/imports`                                           | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert`job_run`-ID (202)                                                                       |
 | GET     | `/jobs/runs?ids=…`                                   | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling                                                                                |
 | POST    | `/search`                                            | Volltextsuche über Objekte                                                                                                                               |
@@ -61,7 +66,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PUT     | `/system/settings/{key}`                             | Systemeinstellung ändern (persistiert, Audit; nur`admin`/`superadmin`)                                                                                   |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
-- **Machine-to-Machine**: `POST /system/logs` und `GET /system/settings` akzeptieren zusätzlich zum Admin-JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts.
+- **Machine-to-Machine**: `POST /system/logs`, `GET /system/settings`, `PATCH /jobs/runs/{run_id}` und `PATCH /objects/{id}/computed` akzeptieren zusätzlich zum Admin-JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen (Ziel). Phase 1 nutzt vorläufig Offset-Pagination (`limit`/`start`); Cursor-Pagination folgt in einer späteren Phase.
 - **IDs**: Ressourcen-IDs sind SurrealDB-Record-IDs (`tabelle:key`); über die API angelegte Datensätze erhalten ULID-Keys (z. B. `object:01M0…`, `user:<ulid>`). Querverweis-Felder enthalten den Record-Key (z. B. `unit_id: "unit_m"`). Details in [datenmodell.md](datenmodell.md).

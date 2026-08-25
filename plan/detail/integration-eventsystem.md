@@ -115,6 +115,7 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 - Ein **Relay-Prozess im Kern** publiziert abgeschlossene Outbox-Einträge asynchron auf dem JetStream-Subject `events.crud` und markiert sie als ausgeliefert (`published_at`).
 - Dadurch ist die API **nie von NATS abhängig**: Ist NATS nicht erreichbar, bleiben Requests funktionsfähig; die Events warten in der Outbox und werden nach Wiederherstellung nachgeliefert (Wiederanlauf-sicher).
 - Auf dem Stream gelten **Retention-Limits** (z. B. Max-Age 7–30 Tage / Max-Bytes, konfigurierbar, [betrieb-deployment.md](betrieb-deployment.md)); verarbeitete Events werden nach Acknowledgment entfernt (WorkQueue-Prinzip). Es gehen keine Änderungen verloren, auch wenn die Middleware kurzfristig nicht erreichbar ist – die **Outbox ist die Quelle**, der Stream nur der Transport.
+- **Umsetzungshinweis aus Phase 5:** Ein WorkQueue-Stream erlaubt nur **einen** gefilterten Konsumenten (Queue-Group über einen Durable). Die nats-py-Bibliothek unterstützt **keine** Consumer-seitige DLQ-Policy; die Dead-Letter-Behandlung erfolgt daher **manuell** (der Worker publiziert beim letzten Zustellversuch in einen dedizierten DLQ-Stream, siehe [jobs-scheduler.md](jobs-scheduler.md)) – dieses Muster wird auch für die Event-/Webhook-Zustellung in Phase 6 wiederverwendet.
 
 **Filterung:**
 
