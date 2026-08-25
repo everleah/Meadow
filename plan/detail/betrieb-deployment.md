@@ -155,6 +155,9 @@ LOG_PERSIST_CATEGORIES=app,rule
 LOG_RETENTION_DAYS=30
 LOG_RATE_LIMIT=1000
 
+# Log-Retention-Cleanup (Kern, periodischer Job)
+LOG_CLEANUP_INTERVAL_S=3600
+
 # Worker-Jobkonsument (JetStream)
 JOBS_SUBJECT=jobs.*
 JOBS_STREAM=JOBS

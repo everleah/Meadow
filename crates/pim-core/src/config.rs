@@ -40,6 +40,8 @@ pub struct Config {
     /// Scheduler sync interval, in seconds (how often job definitions are
     /// reconciled with the cron scheduler).
     pub scheduler_interval_seconds: u64,
+    /// Log-retention cleanup interval, in seconds.
+    pub log_cleanup_interval_seconds: u64,
 }
 
 impl Config {
@@ -66,6 +68,7 @@ impl Config {
             rules_degrade: env_or_bool("RULES_DEGRADE", false),
             rules_breaker_threshold: env_or_parse("RULES_BREAKER_THRESHOLD", 3),
             scheduler_interval_seconds: env_or_parse("SCHEDULER_INTERVAL_S", 60),
+            log_cleanup_interval_seconds: env_or_parse("LOG_CLEANUP_INTERVAL_S", 3600),
         }
     }
 }

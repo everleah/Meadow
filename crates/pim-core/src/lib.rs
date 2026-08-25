@@ -16,6 +16,7 @@ pub mod event;
 pub mod inheritance;
 pub mod jobqueue;
 pub mod language;
+pub mod log_cleanup;
 pub mod rules;
 pub mod scheduler;
 pub mod schema;
@@ -56,6 +57,8 @@ pub async fn run() {
         state.db.clone(),
         state.config.clone(),
     ));
+    // Start the log-retention cleanup.
+    tokio::spawn(log_cleanup::run(state.db.clone(), state.config.clone()));
 
     axum::serve(listener, app::router(state))
         .await

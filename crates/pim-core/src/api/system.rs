@@ -516,6 +516,16 @@ async fn resolve_settings(db: &Db) -> Result<Value, ApiError> {
     Ok(Value::Object(resolved))
 }
 
+/// Resolves the configured log-retention window in days (default 30).
+pub(crate) async fn resolve_retention_days(db: &Db) -> Result<i64, ApiError> {
+    let settings = resolve_settings(db).await?;
+    let days = settings
+        .get("log_retention_days")
+        .and_then(Value::as_i64)
+        .unwrap_or(30);
+    Ok(days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
