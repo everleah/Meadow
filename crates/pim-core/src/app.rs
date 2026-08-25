@@ -140,6 +140,8 @@ pub fn router(state: AppState) -> Router {
             "/imports/{document_id}",
             get(api::imports::get_import_document),
         )
+        .route("/units", get(api::units::list_units))
+        .route("/units/convert", get(api::units::convert))
         .with_state(state)
 }
 

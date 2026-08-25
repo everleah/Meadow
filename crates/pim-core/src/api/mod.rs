@@ -13,6 +13,7 @@ pub mod references;
 pub mod rules;
 pub mod search;
 pub mod system;
+pub mod units;
 pub mod users;
 
 use utoipa::OpenApi;
@@ -77,6 +78,8 @@ use utoipa::OpenApi;
         system::put_setting,
         system::delete_setting,
         search::search,
+        units::list_units,
+        units::convert,
     ),
     components(schemas(
         auth::LoginRequest,
@@ -119,6 +122,8 @@ use utoipa::OpenApi;
         system::ListLogs,
         system::PutSetting,
         search::SearchRequest,
+        units::ListUnits,
+        units::ConvertQuery,
     ))
 )]
 pub struct ApiDoc;

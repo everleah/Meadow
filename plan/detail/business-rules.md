@@ -130,7 +130,7 @@ Der Rust-Kern bleibt die **DB-Autorität**, ist aber für die Regelauswertung vo
 
 ### Nicht-blockierende Kontexte
 
-- **Normalization (R3):** läuft in der Import-Pipeline des Workers (Abschnitt 7) auf den MEF-Daten vor dem Schreiben; gleiche Sandbox, kein Aufruf über den Kern.
+- **Normalization (R3):** läuft in der Import-Pipeline des Workers (Abschnitt 7) auf den MEF-Daten vor dem Schreiben; gleiche Sandbox, kein Aufruf über den Kern. **Implementiert (Phase 6, Schritt 3):** Der `inbound_import`-Worker lädt aktive `normalization`-Regeln (`GET /rules`), führt sie je Objekt mit `mode="import"` in der Sandbox aus und merged `result.computed` in die Attribute vor dem Schreiben.
 - **Bulk (R5):** Job `business_rule` über eine gefilterte Objektmenge (Abschnitt 6), async, mit Report.
 
 ## Berechnete Attribute (R2) – Timing & Recompute

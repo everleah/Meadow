@@ -16,14 +16,20 @@ a report is returned and stored in `job_run.result`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 import httpx
 
+from meadow.rules import Context, execute_rule
+from meadow.worker.business_rules import evaluation_lock
 from meadow.worker.jobs import JobHandler, JobMessage
 
 logger = logging.getLogger(__name__)
+
+#: Sandbox budget for normalization rules in the import pipeline (bulk-like).
+NORMALIZATION_TIMEOUT_SECONDS = 30.0
 
 #: The MEF object `id` is an external identifier, distinct from the core's
 #: `object:<ulid>` record id. It is only used to wire references, never as a
@@ -52,21 +58,98 @@ async def _fetch_document(
     return document
 
 
+async def _load_normalization_rules(
+    client: httpx.AsyncClient,
+    core_url: str,
+) -> list[dict[str, Any]]:
+    """Loads active `normalization` rules (R3) from the core."""
+    response = await client.get(
+        f"{core_url}/rules",
+        params={"type": "normalization", "state": "active", "limit": 1000},
+    )
+    response.raise_for_status()
+    return [rule for rule in response.json() if isinstance(rule, dict) and rule.get("script")]
+
+
+def _rules_for_type(rules: list[dict[str, Any]], object_type: str) -> list[dict[str, Any]]:
+    """Returns the rules whose `applies_to` covers `object_type` (empty = all)."""
+    selected: list[dict[str, Any]] = []
+    for rule in rules:
+        applies_to = rule.get("applies_to") or []
+        if not applies_to or object_type in applies_to:
+            selected.append(rule)
+    return selected
+
+
+def _evaluate_normalization(
+    rules: list[dict[str, Any]],
+    object_type: str,
+    attributes: dict[str, Any],
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Evaluates normalization rules against one object's raw MEF values."""
+    normalized: dict[str, Any] = {}
+    view = {"id": None, "type": object_type, "status": None, "attributes": attributes}
+    ctx = Context(
+        rule_type="normalization",
+        object_type=object_type,
+        mode="import",
+        actor="system",
+    )
+    for rule in rules:
+        result = execute_rule(str(rule.get("script")), view, ctx, timeout_s=timeout_s)
+        normalized.update(result.computed)
+    return normalized
+
+
+async def _normalize_object(
+    rules: list[dict[str, Any]],
+    object_type: str,
+    attributes: dict[str, Any],
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Runs the normalization rules (serialized) and returns the new values."""
+    if not rules:
+        return {}
+    async with evaluation_lock:
+        return await asyncio.to_thread(
+            _evaluate_normalization, rules, object_type, attributes, timeout_s
+        )
+
+
+async def _convert_units(
+    client: httpx.AsyncClient,
+    core_url: str,
+    attributes: dict[str, Any],
+) -> None:
+    """Converts quantified `{"value":…, "unit":…}` values to canonical SI."""
+    for name, value in list(attributes.items()):
+        if not (isinstance(value, dict) and "value" in value):
+            continue
+        number = value.get("value")
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            raise RuntimeError(f"quantified value for `{name}` must be numeric")
+        unit = value.get("unit")
+        if unit is None:
+            attributes[name] = number
+            continue
+        response = await client.get(
+            f"{core_url}/units/convert",
+            params={"value": number, "from": str(unit)},
+        )
+        response.raise_for_status()
+        attributes[name] = response.json()["value"]
+
+
 async def _upsert_object(
     client: httpx.AsyncClient,
     core_url: str,
-    entry: dict[str, Any],
+    object_type: str,
+    attributes: dict[str, Any],
+    status: str,
     match_by_key: str | None,
 ) -> tuple[str, str]:
     """Creates or updates one MEF object; returns `(record_id, action)`."""
-    object_type = str(entry.get("type") or "").strip()
-    if not object_type:
-        raise RuntimeError("MEF object is missing `type`")
-    attributes = entry.get("attributes") or {}
-    if not isinstance(attributes, dict):
-        raise RuntimeError("MEF object `attributes` must be an object")
-    status = entry.get("status") or "draft"
-
     existing_id: str | None = None
     if match_by_key:
         key_value = _key_value(attributes, match_by_key)
@@ -184,6 +267,8 @@ def build_import_handler(
         if not isinstance(references, list):
             raise RuntimeError("MEF `references` must be an array")
 
+        normalization_rules = await _load_normalization_rules(active, core_url)
+
         id_map: dict[str, str] = {}
         created = 0
         updated = 0
@@ -191,9 +276,31 @@ def build_import_handler(
         object_results: list[dict[str, Any]] = []
         for entry in objects:
             external_id = str(entry.get("id") or "")
-            object_type = str(entry.get("type") or "<unknown>")
+            object_type = str(entry.get("type") or "").strip()
             try:
-                record_id, action = await _upsert_object(active, core_url, entry, match_by_key)
+                if not object_type:
+                    raise RuntimeError("MEF object is missing `type`")
+                attributes = entry.get("attributes")
+                if not isinstance(attributes, dict):
+                    raise RuntimeError("MEF object `attributes` must be an object")
+                attributes = dict(attributes)
+                status = entry.get("status") or "draft"
+
+                type_rules = _rules_for_type(normalization_rules, object_type)
+                if type_rules:
+                    attributes.update(
+                        await _normalize_object(
+                            type_rules,
+                            object_type,
+                            attributes,
+                            NORMALIZATION_TIMEOUT_SECONDS,
+                        )
+                    )
+                await _convert_units(active, core_url, attributes)
+
+                record_id, action = await _upsert_object(
+                    active, core_url, object_type, attributes, str(status), match_by_key
+                )
                 if external_id:
                     id_map[external_id] = record_id
                 if action == "created":

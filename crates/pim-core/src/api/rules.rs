@@ -6,7 +6,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -299,10 +299,13 @@ pub async fn get_rule(
     responses((status = 200, description = "Rules", body = Vec<Value>))
 )]
 pub async fn list_rules(
-    AuthUser(_claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListRules>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    // Any authenticated role may read rules; the import worker reads active
+    // `normalization` rules via the machine-to-machine API key.
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_VIEWER)?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 

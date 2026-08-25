@@ -67,7 +67,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PUT     | `/system/settings/{key}`                             | Systemeinstellung ändern (persistiert, Audit; nur`admin`/`superadmin`)                                                                                   |
 
 - **Authentifizierung**: JWT-Bearer-Token im Authorization-Header.
-- **Machine-to-Machine**: `POST /system/logs`, `GET /system/settings`, `PATCH /jobs/runs/{run_id}`, `PATCH /objects/{id}/computed`, `POST /imports`, `GET /imports/{document_id}` sowie – für den Import-Konnektor – `POST /objects`, `PATCH /objects/{id}` und `POST /references` akzeptieren zusätzlich zum JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts. API-Key-Schreibvorgänge werden dem Akteur `system` zugeschrieben.
+- **Machine-to-Machine**: `POST /system/logs`, `GET /system/settings`, `PATCH /jobs/runs/{run_id}`, `PATCH /objects/{id}/computed`, `POST /imports`, `GET /imports/{document_id}`, `GET /rules` sowie – für den Import-Konnektor – `POST /objects`, `PATCH /objects/{id}` und `POST /references` akzeptieren zusätzlich zum JWT einen `X-Api-Key` (`LOG_INGEST_API_KEY`) – für Worker/Service-Accounts. API-Key-Schreibvorgänge werden dem Akteur `system` zugeschrieben.
 - **Rollen**: `superadmin`, `admin`, `editor`, `viewer` – werden im JWT abgebildet (Details in Abschnitt 9 des Hauptdokuments).
 - **Pagination**: Cursor-basiert für große Listen (Ziel). Phase 1 nutzt vorläufig Offset-Pagination (`limit`/`start`); Cursor-Pagination folgt in einer späteren Phase.
 - **IDs**: Ressourcen-IDs sind SurrealDB-Record-IDs (`tabelle:key`); über die API angelegte Datensätze erhalten ULID-Keys (z. B. `object:01M0…`, `user:<ulid>`). Querverweis-Felder enthalten den Record-Key (z. B. `unit_id: "unit_m"`). Details in [datenmodell.md](datenmodell.md).
@@ -124,6 +124,10 @@ Alle Zeitwerte in Requests und Responses folgen der Datumswerte-Konvention (Absc
 - Zeitwerte gelten für Systemfelder (`created_at`, `updated_at`, `started_at`, `finished_at`, `timestamp`) sowie für Attribute vom Typ `date`/`datetime` (Attributdefinitionen, Abschnitt 4).
 
 ## Werte mit Einheiten in der API
+
+Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.md](einheiten.md)):
+
+- **Implementiert:** `GET /units` (Katalog, Filter `symbol`/`dimension`) und `GET /units/convert?value=&from=&to=` (linear-affine Umrechnung `value * factor + offset`, `to` optional = kanonische SI-Einheit der Dimension, 400 bei Dimensions-Mismatch, 404 bei unbekannter Einheit). `POST/PATCH/DELETE /units` für benutzerdefinierte Einheiten sind eine spätere Ausbaustufe.
 
 Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.md](einheiten.md)):
 

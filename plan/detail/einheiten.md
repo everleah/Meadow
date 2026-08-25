@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Datenmodell](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 1–3 (Datenmodell & Speicherung), Phase 6 (MEF), Phase 7 (Frontend)
-- **Stand:** Entwurf
+- **Stand:** Einheiten-Katalog (Seed) und REST-API (`GET /units`, `GET /units/convert`) implementiert; die Normalisierung quantifizierter MEF-Werte in die kanonische SI-Einheit läuft im Import-Worker (Phase 6).
 
 Technische Produktwerte (Höhe, Breite, Spannung, Leistung, …) bestehen in der Regel aus einem **numerischen Wert und einer Einheit** (z. B. `12,5 mm`, `230 V`, `750 W`). Dieses Dokument legt fest, wie Meadow PIM solche **quantifizierten Werte** modelliert, speichert, austauscht und darstellt. Die beteiligten Tabellen stehen im Detaildokument [datenmodell.md](datenmodell.md), das API-Verhalten in [api-design.md](api-design.md).
 

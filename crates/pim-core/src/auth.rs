@@ -123,7 +123,14 @@ pub fn api_key_or_role(
         .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
     let claims = verify(&config.jwt_secret, token)
         .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
-    if !claims.has_role(required_role) {
+    let allowed = match required_role {
+        // `viewer` is the base role: any authenticated token qualifies.
+        ROLE_VIEWER => true,
+        ROLE_EDITOR => claims.is_editor(),
+        ROLE_ADMIN | ROLE_SUPERADMIN => claims.is_admin(),
+        other => claims.has_role(other),
+    };
+    if !allowed {
         return Err(ApiError::forbidden("insufficient role"));
     }
     Ok(claims.sub)

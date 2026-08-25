@@ -1,5 +1,7 @@
 //! SurrealDB connection.
 
+use std::sync::Arc;
+
 use surrealdb::Surreal;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -7,9 +9,15 @@ use surrealdb::opt::auth::Root;
 use crate::config::Config;
 
 /// Handle to the SurrealDB instance.
+///
+/// The `Surreal<Client>` is shared behind an `Arc` so every clone of `Db`
+/// (one per HTTP request via `AppState`) reuses the **same** session. Cloning
+/// `Surreal<Client>` directly would create a fresh session whose namespace/
+/// database replay is asynchronous, which intermittently yields
+/// "Specify a namespace to use" under concurrent requests.
 #[derive(Debug, Clone)]
 pub struct Db {
-    inner: Surreal<Client>,
+    inner: Arc<Surreal<Client>>,
 }
 
 impl Db {
@@ -38,11 +46,13 @@ impl Db {
             .use_ns(config.surrealdb_namespace.as_str())
             .use_db(config.surrealdb_database.as_str())
             .await?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
     /// Returns the underlying SurrealDB client.
     pub fn inner(&self) -> &Surreal<Client> {
-        &self.inner
+        self.inner.as_ref()
     }
 }
