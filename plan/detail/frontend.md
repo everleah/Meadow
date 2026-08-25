@@ -20,6 +20,35 @@ Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprach
 - Keine doppelte UI-Pflege.
 - Rollen- und berechtigungsbasierte Zugriffskontrolle einfach umsetzbar (Berechtigungen aus `GET /auth/me`).
 
+## Branding & Corporate Identity (CI)
+
+**Leitbild (Bildsprache):** „Eine grüne Wiese in einem Tal mit Fluss, umrandet mit Wäldern und Bergen.“
+
+Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild. Logos und weitere Grafiken folgen später und sind **nicht** Teil des MVP.
+
+**Farbpalette (Startwerte):**
+
+| Rolle      | Farbe          | Hex       | Tailwind-Äquivalent | Leitbild-Bezug               |
+|------------|----------------|-----------|---------------------|------------------------------|
+| Primär     | Meadow Green   | `#16a34a` | `green-600`         | Wiese (Markenfarbe)          |
+| Sekundär   | River Blue     | `#0ea5e9` | `sky-500`           | Fluss                        |
+| Akzent     | Sunlight Amber | `#d97706` | `amber-600`         | Sonnenlicht/Warmton          |
+| Dunkel     | Mountain Slate | `#1e293b` | `slate-800`         | Berge/Wälder (Kontrast)      |
+| Neutral    | Valley Mist    | `#f1f5f9` | `slate-100`         | Tal (heller Hintergrund)     |
+| Erfolg     | Meadow Light   | `#22c55e` | `green-500`         | positiv (Status)             |
+
+**Barrierefreiheit:** `#16a34a` als Primärfarbe erreicht mit weißer Schrift ca. 3,3:1 Kontrast (AA für große Schrift/UI-Komponenten, nicht für kleinen Fließtext). Für kleinen Text auf Weiß ist die dunklere Variante `#15803d` (`green-700`, ≥ 4,5:1) zu verwenden.
+
+**Umsetzung in NiceGUI (verifiziert anhand der offiziellen Dokumentation):**
+
+- **Globale Markenfarben:** `app.colors(primary='#16a34a', secondary='#0ea5e9', accent='#d97706', …)` setzt das Quasar-Theme app-weit; `ui.colors(…)` überschreibt es seitenweise. Quasar-Slots: `primary`, `secondary`, `accent`, `positive`, `negative`, `info`, `warning`, `dark`, `dark_page`.
+- **Eigene Markenfarbe:** `app.colors(brand='#16a34a')` definiert eine Zusatzfarbe `brand`, nutzbar als `color='brand'` bzw. Tailwind-Klasse `text-brand`/`bg-brand` (muss vor der ersten Verwendung gesetzt werden).
+- **Element-Ebene:** `.classes(…)`/`.default_classes(…)` nehmen Tailwind-, Quasar- und eigene CSS-Klassen an; `.style(…)` nimmt inline CSS. NiceGUI-Elemente tragen Quasar-Default-Styles – bei Überschreibung auf Element-Ebene ist daher häufig der Tailwind-`!`-Präfix (`!important`) nötig, z. B. `.classes("!bg-[#16a34a]/20 !text-[#0ea5e9]")` (Arbitrary-Value-Syntax `[#hex]`, Opacity-Modifier `/20`).
+- **Seiten-CSS:** `ui.add_css(…)` ergänzt globale CSS-Regeln (dort ggf. mit `!important`); `ui.add_head_html(…)` für `<style>`/Meta.
+- Tailwind ist standardmäßig aktiv (`ui.run(tailwind=True)`); alternativ UnoCSS-Presets (`ui.run(unocss=…)`).
+
+Die Palette sind **Startwerte**; sie werden später über eine zentrale Theme-Konstante bzw. die Admin-UI („System-Einstellungen“) pflegbar – die Quasar-Slots bleiben dabei die Implementierungs-Schnittstelle.
+
 ## Mehrsprachigkeit der Oberfläche
 
 Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**. Dies betrifft ausschließlich die **UI-Texte** (Navigation, Buttons, Meldungen, Hilfe) – nicht die fachlichen Daten. Die Mehrsprachigkeit der Datenobjekte ist bereits über die flexiblen Metadaten gelöst und bleibt davon unabhängig.

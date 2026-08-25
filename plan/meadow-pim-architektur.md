@@ -322,6 +322,8 @@ Das **Rule Lab** (interaktives Testmodus für Business Rules, read-only, keine P
 
 Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s über die REST-API beobachtet (Status, Fortschritt, Report); der Grid-Batch-Save (`batch-update`) ist **gedeckelt** (max. 500 Zeilen/Aufruf) – größere Auswahlen laufen über den Bulk-Wizard.
 
+Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild „grüne Wiese im Tal mit Fluss, umrandet mit Wäldern und Bergen“ (Primär `Meadow Green #16a34a`, Sekundär `River Blue #0ea5e9`, Akzent `Sunlight Amber #d97706`); Logos/Grafiken folgen später. Details in [frontend.md](detail/frontend.md).
+
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
 ---
@@ -474,6 +476,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-25 – Default-Branding/CI festgelegt (Abschnitt 11 & Phase 7): Farbskala passend zu „Meadow“ (Primär Meadow Green #16a34a, Sekundär River Blue #0ea5e9, Akzent Sunlight Amber #d97706; neutrale Töne Slate); Umsetzung über NiceGUI-Quasar-Theme (`app.colors()`/`ui.colors()`, Tailwind-Klassen mit `!`-Präfix für Element-Overrides); Logos/Grafiken später. `frontend.md` um Abschnitt „Branding & CI“ ergänzt.*
 
 *Zuletzt geändert: 2026-08-25 – Phase-6-Implementierung nachgezogen (Abschnitte 4, 5, 6, 7 & Phase 6): MEF-Import (`POST /imports`, JSON oder Datei-Upload; Dokument inline in `import_document`, Objektstorage-Ablage der Rohdatei als späterer Ausbau), quantifizierte Werte (SI-Normalisierung, `/units` + `/units/convert`), `json_export`, Webhook-Outbound mit Filterung/Retry/Coalescing und Multi-Konnektor-Fanout, Quell-Referenz-Dedup (`source_id`/`source`, `GET /objects/by-source`), `emit_events` (Summary-Event `import.completed`) und persistierte Konnektor-Konfiguration (Tabelle `connector`, `/connectors`-API, Live-Reload im Worker; Env nur als Bootstrap). `datenmodell.md`, `api-design.md`, `integration-eventsystem.md` und `betrieb-deployment.md` entsprechend ergänzt.*
 
