@@ -13,6 +13,7 @@ handler registry, and bounded parallel processing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -40,6 +41,10 @@ JOBS_MAX_DELIVER = 5
 JOBS_NAK_DELAY_S = 5.0
 #: Default maximum number of job messages processed concurrently.
 JOBS_CONCURRENCY = 4
+#: Dead-letter stream: holds jobs that exhausted all delivery attempts.
+JOBS_DLQ_STREAM = "JOBS_DLQ"
+#: Subject pattern of the dead-letter stream.
+JOBS_DLQ_SUBJECT = "jobs.dlq.*"
 
 
 class JobMessage(BaseModel):
@@ -54,6 +59,9 @@ class JobMessage(BaseModel):
 #: A handler receives the parsed message and returns an optional `result`
 #: object that is stored in `job_run.result` on success.
 JobHandler = Callable[[JobMessage], Awaitable[dict[str, Any] | None]]
+
+#: Publishes a dead-letter payload (plain dict) to the DLQ stream.
+DeadLetterPublisher = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class JobRunner:
@@ -72,12 +80,16 @@ class JobRunner:
         api_key: str | None = None,
         worker_id: str = "pim-worker",
         nak_delay: float = JOBS_NAK_DELAY_S,
+        max_deliver: int = JOBS_MAX_DELIVER,
+        dead_letter: DeadLetterPublisher | None = None,
     ) -> None:
         self._core_url = core_url.rstrip("/")
         self._client = client
         self._api_key = api_key
         self._worker_id = worker_id
         self._nak_delay = nak_delay
+        self._max_deliver = max(1, max_deliver)
+        self._dead_letter = dead_letter
         self._handlers: dict[str, JobHandler] = {}
 
     def register(self, job_type: str, handler: JobHandler) -> None:
@@ -146,8 +158,44 @@ class JobRunner:
             await msg.ack()
         except Exception as exc:  # noqa: BLE001 - transient failure, retry
             logger.exception("job %s failed: %s", message.run_id, exc)
-            await self.set_status(message.run_id, "failed", error=str(exc))
-            await msg.nak(delay=self._nak_delay)
+            await self._fail_or_dead_letter(message, msg, str(exc))
+
+    @staticmethod
+    def _num_delivered(msg: Any) -> int:
+        metadata = getattr(msg, "metadata", None)
+        num = getattr(metadata, "num_delivered", 0)
+        return int(num) if num else 1
+
+    async def _fail_or_dead_letter(
+        self,
+        message: JobMessage,
+        msg: Any,
+        error: str,
+    ) -> None:
+        """Retries via negative-ack, or dead-letters on the final delivery."""
+        num_delivered = self._num_delivered(msg)
+        if num_delivered >= self._max_deliver and self._dead_letter is not None:
+            payload = {
+                "run_id": message.run_id,
+                "job_definition_id": message.job_definition_id,
+                "type": message.type,
+                "parameters": message.parameters,
+                "error": error,
+                "num_delivered": num_delivered,
+            }
+            try:
+                await self._dead_letter(payload)
+                await self.set_status(
+                    message.run_id,
+                    "failed",
+                    error=f"dead lettered after {num_delivered} attempts: {error}",
+                )
+                await msg.term()
+                return
+            except Exception:  # noqa: BLE001 - fall back to a retry
+                logger.exception("dead-letter publish failed for %s", message.run_id)
+        await self.set_status(message.run_id, "failed", error=error)
+        await msg.nak(delay=self._nak_delay)
 
 
 async def process_messages(
@@ -162,6 +210,14 @@ async def process_messages(
             await runner.handle(msg)
 
     await asyncio.gather(*(run_one(msg) for msg in msgs))
+
+
+async def ensure_dlq_stream(js) -> None:
+    """Ensures the dead-letter stream exists (idempotent)."""
+    try:
+        await js.stream_info(JOBS_DLQ_STREAM)
+    except nats.js.errors.NotFoundError:
+        await js.add_stream(name=JOBS_DLQ_STREAM, subjects=[JOBS_DLQ_SUBJECT])
 
 
 async def serve_jobs(
@@ -194,6 +250,14 @@ async def serve_jobs(
         stream=stream,
         config=config,
     )
+
+    async def publish_dead_letter(payload: dict[str, Any]) -> None:
+        await ensure_dlq_stream(js)
+        await js.publish(
+            f"jobs.dlq.{payload.get('type', 'unknown')}",
+            json.dumps(payload).encode(),
+        )
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         runner = JobRunner(
             core_url,
@@ -201,6 +265,8 @@ async def serve_jobs(
             api_key=api_key,
             worker_id=worker_id,
             nak_delay=nak_delay,
+            max_deliver=max_deliver,
+            dead_letter=publish_dead_letter,
         )
         for job_type, handler in (handlers or {}).items():
             runner.register(job_type, handler)
@@ -226,6 +292,8 @@ async def serve_jobs(
 __all__ = [
     "JOBS_ACK_WAIT_S",
     "JOBS_CONCURRENCY",
+    "JOBS_DLQ_STREAM",
+    "JOBS_DLQ_SUBJECT",
     "JOBS_DURABLE",
     "JOBS_MAX_DELIVER",
     "JOBS_NAK_DELAY_S",
@@ -234,6 +302,7 @@ __all__ = [
     "JobMessage",
     "JobHandler",
     "JobRunner",
+    "ensure_dlq_stream",
     "process_messages",
     "serve_jobs",
 ]

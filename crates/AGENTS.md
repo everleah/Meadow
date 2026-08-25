@@ -28,6 +28,7 @@ Owns the Rust workspace (root `Cargo.toml`) and all Rust crates. The core servic
 - Rule recompute (`src/api/rules.rs::recompute_rule`, `POST /rules/{id}/recompute`, admin/superadmin): queues a `business_rule` `job_run` (no definition) whose parameters embed the rule `{name, type, script}`, `applies_to`, and optional `object_ids`. The worker executes and reports per object.
 - Computed write-back (`src/api/objects.rs::update_computed`, `PATCH /objects/{id}/computed`, `X-Api-Key` or admin): machine-to-machine path that merges only declared-`computed` values (`rules.rs::resolve_computed`) into an object without re-running rules (used by the recompute worker).
 - Cron scheduler (`src/scheduler.rs`): a background task (`tokio::spawn` in `run()`) keeps `tokio_cron_scheduler` in sync with enabled scheduled `job_definition` records (6-field seconds-first cron) and, on each fire, creates a `job_run` (`trigger: schedule`) and publishes it to JetStream via `queue_run`. Sync interval from `SCHEDULER_INTERVAL_S` (default 60).
+- Dead-letter monitor (`src/jobqueue.rs::monitor_dlq`, background task): ensures the `JOBS_DLQ` stream (`jobs.dlq.*`, Limits retention, manual cleanup) and, for each dead-lettered message, marks the corresponding `job_run` as finally `failed` via `jobs::fail_run` („dead lettered after N attempts“).
 - SurrealDB `option<T>` fields reject JSON `null` (the distinct `NULL` value, not `NONE`): omit `None` option fields when building `CREATE ... CONTENT`, and clear them with `UPDATE ... SET field = NONE;`.
 
 ## Work Guidance

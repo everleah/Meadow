@@ -166,6 +166,9 @@ JOBS_CONCURRENCY=4
 # Scheduler (Kern)
 SCHEDULER_INTERVAL_S=60
 
+# Dead-Letter-Queue (JOBS_DLQ-Stream, Limits-Retention; manuell bereinigen)
+# Stream wird vom Kern/Worker automatisch angelegt.
+
 # Bootstrap (nur beim Erst-Deployment; danach entfernen)
 BOOTSTRAP_SUPERADMIN_USERNAME=superadmin
 BOOTSTRAP_SUPERADMIN_PASSWORD=CHANGE_ME

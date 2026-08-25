@@ -51,6 +51,11 @@ pub async fn run() {
 
     // Start the background scheduler (cron jobs from scheduled definitions).
     tokio::spawn(scheduler::run(state.db.clone(), state.config.clone()));
+    // Start the dead-letter monitor (marks dead-lettered job runs as failed).
+    tokio::spawn(jobqueue::monitor_dlq(
+        state.db.clone(),
+        state.config.clone(),
+    ));
 
     axum::serve(listener, app::router(state))
         .await

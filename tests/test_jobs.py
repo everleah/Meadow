@@ -14,8 +14,9 @@ from meadow.worker.jobs import JOBS_NAK_DELAY_S, JobMessage, JobRunner, process_
 class FakeMsg:
     """Minimal stand-in for a nats-py `Msg` with ack/nak/term bookkeeping."""
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, *, num_delivered: int = 1) -> None:
         self.data = data
+        self.metadata = _FakeMetadata(num_delivered)
         self.acked = False
         self.nakked = False
         self.nak_delay: float | None = None
@@ -30,6 +31,11 @@ class FakeMsg:
 
     async def term(self) -> None:
         self.terminated = True
+
+
+class _FakeMetadata:
+    def __init__(self, num_delivered: int) -> None:
+        self.num_delivered = num_delivered
 
 
 def make_runner(
@@ -168,3 +174,45 @@ async def test_process_messages_respects_concurrency() -> None:
 
     assert state["max_active"] == 2
     assert state["active"] == 0
+
+
+async def test_handle_final_failure_dead_letters() -> None:
+    dead_letters: list[dict[str, Any]] = []
+    requests: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": "job_run:1"})
+
+    async def publish_dead_letter(payload: dict[str, Any]) -> None:
+        dead_letters.append(payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    runner = JobRunner(
+        "http://core",
+        client,
+        max_deliver=5,
+        dead_letter=publish_dead_letter,
+    )
+
+    async def handler(msg: JobMessage) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    runner.register("business_rule", handler)
+    msg = message()
+    msg.metadata.num_delivered = 5  # final delivery attempt
+
+    await runner.handle(msg)
+
+    assert msg.terminated is True
+    assert msg.nakked is False
+    assert msg.acked is False
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["run_id"] == "job_run:1"
+    assert dead_letters[0]["error"] == "boom"
+    assert dead_letters[0]["num_delivered"] == 5
+
+    statuses = [json.loads(request.content)["status"] for request in requests]
+    assert statuses == ["running", "failed"]
+    failed_body = json.loads(requests[1].content)
+    assert failed_body["error"] == "dead lettered after 5 attempts: boom"

@@ -631,7 +631,7 @@ pub async fn update_job_run(
 }
 
 /// Marks a job run as failed (best effort), used when queueing fails.
-async fn fail_run(db: &Db, run_id: &str, error: &str) {
+pub(crate) async fn fail_run(db: &Db, run_id: &str, error: &str) {
     let key = run_id.split_once(':').map(|(_, k)| k).unwrap_or(run_id);
     let sql = "
         LET $r = type::record('job_run', $key);

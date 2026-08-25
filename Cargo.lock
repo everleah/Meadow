@@ -2691,6 +2691,7 @@ dependencies = [
  "async-nats",
  "axum",
  "bytes",
+ "futures-util",
  "jsonwebtoken 11.0.0",
  "serde",
  "serde_json",

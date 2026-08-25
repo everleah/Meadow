@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 6: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz). DLQ-Überwachung und Log-Retention folgen.
+- **Stand:** Implementiert bis Phase-5-Schritt 7: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz) + DLQ-Überwachung. Log-Retention folgt.
 
 ## Architektur
 
@@ -100,7 +100,7 @@ Für spätere Ausbaustufen sind weitere Job-Typen vorgesehen (z. B. `collection_
 ## Fehlerbehandlung & Wiederholung
 
 - **Retries**: NATS JetStream wiederholt die Zustellung bei nicht erfolgtem Acknowledgment. Der Worker kann zusätzlich bei bestimmten Fehlern selbst entscheiden, die Nachricht abzulehnen, um eine sofortige Wiederholung zu vermeiden.
-- **Dead-Letter-Queue (DLQ)**: Nach Erreichen der maximalen Zustellversuche landet die Nachricht automatisch im DLQ-Stream. Der Rust-Kern abonniert diesen Stream und markiert die betroffenen `job_run`-Einträge als `failed`.
+- **Dead-Letter-Queue (DLQ) (implementiert, Schritt 7):** Beim letzten Zustellversuch (`num_delivered >= max_deliver`) publiziert der Worker die Message in den `JOBS_DLQ`-Stream (`jobs.dlq.<type>`, `Limits`-Retention) und terminiert sie; der Rust-Kern abonniert `jobs.dlq.>` (Hintergrund-Monitor, `src/jobqueue.rs::monitor_dlq`) und markiert den `job_run` endgültig als `failed` („dead lettered after N attempts“).
 - **Timeout**: Wird ein Worker nicht innerhalb der konfigurierten `AckWait`-Zeit aktiv, stellt JetStream die Nachricht erneut zu.
 - **Monitoring**: Alle Job-Runs und Dead-Letter-Ereignisse werden in SurrealDB gespeichert und können über die API ausgelesen werden.
 - **Stream-Retention:** Der `JOBS`-Stream (Subjects `jobs.*`) wird vom Kern bei der ersten Veröffentlichung angelegt: **WorkQueue-Retention** (Message wird nach dem ersten Worker-Ack entfernt) und **Max-Age** über `JOBS_STREAM_MAX_AGE_MINUTES` (Standard 1440 min). Der dauerhafte Job-Status liegt in `job_run` (SurrealDB); der Stream dient nur dem Transport. Der DLQ-Stream wird **manuell** überwacht und bereinigt (Operationen, [betrieb-deployment.md](betrieb-deployment.md)).
