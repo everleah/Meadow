@@ -1,4 +1,4 @@
-"""`inbound_import` job handler: MEF import with business-key upsert (Phase 6).
+"""`inbound_import` job handler: MEF import with idempotent upsert (Phase 6).
 
 The handler receives `parameters.document_id`, fetches the stored MEF document
 from the core (`GET /imports/{document_id}`), and imports its objects and
@@ -6,9 +6,11 @@ references:
 
 - Objects are upserted by business key (`match_by_key`, e.g. `sku`): an
   existing object with the same type + key value is updated, otherwise a new
-  object is created (idempotent for keyed objects).
+  object is created.
+- Objects without a key match are deduplicated by **source reference** (the
+  MEF object `id` + the document `source`), via `GET /objects/by-source`.
 - References are created between the imported objects, mapping the MEF `id`
-  (and the key-based lookups) to the core's record ids.
+  (and the key/source lookups) to the core's record ids.
 
 Per-object failures are isolated: one bad object does not abort the whole run;
 a report is returned and stored in `job_run.result`.
@@ -31,9 +33,8 @@ logger = logging.getLogger(__name__)
 #: Sandbox budget for normalization rules in the import pipeline (bulk-like).
 NORMALIZATION_TIMEOUT_SECONDS = 30.0
 
-#: The MEF object `id` is an external identifier, distinct from the core's
-#: `object:<ulid>` record id. It is only used to wire references, never as a
-#: dedup key (source-reference dedup follows in a later Phase 6 step).
+#: Default source label when the MEF document carries none.
+DEFAULT_SOURCE = "default"
 
 
 def _key_value(attributes: dict[str, Any], key: str) -> str | None:
@@ -148,8 +149,14 @@ async def _upsert_object(
     attributes: dict[str, Any],
     status: str,
     match_by_key: str | None,
+    source_id: str | None,
+    source: str | None,
 ) -> tuple[str, str]:
-    """Creates or updates one MEF object; returns `(record_id, action)`."""
+    """Creates or updates one MEF object; returns `(record_id, action)`.
+
+    The object is matched by business key first, then by source reference
+    (`source` + `source_id`), so keyless objects are idempotent too.
+    """
     existing_id: str | None = None
     if match_by_key:
         key_value = _key_value(attributes, match_by_key)
@@ -167,7 +174,26 @@ async def _upsert_object(
             elif response.status_code != 404:
                 response.raise_for_status()
 
-    body = {"type": object_type, "attributes": attributes, "status": status}
+    if existing_id is None and source_id:
+        response = await client.get(
+            f"{core_url}/objects/by-source",
+            params={"source": source or DEFAULT_SOURCE, "source_id": source_id},
+        )
+        if response.status_code == 200:
+            existing_id = str(response.json()["id"])
+        elif response.status_code != 404:
+            response.raise_for_status()
+
+    body: dict[str, Any] = {
+        "type": object_type,
+        "attributes": attributes,
+        "status": status,
+    }
+    if source_id:
+        body["source_id"] = source_id
+    if source:
+        body["source"] = source
+
     if existing_id:
         response = await client.patch(
             f"{core_url}/objects/{existing_id}",
@@ -267,6 +293,7 @@ def build_import_handler(
         if not isinstance(references, list):
             raise RuntimeError("MEF `references` must be an array")
 
+        source = str(parameters.get("source") or document.get("source") or "")
         normalization_rules = await _load_normalization_rules(active, core_url)
 
         id_map: dict[str, str] = {}
@@ -299,7 +326,14 @@ def build_import_handler(
                 await _convert_units(active, core_url, attributes)
 
                 record_id, action = await _upsert_object(
-                    active, core_url, object_type, attributes, str(status), match_by_key
+                    active,
+                    core_url,
+                    object_type,
+                    attributes,
+                    str(status),
+                    match_by_key,
+                    external_id or None,
+                    source or None,
                 )
                 if external_id:
                     id_map[external_id] = record_id

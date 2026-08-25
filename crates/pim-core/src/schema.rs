@@ -18,10 +18,13 @@ DEFINE FIELD IF NOT EXISTS version ON TABLE object TYPE int;
 DEFINE FIELD OVERWRITE created_at ON TABLE object TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON TABLE object TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_by ON TABLE object TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS source_id ON TABLE object TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS source ON TABLE object TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_object_type ON TABLE object FIELDS type;
 DEFINE INDEX IF NOT EXISTS idx_object_status ON TABLE object FIELDS status;
 DEFINE INDEX IF NOT EXISTS idx_object_created_at ON TABLE object FIELDS created_at;
 DEFINE INDEX IF NOT EXISTS idx_object_updated_at ON TABLE object FIELDS updated_at;
+DEFINE INDEX IF NOT EXISTS idx_object_source ON TABLE object FIELDS source, source_id;
 
 -- Attribute definitions: the metadata schema (product template per type).
 DEFINE TABLE IF NOT EXISTS attribute_definition;

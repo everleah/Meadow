@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 6: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export`, Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ) **und** Webhook-Coalescing (pro `object_id`+`event_type`, letztes Event im Fenster mit `coalesced`/`bundled_count`). Datei-Upload, `emit_events` und Quell-Referenz-Dedup folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 7: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export`, Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ), Webhook-Coalescing **und** Quell-Referenz-Dedup (Import-Idempotenz für Objekte ohne Schlüssel). Datei-Upload und `emit_events` folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -60,6 +60,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 - Die ID ist optional: Fehlt sie, wird eine neue vergeben. Vorhandene IDs ermöglichen Upserts.
 - **Business-Schlüssel (z. B. SKU):** Schlüsselattribute werden wie normale Attribute übertragen. Der Import kann per Schlüssel abgleichen (Upsert): Existiert im Ziel bereits ein Objekt mit gleichem Typ und gleichem Schlüsselwert, wird es aktualisiert statt neu angelegt (konfigurierbar pro Konnektor, z. B. `match_by_key: "sku"`). Das ermöglicht die Synchronisation mit Bestandssystemen und Datenübernahmen zwischen QA- und Produktivsystem.
 - **Idempotenz (verbindlich):** NATS liefert Nachrichten at-least-once; ein Import-Job kann nach Teilausfall erneut ausgeführt werden. Der Import ist deshalb **idempotent**: Objekte mit Business-Schlüssel werden per `match_by_key` (Upsert) abgeglichen; Objekte ohne Schlüssel deduplizieren über eine **Quell-Referenz** (`source_id`, optional mit `source`-System), gegen die beim erneuten Import derselbe Datensatz aktualisiert statt neu angelegt wird.
+- **Implementiert (Schritt 7):** Der Import-Konnektor gleicht jedes Objekt zuerst per Business-Schlüssel, dann per Quell-Referenz ab (`GET /objects/by-source?source=&source_id=`, MEF-`id` + Dokument-`source`); `source_id`/`source` werden beim Anlegen über `POST /objects` am Objekt gespeichert.
 - Alle Datums- und Zeitwerte (z. B. `created_at`, Event-`timestamp`) werden als **ISO-8601-String mit Zeitzonenangabe** übertragen und beim Empfang nach UTC normalisiert (Konvention gemäß [datenmodell.md](datenmodell.md)).
 - Quantifizierte Werte (Zahl + Einheit) werden als Objekt `{"value": 12.5, "unit": "mm"}` übertragen; beim Import rechnet der Worker in die kanonische SI-Einheit um, beim Export wird in die Standard-Anzeigeeinheit (bzw. die angeforderte Einheit) umgerechnet (Konvention gemäß [einheiten.md](einheiten.md)).
 

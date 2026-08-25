@@ -132,13 +132,16 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
     "version": 3,
     "created_at": "2026-08-14T08:00:00Z",
     "updated_at": "2026-08-14T11:30:00Z",
-    "updated_by": "user_1"
+    "updated_by": "user_1",
+    "source_id": "ext-123",           // optionale Quell-Referenz (MEF-`id`), für Import-Dedup ohne Schlüssel
+    "source": "middleware"            // optionales Quellsystem (MEF-`source`)
 }
 ```
 
 - `type` ist frei wählbar und bestimmt die fachliche Rolle des Objekts.
 - Sprachabhängige Werte werden als verschachtelte JSON-Objekte mit Sprachschlüsseln gemäß Sprachbaum (siehe [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md)) gespeichert.
 - `status` dient dem einfachen Workflow (Abschnitt 8).
+- **Quell-Referenz (`source_id` + `source`, optional):** externe Identität des Objekts; der MEF-Import nutzt sie für den idempotenten Abgleich von Objekten **ohne** Business-Schlüssel (`GET /objects/by-source`), Details [integration-eventsystem.md](integration-eventsystem.md).
 
 ### Tabelle `attribute_definition`
 

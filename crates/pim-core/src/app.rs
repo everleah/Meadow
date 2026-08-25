@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
             get(api::objects::list_objects).post(api::objects::create_object),
         )
         .route("/objects/by-key", get(api::keys::get_by_key))
+        .route("/objects/by-source", get(api::objects::get_by_source))
         .route(
             "/objects/{id}",
             get(api::objects::get_object).patch(api::objects::update_object),

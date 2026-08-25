@@ -29,6 +29,12 @@ pub struct CreateObject {
     /// Workflow status.
     #[serde(default = "default_status")]
     pub status: String,
+    /// External id within a source system (MEF object `id`), for source-reference dedup.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    /// Source-system label (MEF document `source`).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 fn default_status() -> String {
@@ -129,6 +135,8 @@ pub async fn create_object(
         object_type,
         attributes,
         status,
+        source_id,
+        source,
     } = body;
     let object_type = object_type.trim().to_owned();
     let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
@@ -174,13 +182,18 @@ pub async fn create_object(
         attributes.insert(name, value);
     }
 
-    let content = json!({
-        "type": object_type.clone(),
-        "attributes": Value::Object(attributes),
-        "status": status,
-        "version": 1,
-        "updated_by": user_id.clone(),
-    });
+    let mut content = serde_json::Map::new();
+    content.insert("type".to_owned(), Value::String(object_type.clone()));
+    content.insert("attributes".to_owned(), Value::Object(attributes));
+    content.insert("status".to_owned(), Value::String(status));
+    content.insert("version".to_owned(), json!(1));
+    content.insert("updated_by".to_owned(), Value::String(user_id.clone()));
+    if let Some(source_id) = source_id {
+        content.insert("source_id".to_owned(), Value::String(source_id));
+    }
+    if let Some(source) = source {
+        content.insert("source".to_owned(), Value::String(source));
+    }
     let changes = json!({
         "attributes": content
             .get("attributes")
@@ -203,7 +216,7 @@ pub async fn create_object(
         .db
         .inner()
         .query(sql)
-        .bind(("content", content))
+        .bind(("content", Value::Object(content)))
         .bind(("object_type", object_type))
         .bind(("changes", changes))
         .bind(("metadata", json!({ "user_id": user_id.clone() })))
@@ -326,6 +339,55 @@ pub async fn list_objects(
         .check()?;
     let objects: Vec<Value> = response.take(0)?;
     Ok(Json(objects))
+}
+
+/// Query parameters for `GET /objects/by-source`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct BySourceParams {
+    /// Source-system label (e.g. the MEF document `source`).
+    pub source: String,
+    /// External id within the source system (the MEF object `id`).
+    pub source_id: String,
+}
+
+/// Loads exactly one object by its source reference (`source` + `source_id`).
+#[utoipa::path(
+    get,
+    path = "/objects/by-source",
+    params(BySourceParams),
+    responses(
+        (status = 200, description = "Matching object", body = Value),
+        (status = 400, description = "Missing query parameter", body = Value),
+        (status = 404, description = "No object matches the source reference", body = Value)
+    )
+)]
+pub async fn get_by_source(
+    State(state): State<AppState>,
+    Query(params): Query<BySourceParams>,
+) -> Result<Json<Value>, ApiError> {
+    let source = params.source.trim();
+    let source_id = params.source_id.trim();
+    if source_id.is_empty() {
+        return Err(ApiError::bad_request("`source_id` must not be empty"));
+    }
+    let sql = "
+        SELECT * FROM object WHERE source_id = $source_id AND source = $source LIMIT 1;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("source_id", source_id.to_owned()))
+        .bind(("source", source.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let object = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found("no object matches the given source reference"))?;
+    Ok(Json(object))
 }
 
 /// Partially updates an object's attributes and/or status.
