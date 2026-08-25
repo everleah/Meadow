@@ -10,6 +10,8 @@ import nats
 
 from meadow.worker.webhooks import (
     WebhookConfig,
+    _CoalesceBuffer,
+    _deliver_coalesced,
     _handle_message,
     matches_filter,
 )
@@ -156,3 +158,61 @@ async def test_final_delivery_failure_dead_letters_and_terminates() -> None:
     subject, payload = js.published[0]
     assert subject == "events.dlq.webhook"
     assert json.loads(payload)["event_id"] == "outbox_event:1"
+
+
+async def test_coalesce_buffer_last_wins() -> None:
+    buffer = _CoalesceBuffer()
+    key = ("object:1", "object.updated")
+    msg1 = _FakeMsg(json.dumps(event(event_id="outbox_event:1")).encode())
+    msg2 = _FakeMsg(json.dumps(event(event_id="outbox_event:2")).encode())
+    await buffer.add(key, event(event_id="outbox_event:1"), msg1)
+    await buffer.add(key, event(event_id="outbox_event:2"), msg2)
+
+    entries = await buffer.drain()
+    assert len(entries) == 1
+    assert entries[0]["event"]["event_id"] == "outbox_event:2"
+    assert [m.data for m in entries[0]["msgs"]] == [msg1.data, msg2.data]
+
+
+async def test_handle_message_buffers_when_coalescing() -> None:
+    delivered: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        delivered.append(request)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    buffer = _CoalesceBuffer()
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(client, _FakeJs(), config(), msg, 5, 1.0, buffer)
+    await client.aclose()
+
+    assert delivered == []
+    assert msg.acked is False
+    assert msg.nakked is False
+    entries = await buffer.drain()
+    assert len(entries) == 1
+
+
+async def test_deliver_coalesced_sends_latest_with_flags_and_acks_all() -> None:
+    delivered: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        delivered.append(request)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    msg1 = _FakeMsg(json.dumps(event(event_id="outbox_event:1")).encode())
+    msg2 = _FakeMsg(json.dumps(event(event_id="outbox_event:2")).encode())
+    entry = {"event": event(event_id="outbox_event:2"), "msgs": [msg1, msg2]}
+
+    await _deliver_coalesced(client, _FakeJs(), config(), entry, 5, 1.0)
+    await client.aclose()
+
+    assert len(delivered) == 1
+    body = json.loads(delivered[0].content)
+    assert body["event_id"] == "outbox_event:2"
+    assert body["coalesced"] is True
+    assert body["bundled_count"] == 2
+    assert msg1.acked is True
+    assert msg2.acked is True

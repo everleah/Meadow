@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 5: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export` **und** Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ). Coalescing, Datei-Upload, `emit_events` und Quell-Referenz-Dedup folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 6: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export`, Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ) **und** Webhook-Coalescing (pro `object_id`+`event_type`, letztes Event im Fenster mit `coalesced`/`bundled_count`). Datei-Upload, `emit_events` und Quell-Referenz-Dedup folgen.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -132,12 +132,13 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 
 - Die Event-Reihenfolge ist **pro Objekt garantiert** (je `object_id` wird die Reihenfolge der Änderungen bewahrt); **global** ist sie bewusst ungeordnet (mehrere Worker-Konsumenten, [jobs-scheduler.md](jobs-scheduler.md)).
 - Der Webhook-Outbound kann pro Konnektor **Coalescing** aktivieren: Innerhalb eines Zeitfensters wird pro `object_id` + `event_type` nur das **letzte** Event gesendet (mit einem Flag, dass zwischenzeitliche Änderungen gebündelt wurden). Das verhindert Event-Stürme bei Bulk-Änderungen und Importen.
+- **Implementiert (Schritt 6):** Bei `coalesce.enabled` (Env `WEBHOOK_COALESCE_ENABLED`, Fenster `WEBHOOK_COALESCE_WINDOW_S`, Standard 30 s) puffert der Konsument Events pro `object_id`+`event_type` und ein Flush-Task liefert pro Fenster nur das letzte Event (Felder `coalesced: true`, `bundled_count: N`); die gepufferten Messages werden erst beim Flush ge-ackt (at-least-once bleibt erhalten).
 
 ## Webhook-Outbound zur Middleware
 
 Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bestehende Middleware zu liefern. Er kombiniert das Eventsystem mit einem zuverlässigen HTTP-Versand.
 
-- **Implementiert (Schritt 5):** Der Worker startet bei gesetztem `WEBHOOK_URL` einen eigenen `events.crud`-Pull-Konsumenten (`meadow/worker/webhooks.py`, Durable `event-webhook`): Filter (`event_types`/`object_types`/`attribute_changes`), HTTP-Versand mit Retry (NATS-Redelivery per Negative-Ack) und manueller DLQ (`EVENTS_DLQ`, Subject `events.dlq.webhook`). Konfiguration über Env-Variablen (`WEBHOOK_URL`, `WEBHOOK_FILTER_*`, …); Coalescing und persistierte Konnektor-Konfiguration folgen.
+- **Implementiert (Schritt 5):** Der Worker startet bei gesetztem `WEBHOOK_URL` einen eigenen `events.crud`-Pull-Konsumenten (`meadow/worker/webhooks.py`, Durable `event-webhook`): Filter (`event_types`/`object_types`/`attribute_changes`), HTTP-Versand mit Retry (NATS-Redelivery per Negative-Ack) und manueller DLQ (`EVENTS_DLQ`, Subject `events.dlq.webhook`). Konfiguration über Env-Variablen (`WEBHOOK_URL`, `WEBHOOK_FILTER_*`, `WEBHOOK_COALESCE_*`, …); persistierte Konnektor-Konfiguration folgt.
 
 **Konfiguration (als `job_definition` oder Konnektor-Konfiguration):**
 

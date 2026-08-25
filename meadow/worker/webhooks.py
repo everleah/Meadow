@@ -6,12 +6,17 @@ delivery failures are retried via NATS redelivery (negative-ack) and finally
 dead-lettered to a dedicated DLQ stream (manual cleanup, like the job queue).
 The middleware must deduplicate on `event_id` (redelivery is normal).
 
+When coalescing is enabled, events are buffered per `object_id` + `event_type`
+within a fixed window and only the **last** event is sent (with `coalesced` and
+`bundled_count` flags); the buffered messages are acknowledged on flush.
 Configuration is read from environment variables (`WEBHOOK_URL`, …) in the MVP;
 persisting connector configuration is a later step.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 from typing import Any
@@ -49,6 +54,13 @@ class WebhookFilter(BaseModel):
     attribute_changes: list[str] = Field(default_factory=list)
 
 
+class WebhookCoalesce(BaseModel):
+    """Coalescing: per `object_id` + `event_type`, only the last event is sent."""
+
+    enabled: bool = False
+    window_seconds: float = 30.0
+
+
 class WebhookConfig(BaseModel):
     """Configuration of one webhook endpoint."""
 
@@ -56,6 +68,7 @@ class WebhookConfig(BaseModel):
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     filter: WebhookFilter = Field(default_factory=WebhookFilter)
+    coalesce: WebhookCoalesce = Field(default_factory=WebhookCoalesce)
     timeout_s: float = 30.0
 
 
@@ -91,6 +104,34 @@ def _num_delivered(msg: Any) -> int:
     metadata = getattr(msg, "metadata", None)
     num = getattr(metadata, "num_delivered", 0)
     return int(num) if num else 1
+
+
+def _coalesce_key(event: dict[str, Any]) -> tuple[str, str]:
+    """The coalescing key: one buffer slot per object + event type."""
+    return (str(event.get("object_id") or ""), str(event.get("event_type") or ""))
+
+
+class _CoalesceBuffer:
+    """Holds the latest event per key until the flush loop drains it."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, key: tuple[str, str], event: dict[str, Any], msg: Any) -> None:
+        async with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                self._entries[key] = {"event": event, "msgs": [msg]}
+            else:
+                entry["event"] = event
+                entry["msgs"].append(msg)
+
+    async def drain(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            entries = list(self._entries.values())
+            self._entries.clear()
+        return entries
 
 
 async def _ensure_dlq_stream(js) -> None:
@@ -131,6 +172,107 @@ async def _deliver(
     response.raise_for_status()
 
 
+async def _ack_many(msgs: list[Any]) -> None:
+    for msg in msgs:
+        await msg.ack()
+
+
+async def _nak_many(msgs: list[Any], delay: float) -> None:
+    for msg in msgs:
+        await msg.nak(delay=delay)
+
+
+async def _term_many(msgs: list[Any]) -> None:
+    for msg in msgs:
+        await msg.term()
+
+
+async def _deliver_or_retry(
+    client: httpx.AsyncClient,
+    js,
+    config: WebhookConfig,
+    msg: Any,
+    event: dict[str, Any],
+    max_deliver: int,
+    nak_delay: float,
+) -> None:
+    """Delivers one event; acks, naks (retry), or dead-letters + terms."""
+    num_delivered = _num_delivered(msg)
+    try:
+        await _deliver(client, config, event)
+        await msg.ack()
+    except Exception as exc:  # noqa: BLE001 - transient delivery failure
+        logger.warning(
+            "webhook delivery failed for %s (attempt %d): %s",
+            event.get("event_id"),
+            num_delivered,
+            exc,
+        )
+        if num_delivered >= max_deliver:
+            try:
+                await _dead_letter(js, event, str(exc), num_delivered)
+            except Exception:  # noqa: BLE001 - fall back to a retry
+                logger.exception("webhook dead-letter publish failed")
+                await msg.nak(delay=nak_delay)
+                return
+            await msg.term()
+        else:
+            await msg.nak(delay=nak_delay)
+
+
+async def _deliver_coalesced(
+    client: httpx.AsyncClient,
+    js,
+    config: WebhookConfig,
+    entry: dict[str, Any],
+    max_deliver: int,
+    nak_delay: float,
+) -> None:
+    """Delivers the latest buffered event and settles all messages for its key."""
+    msgs: list[Any] = entry["msgs"]
+    latest = dict(entry["event"])
+    latest["coalesced"] = len(msgs) > 1
+    latest["bundled_count"] = len(msgs)
+
+    num_delivered = _num_delivered(msgs[-1])
+    try:
+        await _deliver(client, config, latest)
+        await _ack_many(msgs)
+    except Exception as exc:  # noqa: BLE001 - transient delivery failure
+        logger.warning(
+            "webhook coalesced delivery failed for %s (attempt %d): %s",
+            latest.get("event_id"),
+            num_delivered,
+            exc,
+        )
+        if num_delivered >= max_deliver:
+            try:
+                await _dead_letter(js, latest, str(exc), num_delivered)
+            except Exception:  # noqa: BLE001 - fall back to a retry
+                logger.exception("webhook dead-letter publish failed")
+                await _nak_many(msgs, nak_delay)
+                return
+            await _term_many(msgs)
+        else:
+            await _nak_many(msgs, nak_delay)
+
+
+async def _flush_loop(
+    client: httpx.AsyncClient,
+    js,
+    config: WebhookConfig,
+    buffer: _CoalesceBuffer,
+    max_deliver: int,
+    nak_delay: float,
+) -> None:
+    """Periodically delivers the buffered coalesced events."""
+    window = max(config.coalesce.window_seconds, 0.1)
+    while True:
+        await asyncio.sleep(window)
+        for entry in await buffer.drain():
+            await _deliver_coalesced(client, js, config, entry, max_deliver, nak_delay)
+
+
 async def serve_webhooks(
     nats_url: str,
     config: WebhookConfig,
@@ -167,6 +309,14 @@ async def serve_webhooks(
     logger.info("webhook consumer subscribed to %r -> %s", subject, config.url)
 
     async with httpx.AsyncClient() as client:
+        flusher: asyncio.Task | None = None
+        if config.coalesce.enabled:
+            buffer = _CoalesceBuffer()
+            flusher = asyncio.create_task(
+                _flush_loop(client, js, config, buffer, max_deliver, nak_delay)
+            )
+        else:
+            buffer = None
         try:
             while True:
                 try:
@@ -174,8 +324,12 @@ async def serve_webhooks(
                 except TimeoutError:
                     continue
                 for msg in msgs:
-                    await _handle_message(client, js, config, msg, max_deliver, nak_delay)
+                    await _handle_message(client, js, config, msg, max_deliver, nak_delay, buffer)
         finally:
+            if flusher is not None:
+                flusher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await flusher
             await nc.close()
 
 
@@ -186,8 +340,9 @@ async def _handle_message(
     msg: Any,
     max_deliver: int,
     nak_delay: float,
+    buffer: _CoalesceBuffer | None = None,
 ) -> None:
-    """Handles one event message: filter, deliver, ack/nak/dead-letter."""
+    """Handles one event message: filter, buffer (coalesce) or deliver."""
     try:
         event = json.loads(msg.data)
     except json.JSONDecodeError, TypeError:
@@ -199,27 +354,11 @@ async def _handle_message(
         await msg.ack()
         return
 
-    num_delivered = _num_delivered(msg)
-    try:
-        await _deliver(client, config, event)
-        await msg.ack()
-    except Exception as exc:  # noqa: BLE001 - transient delivery failure
-        logger.warning(
-            "webhook delivery failed for %s (attempt %d): %s",
-            event.get("event_id"),
-            num_delivered,
-            exc,
-        )
-        if num_delivered >= max_deliver:
-            try:
-                await _dead_letter(js, event, str(exc), num_delivered)
-            except Exception:  # noqa: BLE001 - fall back to a retry
-                logger.exception("webhook dead-letter publish failed")
-                await msg.nak(delay=nak_delay)
-                return
-            await msg.term()
-        else:
-            await msg.nak(delay=nak_delay)
+    if buffer is not None:
+        await buffer.add(_coalesce_key(event), event, msg)
+        return
+
+    await _deliver_or_retry(client, js, config, msg, event, max_deliver, nak_delay)
 
 
 __all__ = [
@@ -228,6 +367,7 @@ __all__ = [
     "EVENTS_DURABLE",
     "EVENTS_STREAM",
     "EVENTS_SUBJECT",
+    "WebhookCoalesce",
     "WebhookConfig",
     "WebhookFilter",
     "matches_filter",

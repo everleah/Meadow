@@ -14,7 +14,7 @@ from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
 from meadow.worker.rules_service import serve
-from meadow.worker.webhooks import WebhookConfig, WebhookFilter, serve_webhooks
+from meadow.worker.webhooks import WebhookCoalesce, WebhookConfig, WebhookFilter, serve_webhooks
 
 logging.basicConfig(level=logging.INFO)
 # httpx logs every request at INFO; keep only warnings to avoid noise.
@@ -81,6 +81,10 @@ async def main() -> None:
                 object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
                 attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
             ),
+            coalesce=WebhookCoalesce(
+                enabled=_env_bool(os.environ.get("WEBHOOK_COALESCE_ENABLED")),
+                window_seconds=float(os.environ.get("WEBHOOK_COALESCE_WINDOW_S", "30")),
+            ),
         )
         tasks.append(
             asyncio.create_task(serve_webhooks(nats_url, webhook_config, log_sender=log_sender))
@@ -101,6 +105,11 @@ def _csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [token.strip() for token in value.split(",") if token.strip()]
+
+
+def _env_bool(value: str | None) -> bool:
+    """Parses a boolean environment variable."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":
