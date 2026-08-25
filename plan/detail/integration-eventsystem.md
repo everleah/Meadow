@@ -73,7 +73,7 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 **Verwendung im Outbound:**
 
 - Der Outbound-Konnektor `json_export` erzeugt MEF-Dokumente aus ausgewählten Objekten (Filter wie Typ, Status, Kategorie).
-- **Implementiert (Schritt 4):** Der `outbound_export`-Job-Handler (`meadow/worker/exports.py`) filtert Objekte (`filter.type`/`filter.status`), baut das MEF-Dokument (`format_version`, `source`, `created_at`, `objects`) und legt es im `job_run.result` ab. Quantifizierte Werte werden vorerst als kanonische SI-Zahl exportiert; die Rück-Umrechnung in `{"value":…,"unit":…}` (Anzeigeeinheit) folgt.
+- **Implementiert (Schritt 4):** Der `outbound_export`-Job-Handler (`meadow/worker/exports.py`) filtert Objekte (`filter.type`/`filter.status`), re-emittiert quantifizierte Werte als `{"value":…,"unit":…}` in der Anzeigeeinheit der Attributdefinition, baut das MEF-Dokument (`format_version`, `source`, `created_at`, `objects`) und legt es im `job_run.result` ab.
 - Die Exportdatei kann per Datei, HTTP oder Messaging an die Middleware übergeben werden.
 
 ## Eventsystem

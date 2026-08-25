@@ -4,9 +4,9 @@ The handler receives `parameters.filter` (`type` and/or `status`), fetches the
 matching objects from the core, builds a Meadow Exchange Format (MEF) document,
 and stores it in `job_run.result`.
 
-Quantified values are currently exported as the stored canonical-SI numbers;
-re-emitting them as `{"value": …, "unit": …}` (in the attribute's display unit)
-is a follow-up step.
+Quantified values (stored as canonical-SI numbers) are re-emitted as
+`{"value": …, "unit": …}` in the attribute's display unit via the core's
+`GET /units/convert` endpoint.
 """
 
 from __future__ import annotations
@@ -28,6 +28,52 @@ DEFAULT_EXPORT_LIMIT = 1000
 def _now_iso_utc() -> str:
     """Returns the current time as an ISO-8601 UTC string."""
     return datetime.now(UTC).isoformat()
+
+
+def _is_number(value: Any) -> bool:
+    """Whether `value` is a JSON number (excluding booleans)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+async def _load_unit_map(
+    client: httpx.AsyncClient,
+    core_url: str,
+) -> dict[str, tuple[str, str]]:
+    """Loads quantified attribute definitions: `name -> (unit_id, display_unit_id)`."""
+    response = await client.get(
+        f"{core_url}/attribute-definitions",
+        params={"limit": 1000},
+    )
+    response.raise_for_status()
+    unit_map: dict[str, tuple[str, str]] = {}
+    for definition in response.json():
+        name = definition.get("name")
+        unit_id = definition.get("unit_id")
+        if not name or not unit_id:
+            continue
+        display_unit_id = definition.get("display_unit_id") or unit_id
+        unit_map[str(name)] = (str(unit_id), str(display_unit_id))
+    return unit_map
+
+
+async def _emit_quantified(
+    client: httpx.AsyncClient,
+    core_url: str,
+    attributes: dict[str, Any],
+    unit_map: dict[str, tuple[str, str]],
+) -> None:
+    """Re-emits canonical-SI numbers as `{"value":…,"unit":…}` objects."""
+    for name, (unit_id, display_unit_id) in unit_map.items():
+        value = attributes.get(name)
+        if not _is_number(value):
+            continue
+        response = await client.get(
+            f"{core_url}/units/convert",
+            params={"value": value, "from": unit_id, "to": display_unit_id},
+        )
+        response.raise_for_status()
+        converted = response.json()
+        attributes[name] = {"value": converted["value"], "unit": converted["unit"]}
 
 
 def build_export_handler(
@@ -62,14 +108,18 @@ def build_export_handler(
         if status:
             objects = [obj for obj in objects if obj.get("status") == str(status)]
 
+        unit_map = await _load_unit_map(active, core_url)
+
         mef_objects: list[dict[str, Any]] = []
         for obj in objects:
             attributes = obj.get("attributes")
+            attributes = dict(attributes) if isinstance(attributes, dict) else {}
+            await _emit_quantified(active, core_url, attributes, unit_map)
             mef_objects.append(
                 {
                     "id": obj.get("id"),
                     "type": obj.get("type"),
-                    "attributes": attributes if isinstance(attributes, dict) else {},
+                    "attributes": attributes,
                     "status": obj.get("status") or "draft",
                 }
             )
