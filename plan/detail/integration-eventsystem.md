@@ -112,6 +112,7 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 - `reference.created` – neue Referenz erstellt
 - `reference.deleted` – Referenz entfernt
 - `attribute_definition.created` / `updated` / `deleted` – Änderungen an Attributdefinitionen
+- `import.completed` – Summary-Event eines Bulk-Imports (`emit_events: false`) statt Einzelevents
 
 **Veröffentlichung (Transactional Outbox, verbindlich):**
 

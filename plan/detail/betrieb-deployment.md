@@ -168,7 +168,9 @@ JOBS_ACK_WAIT_S=300
 JOBS_MAX_DELIVER=5
 JOBS_CONCURRENCY=4
 
-# Webhook-Outbound (Worker, optional: aktiv bei gesetztem WEBHOOK_URL)
+# Webhook-Outbound (Worker): Konfiguration persistent in der Tabelle `connector`
+# (Verwaltung über die API/Admin-UI, Live-Reload ohne Neustart). Die folgenden
+# Env-Variablen dienen nur als Bootstrap, wenn kein Konnektor existiert.
 WEBHOOK_URL=
 WEBHOOK_METHOD=POST
 WEBHOOK_HEADERS={}
@@ -180,6 +182,7 @@ WEBHOOK_COALESCE_WINDOW_S=30
 WEBHOOK_ACK_WAIT_S=300
 WEBHOOK_MAX_DELIVER=5
 WEBHOOK_NAK_DELAY_S=5
+WEBHOOK_RELOAD_INTERVAL_S=30
 
 # Scheduler (Kern)
 SCHEDULER_INTERVAL_S=60

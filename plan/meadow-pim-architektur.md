@@ -262,7 +262,7 @@ Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Proz
 
 Beim Inbound normalisieren **`normalization`-Regeln** (R3, Abschnitt 8) die MEF-Werte vor dem Schreiben.
 
-Der Inbound erfolgt **asynchron über `POST /imports`** (MEF als JSON oder Datei-Upload; sofortige `job_run`-ID, nie blockierend). CRUD-Events werden per **Transactional Outbox** im selben Schreibvorgang wie die Daten persistiert und asynchron über ein Relay an NATS JetStream publiziert – die API ist damit nie von NATS abhängig und es gehen keine Events verloren. Die Event-Zustellung ist **at-least-once** (Deduplizierung über `event_id`), die Reihenfolge **pro Objekt garantiert**; der Webhook-Outbound kann **coalescen** (letztes Event pro Objekt+Typ im Fenster) und Bulk-Importe können auf ein Summary-Event umgestellt werden (`emit_events`).
+Der Inbound erfolgt **asynchron über `POST /imports`** (MEF als JSON oder Datei-Upload; sofortige `job_run`-ID, nie blockierend). CRUD-Events werden per **Transactional Outbox** im selben Schreibvorgang wie die Daten persistiert und asynchron über ein Relay an NATS JetStream publiziert – die API ist damit nie von NATS abhängig und es gehen keine Events verloren. Die Event-Zustellung ist **at-least-once** (Deduplizierung über `event_id`), die Reihenfolge **pro Objekt garantiert**; der Webhook-Outbound kann **coalescen** (letztes Event pro Objekt+Typ im Fenster) und Bulk-Importe können auf ein Summary-Event umgestellt werden (`emit_events`). Konnektoren (Webhook/Import/Export) sind **persistierte Datensätze** (Tabelle `connector`, Verwaltung über `/connectors`); der Worker wendet Änderungen per **Live-Reload** ohne Neustart an – Env-Variablen dienen nur als Bootstrap.
 
 > **Details:** [detail/integration-eventsystem.md](detail/integration-eventsystem.md)
 
@@ -423,6 +423,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Dedizierter Inbound-Endpunkt `POST /imports` (MEF als JSON oder Datei-Upload, asynchron mit `job_run`-ID)**
 - **CRUD-Events per Transactional Outbox (atomar mit dem DB-Write) erzeugen und über ein Relay asynchron nach NATS JetStream publizieren**
 - **Webhook-Outbound-Konnektor mit Filterung, Retry-Logik, at-least-once-Zustellvertrag (`event_id`-Dedup) und Coalescing zur Middleware entwickeln; konfigurierbares `emit_events` für Import-Jobs (Summary-Event)**
+- **Konnektor-Konfiguration persistieren (Tabelle `connector` + `/connectors`-API) und im Worker per Live-Reload anwenden (Multi-Konnektor-Fanout; Env nur als Bootstrap)**
 - **Import-Abgleich per Business-Schlüssel (Upsert) im `json_import`-Konnektor; Idempotenz zusätzlich über Quell-Referenz für Objekte ohne Schlüssel; Schlüssel im MEF-Format und in Events abdecken**
 - **Events für Objekt-, Referenz- und Attributdefinitionsänderungen abdecken; Event-Reihenfolge pro Objekt garantieren**
 
@@ -473,6 +474,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-25 – Phase-6-Implementierung nachgezogen (Abschnitte 4, 5, 6, 7 & Phase 6): MEF-Import (`POST /imports`, JSON oder Datei-Upload; Dokument inline in `import_document`, Objektstorage-Ablage der Rohdatei als späterer Ausbau), quantifizierte Werte (SI-Normalisierung, `/units` + `/units/convert`), `json_export`, Webhook-Outbound mit Filterung/Retry/Coalescing und Multi-Konnektor-Fanout, Quell-Referenz-Dedup (`source_id`/`source`, `GET /objects/by-source`), `emit_events` (Summary-Event `import.completed`) und persistierte Konnektor-Konfiguration (Tabelle `connector`, `/connectors`-API, Live-Reload im Worker; Env nur als Bootstrap). `datenmodell.md`, `api-design.md`, `integration-eventsystem.md` und `betrieb-deployment.md` entsprechend ergänzt.*
 
 *Zuletzt geändert: 2026-08-19 – Phase-3-Performance nachgezogen (Abschnitt 4 & Phase 3): In-Process-Metadaten-Cache im Kern (Attributnamen `multilingual`/`inheritable` und Sprach-Fallback-Ketten; Invalidierung bei Attributdefinitions-Schreibvorgängen); Vererbungsauflösung als schrittweises Aufsteigen mit einer Query pro Ebene (`SELECT out, out.attributes FROM reference WHERE …`); Graph-Indizes für Vererbung/Kategorisierung per EXPLAIN bestätigt; Benchmark `cargo run --release -p pim-core --example bench`. `datenwertvererbung.md` und `sprachbaum-mehrsprachigkeit.md` entsprechend präzisiert.*
 
