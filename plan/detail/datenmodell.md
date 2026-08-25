@@ -377,6 +377,33 @@ Speichert ein über `POST /imports` eingereichtes MEF-Dokument, bis es vom Worke
 
 - `document` trägt das rohe MEF-JSON (Objekt); der Job-Message-Payload referenziert nur `document_id`, damit auch große Dokumente (bis zum Body-Limit) nicht durch NATS übertragen werden müssen.
 
+### Tabelle `connector`
+
+Persistierte Konnektor-Konfiguration: die Datenbank ist die dauerhafte Quelle der Wahrheit für Inbound-/Outbound-Konnektoren; Umgebungsvariablen setzen nur den Initialwert (Details [integration-eventsystem.md](integration-eventsystem.md)).
+
+```json
+{
+    "id": "connector:conn_webhook_middleware",
+    "name": "middleware-webhook",
+    "type": "webhook",           // webhook | json_import | json_export
+    "enabled": true,
+    "parameters": {
+        "url": "https://middleware.example.com/api/meadow-events",
+        "method": "POST",
+        "headers": { "Authorization": "Bearer <token>" },
+        "filter": { "event_types": ["object.updated"], "object_types": ["product"] },
+        "retry_policy": { "max_attempts": 5, "backoff_seconds": [30, 60, 120, 300] },
+        "coalesce": { "enabled": true, "window_seconds": 30 }
+    },
+    "created_at": "2026-08-14T10:00:00Z",
+    "updated_at": "2026-08-14T10:00:00Z",
+    "updated_by": "user_admin"
+}
+```
+
+- `name` ist eindeutig und dient zugleich als Konnektor-Schlüssel des Workers; `parameters` ist ein freies JSON-Objekt (je Konnektor-Typ anders belegt).
+- Verwaltung über `/connectors` (Admin) bzw. `GET /connectors` (Worker, `X-Api-Key`); Änderungen am Worker erfordern bis zum Live-Reload einen Neustart.
+
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
 - **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.

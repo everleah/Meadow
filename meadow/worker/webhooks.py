@@ -1,22 +1,27 @@
-"""Webhook outbound connector: delivers CRUD events to a middleware over HTTP.
+"""Webhook outbound connector: delivers CRUD events to one or more endpoints.
 
-Subscribes to `events.crud` (stream `EVENTS`), filters events, and delivers
-matching events to a configured endpoint with **at-least-once** semantics:
-delivery failures are retried via NATS redelivery (negative-ack) and finally
-dead-lettered to a dedicated DLQ stream (manual cleanup, like the job queue).
-The middleware must deduplicate on `event_id` (redelivery is normal).
+Subscribes to `events.crud` (stream `EVENTS`), filters events, and fans matching
+events out to every configured webhook endpoint with **at-least-once**
+semantics: delivery failures are retried via NATS redelivery (negative-ack) and
+finally dead-lettered to a dedicated DLQ stream (manual cleanup, like the job
+queue). The middleware must deduplicate on `event_id` (redelivery is normal).
 
-When coalescing is enabled, events are buffered per `object_id` + `event_type`
-within a fixed window and only the **last** event is sent (with `coalesced` and
-`bundled_count` flags); the buffered messages are acknowledged on flush.
-Configuration is read from environment variables (`WEBHOOK_URL`, …) in the MVP;
-persisting connector configuration is a later step.
+When coalescing is enabled, events are buffered per connector, `object_id` and
+`event_type` within a fixed window and only the **last** event is sent (with
+`coalesced` and `bundled_count` flags); the buffered messages are acknowledged
+on flush. A single JetStream consumer fans out to multiple connectors; a
+message is acknowledged only after every matching connector path has settled.
+
+Configuration is loaded from the persisted `connector` table (see
+`meadow/worker/connectors.py`); environment variables (`WEBHOOK_URL`, …) only
+seed the initial value.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 from typing import Any
@@ -64,12 +69,22 @@ class WebhookCoalesce(BaseModel):
 class WebhookConfig(BaseModel):
     """Configuration of one webhook endpoint."""
 
+    #: Connector key used for logging and dead-letter attribution.
+    key: str = "webhook"
     url: str
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     filter: WebhookFilter = Field(default_factory=WebhookFilter)
     coalesce: WebhookCoalesce = Field(default_factory=WebhookCoalesce)
     timeout_s: float = 30.0
+
+
+@dataclasses.dataclass
+class _Connector:
+    """A webhook destination plus its optional coalescing buffer."""
+
+    config: WebhookConfig
+    buffer: _CoalesceBuffer | None = None
 
 
 def matches_filter(event: dict[str, Any], config: WebhookConfig) -> bool:
@@ -134,6 +149,55 @@ class _CoalesceBuffer:
         return entries
 
 
+class _DeliveryTracker:
+    """Settles a message after every matching connector path has finished.
+
+    A single JetStream consumer fans one event out to several connectors. A
+    message that is delivered immediately to `N` connectors and buffered by
+    `M` coalescing connectors has `N + M` outstanding settlements. Only when
+    the last path settles is the message acknowledged (or nakked/terminated on
+    failure) — so no connector's success can ack a message another connector
+    still needs.
+    """
+
+    def __init__(self, nak_delay: float) -> None:
+        self._nak_delay = nak_delay
+        self._pending: dict[int, dict[str, int | bool]] = {}
+        self._lock = asyncio.Lock()
+
+    async def open(self, msg: Any, total: int) -> None:
+        """Registers a message with `total` expected settlements.
+
+        A message with no connector to deliver is acknowledged immediately.
+        """
+        if total <= 0:
+            await msg.ack()
+            return
+        async with self._lock:
+            self._pending[id(msg)] = {"remaining": total, "terminal": False, "retry": False}
+
+    async def settle(self, msg: Any, *, terminal: bool = False, retry: bool = False) -> None:
+        """Records one settled connector path and finalizes on the last one."""
+        async with self._lock:
+            entry = self._pending.get(id(msg))
+            if entry is None:
+                return
+            entry["terminal"] = bool(entry["terminal"]) or terminal
+            entry["retry"] = bool(entry["retry"]) or retry
+            entry["remaining"] = int(entry["remaining"]) - 1
+            if int(entry["remaining"]) > 0:
+                return
+            del self._pending[id(msg)]
+            terminal = bool(entry["terminal"])
+            retry = bool(entry["retry"])
+        if terminal:
+            await msg.term()
+        elif retry:
+            await msg.nak(delay=self._nak_delay)
+        else:
+            await msg.ack()
+
+
 async def _ensure_dlq_stream(js) -> None:
     """Ensures the webhook dead-letter stream exists (idempotent)."""
     try:
@@ -142,13 +206,16 @@ async def _ensure_dlq_stream(js) -> None:
         await js.add_stream(name=EVENTS_DLQ_STREAM, subjects=[EVENTS_DLQ_SUBJECT])
 
 
-async def _dead_letter(js, event: dict[str, Any], error: str, num_delivered: int) -> None:
+async def _dead_letter(
+    js, event: dict[str, Any], error: str, num_delivered: int, *, connector: str = "webhook"
+) -> None:
     """Publishes a failed event to the webhook DLQ stream."""
     await _ensure_dlq_stream(js)
     payload = {
         "event_id": event.get("event_id"),
         "event_type": event.get("event_type"),
         "object_id": event.get("object_id"),
+        "connector": connector,
         "event": event,
         "error": error,
         "num_delivered": num_delivered,
@@ -172,61 +239,50 @@ async def _deliver(
     response.raise_for_status()
 
 
-async def _ack_many(msgs: list[Any]) -> None:
-    for msg in msgs:
-        await msg.ack()
-
-
-async def _nak_many(msgs: list[Any], delay: float) -> None:
-    for msg in msgs:
-        await msg.nak(delay=delay)
-
-
-async def _term_many(msgs: list[Any]) -> None:
-    for msg in msgs:
-        await msg.term()
-
-
-async def _deliver_or_retry(
+async def _deliver_immediate(
     client: httpx.AsyncClient,
     js,
-    config: WebhookConfig,
+    connector: _Connector,
     msg: Any,
     event: dict[str, Any],
     max_deliver: int,
-    nak_delay: float,
+    tracker: _DeliveryTracker,
 ) -> None:
-    """Delivers one event; acks, naks (retry), or dead-letters + terms."""
+    """Delivers one event to a non-coalesced connector; settles the shared message."""
     num_delivered = _num_delivered(msg)
     try:
-        await _deliver(client, config, event)
-        await msg.ack()
+        await _deliver(client, connector.config, event)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
-            "webhook delivery failed for %s (attempt %d): %s",
+            "webhook delivery failed for %s (connector %s, attempt %d): %s",
             event.get("event_id"),
+            connector.config.key,
             num_delivered,
             exc,
         )
         if num_delivered >= max_deliver:
             try:
-                await _dead_letter(js, event, str(exc), num_delivered)
+                await _dead_letter(
+                    js, event, str(exc), num_delivered, connector=connector.config.key
+                )
             except Exception:  # noqa: BLE001 - fall back to a retry
                 logger.exception("webhook dead-letter publish failed")
-                await msg.nak(delay=nak_delay)
+                await tracker.settle(msg, retry=True)
                 return
-            await msg.term()
+            await tracker.settle(msg, terminal=True)
         else:
-            await msg.nak(delay=nak_delay)
+            await tracker.settle(msg, retry=True)
+    else:
+        await tracker.settle(msg)
 
 
 async def _deliver_coalesced(
     client: httpx.AsyncClient,
     js,
-    config: WebhookConfig,
+    connector: _Connector,
     entry: dict[str, Any],
     max_deliver: int,
-    nak_delay: float,
+    tracker: _DeliveryTracker,
 ) -> None:
     """Delivers the latest buffered event and settles all messages for its key."""
     msgs: list[Any] = entry["msgs"]
@@ -236,46 +292,55 @@ async def _deliver_coalesced(
 
     num_delivered = _num_delivered(msgs[-1])
     try:
-        await _deliver(client, config, latest)
-        await _ack_many(msgs)
+        await _deliver(client, connector.config, latest)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
-            "webhook coalesced delivery failed for %s (attempt %d): %s",
+            "webhook coalesced delivery failed for %s (connector %s, attempt %d): %s",
             latest.get("event_id"),
+            connector.config.key,
             num_delivered,
             exc,
         )
         if num_delivered >= max_deliver:
             try:
-                await _dead_letter(js, latest, str(exc), num_delivered)
+                await _dead_letter(
+                    js, latest, str(exc), num_delivered, connector=connector.config.key
+                )
             except Exception:  # noqa: BLE001 - fall back to a retry
                 logger.exception("webhook dead-letter publish failed")
-                await _nak_many(msgs, nak_delay)
+                for msg in msgs:
+                    await tracker.settle(msg, retry=True)
                 return
-            await _term_many(msgs)
+            for msg in msgs:
+                await tracker.settle(msg, terminal=True)
         else:
-            await _nak_many(msgs, nak_delay)
+            for msg in msgs:
+                await tracker.settle(msg, retry=True)
+        return
+
+    for msg in msgs:
+        await tracker.settle(msg)
 
 
 async def _flush_loop(
     client: httpx.AsyncClient,
     js,
-    config: WebhookConfig,
+    connector: _Connector,
     buffer: _CoalesceBuffer,
     max_deliver: int,
-    nak_delay: float,
+    tracker: _DeliveryTracker,
 ) -> None:
     """Periodically delivers the buffered coalesced events."""
-    window = max(config.coalesce.window_seconds, 0.1)
+    window = max(connector.config.coalesce.window_seconds, 0.1)
     while True:
         await asyncio.sleep(window)
         for entry in await buffer.drain():
-            await _deliver_coalesced(client, js, config, entry, max_deliver, nak_delay)
+            await _deliver_coalesced(client, js, connector, entry, max_deliver, tracker)
 
 
 async def serve_webhooks(
     nats_url: str,
-    config: WebhookConfig,
+    configs: list[WebhookConfig],
     *,
     subject: str = EVENTS_SUBJECT,
     stream: str = EVENTS_STREAM,
@@ -285,11 +350,16 @@ async def serve_webhooks(
     nak_delay: float = WEBHOOK_NAK_DELAY_S,
     log_sender: LogSender | None = None,
 ) -> None:
-    """Consumes CRUD events and delivers matching ones to the webhook endpoint.
+    """Consumes CRUD events and fans matching ones out to every webhook endpoint.
 
     Runs until cancelled; intended to be started as a separate asyncio task so
-    long webhook deliveries never block job processing.
+    long webhook deliveries never block job processing. One JetStream consumer
+    feeds all connectors.
     """
+    connectors = [
+        _Connector(config=config, buffer=_CoalesceBuffer() if config.coalesce.enabled else None)
+        for config in configs
+    ]
     nc = await nats.connect(nats_url)
     js = nc.jetstream()
     consumer_config = jsapi.ConsumerConfig(ack_wait=ack_wait, max_deliver=max_deliver)
@@ -300,23 +370,32 @@ async def serve_webhooks(
         config=consumer_config,
     )
     if log_sender is not None:
-        log_sender.enqueue(
-            service="pim-worker",
-            level="INFO",
-            category="integration",
-            message=f"webhook consumer subscribed to {subject} -> {config.url}",
-        )
-    logger.info("webhook consumer subscribed to %r -> %s", subject, config.url)
-
-    async with httpx.AsyncClient() as client:
-        flusher: asyncio.Task | None = None
-        if config.coalesce.enabled:
-            buffer = _CoalesceBuffer()
-            flusher = asyncio.create_task(
-                _flush_loop(client, js, config, buffer, max_deliver, nak_delay)
+        for connector in connectors:
+            log_sender.enqueue(
+                service="pim-worker",
+                level="INFO",
+                category="integration",
+                message=(
+                    f"webhook connector {connector.config.key} subscribed to "
+                    f"{subject} -> {connector.config.url}"
+                ),
             )
-        else:
-            buffer = None
+    logger.info(
+        "webhook consumer subscribed to %r for %d connector(s)",
+        subject,
+        len(connectors),
+    )
+
+    tracker = _DeliveryTracker(nak_delay)
+    async with httpx.AsyncClient() as client:
+        flushers: list[asyncio.Task] = []
+        for connector in connectors:
+            if connector.buffer is not None:
+                flushers.append(
+                    asyncio.create_task(
+                        _flush_loop(client, js, connector, connector.buffer, max_deliver, tracker)
+                    )
+                )
         try:
             while True:
                 try:
@@ -324,9 +403,9 @@ async def serve_webhooks(
                 except TimeoutError:
                     continue
                 for msg in msgs:
-                    await _handle_message(client, js, config, msg, max_deliver, nak_delay, buffer)
+                    await _handle_message(client, js, connectors, msg, max_deliver, tracker)
         finally:
-            if flusher is not None:
+            for flusher in flushers:
                 flusher.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await flusher
@@ -336,13 +415,12 @@ async def serve_webhooks(
 async def _handle_message(
     client: httpx.AsyncClient,
     js,
-    config: WebhookConfig,
+    connectors: list[_Connector],
     msg: Any,
     max_deliver: int,
-    nak_delay: float,
-    buffer: _CoalesceBuffer | None = None,
+    tracker: _DeliveryTracker,
 ) -> None:
-    """Handles one event message: filter, buffer (coalesce) or deliver."""
+    """Handles one event message: filter, buffer (coalesce) or fan out."""
     try:
         event = json.loads(msg.data)
     except json.JSONDecodeError, TypeError:
@@ -350,15 +428,19 @@ async def _handle_message(
         await msg.term()
         return
 
-    if not matches_filter(event, config):
+    matching = [connector for connector in connectors if matches_filter(event, connector.config)]
+    if not matching:
         await msg.ack()
         return
 
-    if buffer is not None:
-        await buffer.add(_coalesce_key(event), event, msg)
-        return
+    immediate = [connector for connector in matching if connector.buffer is None]
+    buffered = [connector for connector in matching if connector.buffer is not None]
+    for connector in buffered:
+        await connector.buffer.add(_coalesce_key(event), event, msg)
 
-    await _deliver_or_retry(client, js, config, msg, event, max_deliver, nak_delay)
+    await tracker.open(msg, len(immediate) + len(buffered))
+    for connector in immediate:
+        await _deliver_immediate(client, js, connector, msg, event, max_deliver, tracker)
 
 
 __all__ = [

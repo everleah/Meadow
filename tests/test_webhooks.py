@@ -11,7 +11,9 @@ import nats
 from meadow.worker.webhooks import (
     WebhookConfig,
     _CoalesceBuffer,
+    _Connector,
     _deliver_coalesced,
+    _DeliveryTracker,
     _handle_message,
     matches_filter,
 )
@@ -21,6 +23,14 @@ def config(**overrides: Any) -> WebhookConfig:
     payload: dict[str, Any] = {"url": "https://middleware.example/events"}
     payload.update(overrides)
     return WebhookConfig.model_validate(payload)
+
+
+def connector(**overrides: Any) -> _Connector:
+    return _Connector(config=config(**overrides))
+
+
+def tracker() -> _DeliveryTracker:
+    return _DeliveryTracker(nak_delay=1.0)
 
 
 def event(**overrides: Any) -> dict[str, Any]:
@@ -109,7 +119,7 @@ async def test_deliver_success_acks() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), config(), msg, 5, 1.0)
+    await _handle_message(client, _FakeJs(), [connector()], msg, 5, tracker())
     await client.aclose()
     assert msg.acked is True
     assert msg.nakked is False
@@ -125,7 +135,7 @@ async def test_filtered_out_event_is_acked_without_delivery() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     cfg = config(filter={"event_types": ["object.created"]})
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), cfg, msg, 5, 1.0)
+    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], msg, 5, tracker())
     await client.aclose()
     assert msg.acked is True
     assert delivered == []
@@ -137,7 +147,7 @@ async def test_delivery_failure_naks_for_retry() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), config(), msg, 5, 1.0)
+    await _handle_message(client, _FakeJs(), [connector()], msg, 5, tracker())
     await client.aclose()
     assert msg.nakked is True
     assert msg.acked is False
@@ -150,14 +160,37 @@ async def test_final_delivery_failure_dead_letters_and_terminates() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     js = _FakeJs()
     msg = _FakeMsg(json.dumps(event()).encode(), num_delivered=5)
-    await _handle_message(client, js, config(), msg, 5, 1.0)
+    await _handle_message(client, js, [connector()], msg, 5, tracker())
     await client.aclose()
     assert msg.terminated is True
     assert msg.nakked is False
     assert len(js.published) == 1
     subject, payload = js.published[0]
     assert subject == "events.dlq.webhook"
-    assert json.loads(payload)["event_id"] == "outbox_event:1"
+    body = json.loads(payload)
+    assert body["event_id"] == "outbox_event:1"
+    assert body["connector"] == "webhook"
+
+
+async def test_fan_out_delivers_to_all_matching_connectors() -> None:
+    delivered: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        delivered.append(request)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    one = connector(url="https://one.example/events")
+    two = connector(url="https://two.example/events")
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(client, _FakeJs(), [one, two], msg, 5, tracker())
+    await client.aclose()
+
+    assert [str(request.url) for request in delivered] == [
+        "https://one.example/events",
+        "https://two.example/events",
+    ]
+    assert msg.acked is True
 
 
 async def test_coalesce_buffer_last_wins() -> None:
@@ -182,15 +215,18 @@ async def test_handle_message_buffers_when_coalescing() -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
-    buffer = _CoalesceBuffer()
+    coalesced = _Connector(
+        config=config(coalesce={"enabled": True, "window_seconds": 30}),
+        buffer=_CoalesceBuffer(),
+    )
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), config(), msg, 5, 1.0, buffer)
+    await _handle_message(client, _FakeJs(), [coalesced], msg, 5, tracker())
     await client.aclose()
 
     assert delivered == []
     assert msg.acked is False
     assert msg.nakked is False
-    entries = await buffer.drain()
+    entries = await coalesced.buffer.drain()
     assert len(entries) == 1
 
 
@@ -202,11 +238,15 @@ async def test_deliver_coalesced_sends_latest_with_flags_and_acks_all() -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    coalesced = _Connector(config=config(coalesce={"enabled": True}))
     msg1 = _FakeMsg(json.dumps(event(event_id="outbox_event:1")).encode())
     msg2 = _FakeMsg(json.dumps(event(event_id="outbox_event:2")).encode())
     entry = {"event": event(event_id="outbox_event:2"), "msgs": [msg1, msg2]}
 
-    await _deliver_coalesced(client, _FakeJs(), config(), entry, 5, 1.0)
+    tr = tracker()
+    await tr.open(msg1, 1)
+    await tr.open(msg2, 1)
+    await _deliver_coalesced(client, _FakeJs(), coalesced, entry, 5, tr)
     await client.aclose()
 
     assert len(delivered) == 1

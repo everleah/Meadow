@@ -3,6 +3,7 @@
 pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
+pub mod connectors;
 pub mod groups;
 pub mod health;
 pub mod imports;
@@ -33,6 +34,11 @@ use utoipa::OpenApi;
         jobs::list_job_runs,
         jobs::update_job_run,
         jobs::run_job,
+        connectors::create_connector,
+        connectors::get_connector,
+        connectors::list_connectors,
+        connectors::update_connector,
+        connectors::delete_connector,
         imports::create_import,
         imports::get_import_document,
         imports::complete_import,
@@ -87,6 +93,9 @@ use utoipa::OpenApi;
         auth::LoginRequest,
         auth::LoginResponse,
         auth::MeResponse,
+        connectors::CreateConnector,
+        connectors::UpdateConnector,
+        connectors::ListConnectors,
         jobs::CreateJobDefinition,
         jobs::UpdateJobDefinition,
         jobs::ListJobs,

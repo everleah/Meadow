@@ -138,6 +138,16 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
         .route("/jobs/{id}/run", post(api::jobs::run_job))
         .route(
+            "/connectors",
+            get(api::connectors::list_connectors).post(api::connectors::create_connector),
+        )
+        .route(
+            "/connectors/{id}",
+            get(api::connectors::get_connector)
+                .patch(api::connectors::update_connector)
+                .delete(api::connectors::delete_connector),
+        )
+        .route(
             "/imports",
             post(api::imports::create_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )

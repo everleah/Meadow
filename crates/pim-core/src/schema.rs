@@ -230,6 +230,20 @@ DEFINE INDEX IF NOT EXISTS idx_job_run_definition ON TABLE job_run FIELDS job_de
 DEFINE INDEX IF NOT EXISTS idx_job_run_status ON TABLE job_run FIELDS status;
 DEFINE INDEX IF NOT EXISTS idx_job_run_created ON TABLE job_run FIELDS created_at;
 
+-- Connectors: persisted inbound/outbound connector configuration. Env
+-- variables seed the initial value; the database is the durable source of
+-- truth managed via the API/admin UI (Phase 6).
+DEFINE TABLE IF NOT EXISTS connector;
+DEFINE FIELD IF NOT EXISTS name ON TABLE connector TYPE string;
+DEFINE FIELD IF NOT EXISTS type ON TABLE connector TYPE string;
+DEFINE FIELD IF NOT EXISTS enabled ON TABLE connector TYPE bool;
+DEFINE FIELD IF NOT EXISTS parameters ON TABLE connector TYPE object;
+DEFINE FIELD OVERWRITE created_at ON TABLE connector TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE connector TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE connector TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_connector_name ON TABLE connector FIELDS name UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_connector_type ON TABLE connector FIELDS type;
+
 -- Import documents: raw MEF documents submitted via `POST /imports`. The
 -- core stores the document and queues an `inbound_import` job; the worker
 -- fetches it via `GET /imports/{document_id}` and performs the import.

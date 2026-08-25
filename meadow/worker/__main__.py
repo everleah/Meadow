@@ -9,6 +9,7 @@ import logging
 import os
 
 from meadow.worker.business_rules import build_business_rule_handler
+from meadow.worker.connectors import fetch_webhook_configs
 from meadow.worker.exports import build_export_handler
 from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
@@ -68,26 +69,34 @@ async def main() -> None:
         )
     )
 
-    # Webhook outbound connector: optional, enabled by `WEBHOOK_URL`.
+    # Webhook outbound connector: DB-backed config with an env fallback for
+    # the initial value. The persisted `connector` table is the durable source
+    # of truth; `WEBHOOK_URL` only bootstraps when no connector exists yet.
     tasks: list[asyncio.Task] = [rules_task, jobs_task]
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url:
-        webhook_config = WebhookConfig(
-            url=webhook_url,
-            method=os.environ.get("WEBHOOK_METHOD", "POST"),
-            headers=json.loads(os.environ.get("WEBHOOK_HEADERS", "{}")),
-            filter=WebhookFilter(
-                event_types=_csv(os.environ.get("WEBHOOK_FILTER_EVENT_TYPES")),
-                object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
-                attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
-            ),
-            coalesce=WebhookCoalesce(
-                enabled=_env_bool(os.environ.get("WEBHOOK_COALESCE_ENABLED")),
-                window_seconds=float(os.environ.get("WEBHOOK_COALESCE_WINDOW_S", "30")),
-            ),
-        )
+    webhook_configs = await fetch_webhook_configs(core_url, api_key=api_key)
+    if not webhook_configs:
+        webhook_url = os.environ.get("WEBHOOK_URL")
+        if webhook_url:
+            webhook_configs.append(
+                WebhookConfig(
+                    key="env",
+                    url=webhook_url,
+                    method=os.environ.get("WEBHOOK_METHOD", "POST"),
+                    headers=json.loads(os.environ.get("WEBHOOK_HEADERS", "{}")),
+                    filter=WebhookFilter(
+                        event_types=_csv(os.environ.get("WEBHOOK_FILTER_EVENT_TYPES")),
+                        object_types=_csv(os.environ.get("WEBHOOK_FILTER_OBJECT_TYPES")),
+                        attribute_changes=_csv(os.environ.get("WEBHOOK_FILTER_ATTRIBUTES")),
+                    ),
+                    coalesce=WebhookCoalesce(
+                        enabled=_env_bool(os.environ.get("WEBHOOK_COALESCE_ENABLED")),
+                        window_seconds=float(os.environ.get("WEBHOOK_COALESCE_WINDOW_S", "30")),
+                    ),
+                )
+            )
+    if webhook_configs:
         tasks.append(
-            asyncio.create_task(serve_webhooks(nats_url, webhook_config, log_sender=log_sender))
+            asyncio.create_task(serve_webhooks(nats_url, webhook_configs, log_sender=log_sender))
         )
 
     try:
