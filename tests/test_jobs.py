@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import httpx
 
-from meadow.worker.jobs import JOBS_NAK_DELAY_S, JobMessage, JobRunner
+from meadow.worker.jobs import JOBS_NAK_DELAY_S, JobMessage, JobRunner, process_messages
 
 
 class FakeMsg:
@@ -150,3 +151,20 @@ async def test_job_message_defaults_parameters() -> None:
     )
     assert parsed.parameters == {}
     assert parsed.type == "bulk_operation"
+
+
+async def test_process_messages_respects_concurrency() -> None:
+    state = {"active": 0, "max_active": 0}
+
+    class FakeRunner:
+        async def handle(self, msg: Any) -> None:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            await asyncio.sleep(0.02)
+            state["active"] -= 1
+
+    sem = asyncio.Semaphore(2)
+    await process_messages(FakeRunner(), sem, [object() for _ in range(6)])
+
+    assert state["max_active"] == 2
+    assert state["active"] == 0

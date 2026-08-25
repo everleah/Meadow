@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 #: Bulk/recompute evaluation budget (generous, per plan: ~30 s).
 BULK_TIMEOUT_SECONDS = 30.0
 
+#: Serializes sandbox evaluations. `execute_rule` installs `sys.settrace`
+#: (per-thread) and `tracemalloc` (process-global, not thread-safe), so only
+#: one evaluation may run at a time even while job I/O is processed in parallel.
+_evaluation_lock = asyncio.Lock()
+
 
 def evaluate_object(
     script: str,
@@ -152,13 +157,14 @@ def build_business_rule_handler(
         for obj in objects:
             object_id = str(obj.get("id") or "<unknown>")
             try:
-                outcome = await asyncio.to_thread(
-                    evaluate_object,
-                    script,
-                    rule_type,
-                    obj,
-                    timeout_s=timeout_s,
-                )
+                async with _evaluation_lock:
+                    outcome = await asyncio.to_thread(
+                        evaluate_object,
+                        script,
+                        rule_type,
+                        obj,
+                        timeout_s=timeout_s,
+                    )
                 if outcome["computed"]:
                     await write_computed(active, core_url, object_id, outcome["computed"])
                 results.append(

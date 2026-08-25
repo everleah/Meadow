@@ -32,6 +32,7 @@ async def main() -> None:
     jobs_durable = os.environ.get("JOBS_CONSUMER_DURABLE", "job-worker")
     jobs_ack_wait = float(os.environ.get("JOBS_ACK_WAIT_S", "300"))
     jobs_max_deliver = int(os.environ.get("JOBS_MAX_DELIVER", "5"))
+    jobs_concurrency = int(os.environ.get("JOBS_CONCURRENCY", "4"))
 
     log_sender = LogSender(
         core_url,
@@ -53,6 +54,7 @@ async def main() -> None:
             durable=jobs_durable,
             ack_wait=jobs_ack_wait,
             max_deliver=jobs_max_deliver,
+            concurrency=jobs_concurrency,
             handlers={"business_rule": build_business_rule_handler(core_url, api_key=api_key)},
             log_sender=log_sender,
         )

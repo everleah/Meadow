@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 5: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler. Parallele Verarbeitung, DLQ-Überwachung und Log-Retention folgen.
+- **Stand:** Implementiert bis Phase-5-Schritt 6: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz). DLQ-Überwachung und Log-Retention folgen.
 
 ## Architektur
 
@@ -42,7 +42,8 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 ## Worker-Konkurrenz & Parallelität
 
 - Der Python-Worker verarbeitet Nachrichten **parallel** (asyncio): getrennte Konsumenten für die **Job-Streams** (`jobs.*`) und den **Event-Stream** (`events.crud`), sodass ein langer Import die Webhook-Auslieferung nicht blockiert.
-- Die **Parallelität ist konfigurierbar** (max. gleichzeitig verarbeitete Nachrichten je Konsument). **Import-Jobs sind bewusst begrenzt** (z. B. max. 1–2 gleichzeitig), damit sie weder die Event-Auslieferung noch andere Jobs aushungern.
+- Die **Parallelität ist konfigurierbar** (max. gleichzeitig verarbeitete Nachrichten je Konsument, `JOBS_CONCURRENCY`, Standard 4). **Import-Jobs sind bewusst begrenzt** (z. B. max. 1–2 gleichzeitig), damit sie weder die Event-Auslieferung noch andere Jobs aushungern (per-Typ-Limits folgen mit den Import-Konnektoren in Phase 6).
+- **Implementiert (Schritt 6):** `serve_jobs` fetcht bis zu `JOBS_CONCURRENCY` Messages und verarbeitet sie mit einem `asyncio.Semaphore` parallel. Sandbox-Auswertungen bleiben **serialisiert** (module-globaler Lock: `sys.settrace`/`tracemalloc` sind nicht nebenläufig sicher), während Objekt-I/O parallel läuft.
 - Skalierung über mehrere Worker-Container in einer NATS-Queue-Group bleibt möglich ([betrieb-deployment.md](betrieb-deployment.md)).
 
 ## Ablauf eines Jobs

@@ -6,13 +6,13 @@ and dispatches each message to a handler registered by job type.
 
 The concrete job handlers (business-rule recompute, import/export) are added in
 later steps. This module provides the consumer framework: parsing, status
-transitions (`running` -> `success`/`failed`), ack/negative-ack semantics, and
-the handler registry. Messages are processed sequentially for now; parallel
-processing (configurable concurrency) follows in a later step.
+transitions (`running` -> `success`/`failed`), ack/negative-ack semantics, the
+handler registry, and bounded parallel processing.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -38,6 +38,8 @@ JOBS_ACK_WAIT_S = 300.0
 JOBS_MAX_DELIVER = 5
 #: Delay (seconds) before a failed message is redelivered after a negative ack.
 JOBS_NAK_DELAY_S = 5.0
+#: Default maximum number of job messages processed concurrently.
+JOBS_CONCURRENCY = 4
 
 
 class JobMessage(BaseModel):
@@ -148,6 +150,20 @@ class JobRunner:
             await msg.nak(delay=self._nak_delay)
 
 
+async def process_messages(
+    runner: JobRunner,
+    sem: asyncio.Semaphore,
+    msgs: list[Any],
+) -> None:
+    """Processes a batch of messages concurrently, bounded by `sem`."""
+
+    async def run_one(msg: Any) -> None:
+        async with sem:
+            await runner.handle(msg)
+
+    await asyncio.gather(*(run_one(msg) for msg in msgs))
+
+
 async def serve_jobs(
     nats_url: str,
     core_url: str,
@@ -160,10 +176,15 @@ async def serve_jobs(
     ack_wait: float = JOBS_ACK_WAIT_S,
     max_deliver: int = JOBS_MAX_DELIVER,
     nak_delay: float = JOBS_NAK_DELAY_S,
+    concurrency: int = JOBS_CONCURRENCY,
     handlers: dict[str, JobHandler] | None = None,
     log_sender: LogSender | None = None,
 ) -> None:
-    """Connects to NATS and consumes job messages from JetStream until cancelled."""
+    """Connects to NATS and consumes job messages from JetStream until cancelled.
+
+    Up to `concurrency` messages are fetched and processed concurrently.
+    """
+    sem = asyncio.Semaphore(max(1, concurrency))
     nc = await nats.connect(nats_url)
     js = nc.jetstream()
     config = jsapi.ConsumerConfig(ack_wait=ack_wait, max_deliver=max_deliver)
@@ -194,17 +215,17 @@ async def serve_jobs(
         try:
             while True:
                 try:
-                    msgs = await psub.fetch(1, timeout=5)
+                    msgs = await psub.fetch(max(1, concurrency), timeout=5)
                 except TimeoutError:
                     continue
-                for msg in msgs:
-                    await runner.handle(msg)
+                await process_messages(runner, sem, msgs)
         finally:
             await nc.close()
 
 
 __all__ = [
     "JOBS_ACK_WAIT_S",
+    "JOBS_CONCURRENCY",
     "JOBS_DURABLE",
     "JOBS_MAX_DELIVER",
     "JOBS_NAK_DELAY_S",
@@ -213,5 +234,6 @@ __all__ = [
     "JobMessage",
     "JobHandler",
     "JobRunner",
+    "process_messages",
     "serve_jobs",
 ]
