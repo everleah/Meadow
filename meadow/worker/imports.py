@@ -11,6 +11,8 @@ references:
   MEF object `id` + the document `source`), via `GET /objects/by-source`.
 - References are created between the imported objects, mapping the MEF `id`
   (and the key/source lookups) to the core's record ids.
+- When `emit_events` is `false` (bulk imports), per-object CRUD events are
+  suppressed and a single `import.completed` summary event is emitted.
 
 Per-object failures are isolated: one bad object does not abort the whole run;
 a report is returned and stored in `job_run.result`.
@@ -151,6 +153,7 @@ async def _upsert_object(
     match_by_key: str | None,
     source_id: str | None,
     source: str | None,
+    emit_events: bool,
 ) -> tuple[str, str]:
     """Creates or updates one MEF object; returns `(record_id, action)`.
 
@@ -194,14 +197,16 @@ async def _upsert_object(
     if source:
         body["source"] = source
 
+    params = None if emit_events else {"emit_events": "false"}
     if existing_id:
         response = await client.patch(
             f"{core_url}/objects/{existing_id}",
             json={"attributes": attributes, "status": status},
+            params=params,
         )
         response.raise_for_status()
         return str(response.json()["id"]), "updated"
-    response = await client.post(f"{core_url}/objects", json=body)
+    response = await client.post(f"{core_url}/objects", json=body, params=params)
     response.raise_for_status()
     return str(response.json()["id"]), "created"
 
@@ -211,6 +216,7 @@ async def _import_references(
     core_url: str,
     references: list[dict[str, Any]],
     id_map: dict[str, str],
+    emit_events: bool,
 ) -> list[dict[str, Any]]:
     """Creates MEF references, mapping external ids via `id_map`.
 
@@ -220,6 +226,7 @@ async def _import_references(
     `rel_related`). An already-prefixed id is passed through unchanged.
     """
     results: list[dict[str, Any]] = []
+    params = None if emit_events else {"emit_events": "false"}
     for reference in references:
         source = id_map.get(str(reference.get("in") or ""))
         target = id_map.get(str(reference.get("out") or ""))
@@ -244,6 +251,7 @@ async def _import_references(
                     "definition_id": definition_id,
                     "attributes": attributes,
                 },
+                params=params,
             )
             response.raise_for_status()
             results.append(
@@ -261,6 +269,32 @@ async def _import_references(
                 }
             )
     return results
+
+
+async def _complete_import(
+    client: httpx.AsyncClient,
+    core_url: str,
+    document_id: str,
+    run_id: str,
+    source: str,
+    created: int,
+    updated: int,
+    failed: int,
+    processed: int,
+) -> None:
+    """Emits the `import.completed` summary event (bulk imports)."""
+    response = await client.post(
+        f"{core_url}/imports/{document_id}/complete",
+        json={
+            "job_run_id": run_id,
+            "source": source or None,
+            "created": created,
+            "updated": updated,
+            "failed": failed,
+            "processed": processed,
+        },
+    )
+    response.raise_for_status()
 
 
 def build_import_handler(
@@ -284,6 +318,7 @@ def build_import_handler(
         match_by_key = parameters.get("match_by_key")
         if match_by_key is not None:
             match_by_key = str(match_by_key)
+        emit_events = bool(parameters.get("emit_events", True))
 
         document = await _fetch_document(active, core_url, str(document_id))
         objects = document.get("objects") or []
@@ -334,6 +369,7 @@ def build_import_handler(
                     match_by_key,
                     external_id or None,
                     source or None,
+                    emit_events,
                 )
                 if external_id:
                     id_map[external_id] = record_id
@@ -349,7 +385,22 @@ def build_import_handler(
                     {"id": external_id, "type": object_type, "status": "failed", "error": str(exc)}
                 )
 
-        reference_results = await _import_references(active, core_url, references, id_map)
+        reference_results = await _import_references(
+            active, core_url, references, id_map, emit_events
+        )
+
+        if not emit_events:
+            await _complete_import(
+                active,
+                core_url,
+                str(document_id),
+                message.run_id,
+                source,
+                created,
+                updated,
+                failed,
+                len(objects),
+            )
 
         return {
             "processed": len(objects),

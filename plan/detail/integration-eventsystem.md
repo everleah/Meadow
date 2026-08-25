@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem))
 - **Relevante Phasen:** Phase 6, 8
-- **Stand:** Implementiert bis Phase-6-Schritt 7: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export`, Webhook-Outbound (`events.crud`-Konsument mit Filterung, at-least-once + Retry, manuelle DLQ), Webhook-Coalescing **und** Quell-Referenz-Dedup (Import-Idempotenz für Objekte ohne Schlüssel). Datei-Upload und `emit_events` folgen.
+- **Stand:** Implementiert bis Phase-6-Schritt 9: Transactional Outbox + Event-Relay, MEF-Import, quantifizierte Werte (SI-Normalisierung), `normalization`-Regeln, `json_export`, Webhook-Outbound, Webhook-Coalescing, Quell-Referenz-Dedup, `emit_events` (Summary-Event `import.completed` für Bulk-Importe) **und** Datei-Upload (Multipart auf `POST /imports`). Persistierte Konnektor-Konfiguration (statt Env-Variablen) folgt.
 
 Meadow PIM kommuniziert mit externen Systemen über **Inbound- und Outbound-Prozesse**. In der ersten Version genügt die Anbindung an eine bestehende Middleware, die komplexe Transformations- und Verteilungsaufgaben übernimmt. Meadow PIM liefert dafür ein einheitliches JSON-Austauschformat und ein Eventsystem, das Änderungen zuverlässig an die Middleware weiterleitet.
 
@@ -67,8 +67,9 @@ Für den Import und Export wird ein generisches JSON-Format verwendet, das alle 
 **Verwendung im Inbound:**
 
 - Der Inbound-Konnektor `json_import` akzeptiert MEF-Dokumente (z. B. aus Datei oder HTTP) und läuft als Hintergrundjob (Typ `inbound_import`, [jobs-scheduler.md](jobs-scheduler.md)).
-- **Implementiert (Schritt 2–3):** `POST /imports` (JSON-Body) speichert das MEF-Dokument in `import_document` und queue't einen `inbound_import`-Job; der Worker-Konnektor holt das Dokument (`GET /imports/{document_id}`), führt aktive `normalization`-Regeln (R3) aus, normalisiert quantifizierte Werte in die kanonische SI-Einheit, legt Objekte per Business-Schlüssel-Upsert (`match_by_key`, z. B. `sku`) an bzw. aktualisiert sie und legt Referenzen an (MEF-`type`-Name → Definitions-Key `rel_<name>`). Datei-Upload (Objektstorage) folgt.
-- **Einspeisung über `POST /imports` (verbindlich):** Die Middleware (oder die UI) reicht ein MEF-Dokument über den dedizierten Endpunkt `POST /imports` ein – als JSON-Body oder als Datei-Upload (Dateien werden nach dem Objektstorage abgelegt). Der Kern validiert nur oberflächlich, legt sofort ein `job_run` an und antwortet mit `202 Accepted` inkl. `job_run`-ID (Details [api-design.md](api-design.md)). Der Aufrufer ist nie blockiert; die eigentliche Verarbeitung übernimmt der Worker.
+- **Implementiert (Schritt 2–3):** `POST /imports` (JSON-Body) speichert das MEF-Dokument in `import_document` und queue't einen `inbound_import`-Job; der Worker-Konnektor holt das Dokument (`GET /imports/{document_id}`), führt aktive `normalization`-Regeln (R3) aus, normalisiert quantifizierte Werte in die kanonische SI-Einheit, legt Objekte per Business-Schlüssel-Upsert (`match_by_key`, z. B. `sku`) an bzw. aktualisiert sie und legt Referenzen an (MEF-`type`-Name → Definitions-Key `rel_<name>`).
+- **Implementiert (Schritt 9):** Datei-Upload über `POST /imports` als `multipart/form-data` (Feld `file`) funktioniert; der Kern parst Multipart via `multer`, speichert das Dokument wie beim JSON-Body in `import_document` (Body-Limit 100 MB). Ablage der Upload-Datei im Objektstorage (minio) folgt später.
+- **Einspeisung über `POST /imports` (verbindlich):** Die Middleware (oder die UI) reicht ein MEF-Dokument über den dedizierten Endpunkt `POST /imports` ein – als JSON-Body oder als Datei-Upload (`multipart/form-data`, Feld `file`). Der Kern validiert nur oberflächlich, legt sofort ein `job_run` an und antwortet mit `202 Accepted` inkl. `job_run`-ID (Details [api-design.md](api-design.md)). Der Aufrufer ist nie blockiert; die eigentliche Verarbeitung übernimmt der Worker. (Die Ablage der Rohdatei im Objektstorage ist späterer Ausbau.)
 - Der Python-Worker validiert die Struktur, führt Business Rules aus und übergibt die Objekte/Referenzen an den Rust-Kern; Fortschritt und Report stehen am `job_run`.
 
 **Verwendung im Outbound:**
@@ -174,6 +175,7 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
 
 - **`coalesce`:** Bündelt Events pro `object_id` + `event_type` innerhalb eines Fensters („letztes gewinnt“, inkl. Flag für gebündelte Änderungen); Standard aus.
 - **Quellseitige Steuerung (`emit_events`):** Bulk-Import-Jobs können per Konfiguration auf „nur ein Summary-Event `import.completed`“ umstellen, statt pro Objekt Einzelevents zu erzeugen (Details [jobs-scheduler.md](jobs-scheduler.md)); der Webhook-Filter bleibt davon unabhängig konfigurierbar.
+- **Implementiert (Schritt 8):** `POST /imports?emit_events=false` lässt den Import-Konnektor Objekte/Referenzen **ohne** Einzelevents schreiben (`?emit_events=false` an `POST /objects`/`PATCH /objects/{id}`/`POST /references`) und am Ende genau ein `import.completed`-Event über `POST /imports/{document_id}/complete` in die Outbox legen (relay't nach `events.crud`).
 
 **Verarbeitungsablauf:**
 

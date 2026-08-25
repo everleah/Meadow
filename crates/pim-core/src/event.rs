@@ -25,6 +25,8 @@ pub const EVENT_REFERENCE_DELETED: &str = "reference.deleted";
 pub const EVENT_ATTRIBUTE_DEFINITION_CREATED: &str = "attribute_definition.created";
 pub const EVENT_ATTRIBUTE_DEFINITION_UPDATED: &str = "attribute_definition.updated";
 pub const EVENT_ATTRIBUTE_DEFINITION_DELETED: &str = "attribute_definition.deleted";
+/// Summary event emitted by bulk imports with `emit_events: false`.
+pub const EVENT_IMPORT_COMPLETED: &str = "import.completed";
 
 /// Outbox delivery status.
 pub const STATUS_PENDING: &str = "pending";

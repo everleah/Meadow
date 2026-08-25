@@ -2,6 +2,7 @@
 
 use axum::{
     Json, Router,
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
 };
 use utoipa::OpenApi as _;
@@ -136,10 +137,17 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
         .route("/jobs/{id}/run", post(api::jobs::run_job))
-        .route("/imports", post(api::imports::create_import))
+        .route(
+            "/imports",
+            post(api::imports::create_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
         .route(
             "/imports/{document_id}",
             get(api::imports::get_import_document),
+        )
+        .route(
+            "/imports/{document_id}/complete",
+            post(api::imports::complete_import),
         )
         .route("/units", get(api::units::list_units))
         .route("/units/convert", get(api::units::convert))

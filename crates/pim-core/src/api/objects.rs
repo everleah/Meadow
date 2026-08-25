@@ -73,6 +73,10 @@ pub struct GetObjectQuery {
 pub struct WriteObjectQuery {
     /// Language code used to resolve multilingual + inherited values for rules.
     pub locale: Option<String>,
+    /// When `false`, no `object.created`/`object.updated` event is written to the
+    /// outbox (bulk import with `emit_events: false`).
+    #[serde(default)]
+    pub emit_events: Option<bool>,
 }
 
 /// Query parameters for listing objects.
@@ -145,6 +149,7 @@ pub async fn create_object(
         .as_deref()
         .map(str::trim)
         .filter(|l| !l.is_empty());
+    let emit_events = params.emit_events.unwrap_or(true);
 
     let Value::Object(mut attributes) = attributes else {
         return Err(ApiError::bad_request("`attributes` must be an object"));
@@ -201,9 +206,10 @@ pub async fn create_object(
             .unwrap_or_else(|| json!({})),
     });
 
-    // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), CREATE outbox(4),
-    // SELECT(5), COMMIT(6).
-    let sql = "
+    // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), [CREATE outbox(4)],
+    // SELECT(4|5), COMMIT(5|6).
+    let sql = if emit_events {
+        "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', rand::ulid());
         CREATE $obj CONTENT $content;
@@ -211,7 +217,19 @@ pub async fn create_object(
         CREATE outbox_event SET event_type = 'object.created', object_type = $object_type, object_id = type::string($obj.id), changes = $changes, metadata = $metadata, status = 'pending';
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
-    ";
+        "
+        .to_owned()
+    } else {
+        "
+        BEGIN TRANSACTION;
+        LET $obj = type::record('object', rand::ulid());
+        CREATE $obj CONTENT $content;
+        RELATE $obj->reference->object:object_root SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
+        SELECT * FROM $obj;
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    };
     let mut response = state
         .db
         .inner()
@@ -222,7 +240,8 @@ pub async fn create_object(
         .bind(("metadata", json!({ "user_id": user_id.clone() })))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(5)?;
+    let select_index = if emit_events { 5 } else { 4 };
+    let objects: Vec<Value> = response.take(select_index)?;
     let object = objects
         .into_iter()
         .next()
@@ -468,6 +487,7 @@ pub async fn update_object(
         .as_deref()
         .map(str::trim)
         .filter(|l| !l.is_empty());
+    let emit_events = params.emit_events.unwrap_or(true);
 
     // Own attributes to persist (pending changes applied).
     let own_attributes = changes
@@ -558,8 +578,9 @@ pub async fn update_object(
     });
 
     // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
-    // CREATE outbox(4), SELECT(5), COMMIT(6).
-    let sql = "
+    // [CREATE outbox(4)], SELECT(4|5), COMMIT(5|6).
+    let sql = if emit_events {
+        "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', $key);
         UPDATE $obj MERGE $changes;
@@ -567,7 +588,19 @@ pub async fn update_object(
         CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
-    ";
+        "
+        .to_owned()
+    } else {
+        "
+        BEGIN TRANSACTION;
+        LET $obj = type::record('object', $key);
+        UPDATE $obj MERGE $changes;
+        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        SELECT * FROM $obj;
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    };
     let mut response = state
         .db
         .inner()
@@ -578,7 +611,8 @@ pub async fn update_object(
         .bind(("outbox", outbox))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(5)?;
+    let select_index = if emit_events { 5 } else { 4 };
+    let objects: Vec<Value> = response.take(select_index)?;
     let object = objects
         .into_iter()
         .next()

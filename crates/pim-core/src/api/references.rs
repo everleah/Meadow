@@ -4,11 +4,11 @@
 //! target (see `plan/detail/relationen.md`).
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
@@ -30,6 +30,15 @@ pub struct CreateReference {
     /// Edge metadata.
     #[serde(default = "default_object")]
     pub attributes: Value,
+}
+
+/// Query parameters for `POST /references`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReferenceWriteQuery {
+    /// When `false`, no `reference.created` event is written to the outbox.
+    #[serde(default)]
+    pub emit_events: Option<bool>,
 }
 
 /// Payload for re-parenting an object.
@@ -158,9 +167,11 @@ fn check_type_restriction(
 pub async fn create_reference(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<ReferenceWriteQuery>,
     Json(body): Json<CreateReference>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let emit_events = params.emit_events.unwrap_or(true);
     let source_key = parse_object_key(&body.source)?;
     let target_key = parse_object_key(&body.target)?;
     if source_key == target_key {
@@ -220,9 +231,10 @@ pub async fn create_reference(
         metadata: json!({ "user_id": user_id.clone() }),
     });
 
-    // Statements: BEGIN(0), LET(1), LET(2), RELATE(3), CREATE outbox(4),
-    // RETURN(5), COMMIT(6).
-    let sql = "
+    // Statements: BEGIN(0), LET(1), LET(2), RELATE(3), [CREATE outbox(4)],
+    // RETURN(4|5), COMMIT(5|6).
+    let sql = if emit_events {
+        "
         BEGIN TRANSACTION;
         LET $src = type::record('object', $source_key);
         LET $tgt = type::record('object', $target_key);
@@ -230,7 +242,19 @@ pub async fn create_reference(
         CREATE outbox_event CONTENT $outbox;
         RETURN $edge;
         COMMIT TRANSACTION;
-    ";
+        "
+        .to_owned()
+    } else {
+        "
+        BEGIN TRANSACTION;
+        LET $src = type::record('object', $source_key);
+        LET $tgt = type::record('object', $target_key);
+        LET $edge = (RELATE $src->reference->$tgt SET definition_id = $definition_id, type = $definition_name, attributes = $attributes);
+        RETURN $edge;
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    };
     let mut response = state
         .db
         .inner()
@@ -243,7 +267,8 @@ pub async fn create_reference(
         .bind(("outbox", outbox))
         .await?
         .check()?;
-    let edges: Vec<Value> = response.take(5)?;
+    let return_index = if emit_events { 5 } else { 4 };
+    let edges: Vec<Value> = response.take(return_index)?;
     let edge = edges
         .into_iter()
         .next()

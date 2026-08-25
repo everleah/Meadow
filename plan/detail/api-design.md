@@ -45,6 +45,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PATCH   | `/jobs/{id}`                                         | Job-Definition bearbeiten (`schedule` mit `null` löschbar; nur `admin`/`superadmin`)                                                                     |
 | POST    | `/imports`                                           | MEF-Import anstoßen (JSON oder Datei-Upload); asynchron, liefert`job_run`-ID (202)                                                                       |
 | GET     | `/imports/{document_id}`                             | Gespeichertes MEF-Dokument laden (Worker, `X-Api-Key` oder Admin)                                                                                        |
+| POST    | `/imports/{document_id}/complete`                    | `import.completed`-Summary-Event in die Outbox schreiben (Worker, `emit_events: false`)                                                                |
 | GET     | `/jobs/runs?ids=…`                                   | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling                                                                                |
 | POST    | `/search`                                            | Volltextsuche über Objekte                                                                                                                               |
 | GET     | `/auth/me`                                           | Rollen, Berechtigungen & Scope des Nutzers                                                                                                               |
@@ -161,7 +162,7 @@ Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- un
 ## Inbound-Import & Request-Limits
 
 - **`POST /imports`:** Nimmt ein MEF-Dokument entgegen (JSON-Body oder Datei-Upload → Objektstorage), validiert nur oberflächlich, legt sofort ein `job_run` an und liefert `202 Accepted` mit `{ "job_run_id": … }` (Details [integration-eventsystem.md](integration-eventsystem.md)). Der Aufrufer wartet nie auf die Verarbeitung; Status/Fortschritt/Report über `GET /jobs/runs?ids=…`.
-- **Implementiert (Schritt 2):** `POST /imports` akzeptiert den MEF-JSON-Body plus optionale Query-Parameter `match_by_key` (Business-Schlüssel für Upsert) und `source`; das Dokument wird in `import_document` gespeichert und ein `inbound_import`-Job gequeue't. `GET /imports/{document_id}` liefert das gespeicherte Dokument an den Worker (`X-Api-Key` oder Admin).
+- **Implementiert (Schritt 2, 9):** `POST /imports` akzeptiert den MEF-JSON-Body **oder** einen `multipart/form-data`-Datei-Upload (Feld `file`) plus optionale Query-Parameter `match_by_key` (Business-Schlüssel für Upsert), `source` und `emit_events`; das Dokument wird in `import_document` gespeichert und ein `inbound_import`-Job gequeue't. `GET /imports/{document_id}` liefert das gespeicherte Dokument an den Worker (`X-Api-Key` oder Admin). Datei-Upload-Limit: 100 MB (`DefaultBodyLimit`).
 - **Request-Limits (verbindlich):** Für alle Endpunkte gelten **Body-/Upload-Limits** (z. B. JSON-Body max. 10 MB, Datei-Upload max. 100 MB, konfigurierbar) sowie ein **Rate-Limit** (z. B. pro Nutzer/JWT, konfigurierbar), damit Eingabe-Fluten über API/Inbound das System nicht stilllegen.
 
 ## Referenz-Picker-Suche
