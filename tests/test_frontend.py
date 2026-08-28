@@ -69,6 +69,13 @@ def test_t_falls_back_to_key() -> None:
     assert t("login.username", locale="de") == "Benutzername"
 
 
+def test_grid_view_keys_translate() -> None:
+    assert t("grid.views", locale="de") == "Ansichten"
+    assert t("grid.save_view", locale="en") == "Save view"
+    assert t("grid.close", locale="fr") == "Fermer"
+    assert t("grid.view_name_required", locale="de") == "Bitte einen Ansichtsnamen eingeben."
+
+
 def test_resolve_value() -> None:
     assert resolve_value({"en": "Product", "de": "Produkt"}, "de") == "Produkt"
     assert resolve_value({"en": "Product", "de": "Produkt"}, "fr") == "Product"

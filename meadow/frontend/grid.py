@@ -162,29 +162,92 @@ async def products_page() -> None:
         def discard() -> None:
             ui.navigate.reload()
 
+        # Personal views (step 4b): save/restore the visible column set per user.
+        views = app.storage.user.get("views", {})
+        visible_fields: set[str] = {"_id", "_name", "_type", "_status"}
+        checkbox_refs: dict[str, ui.checkbox] = {}
+
+        def apply_visibility(fields: set[str]) -> None:
+            for column in column_defs:
+                grid.run_grid_method(
+                    "setColumnsVisible", [column["field"]], column["field"] in fields
+                )
+
+        def save_view() -> None:
+            name = view_input.value.strip()
+            if not name:
+                ui.notify(t("grid.view_name_required"), color="warning")
+                return
+            views[name] = sorted(visible_fields)
+            app.storage.user["views"] = views
+            view_input.value = ""
+            refresh_views()
+            ui.notify(t("grid.view_saved").format(name=name))
+
+        def load_view(name: str) -> None:
+            fields = set(views.get(name, []))
+            visible_fields.clear()
+            visible_fields.update(fields)
+            apply_visibility(visible_fields)
+            for column in column_defs:
+                checkbox_refs[column["field"]].value = column["field"] in visible_fields
+            ui.notify(t("grid.view_loaded").format(name=name))
+
+        def delete_view(name: str) -> None:
+            views.pop(name, None)
+            app.storage.user["views"] = views
+            refresh_views()
+
+        def refresh_views() -> None:
+            views_container.clear()
+            for name in views:
+                with views_container, ui.row().classes("items-center gap-1 w-full"):
+                    ui.button(name, on_click=lambda n=name: load_view(n)).props("flat dense")
+                    ui.button(icon="delete", on_click=lambda n=name: delete_view(n)).props(
+                        "flat dense color=negative"
+                    )
+
+        with ui.dialog() as views_dialog, ui.card().classes("w-96"):
+            ui.label(t("grid.views")).classes("text-h6")
+            with ui.row().classes("items-center gap-2 w-full"):
+                view_input = ui.input(t("grid.view_name")).props("outline dense").classes("grow")
+                ui.button(t("grid.save_view"), icon="save", on_click=save_view).props(
+                    "outline dense"
+                )
+            views_container = ui.column()
+            refresh_views()
+            with ui.row().classes("w-full justify-end"):
+                ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
+
         with ui.row().classes("items-center gap-3"):
             ui.button(t("grid.save"), icon="save", on_click=save).classes("bg-primary text-white")
             ui.button(t("grid.discard"), icon="undo", on_click=discard).props("outline")
             staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
                 "text-caption"
             )
+            ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
+                "outline"
+            ).classes("ml-auto")
 
             def make_toggler(field: str):
                 def toggle(event) -> None:
                     grid.run_grid_method("setColumnsVisible", [field], event.value)
+                    if event.value:
+                        visible_fields.add(field)
+                    else:
+                        visible_fields.discard(field)
 
                 return toggle
 
             with (
-                ui.button(t("grid.columns"), icon="view_column")
-                .props("outline")
-                .classes("ml-auto"),
+                ui.button(t("grid.columns"), icon="view_column").props("outline").classes("ml-2"),
                 ui.menu(),
             ):
                 for column in column_defs:
-                    ui.checkbox(column["headerName"], value=not column.get("hide")).on_value_change(
-                        make_toggler(column["field"])
-                    )
+                    checkbox = ui.checkbox(
+                        column["headerName"], value=not column.get("hide")
+                    ).on_value_change(make_toggler(column["field"]))
+                    checkbox_refs[column["field"]] = checkbox
 
         grid = ui.aggrid(
             {

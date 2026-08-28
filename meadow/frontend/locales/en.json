@@ -33,5 +33,12 @@
   "grid.staged_changes": "Unsaved changes: {count}",
   "grid.save_failed": "Saving failed.",
   "grid.session_expired": "Your session has expired. Please sign in again.",
-  "grid.columns": "Columns"
+  "grid.columns": "Columns",
+  "grid.views": "Views",
+  "grid.view_name": "View name",
+  "grid.save_view": "Save view",
+  "grid.view_name_required": "Please enter a view name.",
+  "grid.view_saved": "View '{name}' saved.",
+  "grid.view_loaded": "View '{name}' loaded.",
+  "grid.close": "Close"
 }

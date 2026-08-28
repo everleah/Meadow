@@ -33,5 +33,12 @@
   "grid.staged_changes": "Ungespeicherte Änderungen: {count}",
   "grid.save_failed": "Speichern fehlgeschlagen.",
   "grid.session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
-  "grid.columns": "Spalten"
+  "grid.columns": "Spalten",
+  "grid.views": "Ansichten",
+  "grid.view_name": "Ansichtsname",
+  "grid.save_view": "Ansicht speichern",
+  "grid.view_name_required": "Bitte einen Ansichtsnamen eingeben.",
+  "grid.view_saved": "Ansicht '{name}' gespeichert.",
+  "grid.view_loaded": "Ansicht '{name}' geladen.",
+  "grid.close": "Schließen"
 }
