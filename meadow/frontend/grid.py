@@ -186,7 +186,7 @@ async def products_page() -> None:
         ]
         column_defs = [
             {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
-            {"headerName": t("grid.name"), "field": "_name", "editable": True, "flex": 1},
+            {"headerName": t("grid.name"), "field": "_name", "editable": True},
             {"headerName": t("grid.type"), "field": "_type", "width": 120},
             {"headerName": t("grid.status"), "field": "_status", "width": 140},
         ] + attribute_columns(definitions, locale)
@@ -321,6 +321,7 @@ async def products_page() -> None:
             nonlocal nodes_expanded
             if nodes_expanded:
                 tree.collapse()
+                tree.expand([root_id])
                 nodes_toggle.props("icon=unfold_more")
             else:
                 tree.expand()
@@ -330,7 +331,9 @@ async def products_page() -> None:
         def toggle_panel() -> None:
             splitter.value = 0 if splitter.value > 0 else 25
 
-        with ui.splitter(value=25, limits=(0, 60)).classes("w-full") as splitter:
+        with ui.splitter(value=25, limits=(0, 60)).classes(
+            "w-full h-[calc(100vh-210px)]"
+        ) as splitter:
             # Left: resizable structure tree card.
             with splitter.before, ui.card().classes("w-full h-full"):  # noqa: SIM117 - layout nesting
                 with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - header
@@ -360,8 +363,8 @@ async def products_page() -> None:
                     filter_input.on_value_change(lambda e: apply_tree_filter(e.value))
                 else:
                     ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
-            # Right: grid area (fills the remaining width).
-            with splitter.after:
+            # Right: grid area (fills the remaining width and height).
+            with splitter.after, ui.column().classes("w-full h-full"):  # noqa: SIM117 - layout
                 with ui.row().classes("items-center gap-3"):
                     ui.button(t("grid.save"), icon="save", on_click=save).classes(
                         "bg-primary text-white"
@@ -408,5 +411,5 @@ async def products_page() -> None:
                         "paginationPageSize": 50,
                     },
                     html_columns=[3],
-                ).classes("w-full h-96")
+                ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data"])
