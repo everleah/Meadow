@@ -324,7 +324,7 @@ Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s übe
 
 Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild „grüne Wiese im Tal mit Fluss, umrandet mit Wäldern und Bergen“ (Primär `Meadow Green #16a34a`, Sekundär `River Blue #0ea5e9`, Akzent `Sunlight Amber #d97706`); Logos/Grafiken folgen später. Details in [frontend.md](detail/frontend.md).
 
-**Stand Phase 7:** Das Frontend-Grundgerüst (`meadow/frontend/`, `python -m meadow.frontend`, Dev-Port 8081) mit App-Shell, Login/Session und CI-Farbskala ist umgesetzt (Schritt 1); Grid, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
+**Stand Phase 7:** Frontend-Grundgerüst (Schritt 1), Oberflächen-i18n (Schritt 2) und das Objekt-Grid als Basis (Schritt 3) sind umgesetzt; Kategorien-/Strukturbaum, Spalten-Picker, Inline-Editing/Batch-Save, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
 
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
@@ -478,6 +478,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3 (Abschnitt 11): Objekt-Grid `/products` mit `ui.aggrid` (`meadow/frontend/grid.py`) – lesbare Objektliste, Sprachwert-Auflösung, Status-Badge, i18n-Spaltenüberschriften, Mehrfachauswahl; Daten aus `GET /objects`. `frontend-arbeitsflaechen.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 2 (Abschnitt 11): Oberflächen-i18n mit schlanker JSON-basierter Übersetzungsverwaltung (`meadow/frontend/locales/<locale>.json` + `i18n.t(key, locale)`; en/de/fr), Sprachumschalter im Drawer, Locale pro Benutzer in der NiceGUI-Session (Default aus `Accept-Language`, Persistenz im Benutzerprofil später). `frontend.md` und `meadow/AGENTS.md` ergänzt.*
 

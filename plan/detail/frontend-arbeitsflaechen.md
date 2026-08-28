@@ -13,6 +13,7 @@ Dieses Dokument spezifiziert die konkreten Arbeitsflächen der Weboberfläche (N
 - **Template pro Typ:** Welche Attribute, Gruppen und Pflichtfelder ein Objekttyp anzeigt, bestimmt die Produktvorlage (Attributdefinitionen mit `applicable_types`/`required_types`, siehe [datenmodell.md](datenmodell.md)). Nur Gruppen mit mindestens einem für den Typ gültigen Attribut erscheinen.
 - **Hinweise als Icons/Marker:** Herkunft (Vererbung), Fallback (Sprache), Warnungen und Status werden als **dezente Icons/Marker mit Tooltip** dargestellt – nicht als beschreibender Text, um die Anzeige schlank zu halten.
 - **Grid-Technologie:** Produktives Grid über **`ui.aggrid` (AG Grid, Community-Modul)** – eingebaute Zell-Editoren, Mehrfachauswahl, Spalten-Pinning, bedingte Formatierung und Synchronisation der Client-Edits zurück zum Server. `ui.table` (Quasar) bleibt für einfache Admin-Listen (Jobs, Audit, Benutzer). `nicegui-tabulator` (Tabulator.js, MIT) ist die dokumentierte Alternative, falls ein Baum direkt im Grid benötigt wird.
+- **Stand (Schritt 3):** Das Basis-Grid ist umgesetzt (`/products`, `meadow/frontend/grid.py`): lesbare Objektliste (`ui.aggrid`) mit aufgelöstem Namen (Sprachbaum-Wert), **Status-Badge**, i18n-Spaltenüberschriften und Mehrfachauswahl; Daten aus `GET /objects`. Kategorien-/Strukturbaum, Spalten-Picker, persönliche Ansichten, Inline-Editing/Batch-Save und Vollständigkeits-Spalte folgen.
 
 ## 1. Grid (Hauptarbeitsfläche)
 

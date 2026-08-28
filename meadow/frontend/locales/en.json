@@ -19,5 +19,11 @@
   "dashboard.overview_placeholder": "Work overview will follow in a later Phase 7 step.",
   "dashboard.welcome": "Welcome to Meadow PIM.",
   "dashboard.milestone_note": "This first milestone provides the app shell, login and branding.",
-  "placeholder.under_construction": "This page will be implemented in a later Phase 7 step."
+  "placeholder.under_construction": "This page will be implemented in a later Phase 7 step.",
+  "grid.id": "ID",
+  "grid.name": "Name",
+  "grid.type": "Type",
+  "grid.status": "Status",
+  "grid.no_objects": "No objects found.",
+  "grid.load_failed": "Could not load objects."
 }

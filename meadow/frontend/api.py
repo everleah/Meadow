@@ -47,3 +47,24 @@ class CoreClient:
             )
             response.raise_for_status()
             return MeResponse.model_validate(response.json())
+
+    async def list_objects(
+        self,
+        token: str,
+        *,
+        object_type: str | None = None,
+        limit: int = 100,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists objects, optionally filtered by type."""
+        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        if object_type:
+            params["type"] = object_type
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()

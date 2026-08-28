@@ -19,5 +19,11 @@
   "dashboard.overview_placeholder": "L'aperçu du travail suivra dans une étape ultérieure de la phase 7.",
   "dashboard.welcome": "Bienvenue dans Meadow PIM.",
   "dashboard.milestone_note": "Ce premier jalon fournit le cadre, la connexion et le branding.",
-  "placeholder.under_construction": "Cette page sera mise en œuvre dans une étape ultérieure de la phase 7."
+  "placeholder.under_construction": "Cette page sera mise en œuvre dans une étape ultérieure de la phase 7.",
+  "grid.id": "ID",
+  "grid.name": "Nom",
+  "grid.type": "Type",
+  "grid.status": "Statut",
+  "grid.no_objects": "Aucun objet trouvé.",
+  "grid.load_failed": "Impossible de charger les objets."
 }

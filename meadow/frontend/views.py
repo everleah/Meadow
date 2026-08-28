@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from nicegui import ui
 
+from meadow.frontend import grid  # noqa: F401  (registers the /products page)
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import NAV_ITEMS, build_shell
+
+#: Routes that have a real page and must be skipped by the placeholder
+#: registration.
+_IMPLEMENTED_ROUTES = {"/products"}
 
 
 @ui.page("/")
@@ -23,7 +28,7 @@ def home() -> None:
 def register_placeholders() -> None:
     """Registers placeholder pages for routes built in later steps."""
     for key, path, _admin_only in NAV_ITEMS:
-        if path == "/":
+        if path == "/" or path in _IMPLEMENTED_ROUTES:
             continue
 
         @ui.page(path)

@@ -19,5 +19,11 @@
   "dashboard.overview_placeholder": "Die Arbeitsübersicht folgt in einem späteren Phase-7-Schritt.",
   "dashboard.welcome": "Willkommen bei Meadow PIM.",
   "dashboard.milestone_note": "Dieser erste Meilenstein stellt Grundgerüst, Login und Branding bereit.",
-  "placeholder.under_construction": "Diese Seite wird in einem späteren Phase-7-Schritt umgesetzt."
+  "placeholder.under_construction": "Diese Seite wird in einem späteren Phase-7-Schritt umgesetzt.",
+  "grid.id": "ID",
+  "grid.name": "Name",
+  "grid.type": "Typ",
+  "grid.status": "Status",
+  "grid.no_objects": "Keine Objekte gefunden.",
+  "grid.load_failed": "Objekte konnten nicht geladen werden."
 }

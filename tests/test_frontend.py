@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 
 from meadow.frontend.api import LoginResponse, MeResponse
+from meadow.frontend.grid import resolve_value, row_data, status_badge
 from meadow.frontend.i18n import best_locale, t
 
 
@@ -21,6 +22,7 @@ def test_frontend_modules_import() -> None:
         "meadow.frontend.api",
         "meadow.frontend.auth",
         "meadow.frontend.layout",
+        "meadow.frontend.grid",
         "meadow.frontend.views",
     ):
         importlib.import_module(module)
@@ -59,3 +61,33 @@ def test_t_translates_with_explicit_locale() -> None:
 def test_t_falls_back_to_key() -> None:
     assert t("does.not.exist", locale="en") == "does.not.exist"
     assert t("login.username", locale="de") == "Benutzername"
+
+
+def test_resolve_value() -> None:
+    assert resolve_value({"en": "Product", "de": "Produkt"}, "de") == "Produkt"
+    assert resolve_value({"en": "Product", "de": "Produkt"}, "fr") == "Product"
+    assert resolve_value("Plain", "en") == "Plain"
+    assert resolve_value(None, "en") == ""
+    assert resolve_value({}, "en") == ""
+
+
+def test_status_badge() -> None:
+    assert "bg-primary" in status_badge("published")
+    assert "bg-neutral" in status_badge("draft")
+    assert "bg-secondary" in status_badge("unknown")
+
+
+def test_row_data() -> None:
+    row = row_data(
+        {
+            "id": "object:1",
+            "type": "product",
+            "status": "published",
+            "attributes": {"name": {"en": "Widget"}},
+        },
+        "en",
+    )
+    assert row["_id"] == "object:1"
+    assert row["_name"] == "Widget"
+    assert row["_type"] == "product"
+    assert "published" in row["_status"]
