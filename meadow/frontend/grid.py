@@ -106,19 +106,42 @@ def enrich_tree_nodes(
     def enrich(node: dict, is_root: bool) -> dict:
         node_id = str(node.get("id", ""))
         obj = objects_by_id.get(node_id, {})
+        obj_type = str(obj.get("type", ""))
         label = resolve_value((obj.get("attributes") or {}).get("name"), locale)
         if not label:
-            label = root_label if is_root else node_id
+            label = root_label if is_root else (obj_type or node_id)
         raw_children = node.get("children", [])
         children_by_id[node_id] = [str(c.get("id")) for c in raw_children if c.get("id")]
         return {
             "id": node_id,
             "label": label,
+            "type": obj_type,
             "children": [enrich(c, False) for c in raw_children],
         }
 
     enriched = [enrich(n, n.get("id") == root_id) for n in nodes]
     return enriched, children_by_id
+
+
+def filter_tree_nodes(nodes: list[dict], query: str) -> list[dict]:
+    """Filters QTree nodes by label, keeping ancestors of matches.
+
+    An empty query returns the nodes unchanged. A node is kept when its label
+    contains the query (case-insensitive) or when a descendant matches; kept
+    nodes carry only their matching descendants.
+    """
+    q = query.strip().lower()
+    if not q:
+        return nodes
+
+    def keep(node: dict) -> dict | None:
+        children = [keep(c) for c in node.get("children", [])]
+        children = [c for c in children if c is not None]
+        if q in str(node.get("label", "")).lower() or children:
+            return dict(node, children=children)
+        return None
+
+    return [n for n in (keep(x) for x in nodes) if n is not None]
 
 
 def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
@@ -136,7 +159,7 @@ def build_patch(object_id: str, client_name: object, original: dict, locale: str
     return {"id": object_id, "attributes": {"name": new_name}}
 
 
-@ui.page("/products")
+@ui.page("/products", response_timeout=10)
 async def products_page() -> None:
     """Lists objects in the main grid with inline editing + batch save."""
     build_shell(active="/products")
@@ -292,17 +315,33 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
-        with ui.row().classes("w-full no-wrap gap-4"):
-            # Left: composition (structure) tree.
-            with ui.column().classes("w-72 shrink-0"):
-                ui.label(t("grid.structure")).classes("text-subtitle2")
-                if tree_nodes:
-                    tree = ui.tree(tree_nodes, on_select=handle_tree_select)
-                    tree.expand()
-                else:
-                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
+        with ui.splitter(value=25, limits=(15, 55)) as splitter:
+            # Left: composition (structure) tree in a card.
+            with splitter.before, ui.card().classes("w-full h-full"):  # noqa: SIM117 - layout nesting
+                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - header row
+                    ui.label(t("grid.structure")).classes("text-subtitle2 text-bold")
+                    filter_input = ui.input(t("grid.filter")).props("outline dense").classes(
+                        "grow"
+                    )
+                    if tree_nodes:
+                        tree = ui.tree(tree_nodes, on_select=handle_tree_select)
+                        tree.expand()
+                        tree.add_slot(
+                            "default-header",
+                            '<span :props="props">{{ props.node.label }}'
+                            '<small v-if="props.node.type" class="text-caption text-gray-500">'
+                            " &middot; {{ props.node.type }}</small></span>",
+                        )
+
+                        def apply_tree_filter(value: str) -> None:
+                            tree.props["nodes"] = filter_tree_nodes(tree_nodes, value)
+                            tree.update()
+
+                        filter_input.on_value_change(lambda e: apply_tree_filter(e.value))
+                    else:
+                        ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
             # Right: grid area with the toolbar.
-            with ui.column().classes("flex-1"):
+            with splitter.after:
                 with ui.row().classes("items-center gap-3"):
                     ui.button(t("grid.save"), icon="save", on_click=save).classes(
                         "bg-primary text-white"

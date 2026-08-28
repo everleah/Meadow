@@ -42,5 +42,6 @@
   "grid.view_loaded": "Vue '{name}' chargée.",
   "grid.close": "Fermer",
   "grid.structure": "Structure",
-  "grid.tree_load_failed": "Impossible de charger l'arbre de structure."
+  "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
+  "grid.filter": "Filtrer"
 }

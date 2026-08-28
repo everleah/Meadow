@@ -10,6 +10,7 @@ from meadow.frontend.grid import (
     build_patch,
     collect_subtree,
     enrich_tree_nodes,
+    filter_tree_nodes,
     resolve_value,
     row_data,
     status_badge,
@@ -174,9 +175,10 @@ def test_collect_subtree() -> None:
 
 def test_enrich_tree_nodes() -> None:
     objects = {
-        "object:root": {"id": "object:root", "attributes": {}},
-        "object:a": {"id": "object:a", "attributes": {"name": {"en": "Alpha"}}},
-        "object:b": {"id": "object:b", "attributes": {"name": {"de": "Beta"}}},
+        "object:root": {"id": "object:root", "attributes": {}, "type": "root"},
+        "object:a": {"id": "object:a", "attributes": {"name": {"en": "Alpha"}}, "type": "product"},
+        "object:b": {"id": "object:b", "attributes": {"name": {"de": "Beta"}}, "type": "variant"},
+        "object:c": {"id": "object:c", "attributes": {}, "type": "category"},
     }
     raw = [
         {
@@ -184,11 +186,46 @@ def test_enrich_tree_nodes() -> None:
             "children": [
                 {"id": "object:a", "children": []},
                 {"id": "object:b", "children": []},
+                {"id": "object:c", "children": []},
             ],
         }
     ]
     nodes, children_by_id = enrich_tree_nodes(raw, objects, "de", "object:root", "Root")
     assert nodes[0]["id"] == "object:root"
     assert nodes[0]["label"] == "Root"
-    assert [c["label"] for c in nodes[0]["children"]] == ["Alpha", "Beta"]
-    assert children_by_id["object:root"] == ["object:a", "object:b"]
+    assert nodes[0]["type"] == "root"
+    children = nodes[0]["children"]
+    assert [c["label"] for c in children] == ["Alpha", "Beta", "category"]
+    assert children[0]["type"] == "product"
+    assert children_by_id["object:root"] == ["object:a", "object:b", "object:c"]
+
+
+def test_filter_tree_nodes() -> None:
+    nodes = [
+        {
+            "id": "root",
+            "label": "Structure",
+            "type": "root",
+            "children": [
+                {"id": "a", "label": "Alpha", "type": "product", "children": []},
+                {
+                    "id": "b",
+                    "label": "Beta",
+                    "type": "variant",
+                    "children": [{"id": "b1", "label": "Betty", "type": "variant", "children": []}],
+                },
+            ],
+        }
+    ]
+    assert filter_tree_nodes(nodes, "") == nodes
+    # "beta" matches the "Beta" node; its "Betty" child is dropped (no match).
+    filtered = filter_tree_nodes(nodes, "beta")
+    assert filtered[0]["id"] == "root"
+    assert [c["id"] for c in filtered[0]["children"]] == ["b"]
+    assert filtered[0]["children"][0]["children"] == []
+    # "betty" keeps ancestors: root -> b -> b1.
+    filtered = filter_tree_nodes(nodes, "betty")
+    assert filtered[0]["id"] == "root"
+    assert [c["id"] for c in filtered[0]["children"]] == ["b"]
+    assert filtered[0]["children"][0]["children"][0]["id"] == "b1"
+    assert filter_tree_nodes(nodes, "zzz") == []

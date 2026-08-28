@@ -42,5 +42,6 @@
   "grid.view_loaded": "Ansicht '{name}' geladen.",
   "grid.close": "Schließen",
   "grid.structure": "Struktur",
-  "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden."
+  "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
+  "grid.filter": "Filtern"
 }

@@ -42,5 +42,6 @@
   "grid.view_loaded": "View '{name}' loaded.",
   "grid.close": "Close",
   "grid.structure": "Structure",
-  "grid.tree_load_failed": "Could not load the structure tree."
+  "grid.tree_load_failed": "Could not load the structure tree.",
+  "grid.filter": "Filter"
 }
