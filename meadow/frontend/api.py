@@ -82,6 +82,23 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_attribute_definitions(
+        self,
+        token: str,
+        *,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists attribute definitions (used to offer grid columns)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/attribute-definitions",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def batch_update(self, token: str, items: list[dict]) -> list[dict]:
         """Applies staged grid edits in a single batch call."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:

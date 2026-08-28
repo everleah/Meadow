@@ -32,5 +32,6 @@
   "grid.saved_count": "Saved {ok} of {total}.",
   "grid.staged_changes": "Unsaved changes: {count}",
   "grid.save_failed": "Saving failed.",
-  "grid.session_expired": "Your session has expired. Please sign in again."
+  "grid.session_expired": "Your session has expired. Please sign in again.",
+  "grid.columns": "Columns"
 }

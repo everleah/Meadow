@@ -32,5 +32,6 @@
   "grid.saved_count": "{ok} von {total} gespeichert.",
   "grid.staged_changes": "Ungespeicherte Änderungen: {count}",
   "grid.save_failed": "Speichern fehlgeschlagen.",
-  "grid.session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an."
+  "grid.session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+  "grid.columns": "Spalten"
 }

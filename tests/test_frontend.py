@@ -5,7 +5,13 @@ from __future__ import annotations
 import importlib
 
 from meadow.frontend.api import LoginResponse, MeResponse, is_session_expired
-from meadow.frontend.grid import build_patch, resolve_value, row_data, status_badge
+from meadow.frontend.grid import (
+    attribute_columns,
+    build_patch,
+    resolve_value,
+    row_data,
+    status_badge,
+)
 from meadow.frontend.i18n import best_locale, t
 
 
@@ -119,3 +125,33 @@ def test_is_session_expired_ignores_other_failures() -> None:
         [{"id": "object:1", "success": False, "error": "some other error"}]
     )
     assert not is_session_expired([])
+
+
+def test_attribute_columns_resolves_label_and_hides() -> None:
+    definitions = [
+        {"name": "price", "label": {"en": "Price", "de": "Preis"}},
+        {"name": "sku", "label": {}},
+    ]
+    columns = attribute_columns(definitions, "de")
+    assert columns[0] == {
+        "headerName": "Preis",
+        "field": "attr_price",
+        "width": 140,
+        "hide": True,
+    }
+    assert columns[1]["field"] == "attr_sku"
+    assert columns[1]["headerName"] == "sku"  # falls back to name when label missing
+
+
+def test_row_data_with_attribute_names() -> None:
+    row = row_data(
+        {
+            "id": "object:1",
+            "type": "product",
+            "status": "draft",
+            "attributes": {"name": {"en": "Widget"}, "price": 9.5},
+        },
+        "en",
+        ["price"],
+    )
+    assert row["attr_price"] == "9.5"

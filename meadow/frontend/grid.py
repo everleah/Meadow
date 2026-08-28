@@ -1,8 +1,9 @@
-"""Object list grid (AG Grid): the main work area (Phase 7, step 3).
+"""Object list grid (AG Grid): the main work area (Phase 7, steps 3-4).
 
-The first stage is a clean, read-only object listing with human-friendly
-display (resolved name, status badge). Later stages add inline editing /
-batch save, category & structure navigation, and the column picker.
+The grid lists objects with human-friendly display (resolved name, status
+badge), supports inline editing / batch save, and offers a column picker to
+toggle attribute columns. Category & structure navigation and personal views
+follow in later steps.
 """
 
 from __future__ import annotations
@@ -36,15 +37,39 @@ def status_badge(status: str) -> str:
     return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{status}</span>'
 
 
-def row_data(object_: dict, locale: str) -> dict:
-    """Maps a core object to an AG Grid row."""
+def row_data(object_: dict, locale: str, attribute_names: list[str] | None = None) -> dict:
+    """Maps a core object to an AG Grid row.
+
+    With ``attribute_names``, one ``attr_<name>`` field per attribute is added
+    (resolved to a display string for the working locale).
+    """
     attributes = object_.get("attributes") or {}
-    return {
+    row = {
         "_id": str(object_.get("id", "")),
         "_name": resolve_value(attributes.get("name"), locale),
         "_type": str(object_.get("type", "")),
         "_status": status_badge(str(object_.get("status", ""))),
     }
+    for name in attribute_names or []:
+        row[f"attr_{name}"] = resolve_value(attributes.get(name), locale)
+    return row
+
+
+def attribute_columns(definitions: list[dict], locale: str) -> list[dict]:
+    """Builds hidden AG Grid column defs for attribute definitions.
+
+    The header uses the definition's (multilingual) label, falling back to the
+    attribute name. Attribute columns are hidden by default so the grid stays
+    clean until the user enables them via the column picker.
+    """
+    columns = []
+    for definition in definitions:
+        name = str(definition.get("name", ""))
+        if not name:
+            continue
+        label = resolve_value(definition.get("label"), locale) or name
+        columns.append({"headerName": label, "field": f"attr_{name}", "width": 140, "hide": True})
+    return columns
 
 
 def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
@@ -79,6 +104,20 @@ async def products_page() -> None:
         if not objects:
             ui.label(t("grid.no_objects")).classes("text-subtitle1")
             return
+
+        try:
+            definitions = await client.list_attribute_definitions(token)
+        except Exception:  # noqa: BLE001 - degrade to base columns on failure
+            definitions = []
+        attribute_names = [
+            str(definition.get("name")) for definition in definitions if definition.get("name")
+        ]
+        column_defs = [
+            {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
+            {"headerName": t("grid.name"), "field": "_name", "editable": True},
+            {"headerName": t("grid.type"), "field": "_type", "width": 120},
+            {"headerName": t("grid.status"), "field": "_status", "width": 140},
+        ] + attribute_columns(definitions, locale)
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
         staged_ids: set[str] = set()
@@ -130,15 +169,27 @@ async def products_page() -> None:
                 "text-caption"
             )
 
+            def make_toggler(field: str):
+                def toggle(event) -> None:
+                    grid.run_grid_method("setColumnsVisible", [field], event.value)
+
+                return toggle
+
+            with (
+                ui.button(t("grid.columns"), icon="view_column")
+                .props("outline")
+                .classes("ml-auto"),
+                ui.menu(),
+            ):
+                for column in column_defs:
+                    ui.checkbox(column["headerName"], value=not column.get("hide")).on_value_change(
+                        make_toggler(column["field"])
+                    )
+
         grid = ui.aggrid(
             {
-                "columnDefs": [
-                    {"headerName": t("grid.id"), "field": "_id", "width": 100},
-                    {"headerName": t("grid.name"), "field": "_name", "editable": True},
-                    {"headerName": t("grid.type"), "field": "_type", "width": 120},
-                    {"headerName": t("grid.status"), "field": "_status", "width": 140},
-                ],
-                "rowData": [row_data(object_, locale) for object_ in objects],
+                "columnDefs": column_defs,
+                "rowData": [row_data(object_, locale, attribute_names) for object_ in objects],
                 "rowSelection": {"mode": "multiRow"},
                 "pagination": True,
                 "paginationPageSize": 50,
