@@ -25,5 +25,11 @@
   "grid.type": "Typ",
   "grid.status": "Status",
   "grid.no_objects": "Keine Objekte gefunden.",
-  "grid.load_failed": "Objekte konnten nicht geladen werden."
+  "grid.load_failed": "Objekte konnten nicht geladen werden.",
+  "grid.save": "Speichern",
+  "grid.discard": "Verwerfen",
+  "grid.no_changes": "Keine Änderungen zum Speichern.",
+  "grid.saved_count": "{ok} von {total} gespeichert.",
+  "grid.staged_changes": "Ungespeicherte Änderungen: {count}",
+  "grid.save_failed": "Speichern fehlgeschlagen."
 }

@@ -47,9 +47,24 @@ def row_data(object_: dict, locale: str) -> dict:
     }
 
 
+def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
+    """Builds a batch-update item for an edited name value.
+
+    Preserves other locales when the attribute is multilingual; otherwise the
+    scalar name is replaced.
+    """
+    original_name = (original.get("attributes") or {}).get("name")
+    if isinstance(original_name, dict):
+        new_name = dict(original_name)
+        new_name[locale] = client_name
+    else:
+        new_name = client_name
+    return {"id": object_id, "attributes": {"name": new_name}}
+
+
 @ui.page("/products")
 async def products_page() -> None:
-    """Lists objects in the main grid."""
+    """Lists objects in the main grid with inline editing + batch save."""
     build_shell(active="/products")
     locale = current_locale()
     with ui.column().classes("w-full p-6"):
@@ -64,11 +79,57 @@ async def products_page() -> None:
         if not objects:
             ui.label(t("grid.no_objects")).classes("text-subtitle1")
             return
-        ui.aggrid(
+
+        original_by_id = {str(object_.get("id")): object_ for object_ in objects}
+        staged_ids: set[str] = set()
+
+        def mark_changed(event) -> None:
+            data = event.args.get("data") if isinstance(event.args, dict) else None
+            oid = data.get("_id") if isinstance(data, dict) else None
+            if oid:
+                staged_ids.add(oid)
+                staged_label.set_text(t("grid.staged_changes").format(count=len(staged_ids)))
+
+        async def save() -> None:
+            client_rows = await grid.get_client_data()
+            patches = []
+            for row in client_rows:
+                oid = row.get("_id")
+                original = original_by_id.get(oid)
+                if original is None:
+                    continue
+                original_name = resolve_value(
+                    (original.get("attributes") or {}).get("name"), locale
+                )
+                if row.get("_name") != original_name:
+                    patches.append(build_patch(oid, row.get("_name"), original, locale))
+            if not patches:
+                ui.notify(t("grid.no_changes"))
+                return
+            try:
+                results = await client.batch_update(token, patches)
+            except Exception:  # noqa: BLE001 - show a friendly message on failure
+                ui.notify(t("grid.save_failed"), color="negative")
+                return
+            ok = sum(1 for result in results if result.get("success"))
+            ui.notify(t("grid.saved_count").format(ok=ok, total=len(results)))
+            ui.navigate.reload()
+
+        def discard() -> None:
+            ui.navigate.reload()
+
+        with ui.row().classes("items-center gap-3"):
+            ui.button(t("grid.save"), icon="save", on_click=save).classes("bg-primary text-white")
+            ui.button(t("grid.discard"), icon="undo", on_click=discard).props("outline")
+            staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
+                "text-caption"
+            )
+
+        grid = ui.aggrid(
             {
                 "columnDefs": [
                     {"headerName": t("grid.id"), "field": "_id", "width": 100},
-                    {"headerName": t("grid.name"), "field": "_name"},
+                    {"headerName": t("grid.name"), "field": "_name", "editable": True},
                     {"headerName": t("grid.type"), "field": "_type", "width": 120},
                     {"headerName": t("grid.status"), "field": "_status", "width": 140},
                 ],
@@ -79,3 +140,4 @@ async def products_page() -> None:
             },
             html_columns=[3],
         ).classes("w-full h-96")
+        grid.on("cellValueChanged", mark_changed, ["data"])

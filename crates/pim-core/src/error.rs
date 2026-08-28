@@ -11,6 +11,7 @@ pub enum ApiError {
     BadRequest(String),
     NotFound(String),
     Conflict(String),
+    PayloadTooLarge(String),
     Unauthorized(String),
     Forbidden(String),
     Unavailable(String),
@@ -28,6 +29,10 @@ impl ApiError {
 
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::Conflict(message.into())
+    }
+
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::PayloadTooLarge(message.into())
     }
 
     pub fn unauthorized(message: impl Into<String>) -> Self {
@@ -52,6 +57,7 @@ impl ApiError {
             ApiError::BadRequest(message)
             | ApiError::NotFound(message)
             | ApiError::Conflict(message)
+            | ApiError::PayloadTooLarge(message)
             | ApiError::Unauthorized(message)
             | ApiError::Forbidden(message)
             | ApiError::Unavailable(message)
@@ -66,6 +72,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
             ApiError::Conflict(message) => (StatusCode::CONFLICT, message),
+            ApiError::PayloadTooLarge(message) => (StatusCode::PAYLOAD_TOO_LARGE, message),
             ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message),
             ApiError::Forbidden(message) => (StatusCode::FORBIDDEN, message),
             ApiError::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),

@@ -25,5 +25,11 @@
   "grid.type": "Type",
   "grid.status": "Statut",
   "grid.no_objects": "Aucun objet trouvé.",
-  "grid.load_failed": "Impossible de charger les objets."
+  "grid.load_failed": "Impossible de charger les objets.",
+  "grid.save": "Enregistrer",
+  "grid.discard": "Annuler",
+  "grid.no_changes": "Aucune modification à enregistrer.",
+  "grid.saved_count": "{ok} sur {total} enregistrés.",
+  "grid.staged_changes": "Modifications non enregistrées : {count}",
+  "grid.save_failed": "Échec de l'enregistrement."
 }

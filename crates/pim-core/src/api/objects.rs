@@ -6,7 +6,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
 
@@ -68,7 +68,7 @@ pub struct GetObjectQuery {
 }
 
 /// Query parameters for object writes: locale for rule evaluation.
-#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[derive(Debug, Clone, Deserialize, ToSchema, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct WriteObjectQuery {
     /// Language code used to resolve multilingual + inherited values for rules.
@@ -409,29 +409,19 @@ pub async fn get_by_source(
     Ok(Json(object))
 }
 
-/// Partially updates an object's attributes and/or status.
-#[utoipa::path(
-    patch,
-    path = "/objects/{id}",
-    request_body = UpdateObject,
-    params(WriteObjectQuery),
-    responses(
-        (status = 200, description = "Updated object", body = Value),
-        (status = 400, description = "Invalid id or payload", body = Value),
-        (status = 401, description = "Unauthorized", body = Value),
-        (status = 403, description = "Forbidden", body = Value),
-        (status = 404, description = "Object not found", body = Value)
-    )
-)]
-pub async fn update_object(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Query(params): Query<WriteObjectQuery>,
-    Json(body): Json<UpdateObject>,
-) -> Result<Json<Value>, ApiError> {
-    let key = parse_key(&id, TABLE)?;
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+/// Applies a partial object update (attributes/status) with rule evaluation.
+///
+/// Shared by `update_object` and `batch_update_objects` so the single and
+/// batch write paths remain consistent.
+async fn apply_object_update(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: &str,
+    body: UpdateObject,
+    params: WriteObjectQuery,
+) -> Result<Value, ApiError> {
+    let key = parse_key(id, TABLE)?;
+    let user_id = crate::auth::api_key_or_role(headers, &state.config, crate::auth::ROLE_EDITOR)?;
 
     // Load the current object: type for uniqueness checks, status for audit.
     let current_sql = "
@@ -478,7 +468,7 @@ pub async fn update_object(
     }
 
     if changes.is_empty() {
-        return Ok(Json(current));
+        return Ok(current);
     }
 
     let status_changed = changed_fields.contains(&"status");
@@ -524,7 +514,7 @@ pub async fn update_object(
         .unwrap_or_default()
         .to_owned();
     let candidate = json!({
-        "id": id.clone(),
+        "id": id.to_owned(),
         "type": object_type.clone(),
         "status": candidate_status,
         "attributes": Value::Object(eval_attributes),
@@ -572,7 +562,7 @@ pub async fn update_object(
     let outbox = crate::event::content(&crate::event::OutboxEvent {
         event_type: crate::event::EVENT_OBJECT_UPDATED,
         object_type: object_type.clone(),
-        object_id: id.clone(),
+        object_id: id.to_owned(),
         changes: Value::Object(changes.clone()),
         metadata: json!({ "user_id": user_id.clone() }),
     });
@@ -638,7 +628,7 @@ pub async fn update_object(
         AuditEntry {
             user_id: &user_id,
             action,
-            object_id: Some(&id),
+            object_id: Some(id),
             from,
             to,
             metadata,
@@ -646,7 +636,123 @@ pub async fn update_object(
     )
     .await;
 
+    Ok(object)
+}
+
+/// Updates a single object (partial update).
+#[utoipa::path(
+    patch,
+    path = "/objects/{id}",
+    request_body = UpdateObject,
+    params(WriteObjectQuery),
+    responses(
+        (status = 200, description = "Updated object", body = Value),
+        (status = 400, description = "Invalid id or payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Object not found", body = Value)
+    )
+)]
+pub async fn update_object(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<WriteObjectQuery>,
+    Json(body): Json<UpdateObject>,
+) -> Result<Json<Value>, ApiError> {
+    let object = apply_object_update(&state, &headers, &id, body, params).await?;
     Ok(Json(object))
+}
+
+/// Maximum number of rows per batch update call.
+const MAX_BATCH_UPDATE_ROWS: usize = 500;
+
+/// A single staged grid edit to apply in a batch.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchUpdateItem {
+    /// Object record id.
+    #[serde(rename = "id")]
+    pub object_id: String,
+    /// Partial attribute values to merge into the object.
+    #[serde(default)]
+    pub attributes: Option<Value>,
+    /// New workflow status (optional).
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Per-object result of a batch update.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchUpdateResult {
+    pub id: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Applies staged grid inline-edits in a single call (batch save).
+///
+/// `POST /objects/batch-update` accepts a list of partial updates and applies
+/// them independently, reporting a per-object result. Capped at
+/// `MAX_BATCH_UPDATE_ROWS` (HTTP 413 when exceeded).
+#[utoipa::path(
+    post,
+    path = "/objects/batch-update",
+    request_body = Vec<BatchUpdateItem>,
+    responses(
+        (status = 200, description = "Batch result", body = Vec<BatchUpdateResult>),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 413, description = "Too many rows", body = Value)
+    )
+)]
+pub async fn batch_update_objects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WriteObjectQuery>,
+    Json(items): Json<Vec<BatchUpdateItem>>,
+) -> Result<Json<Vec<BatchUpdateResult>>, ApiError> {
+    if items.is_empty() {
+        return Err(ApiError::bad_request("batch must not be empty"));
+    }
+    if items.len() > MAX_BATCH_UPDATE_ROWS {
+        return Err(ApiError::payload_too_large(format!(
+            "batch exceeds the limit of {MAX_BATCH_UPDATE_ROWS} rows"
+        )));
+    }
+    let mut results: Vec<BatchUpdateResult> = Vec::with_capacity(items.len());
+    for item in items {
+        let body = UpdateObject {
+            attributes: item.attributes,
+            status: item.status,
+        };
+        match apply_object_update(&state, &headers, &item.object_id, body, params.clone()).await {
+            Ok(object) => {
+                let status = object
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                results.push(BatchUpdateResult {
+                    id: item.object_id,
+                    success: true,
+                    status,
+                    error: None,
+                });
+            }
+            Err(error) => {
+                results.push(BatchUpdateResult {
+                    id: item.object_id,
+                    success: false,
+                    status: None,
+                    error: Some(error.message().to_owned()),
+                });
+            }
+        }
+    }
+    Ok(Json(results))
 }
 
 /// Payload for persisting worker-computed attribute values.

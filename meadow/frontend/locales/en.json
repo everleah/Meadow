@@ -25,5 +25,11 @@
   "grid.type": "Type",
   "grid.status": "Status",
   "grid.no_objects": "No objects found.",
-  "grid.load_failed": "Could not load objects."
+  "grid.load_failed": "Could not load objects.",
+  "grid.save": "Save",
+  "grid.discard": "Discard",
+  "grid.no_changes": "No changes to save.",
+  "grid.saved_count": "Saved {ok} of {total}.",
+  "grid.staged_changes": "Unsaved changes: {count}",
+  "grid.save_failed": "Saving failed."
 }

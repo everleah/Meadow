@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 
 from meadow.frontend.api import LoginResponse, MeResponse
-from meadow.frontend.grid import resolve_value, row_data, status_badge
+from meadow.frontend.grid import build_patch, resolve_value, row_data, status_badge
 from meadow.frontend.i18n import best_locale, t
 
 
@@ -91,3 +91,18 @@ def test_row_data() -> None:
     assert row["_name"] == "Widget"
     assert row["_type"] == "product"
     assert "published" in row["_status"]
+
+
+def test_build_patch_multilingual() -> None:
+    original = {"attributes": {"name": {"en": "Widget", "de": "Bauteil"}}}
+    patch = build_patch("object:1", "Neues Teil", original, "de")
+    assert patch == {
+        "id": "object:1",
+        "attributes": {"name": {"en": "Widget", "de": "Neues Teil"}},
+    }
+
+
+def test_build_patch_scalar() -> None:
+    original = {"attributes": {"name": "Widget"}}
+    patch = build_patch("object:1", "Gadget", original, "de")
+    assert patch == {"id": "object:1", "attributes": {"name": "Gadget"}}
