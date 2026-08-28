@@ -324,6 +324,8 @@ Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s übe
 
 Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild „grüne Wiese im Tal mit Fluss, umrandet mit Wäldern und Bergen“ (Primär `Meadow Green #16a34a`, Sekundär `River Blue #0ea5e9`, Akzent `Sunlight Amber #d97706`); Logos/Grafiken folgen später. Details in [frontend.md](detail/frontend.md).
 
+**Stand Phase 7:** Das Frontend-Grundgerüst (`meadow/frontend/`, `python -m meadow.frontend`, Dev-Port 8081) mit App-Shell, Login/Session und CI-Farbskala ist umgesetzt (Schritt 1); Grid, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
+
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
 ---
@@ -476,6 +478,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-28 – Phase-7-Start (Abschnitt 11 & Phase 7): Frontend-Grundgerüst `meadow/frontend/` (NiceGUI, `python -m meadow.frontend`, Dev-Port 8081) mit App-Shell, Login/Session (JWT in `app.storage.user`), rollenbasierten Menüs und Anwendung der CI-Farbskala (`app.colors()`); Grid, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen. `frontend.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-25 – Default-Branding/CI festgelegt (Abschnitt 11 & Phase 7): Farbskala passend zu „Meadow“ (Primär Meadow Green #16a34a, Sekundär River Blue #0ea5e9, Akzent Sunlight Amber #d97706; neutrale Töne Slate); Umsetzung über NiceGUI-Quasar-Theme (`app.colors()`/`ui.colors()`, Tailwind-Klassen mit `!`-Präfix für Element-Overrides); Logos/Grafiken später. `frontend.md` um Abschnitt „Branding & CI“ ergänzt.*
 
