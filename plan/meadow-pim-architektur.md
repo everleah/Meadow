@@ -479,7 +479,7 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
-*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3b (Abschnitt 11): Inline-Editing & Batch-Save im Objekt-Grid (`meadow/frontend/grid.py`). Zell-Editing über `ui.aggrid`, Gestaging der Änderungen („Ungespeicherte Änderungen“-Zähler), Batch-Save über `POST /objects/batch-update` (max. 500 Zeilen, `is_session_expired` erkennt abgelaufene JWTs und leitet zur Login-Seite um; `grid.session_expired`). `api-design.md` (Batch-Endpunkt), `frontend-arbeitsflaechen.md`, `crates/AGENTS.md` und `meadow/AGENTS.md` ergänzt.*
+*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3b (Abschnitt 11): Inline-Editing & Batch-Save im Objekt-Grid (`meadow/frontend/grid.py`). Zell-Editing über `ui.aggrid`, Gestaging der Änderungen („Ungespeicherte Änderungen“-Zähler), Batch-Save über `POST /objects/batch-update` (max. 500 Zeilen, `is_session_expired` erkennt abgelaufene JWTs und leitet zur Login-Seite um; `grid.session_expired`). `api-design.md` (Batch-Endpunkt inkl. Auth/Fehler-Semantik: ungültiger Token → HTTP 200 mit `success: false`), `frontend-arbeitsflaechen.md`, `crates/AGENTS.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3 (Abschnitt 11): Objekt-Grid `/products` mit `ui.aggrid` (`meadow/frontend/grid.py`) – lesbare Objektliste, Sprachwert-Auflösung, Status-Badge, i18n-Spaltenüberschriften, Mehrfachauswahl; Daten aus `GET /objects`. `frontend-arbeitsflaechen.md` und `meadow/AGENTS.md` ergänzt.*
 
