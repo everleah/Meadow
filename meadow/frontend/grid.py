@@ -315,33 +315,46 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
-        with ui.splitter(value=25, limits=(15, 55)) as splitter:
-            # Left: composition (structure) tree in a card.
-            with splitter.before, ui.card().classes("w-full h-full"):  # noqa: SIM117 - layout nesting
-                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - header row
-                    ui.label(t("grid.structure")).classes("text-subtitle2 text-bold")
-                    filter_input = ui.input(t("grid.filter")).props("outline dense").classes(
-                        "grow"
-                    )
+        def toggle_tree() -> None:
+            tree_card.set_visibility(not tree_card.visible)
+
+        with ui.row().classes("w-full no-wrap items-start gap-4"):
+            # Left: collapsible structure tree card.
+            with ui.card().classes("w-72 shrink-0") as tree_card:
+                with ui.row().classes("items-center gap-2 w-full"):
+                    ui.label(t("grid.structure")).classes("text-subtitle2 text-bold grow")
                     if tree_nodes:
-                        tree = ui.tree(tree_nodes, on_select=handle_tree_select)
-                        tree.expand()
-                        tree.add_slot(
-                            "default-header",
-                            '<span :props="props">{{ props.node.label }}'
-                            '<small v-if="props.node.type" class="text-caption text-gray-500">'
-                            " &middot; {{ props.node.type }}</small></span>",
-                        )
+                        ui.button(icon="chevron_left", on_click=toggle_tree).props(
+                            "flat dense"
+                        ).tooltip(t("grid.collapse_tree"))
+                with ui.row().classes("items-center gap-2 w-full"):
+                    filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
+                    if tree_nodes:
+                        ui.button(icon="expand_all", on_click=lambda: tree.expand()).props(
+                            "flat dense"
+                        ).tooltip(t("grid.expand_all"))
+                        ui.button(icon="collapse_all", on_click=lambda: tree.collapse()).props(
+                            "flat dense"
+                        ).tooltip(t("grid.collapse_all"))
+                if tree_nodes:
+                    tree = ui.tree(tree_nodes, on_select=handle_tree_select)
+                    tree.expand()
+                    tree.add_slot(
+                        "default-header",
+                        '<span :props="props">{{ props.node.label }}'
+                        '<small v-if="props.node.type" class="text-caption text-gray-500">'
+                        " &middot; {{ props.node.type }}</small></span>",
+                    )
 
-                        def apply_tree_filter(value: str) -> None:
-                            tree.props["nodes"] = filter_tree_nodes(tree_nodes, value)
-                            tree.update()
+                    def apply_tree_filter(value: str) -> None:
+                        tree.props["nodes"] = filter_tree_nodes(tree_nodes, value)
+                        tree.update()
 
-                        filter_input.on_value_change(lambda e: apply_tree_filter(e.value))
-                    else:
-                        ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
-            # Right: grid area with the toolbar.
-            with splitter.after:
+                    filter_input.on_value_change(lambda e: apply_tree_filter(e.value))
+                else:
+                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
+            # Right: grid area (fills the remaining width).
+            with ui.column().classes("flex-1"):
                 with ui.row().classes("items-center gap-3"):
                     ui.button(t("grid.save"), icon="save", on_click=save).classes(
                         "bg-primary text-white"
@@ -350,9 +363,12 @@ async def products_page() -> None:
                     staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
                         "text-caption"
                     )
+                    ui.button(icon="view_sidebar", on_click=toggle_tree).props(
+                        "flat dense"
+                    ).tooltip(t("grid.toggle_tree")).classes("ml-auto")
                     ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
                         "outline"
-                    ).classes("ml-auto")
+                    )
 
                     def make_toggler(field: str):
                         def toggle(event) -> None:

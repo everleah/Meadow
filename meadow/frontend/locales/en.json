@@ -43,5 +43,9 @@
   "grid.close": "Close",
   "grid.structure": "Structure",
   "grid.tree_load_failed": "Could not load the structure tree.",
-  "grid.filter": "Filter"
+  "grid.filter": "Filter",
+  "grid.expand_all": "Expand all",
+  "grid.collapse_all": "Collapse all",
+  "grid.collapse_tree": "Collapse structure",
+  "grid.toggle_tree": "Toggle structure panel"
 }
