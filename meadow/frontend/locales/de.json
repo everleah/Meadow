@@ -46,5 +46,6 @@
   "grid.filter": "Filtern",
 
   "grid.toggle_tree": "Struktur ein-/ausblenden",
-  "grid.toggle_tree_nodes": "Alle Knoten auf-/einklappen"
+  "grid.collapse_all": "Alle einklappen",
+  "grid.expand_all": "Alle aufklappen"
 }

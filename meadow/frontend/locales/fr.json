@@ -46,5 +46,6 @@
   "grid.filter": "Filtrer",
 
   "grid.toggle_tree": "Afficher/masquer la structure",
-  "grid.toggle_tree_nodes": "Déplier/replier tous les nœuds"
+  "grid.collapse_all": "Tout replier",
+  "grid.expand_all": "Tout déplier"
 }

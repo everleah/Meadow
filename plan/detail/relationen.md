@@ -20,9 +20,9 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 - Es gibt **genau einen** Kompositionstyp: `depends_on` („ich bin abhängig von“). Die Richtung ist **Kind → Elternteil**.
 - **Ein-Eltern-Invariante:** Jedes Objekt hat **genau eine** `depends_on`-Kante. Dadurch ist die Komposition strukturell ein Baum und garantiert zyklenfrei.
 - **Universal-Root:** Der Root ist ein reales Objekt (`type: "root"`, feste ID, z. B. `object_root`) und die Wurzel des Kompositionsbaums. Top-Level-Objekte hängen direkt am Root. Der Root ist:
-  - sichtbar (einziger navigierbarer Baumknoten „Alle Objekte“),
   - strukturell unveränderlich (nicht löschbar, nicht umhängbar, kein Typwechsel),
   - mit editierbaren Attributen für **globale Defaults** (nur Admin/Superadmin; Standard: keine Werte, damit nichts ungewollt vererbt wird).
+  - **in der UI als reiner Container-Knoten verborgen** (übliche Darstellung): Der Strukturbaum im Grid ([frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)) zeigt die Kinder des Root auf Top-Level, ohne einen separaten „Struktur · root“-Eintrag; das Grid lädt standardmäßig alle Objekte (Auswahl eines Knotens filtert auf den Teilbaum), die globalen Root-Defaults werden nicht im Produkt-Grid gepflegt.
 - **Kind-Anzahl:** Ein Elternteil kann 0..n Kinder haben (1:n, inkl. 1:1). Es gibt keine Obergrenze.
 
 ### Löschen (Kaskade)

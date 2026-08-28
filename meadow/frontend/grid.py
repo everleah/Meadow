@@ -200,6 +200,13 @@ async def products_page() -> None:
             tree_nodes, children_by_id = enrich_tree_nodes(
                 tree_data, original_by_id, locale, root_id, t("grid.structure")
             )
+            # Hide the Universal-Root container node and show its children at the
+            # top level (common pattern: the single root is just a technical wrapper).
+            root_children = [n for n in tree_nodes if n.get("id") == root_id]
+            if root_children and root_children[0].get("children"):
+                tree_nodes = root_children[0]["children"]
+            else:
+                tree_nodes = [n for n in tree_nodes if n.get("id") != root_id]
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
             children_by_id = {}
@@ -315,18 +322,11 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
-        nodes_expanded = True
+        def collapse_all() -> None:
+            tree.collapse()
 
-        def toggle_nodes() -> None:
-            nonlocal nodes_expanded
-            if nodes_expanded:
-                tree.collapse()
-                tree.expand([root_id])
-                nodes_toggle.props("icon=unfold_more")
-            else:
-                tree.expand()
-                nodes_toggle.props("icon=unfold_less")
-            nodes_expanded = not nodes_expanded
+        def expand_all() -> None:
+            tree.expand()
 
         def toggle_panel() -> None:
             splitter.value = 0 if splitter.value > 0 else 25
@@ -335,17 +335,16 @@ async def products_page() -> None:
             "w-full h-[calc(100vh-210px)]"
         ) as splitter:
             # Left: resizable structure tree card.
-            with splitter.before, ui.card().classes("w-full h-full"):  # noqa: SIM117 - layout nesting
-                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - header
-                    ui.label(t("grid.structure")).classes("text-subtitle2 text-bold grow")
-                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - filter row
+            with splitter.before, ui.card().classes("w-full h-full p-0"):  # noqa: SIM117 - layout nesting
+                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):  # noqa: SIM117 - filter row
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     if tree_nodes:
-                        nodes_toggle = (
-                            ui.button(icon="unfold_less", on_click=toggle_nodes)
-                            .props("flat dense shrink-0")
-                            .tooltip(t("grid.toggle_tree_nodes"))
-                        )
+                        ui.button(icon="unfold_less", on_click=collapse_all).props(
+                            "flat dense shrink-0"
+                        ).tooltip(t("grid.collapse_all"))
+                        ui.button(icon="unfold_more", on_click=expand_all).props(
+                            "flat dense shrink-0"
+                        ).tooltip(t("grid.expand_all"))
                 if tree_nodes:
                     tree = ui.tree(tree_nodes, on_select=handle_tree_select)
                     tree.expand()
