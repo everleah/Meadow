@@ -44,8 +44,7 @@
   "grid.structure": "Structure",
   "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
   "grid.filter": "Filtrer",
-  "grid.expand_all": "Tout déplier",
-  "grid.collapse_all": "Tout replier",
-  "grid.collapse_tree": "Replier la structure",
-  "grid.toggle_tree": "Afficher/masquer la structure"
+
+  "grid.toggle_tree": "Afficher/masquer la structure",
+  "grid.toggle_tree_nodes": "Déplier/replier tous les nœuds"
 }

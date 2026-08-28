@@ -44,8 +44,7 @@
   "grid.structure": "Struktur",
   "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
   "grid.filter": "Filtern",
-  "grid.expand_all": "Alle aufklappen",
-  "grid.collapse_all": "Alle einklappen",
-  "grid.collapse_tree": "Struktur einklappen",
-  "grid.toggle_tree": "Struktur ein-/ausblenden"
+
+  "grid.toggle_tree": "Struktur ein-/ausblenden",
+  "grid.toggle_tree_nodes": "Alle Knoten auf-/einklappen"
 }

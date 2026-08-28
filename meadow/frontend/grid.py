@@ -186,7 +186,7 @@ async def products_page() -> None:
         ]
         column_defs = [
             {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
-            {"headerName": t("grid.name"), "field": "_name", "editable": True},
+            {"headerName": t("grid.name"), "field": "_name", "editable": True, "flex": 1},
             {"headerName": t("grid.type"), "field": "_type", "width": 120},
             {"headerName": t("grid.status"), "field": "_status", "width": 140},
         ] + attribute_columns(definitions, locale)
@@ -315,27 +315,34 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
-        def toggle_tree() -> None:
-            tree_card.set_visibility(not tree_card.visible)
+        nodes_expanded = True
 
-        with ui.row().classes("w-full no-wrap items-start gap-4"):
-            # Left: collapsible structure tree card.
-            with ui.card().classes("w-72 shrink-0") as tree_card:
-                with ui.row().classes("items-center gap-2 w-full"):
+        def toggle_nodes() -> None:
+            nonlocal nodes_expanded
+            if nodes_expanded:
+                tree.collapse()
+                nodes_toggle.props("icon=unfold_more")
+            else:
+                tree.expand()
+                nodes_toggle.props("icon=unfold_less")
+            nodes_expanded = not nodes_expanded
+
+        def toggle_panel() -> None:
+            splitter.value = 0 if splitter.value > 0 else 25
+
+        with ui.splitter(value=25, limits=(0, 60)).classes("w-full") as splitter:
+            # Left: resizable structure tree card.
+            with splitter.before, ui.card().classes("w-full h-full"):  # noqa: SIM117 - layout nesting
+                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - header
                     ui.label(t("grid.structure")).classes("text-subtitle2 text-bold grow")
-                    if tree_nodes:
-                        ui.button(icon="chevron_left", on_click=toggle_tree).props(
-                            "flat dense"
-                        ).tooltip(t("grid.collapse_tree"))
-                with ui.row().classes("items-center gap-2 w-full"):
+                with ui.row().classes("items-center gap-2 w-full"):  # noqa: SIM117 - filter row
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     if tree_nodes:
-                        ui.button(icon="expand_all", on_click=lambda: tree.expand()).props(
-                            "flat dense"
-                        ).tooltip(t("grid.expand_all"))
-                        ui.button(icon="collapse_all", on_click=lambda: tree.collapse()).props(
-                            "flat dense"
-                        ).tooltip(t("grid.collapse_all"))
+                        nodes_toggle = (
+                            ui.button(icon="unfold_less", on_click=toggle_nodes)
+                            .props("flat dense shrink-0")
+                            .tooltip(t("grid.toggle_tree_nodes"))
+                        )
                 if tree_nodes:
                     tree = ui.tree(tree_nodes, on_select=handle_tree_select)
                     tree.expand()
@@ -354,7 +361,7 @@ async def products_page() -> None:
                 else:
                     ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
             # Right: grid area (fills the remaining width).
-            with ui.column().classes("flex-1"):
+            with splitter.after:
                 with ui.row().classes("items-center gap-3"):
                     ui.button(t("grid.save"), icon="save", on_click=save).classes(
                         "bg-primary text-white"
@@ -363,7 +370,7 @@ async def products_page() -> None:
                     staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
                         "text-caption"
                     )
-                    ui.button(icon="view_sidebar", on_click=toggle_tree).props(
+                    ui.button(icon="view_sidebar", on_click=toggle_panel).props(
                         "flat dense"
                     ).tooltip(t("grid.toggle_tree")).classes("ml-auto")
                     ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
