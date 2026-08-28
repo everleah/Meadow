@@ -6,6 +6,19 @@ import httpx
 from pydantic import BaseModel
 
 
+def is_session_expired(results: list[dict]) -> bool:
+    """True if any batch result signals an invalid/expired bearer token.
+
+    The core returns HTTP 200 for a rejected batch item, carrying the failure
+    in the per-item `error` field. Treating this as a session problem lets the
+    UI redirect to the login page instead of reporting a failed save.
+    """
+    return any(
+        not result.get("success") and "invalid or expired token" in (result.get("error") or "")
+        for result in results
+    )
+
+
 class LoginResponse(BaseModel):
     """Response of `POST /auth/login`."""
 

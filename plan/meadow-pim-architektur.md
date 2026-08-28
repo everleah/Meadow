@@ -324,7 +324,7 @@ Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s übe
 
 Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild „grüne Wiese im Tal mit Fluss, umrandet mit Wäldern und Bergen“ (Primär `Meadow Green #16a34a`, Sekundär `River Blue #0ea5e9`, Akzent `Sunlight Amber #d97706`); Logos/Grafiken folgen später. Details in [frontend.md](detail/frontend.md).
 
-**Stand Phase 7:** Frontend-Grundgerüst (Schritt 1), Oberflächen-i18n (Schritt 2) und das Objekt-Grid als Basis (Schritt 3) sind umgesetzt; Kategorien-/Strukturbaum, Spalten-Picker, Inline-Editing/Batch-Save, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
+**Stand Phase 7:** Frontend-Grundgerüst (Schritt 1), Oberflächen-i18n (Schritt 2), das Objekt-Grid als Basis (Schritt 3) und Inline-Editing/Batch-Save (Schritt 3b) sind umgesetzt; Kategorien-/Strukturbaum, Spalten-Picker, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
 
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
@@ -478,6 +478,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3b (Abschnitt 11): Inline-Editing & Batch-Save im Objekt-Grid (`meadow/frontend/grid.py`). Zell-Editing über `ui.aggrid`, Gestaging der Änderungen („Ungespeicherte Änderungen“-Zähler), Batch-Save über `POST /objects/batch-update` (max. 500 Zeilen, `is_session_expired` erkennt abgelaufene JWTs und leitet zur Login-Seite um; `grid.session_expired`). `api-design.md` (Batch-Endpunkt), `frontend-arbeitsflaechen.md`, `crates/AGENTS.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 3 (Abschnitt 11): Objekt-Grid `/products` mit `ui.aggrid` (`meadow/frontend/grid.py`) – lesbare Objektliste, Sprachwert-Auflösung, Status-Badge, i18n-Spaltenüberschriften, Mehrfachauswahl; Daten aus `GET /objects`. `frontend-arbeitsflaechen.md` und `meadow/AGENTS.md` ergänzt.*
 

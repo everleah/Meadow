@@ -31,5 +31,6 @@
   "grid.no_changes": "Aucune modification à enregistrer.",
   "grid.saved_count": "{ok} sur {total} enregistrés.",
   "grid.staged_changes": "Modifications non enregistrées : {count}",
-  "grid.save_failed": "Échec de l'enregistrement."
+  "grid.save_failed": "Échec de l'enregistrement.",
+  "grid.session_expired": "Votre session a expiré. Veuillez vous reconnecter."
 }

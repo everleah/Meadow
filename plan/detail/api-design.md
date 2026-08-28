@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md#5-api-design-openapi-rest))
 - **Relevante Phasen:** Phase 1–9
-- **Stand:** Implementiert bis Phase 5 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs). Offene Endpunkte folgen in Phase 6/7/9 (Import/Export, Webhooks, Bulk, Picker/Graph).
+- **Stand:** Implementiert bis Phase 6 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs, Import/Export, Webhooks) sowie Batch-Save (`POST /objects/batch-update`, Phase 7). Offene Endpunkte folgen in Phase 7/9 (Bulk, Picker/Graph).
 
 Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAPI 3.x.
 

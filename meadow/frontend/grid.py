@@ -10,7 +10,7 @@ from __future__ import annotations
 from nicegui import app, ui
 
 from meadow.frontend import config
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, is_session_expired
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 
@@ -110,6 +110,11 @@ async def products_page() -> None:
                 results = await client.batch_update(token, patches)
             except Exception:  # noqa: BLE001 - show a friendly message on failure
                 ui.notify(t("grid.save_failed"), color="negative")
+                return
+            if is_session_expired(results):
+                ui.notify(t("grid.session_expired"), color="warning")
+                app.storage.user.clear()
+                ui.navigate.to("/login")
                 return
             ok = sum(1 for result in results if result.get("success"))
             ui.notify(t("grid.saved_count").format(ok=ok, total=len(results)))

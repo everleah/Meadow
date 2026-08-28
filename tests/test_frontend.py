@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 
-from meadow.frontend.api import LoginResponse, MeResponse
+from meadow.frontend.api import LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.grid import build_patch, resolve_value, row_data, status_badge
 from meadow.frontend.i18n import best_locale, t
 
@@ -106,3 +106,16 @@ def test_build_patch_scalar() -> None:
     original = {"attributes": {"name": "Widget"}}
     patch = build_patch("object:1", "Gadget", original, "de")
     assert patch == {"id": "object:1", "attributes": {"name": "Gadget"}}
+
+
+def test_is_session_expired_detects_expired_token() -> None:
+    results = [{"id": "object:1", "success": False, "error": "invalid or expired token"}]
+    assert is_session_expired(results)
+
+
+def test_is_session_expired_ignores_other_failures() -> None:
+    assert not is_session_expired([{"id": "object:1", "success": True, "status": "draft"}])
+    assert not is_session_expired(
+        [{"id": "object:1", "success": False, "error": "some other error"}]
+    )
+    assert not is_session_expired([])
