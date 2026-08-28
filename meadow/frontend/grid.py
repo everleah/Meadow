@@ -365,20 +365,24 @@ async def products_page() -> None:
                     ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
             # Right: grid area (fills the remaining width and height).
             with splitter.after, ui.column().classes("w-full h-full"):  # noqa: SIM117 - layout
-                with ui.row().classes("items-center gap-3"):
-                    ui.button(t("grid.save"), icon="save", on_click=save).classes(
-                        "bg-primary text-white"
-                    )
-                    ui.button(t("grid.discard"), icon="undo", on_click=discard).props("outline")
+                with ui.row().classes("items-center gap-2 w-full"):
+                    # Panel toggle (structure tree): separate function, far left.
+                    ui.button(icon="view_sidebar", on_click=toggle_panel).props(
+                        "flat dense"
+                    ).tooltip(t("grid.toggle_tree"))
                     staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
                         "text-caption"
                     )
-                    ui.button(icon="view_sidebar", on_click=toggle_panel).props(
-                        "flat dense"
-                    ).tooltip(t("grid.toggle_tree")).classes("ml-auto")
-                    ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
-                        "outline"
+                    # Right-aligned data actions + view controls.
+                    ui.button(t("grid.save"), icon="save", on_click=save).classes(
+                        "bg-primary text-white ml-auto"
                     )
+                    ui.button(icon="undo", on_click=discard).props("outline").tooltip(
+                        t("grid.discard")
+                    )
+                    ui.button(icon="bookmarks", on_click=views_dialog.open).props(
+                        "outline"
+                    ).tooltip(t("grid.views"))
 
                     def make_toggler(field: str):
                         def toggle(event) -> None:
@@ -391,9 +395,7 @@ async def products_page() -> None:
                         return toggle
 
                     with (
-                        ui.button(t("grid.columns"), icon="view_column")
-                        .props("outline")
-                        .classes("ml-2"),
+                        ui.button(icon="view_column").props("outline").tooltip(t("grid.columns")),
                         ui.menu(),
                     ):
                         for column in column_defs:
