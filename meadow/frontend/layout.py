@@ -24,12 +24,15 @@ def build_shell(*, active: str) -> None:
     """Builds the page shell (header + drawer) for an authenticated page."""
     with ui.header(elevated=True).classes("items-center justify-between bg-primary"):
         with ui.row().classes("items-center gap-2"):
+            ui.button(icon="menu", on_click=lambda: drawer.toggle()).props("flat round color=white")
             ui.label("Meadow PIM").classes("text-lg font-bold text-white")
         with ui.row().classes("items-center gap-3"):
             ui.label(app.storage.user.get("username", "")).classes("text-white")
             ui.button(icon="logout", on_click=logout).props("flat round color=white")
 
-    with ui.left_drawer(top_corner=True, bottom_corner=True).props("bordered"):
+    with ui.left_drawer(value=True, top_corner=True, bottom_corner=True).props(
+        "bordered"
+    ) as drawer:
         ui.label("Navigation").classes("text-subtitle1 px-4 pt-4")
         for label, path, admin_only in NAV_ITEMS:
             if admin_only and not is_admin():
