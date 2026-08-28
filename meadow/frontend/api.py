@@ -99,6 +99,26 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_object_children(self, token: str, object_id: str) -> list[dict]:
+        """Lists an object's composition children (``rel_depends_on``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}/children",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def get_object_tree(self, token: str) -> list[dict]:
+        """Returns the composition tree (``{id, children}``) from the Universal-Root."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/tree",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def batch_update(self, token: str, items: list[dict]) -> list[dict]:
         """Applies staged grid edits in a single batch call."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:

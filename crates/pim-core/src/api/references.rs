@@ -3,6 +3,8 @@
 //! References are native SurrealDB RELATION records: `in` = source, `out` =
 //! target (see `plan/detail/relationen.md`).
 
+use std::collections::{HashMap, HashSet};
+
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -365,6 +367,60 @@ pub async fn list_object_children(
         .check()?;
     let children: Vec<Value> = response.take(1)?;
     Ok(Json(children))
+}
+
+/// Returns the composition tree rooted at the Universal-Root as nested
+/// `{ id, children: [...] }` nodes. Used by the grid's structure navigation.
+#[utoipa::path(
+    get,
+    path = "/objects/tree",
+    responses(
+        (status = 200, description = "Composition tree", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn get_object_tree(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let sql =
+        "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
+    let mut response = state.db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for row in &rows {
+        let child = row.get("child").and_then(Value::as_str).map(str::to_owned);
+        let parent = row.get("parent").and_then(Value::as_str).map(str::to_owned);
+        if let (Some(child), Some(parent)) = (child, parent) {
+            children.entry(parent).or_default().push(child);
+        }
+    }
+
+    fn build(
+        node: &str,
+        children: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+    ) -> Value {
+        if visited.contains(node) {
+            return json!({ "id": node, "children": [] });
+        }
+        visited.insert(node.to_owned());
+        let child_ids = children.get(node).cloned().unwrap_or_default();
+        let child_nodes: Vec<Value> = child_ids
+            .iter()
+            .map(|child| build(child, children, visited))
+            .collect();
+        json!({ "id": node, "children": child_nodes })
+    }
+
+    let mut visited = HashSet::new();
+    let tree = build("object:object_root", &children, &mut visited);
+    Ok(Json(Value::Array(vec![tree])))
 }
 
 /// Changes an object's composition parent (re-parenting with cycle protection).

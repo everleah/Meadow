@@ -324,7 +324,7 @@ Hintergrundjobs (Bulk, Import/Export) werden per **Polling** der `job_run`s übe
 
 Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild „grüne Wiese im Tal mit Fluss, umrandet mit Wäldern und Bergen“ (Primär `Meadow Green #16a34a`, Sekundär `River Blue #0ea5e9`, Akzent `Sunlight Amber #d97706`); Logos/Grafiken folgen später. Details in [frontend.md](detail/frontend.md).
 
-**Stand Phase 7:** Frontend-Grundgerüst (Schritt 1), Oberflächen-i18n (Schritt 2), das Objekt-Grid als Basis (Schritt 3), Inline-Editing/Batch-Save (Schritt 3b), der Spalten-Picker (Schritt 4) und persönliche Ansichten (Schritt 4b) sind umgesetzt; Kategorien-/Strukturbaum, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
+**Stand Phase 7:** Frontend-Grundgerüst (Schritt 1), Oberflächen-i18n (Schritt 2), das Objekt-Grid als Basis (Schritt 3), Inline-Editing/Batch-Save (Schritt 3b), der Spalten-Picker (Schritt 4), persönliche Ansichten (Schritt 4b) und der Strukturbaum (Schritt 5) sind umgesetzt; Kategorien-Baum, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen.
 
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
@@ -478,6 +478,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 ---
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
+
+*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 5 (Abschnitt 11): Strukturbaum im Objekt-Grid (`meadow/frontend/grid.py`, `crates/pim-core/src/api/references.rs`). Neuer Endpunkt `GET /objects/tree` liefert den Kompositionsbaum ab Universal-Root als verschachtelte `{id, children}`-Knoten in einem Call (Zyklenschutz im Core); das Frontend rendert ihn als linkes `ui.tree` und filtert das Grid bei Knoten-Auswahl auf den Teilbaum (Eltern + Nachfahren via `collect_subtree`). `frontend-arbeitsflaechen.md`, `api-design.md`, `crates/AGENTS.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 4b (Abschnitt 11): Persönliche Ansichten im Objekt-Grid (`meadow/frontend/grid.py`). „Ansichten“-Dialog speichert die aktuelle Spaltenauswahl pro Benutzer (`app.storage.user`), listet gespeicherte Ansichten und stellt sie per Klick wieder her (inkl. Löschen); Wiederherstellung über AG-Grid-`setColumnsVisible`. `frontend-arbeitsflaechen.md` und `meadow/AGENTS.md` ergänzt.*
 

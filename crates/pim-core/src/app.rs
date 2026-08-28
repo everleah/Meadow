@@ -42,6 +42,7 @@ pub fn router(state: AppState) -> Router {
             "/objects/batch-update",
             post(api::objects::batch_update_objects),
         )
+        .route("/objects/tree", get(api::references::get_object_tree))
         .route(
             "/objects/{id}",
             get(api::objects::get_object).patch(api::objects::update_object),

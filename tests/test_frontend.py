@@ -8,6 +8,8 @@ from meadow.frontend.api import LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.grid import (
     attribute_columns,
     build_patch,
+    collect_subtree,
+    enrich_tree_nodes,
     resolve_value,
     row_data,
     status_badge,
@@ -162,3 +164,31 @@ def test_row_data_with_attribute_names() -> None:
         ["price"],
     )
     assert row["attr_price"] == "9.5"
+
+
+def test_collect_subtree() -> None:
+    children = {"a": ["b", "c"], "b": ["d"], "c": [], "d": [], "e": []}
+    assert set(collect_subtree("a", children)) == {"a", "b", "c", "d"}
+    assert collect_subtree("e", children) == ["e"]
+
+
+def test_enrich_tree_nodes() -> None:
+    objects = {
+        "object:root": {"id": "object:root", "attributes": {}},
+        "object:a": {"id": "object:a", "attributes": {"name": {"en": "Alpha"}}},
+        "object:b": {"id": "object:b", "attributes": {"name": {"de": "Beta"}}},
+    }
+    raw = [
+        {
+            "id": "object:root",
+            "children": [
+                {"id": "object:a", "children": []},
+                {"id": "object:b", "children": []},
+            ],
+        }
+    ]
+    nodes, children_by_id = enrich_tree_nodes(raw, objects, "de", "object:root", "Root")
+    assert nodes[0]["id"] == "object:root"
+    assert nodes[0]["label"] == "Root"
+    assert [c["label"] for c in nodes[0]["children"]] == ["Alpha", "Beta"]
+    assert children_by_id["object:root"] == ["object:a", "object:b"]

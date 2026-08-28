@@ -1,9 +1,10 @@
-"""Object list grid (AG Grid): the main work area (Phase 7, steps 3-4).
+"""Object list grid (AG Grid): the main work area (Phase 7, steps 3-5).
 
 The grid lists objects with human-friendly display (resolved name, status
-badge), supports inline editing / batch save, and offers a column picker to
-toggle attribute columns. Category & structure navigation and personal views
-follow in later steps.
+badge), supports inline editing / batch save, offers a column picker and
+personal views, and shows a composition (structure) tree that filters the
+grid to the selected subtree. Category & structure navigation with the
+Kategorien toggle and the completeness column follow in later steps.
 """
 
 from __future__ import annotations
@@ -72,6 +73,54 @@ def attribute_columns(definitions: list[dict], locale: str) -> list[dict]:
     return columns
 
 
+def collect_subtree(node_id: str, children_by_id: dict[str, list[str]]) -> list[str]:
+    """Returns the node id and all its descendants (breadth-first)."""
+    result: list[str] = []
+    queue = [node_id]
+    seen: set[str] = set()
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        result.append(current)
+        queue.extend(children_by_id.get(current, []))
+    return result
+
+
+def enrich_tree_nodes(
+    nodes: list[dict],
+    objects_by_id: dict[str, dict],
+    locale: str,
+    root_id: str = "object:object_root",
+    root_label: str = "",
+) -> tuple[list[dict], dict[str, list[str]]]:
+    """Adds labels to composition-tree nodes and returns the children map.
+
+    Returns ``(nodes_with_labels, children_by_id)``. Node labels come from the
+    object's resolved (multilingual) name; the root falls back to
+    ``root_label`` when it has no name.
+    """
+    children_by_id: dict[str, list[str]] = {}
+
+    def enrich(node: dict, is_root: bool) -> dict:
+        node_id = str(node.get("id", ""))
+        obj = objects_by_id.get(node_id, {})
+        label = resolve_value((obj.get("attributes") or {}).get("name"), locale)
+        if not label:
+            label = root_label if is_root else node_id
+        raw_children = node.get("children", [])
+        children_by_id[node_id] = [str(c.get("id")) for c in raw_children if c.get("id")]
+        return {
+            "id": node_id,
+            "label": label,
+            "children": [enrich(c, False) for c in raw_children],
+        }
+
+    enriched = [enrich(n, n.get("id") == root_id) for n in nodes]
+    return enriched, children_by_id
+
+
 def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
     """Builds a batch-update item for an edited name value.
 
@@ -120,6 +169,30 @@ async def products_page() -> None:
         ] + attribute_columns(definitions, locale)
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
+        children_by_id: dict[str, list[str]] = {}
+        root_id = "object:object_root"
+
+        try:
+            tree_data = await client.get_object_tree(token)
+            tree_nodes, children_by_id = enrich_tree_nodes(
+                tree_data, original_by_id, locale, root_id, t("grid.structure")
+            )
+        except Exception:  # noqa: BLE001 - degrade to a grid without the tree
+            tree_nodes = []
+            children_by_id = {}
+
+        all_rows = [row_data(object_, locale, attribute_names) for object_ in objects]
+        rows_by_id = {row["_id"]: row for row in all_rows}
+
+        def handle_tree_select(e) -> None:
+            selected = e.value if hasattr(e, "value") else None
+            if not selected:
+                grid.run_grid_method("setGridOption", "rowData", all_rows)
+            else:
+                ids = collect_subtree(selected, children_by_id)
+                filtered = [rows_by_id[i] for i in ids if i in rows_by_id]
+                grid.run_grid_method("setGridOption", "rowData", filtered)
+
         staged_ids: set[str] = set()
 
         def mark_changed(event) -> None:
@@ -219,44 +292,59 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
-        with ui.row().classes("items-center gap-3"):
-            ui.button(t("grid.save"), icon="save", on_click=save).classes("bg-primary text-white")
-            ui.button(t("grid.discard"), icon="undo", on_click=discard).props("outline")
-            staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
-                "text-caption"
-            )
-            ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
-                "outline"
-            ).classes("ml-auto")
+        with ui.row().classes("w-full no-wrap gap-4"):
+            # Left: composition (structure) tree.
+            with ui.column().classes("w-72 shrink-0"):
+                ui.label(t("grid.structure")).classes("text-subtitle2")
+                if tree_nodes:
+                    tree = ui.tree(tree_nodes, on_select=handle_tree_select)
+                    tree.expand()
+                else:
+                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
+            # Right: grid area with the toolbar.
+            with ui.column().classes("flex-1"):
+                with ui.row().classes("items-center gap-3"):
+                    ui.button(t("grid.save"), icon="save", on_click=save).classes(
+                        "bg-primary text-white"
+                    )
+                    ui.button(t("grid.discard"), icon="undo", on_click=discard).props("outline")
+                    staged_label = ui.label(t("grid.staged_changes").format(count=0)).classes(
+                        "text-caption"
+                    )
+                    ui.button(t("grid.views"), icon="bookmarks", on_click=views_dialog.open).props(
+                        "outline"
+                    ).classes("ml-auto")
 
-            def make_toggler(field: str):
-                def toggle(event) -> None:
-                    grid.run_grid_method("setColumnsVisible", [field], event.value)
-                    if event.value:
-                        visible_fields.add(field)
-                    else:
-                        visible_fields.discard(field)
+                    def make_toggler(field: str):
+                        def toggle(event) -> None:
+                            grid.run_grid_method("setColumnsVisible", [field], event.value)
+                            if event.value:
+                                visible_fields.add(field)
+                            else:
+                                visible_fields.discard(field)
 
-                return toggle
+                        return toggle
 
-            with (
-                ui.button(t("grid.columns"), icon="view_column").props("outline").classes("ml-2"),
-                ui.menu(),
-            ):
-                for column in column_defs:
-                    checkbox = ui.checkbox(
-                        column["headerName"], value=not column.get("hide")
-                    ).on_value_change(make_toggler(column["field"]))
-                    checkbox_refs[column["field"]] = checkbox
+                    with (
+                        ui.button(t("grid.columns"), icon="view_column")
+                        .props("outline")
+                        .classes("ml-2"),
+                        ui.menu(),
+                    ):
+                        for column in column_defs:
+                            checkbox = ui.checkbox(
+                                column["headerName"], value=not column.get("hide")
+                            ).on_value_change(make_toggler(column["field"]))
+                            checkbox_refs[column["field"]] = checkbox
 
-        grid = ui.aggrid(
-            {
-                "columnDefs": column_defs,
-                "rowData": [row_data(object_, locale, attribute_names) for object_ in objects],
-                "rowSelection": {"mode": "multiRow"},
-                "pagination": True,
-                "paginationPageSize": 50,
-            },
-            html_columns=[3],
-        ).classes("w-full h-96")
-        grid.on("cellValueChanged", mark_changed, ["data"])
+                grid = ui.aggrid(
+                    {
+                        "columnDefs": column_defs,
+                        "rowData": all_rows,
+                        "rowSelection": {"mode": "multiRow"},
+                        "pagination": True,
+                        "paginationPageSize": 50,
+                    },
+                    html_columns=[3],
+                ).classes("w-full h-96")
+                grid.on("cellValueChanged", mark_changed, ["data"])

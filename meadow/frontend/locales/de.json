@@ -40,5 +40,7 @@
   "grid.view_name_required": "Bitte einen Ansichtsnamen eingeben.",
   "grid.view_saved": "Ansicht '{name}' gespeichert.",
   "grid.view_loaded": "Ansicht '{name}' geladen.",
-  "grid.close": "Schließen"
+  "grid.close": "Schließen",
+  "grid.structure": "Struktur",
+  "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden."
 }

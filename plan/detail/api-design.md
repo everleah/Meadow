@@ -26,6 +26,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | PATCH   | `/objects/{id}/parent`                               | Kompositions-Elternteil ändern (Re-Parenting, Zyklenschutz)                                                                                              |
 | POST    | `/objects/bulk`                                      | Massenoperation über eine Auswahl (Attributwert setzen/leeren, Status, Kategorie, Re-Parenting, Löschen) – Ausführung als Hintergrundjob (`job_run`)     |
 | POST    | `/objects/batch-update`                              | Gesammelte Inline-Edits aus dem Grid (Batch-Save) in einem Aufruf anwenden                                                                               |
+| GET     | `/objects/tree`                                      | Kompositionsbaum ab Universal-Root (verschachtelt `{id, children}`; für die Struktur-Navigation im Grid)                                                |
 | GET     | `/objects/{id}/children`                             | Direkte Kompositions-Kinder eines Objekts                                                                                                                |
 | GET     | `/objects/{id}/references`                           | Alle Referenzen eines Objekts (mit Metadaten)                                                                                                            |
 | GET     | `/objects/{id}/graph?depth=3`                        | Graph-Traversierung ab Objekt                                                                                                                            |
@@ -91,6 +92,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 
 - Jede Relation referenziert eine Definition aus `/relation-definitions`; beim Anlegen prüft der Kern die `kind`-Semantik und die optionalen Typrestriktionen (`source_types`/`target_types`) gegen Quell- und Zielobjekt.
 - **Komposition (`depends_on`):** genau eine Kante pro Objekt. Beim Anlegen ohne expliziten Elternteil wird der Universal-Root als Kompositions-Elternteil gesetzt. `PATCH /objects/{id}/parent` verschiebt den Teilbaum (Zyklenschutz, Typrestriktionsprüfung, Audit-Eintrag, atomar).
+- **Kompositionsbaum (implementiert):** `GET /objects/tree` liefert den gesamten Kompositionsbaum ab Universal-Root als verschachtelte `{id, children}`-Knoten in **einem** Aufruf (`SELECT in, out FROM reference WHERE definition_id = 'rel_depends_on'` + rekursiver Aufbau mit Zyklenschutz). Namen löst das Frontend clientseitig auf; `GET /objects/{id}/children` bleibt für die Einzelknoten-Abfrage. `GET /objects/{id}/graph?depth=3` (Graph-Traversierung) folgt als spätere Ausbaustufe.
 - **Aggregationen (n:m)** können frei angelegt und entfernt werden; ihre Entfernung kaskadiert nie.
 - **Löschen** (`DELETE /objects/{id}`) kaskadiert als Soft Delete über den gesamten Kompositionsteilbaum (`depends_on`).
 

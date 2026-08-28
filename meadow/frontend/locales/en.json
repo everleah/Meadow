@@ -40,5 +40,7 @@
   "grid.view_name_required": "Please enter a view name.",
   "grid.view_saved": "View '{name}' saved.",
   "grid.view_loaded": "View '{name}' loaded.",
-  "grid.close": "Close"
+  "grid.close": "Close",
+  "grid.structure": "Structure",
+  "grid.tree_load_failed": "Could not load the structure tree."
 }

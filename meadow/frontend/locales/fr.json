@@ -40,5 +40,7 @@
   "grid.view_name_required": "Veuillez saisir un nom de vue.",
   "grid.view_saved": "Vue '{name}' enregistrée.",
   "grid.view_loaded": "Vue '{name}' chargée.",
-  "grid.close": "Fermer"
+  "grid.close": "Fermer",
+  "grid.structure": "Structure",
+  "grid.tree_load_failed": "Impossible de charger l'arbre de structure."
 }
