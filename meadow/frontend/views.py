@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from nicegui import ui
 
+from meadow.frontend.i18n import t
 from meadow.frontend.layout import NAV_ITEMS, build_shell
 
 
@@ -12,29 +13,25 @@ def home() -> None:
     """Dashboard overview (expanded in a later Phase 7 step)."""
     build_shell(active="/")
     with ui.column().classes("w-full p-6"):
-        ui.label("Dashboard").classes("text-h4")
-        ui.label("Work overview will follow in a later Phase 7 step.").classes("text-subtitle1")
+        ui.label(t("nav.dashboard")).classes("text-h4")
+        ui.label(t("dashboard.overview_placeholder")).classes("text-subtitle1")
         with ui.card().classes("w-full"):
-            ui.label("Welcome to Meadow PIM.").classes("text-body1")
-            ui.label("This first milestone provides the app shell, login and branding.").classes(
-                "text-body2"
-            )
+            ui.label(t("dashboard.welcome")).classes("text-body1")
+            ui.label(t("dashboard.milestone_note")).classes("text-body2")
 
 
 def register_placeholders() -> None:
     """Registers placeholder pages for routes built in later steps."""
-    for label, path, _admin_only in NAV_ITEMS:
+    for key, path, _admin_only in NAV_ITEMS:
         if path == "/":
             continue
 
         @ui.page(path)
-        def page(path: str = path, label: str = label) -> None:
+        def page(path: str = path, key: str = key) -> None:
             build_shell(active=path)
             with ui.column().classes("w-full p-6"):
-                ui.label(label).classes("text-h4")
-                ui.label("This page will be implemented in a later Phase 7 step.").classes(
-                    "text-subtitle1"
-                )
+                ui.label(t(key)).classes("text-h4")
+                ui.label(t("placeholder.under_construction")).classes("text-subtitle1")
 
 
 def register_pages() -> None:

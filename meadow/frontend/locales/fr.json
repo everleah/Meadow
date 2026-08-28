@@ -1,0 +1,23 @@
+{
+  "nav.title": "Navigation",
+  "nav.dashboard": "Tableau de bord",
+  "nav.products": "Produits",
+  "nav.attribute_definitions": "Définitions d'attributs",
+  "nav.jobs": "Tâches",
+  "nav.users": "Utilisateurs",
+  "nav.groups": "Groupes",
+  "nav.connectors": "Connecteurs",
+  "nav.system_settings": "Paramètres système",
+  "nav.system_logs": "Journaux système",
+  "language": "Langue",
+  "login.sign_in": "Se connecter",
+  "login.username": "Nom d'utilisateur",
+  "login.password": "Mot de passe",
+  "login.log_in": "Se connecter",
+  "login.invalid_credentials": "Nom d'utilisateur ou mot de passe invalide",
+  "login.core_unreachable": "Cœur inaccessible",
+  "dashboard.overview_placeholder": "L'aperçu du travail suivra dans une étape ultérieure de la phase 7.",
+  "dashboard.welcome": "Bienvenue dans Meadow PIM.",
+  "dashboard.milestone_note": "Ce premier jalon fournit le cadre, la connexion et le branding.",
+  "placeholder.under_construction": "Cette page sera mise en œuvre dans une étape ultérieure de la phase 7."
+}

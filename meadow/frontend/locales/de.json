@@ -1,0 +1,23 @@
+{
+  "nav.title": "Navigation",
+  "nav.dashboard": "Dashboard",
+  "nav.products": "Produkte",
+  "nav.attribute_definitions": "Attributdefinitionen",
+  "nav.jobs": "Jobs",
+  "nav.users": "Benutzer",
+  "nav.groups": "Gruppen",
+  "nav.connectors": "Konnektoren",
+  "nav.system_settings": "Systemeinstellungen",
+  "nav.system_logs": "System-Logs",
+  "language": "Sprache",
+  "login.sign_in": "Anmelden",
+  "login.username": "Benutzername",
+  "login.password": "Passwort",
+  "login.log_in": "Anmelden",
+  "login.invalid_credentials": "Ungültiger Benutzername oder Passwort",
+  "login.core_unreachable": "Kern nicht erreichbar",
+  "dashboard.overview_placeholder": "Die Arbeitsübersicht folgt in einem späteren Phase-7-Schritt.",
+  "dashboard.welcome": "Willkommen bei Meadow PIM.",
+  "dashboard.milestone_note": "Dieser erste Meilenstein stellt Grundgerüst, Login und Branding bereit.",
+  "placeholder.under_construction": "Diese Seite wird in einem späteren Phase-7-Schritt umgesetzt."
+}

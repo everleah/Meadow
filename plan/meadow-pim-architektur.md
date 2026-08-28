@@ -479,6 +479,8 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 *Dokument erstellt am 2026-08-13 – Projektname: Meadow PIM.*
 
+*Zuletzt geändert: 2026-08-28 – Phase-7, Schritt 2 (Abschnitt 11): Oberflächen-i18n mit schlanker JSON-basierter Übersetzungsverwaltung (`meadow/frontend/locales/<locale>.json` + `i18n.t(key, locale)`; en/de/fr), Sprachumschalter im Drawer, Locale pro Benutzer in der NiceGUI-Session (Default aus `Accept-Language`, Persistenz im Benutzerprofil später). `frontend.md` und `meadow/AGENTS.md` ergänzt.*
+
 *Zuletzt geändert: 2026-08-28 – Phase-7-Start (Abschnitt 11 & Phase 7): Frontend-Grundgerüst `meadow/frontend/` (NiceGUI, `python -m meadow.frontend`, Dev-Port 8081) mit App-Shell, Login/Session (JWT in `app.storage.user`), rollenbasierten Menüs und Anwendung der CI-Farbskala (`app.colors()`); Grid, Produkt-Formular, Bulk-Wizard, Dashboard und Admin-Seiten folgen. `frontend.md` und `meadow/AGENTS.md` ergänzt.*
 
 *Zuletzt geändert: 2026-08-25 – Default-Branding/CI festgelegt (Abschnitt 11 & Phase 7): Farbskala passend zu „Meadow“ (Primär Meadow Green #16a34a, Sekundär River Blue #0ea5e9, Akzent Sunlight Amber #d97706; neutrale Töne Slate); Umsetzung über NiceGUI-Quasar-Theme (`app.colors()`/`ui.colors()`, Tailwind-Klassen mit `!`-Präfix für Element-Overrides); Logos/Grafiken später. `frontend.md` um Abschnitt „Branding & CI“ ergänzt.*

@@ -1,0 +1,23 @@
+{
+  "nav.title": "Navigation",
+  "nav.dashboard": "Dashboard",
+  "nav.products": "Products",
+  "nav.attribute_definitions": "Attribute Definitions",
+  "nav.jobs": "Jobs",
+  "nav.users": "Users",
+  "nav.groups": "Groups",
+  "nav.connectors": "Connectors",
+  "nav.system_settings": "System Settings",
+  "nav.system_logs": "System Logs",
+  "language": "Language",
+  "login.sign_in": "Sign in",
+  "login.username": "Username",
+  "login.password": "Password",
+  "login.log_in": "Log in",
+  "login.invalid_credentials": "Invalid username or password",
+  "login.core_unreachable": "Core is unreachable",
+  "dashboard.overview_placeholder": "Work overview will follow in a later Phase 7 step.",
+  "dashboard.welcome": "Welcome to Meadow PIM.",
+  "dashboard.milestone_note": "This first milestone provides the app shell, login and branding.",
+  "placeholder.under_construction": "This page will be implemented in a later Phase 7 step."
+}

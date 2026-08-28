@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient
+from meadow.frontend.i18n import best_locale, t
 
 #: Static routes that must be reachable without authentication.
 UNRESTRICTED_ROUTES = {"/login", "/favicon.ico"}
@@ -46,8 +47,12 @@ def is_admin() -> bool:
 
 
 @ui.page("/login")
-def login(redirect_to: str = "/") -> RedirectResponse | None:
+def login(redirect_to: str = "/", request: Request = None) -> RedirectResponse | None:
     """Login page: exchanges credentials with the core and stores the JWT."""
+    if is_authenticated():
+        return RedirectResponse("/")
+    if not app.storage.user.get("locale"):
+        app.storage.user["locale"] = best_locale(request.headers.get("accept-language"))
 
     async def try_login() -> None:
         client = CoreClient(config.CORE_URL)
@@ -55,10 +60,10 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
             login_response = await client.login(username.value, password.value)
             me = await client.me(login_response.token)
         except httpx.HTTPStatusError:
-            ui.notify("Invalid username or password", color="negative")
+            ui.notify(t("login.invalid_credentials"), color="negative")
             return
         except httpx.HTTPError:
-            ui.notify("Core is unreachable", color="negative")
+            ui.notify(t("login.core_unreachable"), color="negative")
             return
         app.storage.user.update(
             token=login_response.token,
@@ -71,16 +76,16 @@ def login(redirect_to: str = "/") -> RedirectResponse | None:
 
     with ui.card().classes("absolute-center items-stretch w-96"):
         ui.label("Meadow PIM").classes("text-h5 font-bold text-primary")
-        ui.label("Sign in").classes("text-subtitle1")
+        ui.label(t("login.sign_in")).classes("text-subtitle1")
         username = (
-            ui.input("Username")
+            ui.input(t("login.username"))
             .props("autofocus")
             .on("keydown.enter", lambda: password.run_method("focus"))
         )
-        password = ui.input("Password", password=True, password_toggle_button=True).on(
+        password = ui.input(t("login.password"), password=True, password_toggle_button=True).on(
             "keydown.enter", try_login
         )
-        ui.button("Log in", on_click=try_login).classes("bg-primary text-white")
+        ui.button(t("login.log_in"), on_click=try_login).classes("bg-primary text-white")
 
     return None
 

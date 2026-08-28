@@ -64,21 +64,19 @@ Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**
 **Technische Umsetzung in NiceGUI:**
 
 - Verwendung einer internationalisierungsfähigen Struktur: Alle UI-Texte werden über **Übersetzungs-Keys** referenziert, nicht hart im Code verdrahtet.
-- Empfohlene Bibliothek: **`gettext`** (Standard in Python) oder eine schlanke JSON-basierte Übersetzungsverwaltung.
-  - `gettext` bietet ausgereifte Werkzeuge (`.po`/`.mo`-Dateien, Pluralformen, Kontext).
-  - JSON-Dateien sind einfacher zu pflegen, aber weniger mächtig bei Pluralisierung.
+- **Entscheidung (Schritt 2, umgesetzt):** schlanke **JSON-basierte** Übersetzungsverwaltung — eine Datei je Sprache (`meadow/frontend/locales/<locale>.json`), Zugriff über `t(key, locale)` in `meadow/frontend/i18n.py`; fehlende Keys fallen auf den Key selbst zurück (sofort sichtbar in Entwicklung). `gettext`/babel für Plurale bleibt eine spätere Option, falls nötig.
 - Die Übersetzungsdateien werden im Frontend-Container ausgeliefert und können ohne Änderung am Code ergänzt werden.
 
 **Sprachauswahl & Benutzereinstellung:**
 
-- Die Sprache wird **pro Benutzer** festgelegt und im Benutzerprofil gespeichert (z. B. in SurrealDB).
+- Die Sprache wird **pro Benutzer** festgelegt. **Umsetzung (Schritt 2):** aktuell in der NiceGUI-Session (`app.storage.user['locale']`); die Persistenz im Benutzerprofil (SurrealDB) folgt später.
 - Beim ersten Login wird die Sprache automatisch aus den Browser-Einstellungen (`Accept-Language`) übernommen, sofern für den Benutzer noch keine Präferenz hinterlegt ist.
-- Die Auswahl kann jederzeit über einen Sprachumschalter in der Oberfläche geändert werden.
+- Die Auswahl kann jederzeit über einen **Sprachumschalter** (im Drawer) geändert werden.
 - Die gewählte Sprache wird in der Session gehalten und an alle nachfolgenden Seiten/Elemente weitergegeben.
 
 **Umsetzung in NiceGUI:**
 
-- NiceGUI bietet keine eingebaute i18n-Funktion, daher wird eine eigene kleine Abstraktionsschicht implementiert, z. B. eine Funktion `t(key, locale)`, die den passenden Text aus der Übersetzungsdatei liefert.
+- NiceGUI bietet keine eingebaute i18n-Funktion, daher wird eine eigene kleine Abstraktionsschicht implementiert: `t(key, locale)` in `meadow/frontend/i18n.py` liefert den passenden Text aus der JSON-Datei (Default `en`).
 - Alle UI-Elemente (Labels, Buttons, Dialoge) verwenden diese Funktion.
 - Für Datums-, Zahlen- und Währungsformatierung werden die länderspezifischen Einstellungen der gewählten Sprache berücksichtigt (z. B. mit `babel`).
 
