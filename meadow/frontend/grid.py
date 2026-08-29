@@ -237,6 +237,8 @@ async def products_page() -> None:
             patches = []
             for row in client_rows:
                 oid = row.get("_id")
+                if oid is None:
+                    continue
                 original = original_by_id.get(oid)
                 if original is None:
                     continue
@@ -277,7 +279,7 @@ async def products_page() -> None:
                 )
 
         def save_view() -> None:
-            name = view_input.value.strip()
+            name = None if view_input.value is None else view_input.value.strip()
             if not name:
                 ui.notify(t("grid.view_name_required"), color="warning")
                 return
@@ -329,6 +331,8 @@ async def products_page() -> None:
             tree.expand()
 
         def toggle_panel() -> None:
+            if splitter.value is None:
+                splitter.value = 25
             splitter.value = 0 if splitter.value > 0 else 25
 
         with ui.splitter(value=25, limits=(0, 60)).classes(
@@ -359,7 +363,7 @@ async def products_page() -> None:
                         tree.props["nodes"] = filter_tree_nodes(tree_nodes, value)
                         tree.update()
 
-                    filter_input.on_value_change(lambda e: apply_tree_filter(e.value))
+                    filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
                 else:
                     ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
             # Right: grid area (fills the remaining width and height).
