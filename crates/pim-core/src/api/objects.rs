@@ -87,6 +87,9 @@ pub struct ListObjects {
     #[serde(rename = "type")]
     #[param(rename = "type")]
     pub object_type: Option<String>,
+    /// Filter to the composition subtree of this object (server-side lazy tree filter).
+    #[serde(default)]
+    pub ancestor: Option<String>,
     /// Maximum number of results (capped at 1000).
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -341,15 +344,30 @@ pub async fn list_objects(
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
-    let mut sql = String::from("SELECT * FROM object");
+    let mut conditions: Vec<String> = Vec::new();
     if params.object_type.is_some() {
-        sql.push_str(" WHERE type = $type");
+        conditions.push("type = $type".to_owned());
     }
-    sql.push_str(" ORDER BY created_at DESC LIMIT $limit START $start");
+    if params.ancestor.is_some() {
+        conditions
+            .push("id IN array::map($ancestor_ids, |$k| type::record('object', $k))".to_owned());
+    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT * FROM object{where_clause} ORDER BY created_at DESC LIMIT $limit START $start"
+    );
 
     let mut query = state.db.inner().query(sql);
     if let Some(object_type) = &params.object_type {
         query = query.bind(("type", object_type.clone()));
+    }
+    if let Some(ancestor) = &params.ancestor {
+        let keys = crate::api::references::subtree_keys(&state.db, ancestor).await?;
+        query = query.bind(("ancestor_ids", keys));
     }
     let mut response = query
         .bind(("limit", limit))

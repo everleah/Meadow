@@ -332,10 +332,28 @@ pub async fn list_object_references(
     Ok(Json(references))
 }
 
+/// Query parameters for `GET /objects/{id}/children`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ChildrenListParams {
+    /// Maximum number of children to return (default: all, up to 1000).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Number of children to skip.
+    #[serde(default)]
+    pub offset: u32,
+}
+
 /// Lists the direct composition children of an object.
+///
+/// Each child is returned as its object (`id`/`type`/`status`/`attributes`) plus
+/// a `hasChildren` flag so the structure tree can show the expand arrow without
+/// loading the whole subtree (lazy loading); `?limit`/`?offset` paginate nodes
+/// with many direct children.
 #[utoipa::path(
     get,
     path = "/objects/{id}/children",
+    params(ChildrenListParams),
     responses(
         (status = 200, description = "Children", body = Vec<Value>),
         (status = 400, description = "Invalid id", body = Value),
@@ -346,6 +364,7 @@ pub async fn list_object_children(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<ChildrenListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     if !claims.is_editor() {
         return Err(ApiError::forbidden("requires editor role"));
@@ -354,19 +373,85 @@ pub async fn list_object_children(
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
     }
-    let sql = "
+
+    // Direct children of the parent (paginated).
+    let children_sql = "
         LET $parent = type::record('object', $key);
-        SELECT in AS child, attributes FROM reference WHERE out = $parent AND definition_id = 'rel_depends_on';
+        SELECT in AS child FROM reference
+        WHERE out = $parent AND definition_id = 'rel_depends_on'
+        ORDER BY in LIMIT $limit START $offset;
     ";
     let mut response = state
         .db
         .inner()
-        .query(sql)
-        .bind(("key", key))
+        .query(children_sql)
+        .bind(("key", key.to_owned()))
+        .bind(("limit", params.limit.unwrap_or(1000).clamp(1, 1000) as i64))
+        .bind(("offset", params.offset as i64))
         .await?
         .check()?;
-    let children: Vec<Value> = response.take(1)?;
-    Ok(Json(children))
+    let child_rows: Vec<Value> = response.take(1)?;
+    let child_ids: Vec<String> = child_rows
+        .iter()
+        .filter_map(|row| row.get("child").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    if child_ids.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Fetch the child objects (so the client can resolve labels without the full tree).
+    let keys: Vec<String> = child_ids.iter().map(|id| key_of(id)).collect();
+    let object_sql = "
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        SELECT * FROM object WHERE id IN $recs;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(object_sql)
+        .bind(("keys", keys.clone()))
+        .await?
+        .check()?;
+    let objects: Vec<Value> = response.take(1)?;
+
+    // Which of the children are themselves parents (have children)?
+    let has_sql = "
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        SELECT out AS parent FROM reference
+        WHERE definition_id = 'rel_depends_on' AND out IN $recs;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(has_sql)
+        .bind(("keys", keys))
+        .await?
+        .check()?;
+    let parent_rows: Vec<Value> = response.take(1)?;
+    let parent_set: HashSet<String> = parent_rows
+        .iter()
+        .filter_map(|row| row.get("parent").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+
+    // Build the response, preserving the pagination order. Children that point
+    // to a non-existent object (broken/dangling `depends_on` reference) are
+    // skipped so the structure tree stays clean.
+    let by_id: HashMap<String, Value> = objects
+        .into_iter()
+        .filter_map(|obj| {
+            let id = obj.get("id").and_then(Value::as_str)?.to_owned();
+            Some((id, obj))
+        })
+        .collect();
+    let result: Vec<Value> = child_ids
+        .iter()
+        .filter_map(|cid| {
+            let mut value = by_id.get(cid)?.clone();
+            value["hasChildren"] = json!(parent_set.contains(cid));
+            Some(value)
+        })
+        .collect();
+    Ok(Json(result))
 }
 
 /// Returns the composition tree rooted at the Universal-Root as nested
@@ -421,6 +506,42 @@ pub async fn get_object_tree(
     let mut visited = HashSet::new();
     let tree = build("object:object_root", &children, &mut visited);
     Ok(Json(Value::Array(vec![tree])))
+}
+
+/// Returns every descendant (and itself) of a composition node as bare object
+/// keys, breadth-first. Used for the server-side subtree filter
+/// (`GET /objects?ancestor=...`) that replaces client-side tree traversal once
+/// the structure tree is lazy-loaded.
+pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiError> {
+    let sql =
+        "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for row in &rows {
+        let child = row.get("child").and_then(Value::as_str).map(str::to_owned);
+        let parent = row.get("parent").and_then(Value::as_str).map(str::to_owned);
+        if let (Some(child), Some(parent)) = (child, parent) {
+            children.entry(parent).or_default().push(child);
+        }
+    }
+    let mut result: Vec<String> = vec![root_id.to_owned()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = vec![root_id.to_owned()];
+    while let Some(current) = queue.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(next) = children.get(&current) {
+            for child in next {
+                if !seen.contains(child) {
+                    result.push(child.clone());
+                    queue.push(child.clone());
+                }
+            }
+        }
+    }
+    Ok(result.iter().map(|id| key_of(id)).collect())
 }
 
 /// Changes an object's composition parent (re-parenting with cycle protection).

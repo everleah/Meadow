@@ -15,6 +15,7 @@ from meadow.frontend import config
 from meadow.frontend.api import CoreClient, is_session_expired
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.lazy_tree import LazyTree
 
 
 def resolve_value(value: object, locale: str) -> str:
@@ -128,7 +129,9 @@ def filter_tree_nodes(nodes: list[dict], query: str) -> list[dict]:
 
     An empty query returns the nodes unchanged. A node is kept when its label
     contains the query (case-insensitive) or when a descendant matches; kept
-    nodes carry only their matching descendants.
+    nodes carry only their matching descendants. A ``lazy`` node (children are
+    loaded on demand) that has no matching children is kept **without** a
+    ``children`` key so it stays expandable via ``@lazy-load``.
     """
     q = query.strip().lower()
     if not q:
@@ -138,10 +141,25 @@ def filter_tree_nodes(nodes: list[dict], query: str) -> list[dict]:
         children = [keep(c) for c in node.get("children", [])]
         children = [c for c in children if c is not None]
         if q in str(node.get("label", "")).lower() or children:
-            return dict(node, children=children)
+            kept = dict(node)
+            if children or not node.get("lazy"):
+                kept["children"] = children
+            return kept
         return None
 
     return [n for n in (keep(x) for x in nodes) if n is not None]
+
+
+def tree_node_from_object(object_: dict, locale: str) -> dict:
+    """Builds a QTree node dict from a child object, marking lazy nodes."""
+    node_id = str(object_.get("id", ""))
+    attributes = object_.get("attributes") or {}
+    obj_type = str(object_.get("type", ""))
+    label = resolve_value(attributes.get("name"), locale) or obj_type or node_id
+    node = {"id": node_id, "label": label, "type": obj_type}
+    if object_.get("hasChildren"):
+        node["lazy"] = True
+    return node
 
 
 def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
@@ -192,36 +210,32 @@ async def products_page() -> None:
         ] + attribute_columns(definitions, locale)
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
-        children_by_id: dict[str, list[str]] = {}
         root_id = "object:object_root"
+        tree_nodes: list[dict] = []
+
+        async def load_children(node_id: str) -> list[dict]:
+            children = await client.list_object_children(token, node_id, limit=100)
+            return [tree_node_from_object(child, locale) for child in children]
 
         try:
-            tree_data = await client.get_object_tree(token)
-            tree_nodes, children_by_id = enrich_tree_nodes(
-                tree_data, original_by_id, locale, root_id, t("grid.structure")
-            )
-            # Hide the Universal-Root container node and show its children at the
-            # top level (common pattern: the single root is just a technical wrapper).
-            root_children = [n for n in tree_nodes if n.get("id") == root_id]
-            if root_children and root_children[0].get("children"):
-                tree_nodes = root_children[0]["children"]
-            else:
-                tree_nodes = [n for n in tree_nodes if n.get("id") != root_id]
+            top_children = await client.list_object_children(token, root_id, limit=100)
+            tree_nodes = [tree_node_from_object(child, locale) for child in top_children]
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
-            children_by_id = {}
 
         all_rows = [row_data(object_, locale, attribute_names) for object_ in objects]
-        rows_by_id = {row["_id"]: row for row in all_rows}
 
-        def handle_tree_select(e) -> None:
+        async def handle_tree_select(e) -> None:
+            nonlocal all_rows
             selected = e.value if hasattr(e, "value") else None
             if not selected:
-                grid.run_grid_method("setGridOption", "rowData", all_rows)
+                selected_objects = objects
             else:
-                ids = collect_subtree(selected, children_by_id)
-                filtered = [rows_by_id[i] for i in ids if i in rows_by_id]
-                grid.run_grid_method("setGridOption", "rowData", filtered)
+                selected_objects = await client.list_objects(token, ancestor=selected, limit=1000)
+            original_by_id.clear()
+            original_by_id.update({str(o.get("id")): o for o in selected_objects})
+            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
+            grid.run_grid_method("setGridOption", "rowData", all_rows)
 
         staged_ids: set[str] = set()
 
@@ -350,8 +364,12 @@ async def products_page() -> None:
                             "flat dense shrink-0"
                         ).tooltip(t("grid.expand_all"))
                 if tree_nodes:
-                    tree = ui.tree(tree_nodes, on_select=handle_tree_select)
-                    tree.expand()
+                    tree = LazyTree(
+                        tree_nodes,
+                        on_select=handle_tree_select,
+                        load_children=load_children,
+                        virtual_scroll=True,
+                    ).classes("w-full grow")
                     tree.add_slot(
                         "default-header",
                         '<span :props="props">{{ props.node.label }}'

@@ -66,13 +66,16 @@ class CoreClient:
         token: str,
         *,
         object_type: str | None = None,
+        ancestor: str | None = None,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
-        """Lists objects, optionally filtered by type."""
+        """Lists objects, optionally filtered by type or composition ancestor."""
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
             params["type"] = object_type
+        if ancestor:
+            params["ancestor"] = ancestor
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/objects",
@@ -99,11 +102,29 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
-    async def list_object_children(self, token: str, object_id: str) -> list[dict]:
-        """Lists an object's composition children (``rel_depends_on``)."""
+    async def list_object_children(
+        self,
+        token: str,
+        object_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Lists an object's composition children (``rel_depends_on``).
+
+        Each child carries ``hasChildren`` so the tree can show the expand arrow
+        without loading the whole subtree; ``limit``/``offset`` paginate nodes
+        with many direct children.
+        """
+        params: dict[str, str] = {}
+        if limit is not None:
+            params["limit"] = str(limit)
+        if offset:
+            params["offset"] = str(offset)
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/children",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
             response.raise_for_status()
