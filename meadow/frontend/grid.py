@@ -461,11 +461,26 @@ async def products_page() -> None:
         ) as splitter:
             # Left: resizable tree card (structure or categories via toggle).
             with splitter.before, ui.card().classes("w-full h-full p-0"):  # noqa: SIM117 - layout nesting
-                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):  # noqa: SIM117 - filter row
-                    view_toggle = ui.toggle(
-                        {"structure": t("grid.structure"), "category": t("grid.category")},
-                        value="structure",
-                    ).props("dense")
+                # Line 1: view selector as icon buttons (active highlighted).
+                def style_view_button(btn: ui.button, active: bool) -> None:
+                    if active:
+                        btn.props("color=primary text-white", remove="flat")
+                    else:
+                        btn.props("flat", remove="color text-white")
+
+                def set_view(view: str) -> None:
+                    style_view_button(structure_btn, view == "structure")
+                    style_view_button(category_btn, view == "category")
+                    render_tree(view)
+
+                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
+                    with ui.button_group().props("dense"):
+                        structure_btn = ui.button(icon="account_tree").tooltip(t("grid.structure"))
+                        category_btn = ui.button(icon="category").tooltip(t("grid.category"))
+                    structure_btn.on_click(lambda: set_view("structure"))
+                    category_btn.on_click(lambda: set_view("category"))
+                # Line 2: filter + collapse buttons.
+                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     if tree_nodes or category_tree_nodes:
                         ui.button(icon="unfold_less", on_click=collapse_all).props(
@@ -475,8 +490,7 @@ async def products_page() -> None:
                             "flat dense shrink-0"
                         ).tooltip(t("grid.expand_all"))
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
-                render_tree("structure")
-                view_toggle.on_value_change(lambda e: render_tree(e.value))
+                set_view("structure")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
             # Right: grid area (fills the remaining width and height).
             with splitter.after, ui.column().classes("w-full h-full"):  # noqa: SIM117 - layout
