@@ -39,11 +39,26 @@ def status_badge(status: str) -> str:
     return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{status}</span>'
 
 
+def completeness_badge(percent: int) -> str:
+    """Returns a coloured badge for a completeness percentage.
+
+    Grey for 0 % (nothing set), orange for 1-99 %, green for 100 %.
+    """
+    if percent >= 100:
+        classes = "bg-positive text-white"
+    elif percent >= 1:
+        classes = "bg-orange text-white"
+    else:
+        classes = "bg-grey text-white"
+    return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{percent}%</span>'
+
+
 def row_data(object_: dict, locale: str, attribute_names: list[str] | None = None) -> dict:
     """Maps a core object to an AG Grid row.
 
     With ``attribute_names``, one ``attr_<name>`` field per attribute is added
-    (resolved to a display string for the working locale).
+    (resolved to a display string for the working locale). The ``_completeness``
+    field mirrors the core's ``completeness`` value for the working locale.
     """
     attributes = object_.get("attributes") or {}
     row = {
@@ -52,6 +67,12 @@ def row_data(object_: dict, locale: str, attribute_names: list[str] | None = Non
         "_type": str(object_.get("type", "")),
         "_status": status_badge(str(object_.get("status", ""))),
     }
+    completeness = object_.get("completeness") or {}
+    if isinstance(completeness, dict):
+        percent = completeness.get(locale)
+        row["_completeness"] = completeness_badge(int(percent)) if percent is not None else ""
+    else:
+        row["_completeness"] = ""
     for name in attribute_names or []:
         row[f"attr_{name}"] = resolve_value(attributes.get(name), locale)
     return row
@@ -187,7 +208,7 @@ async def products_page() -> None:
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
         try:
-            objects = await client.list_objects(token, limit=100)
+            objects = await client.list_objects(token, limit=100, locale=locale)
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("grid.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -207,6 +228,7 @@ async def products_page() -> None:
             {"headerName": t("grid.name"), "field": "_name", "editable": True},
             {"headerName": t("grid.type"), "field": "_type", "width": 120},
             {"headerName": t("grid.status"), "field": "_status", "width": 140},
+            {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
         ] + attribute_columns(definitions, locale)
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
@@ -231,7 +253,9 @@ async def products_page() -> None:
             if not selected:
                 selected_objects = objects
             else:
-                selected_objects = await client.list_objects(token, ancestor=selected, limit=1000)
+                selected_objects = await client.list_objects(
+                    token, ancestor=selected, limit=1000, locale=locale
+                )
             original_by_id.clear()
             original_by_id.update({str(o.get("id")): o for o in selected_objects})
             all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
@@ -283,7 +307,7 @@ async def products_page() -> None:
 
         # Personal views (step 4b): save/restore the visible column set per user.
         views = app.storage.user.get("views", {})
-        visible_fields: set[str] = {"_id", "_name", "_type", "_status"}
+        visible_fields: set[str] = {"_id", "_name", "_type", "_status", "_completeness"}
         checkbox_refs: dict[str, ui.checkbox] = {}
 
         def apply_visibility(fields: set[str]) -> None:
@@ -437,6 +461,10 @@ async def products_page() -> None:
                         "pagination": True,
                         "paginationPageSize": 50,
                     },
-                    html_columns=[3],
+                    html_columns=[
+                        i
+                        for i, column in enumerate(column_defs)
+                        if column["field"] in ("_status", "_completeness")
+                    ],
                 ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data"])

@@ -90,6 +90,9 @@ pub struct ListObjects {
     /// Filter to the composition subtree of this object (server-side lazy tree filter).
     #[serde(default)]
     pub ancestor: Option<String>,
+    /// Working language code (e.g. `en-US`); when set, each object gets a
+    /// `completeness` value for this language.
+    pub locale: Option<String>,
     /// Maximum number of results (capped at 1000).
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -310,6 +313,18 @@ pub async fn get_object(
         .map(str::trim)
         .filter(|l| !l.is_empty());
 
+    // Capture the original own attributes (for completeness) before resolving.
+    let own_attributes = object
+        .get("attributes")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let object_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+
     if let Some(attributes) = object.get_mut("attributes").and_then(Value::as_object_mut) {
         if let Some(locale) = locale {
             crate::language::resolve_attributes(&state.cache, &state.db, locale, attributes)
@@ -326,6 +341,18 @@ pub async fn get_object(
             .await?;
         }
     }
+
+    let completeness = crate::completeness::compute(
+        &state.cache,
+        &state.db,
+        &id,
+        &object_type,
+        locale,
+        &own_attributes,
+    )
+    .await?;
+    object["completeness"] = json!({ (locale.unwrap_or("default")): completeness.percent });
+    object["missing_required"] = json!(completeness.missing);
 
     Ok(Json(object))
 }
@@ -374,7 +401,44 @@ pub async fn list_objects(
         .bind(("start", start))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(0)?;
+    let mut objects: Vec<Value> = response.take(0)?;
+
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned);
+    if let Some(locale) = &locale {
+        for object in &mut objects {
+            let object_id = object
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let object_type = object
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let own_attributes = object
+                .get("attributes")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let result = crate::completeness::compute(
+                &state.cache,
+                &state.db,
+                &object_id,
+                &object_type,
+                Some(locale),
+                &own_attributes,
+            )
+            .await?;
+            object["completeness"] = json!({ (locale): result.percent });
+        }
+    }
+
     Ok(Json(objects))
 }
 

@@ -9,6 +9,7 @@ from meadow.frontend.grid import (
     attribute_columns,
     build_patch,
     collect_subtree,
+    completeness_badge,
     enrich_tree_nodes,
     filter_tree_nodes,
     resolve_value,
@@ -93,6 +94,15 @@ def test_status_badge() -> None:
     assert "bg-secondary" in status_badge("unknown")
 
 
+def test_completeness_badge() -> None:
+    assert "bg-grey" in completeness_badge(0)
+    assert "bg-orange" in completeness_badge(50)
+    assert "bg-positive" in completeness_badge(100)
+    assert "0%" in completeness_badge(0)
+    assert "50%" in completeness_badge(50)
+    assert "100%" in completeness_badge(100)
+
+
 def test_row_data() -> None:
     row = row_data(
         {
@@ -107,6 +117,22 @@ def test_row_data() -> None:
     assert row["_name"] == "Widget"
     assert row["_type"] == "product"
     assert "published" in row["_status"]
+    assert row["_completeness"] == ""  # no completeness value present
+
+
+def test_row_data_with_completeness() -> None:
+    row = row_data(
+        {
+            "id": "object:1",
+            "type": "product",
+            "status": "draft",
+            "attributes": {"name": {"en": "Widget"}},
+            "completeness": {"en": 50},
+        },
+        "en",
+    )
+    assert "50%" in row["_completeness"]
+    assert "bg-orange" in row["_completeness"]
 
 
 def test_build_patch_multilingual() -> None:

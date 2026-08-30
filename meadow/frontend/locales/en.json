@@ -24,6 +24,7 @@
   "grid.name": "Name",
   "grid.type": "Type",
   "grid.status": "Status",
+  "grid.completeness": "Completeness",
   "grid.no_objects": "No objects found.",
   "grid.load_failed": "Could not load objects.",
   "grid.save": "Save",

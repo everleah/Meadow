@@ -67,15 +67,22 @@ class CoreClient:
         *,
         object_type: str | None = None,
         ancestor: str | None = None,
+        locale: str | None = None,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
-        """Lists objects, optionally filtered by type or composition ancestor."""
+        """Lists objects, optionally filtered by type or composition ancestor.
+
+        With ``locale``, each object carries a ``completeness`` value for that
+        language (computed in the core).
+        """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
             params["type"] = object_type
         if ancestor:
             params["ancestor"] = ancestor
+        if locale:
+            params["locale"] = locale
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/objects",

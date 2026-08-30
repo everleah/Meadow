@@ -156,9 +156,9 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- und Detailantworten (nicht nur im Frontend), damit sie überall konsistent ist.
 
 - **Definition:** Anteil der **Pflichtattribute des Objekttyps** (aus `required_types` der Attributdefinition, siehe [datenmodell.md](datenmodell.md)), die gesetzt sind – inklusive **vererbter** Werte (entlang `depends_on`). Granularität im MVP: **pro (Objekttyp × Sprache)**.
-- **Lieferung:** `GET /objects` liefert pro Objekt ein Feld `completeness: { "<sprache>": <0–100> }` (bzw. für die angeforderte Arbeitssprache). `GET /objects/{id}` liefert zusätzlich die **Liste fehlender Pflichtattribute** (für das Formular-Widget).
-- **Filterung:** Query-Parameter, z. B. `?completeness_lt=100` bzw. `?missing_required=true` („nur unvollständige Produkte“), optional mit `?language=<code>`.
-- **Berechnungsbasis:** Aufgelöste Sicht (`?resolve_inheritance=true`); leere Werte (Vererbungsunterbrechung) zählen als „gesetzt“.
+- **Lieferung (implementiert):** `GET /objects?locale=<code>` liefert pro Objekt ein Feld `completeness: { "<code>": <0–100> }` (für die angeforderte Arbeitssprache; nur gesetzt, wenn `?locale=` angegeben ist). `GET /objects/{id}?locale=<code>` liefert zusätzlich die **Liste fehlender Pflichtattribute** (`missing_required`, für das Formular-Widget). Berechnung in `crates/pim-core/src/completeness.rs`.
+- **Filterung (offen):** Query-Parameter `?completeness_lt=100` bzw. `?missing_required=true` („nur unvollständige Produkte“) sind noch **nicht** umgesetzt; sie folgen mit der Grid-Filterleiste.
+- **Berechnungsbasis:** Aufgelöste Sicht (`resolve_inheritance`, entlang `depends_on`); **leere Werte (Vererbungsunterbrechung) zählen als „gesetzt“** (eigener Schlüssel vorhanden). Ein vererbter Wert gilt als gesetzt, wenn er nicht `null` ist. 
 - Details zur UI-Darstellung: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness).
 
 ## Massenoperationen (Bulk) & Batch-Save
