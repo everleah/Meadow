@@ -18,6 +18,7 @@ Owns the static client assets served by the NiceGUI frontend (branding, imagery,
   - Logo / icons: **SVG** (primary, vector) + **PNG** fallback for small raster contexts.
   - Backgrounds / photos: **WebP** (primary) + **PNG** fallback; always compress.
   - Favicon: `.ico` (or PNG at 32 / 64 / 128).
+- `logos/favicon.ico` is wired as the app-wide favicon via `ui.run(favicon=…)` (served at `/favicon.ico`).
 - Sizes:
   - Logo: SVG source plus raster at 512–1024 px; favicon 32 / 64 / 128.
   - Login background: 1920×1080 (and 2560×1440 for HiDPI) as WebP.

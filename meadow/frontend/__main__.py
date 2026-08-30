@@ -7,7 +7,7 @@ import logging
 from nicegui import ui
 
 from meadow.frontend import auth, config, views
-from meadow.frontend.theme import apply_branding, register_static
+from meadow.frontend.theme import STATIC_DIR, apply_branding, register_static
 
 logging.basicConfig(level=logging.INFO)
 
@@ -22,6 +22,7 @@ def main() -> None:
         host=config.HOST,
         port=config.PORT,
         title="Meadow PIM",
+        favicon=str(STATIC_DIR / "logos" / "favicon.ico"),
         storage_secret=config.STORAGE_SECRET,
         reload=False,
     )
