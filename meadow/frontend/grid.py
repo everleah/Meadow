@@ -443,11 +443,13 @@ async def products_page() -> None:
             ref_object_label = ui.label().classes("text-caption text-gray-500")
             ref_chips = ui.column()
             with ui.row().classes("items-center gap-2 w-full"):
-                ref_definition = ui.select(
-                    relation_options, value=None, label=t("grid.relation_type")
-                ).props("outline dense").classes("grow")
-            ref_search = ui.input(t("grid.reference_search")).props("outline dense").classes(
-                "w-full"
+                ref_definition = (
+                    ui.select(relation_options, value=None, label=t("grid.relation_type"))
+                    .props("outline dense")
+                    .classes("grow")
+                )
+            ref_search = (
+                ui.input(t("grid.reference_search")).props("outline dense").classes("w-full")
             )
             ref_hits = ui.column()
             with ui.row().classes("w-full justify-end"):
@@ -627,13 +629,17 @@ async def products_page() -> None:
                         category_btn = ui.button(icon="category").tooltip(t("grid.category"))
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
-                    tree_select = ui.select(
-                        {
-                            "all": t("grid.all_trees"),
-                            **{r["id"]: r["label"] for r in category_roots},
-                        },
-                        value="all",
-                    ).props("outline dense").classes("grow")
+                    tree_select = (
+                        ui.select(
+                            {
+                                "all": t("grid.all_trees"),
+                                **{r["id"]: r["label"] for r in category_roots},
+                            },
+                            value="all",
+                        )
+                        .props("outline dense")
+                        .classes("grow")
+                    )
 
                     def on_tree_select(value: str) -> None:
                         selected_tree["id"] = None if value in (None, "all") else value
