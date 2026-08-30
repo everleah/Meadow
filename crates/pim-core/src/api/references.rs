@@ -4,6 +4,7 @@
 //! target (see `plan/detail/relationen.md`).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -295,10 +296,44 @@ pub async fn create_reference(
     Ok((StatusCode::CREATED, Json(edge)))
 }
 
+/// Lists relation definitions (used by the reference picker).
+#[utoipa::path(
+    get,
+    path = "/relation-definitions",
+    responses(
+        (status = 200, description = "Relation definitions", body = Vec<Value>),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn list_relation_definitions(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let sql = "SELECT * FROM relation_definition ORDER BY name;";
+    let mut response = state.db.inner().query(sql).await?.check()?;
+    let definitions: Vec<Value> = response.take(0)?;
+    Ok(Json(definitions))
+}
+
+/// Query parameters for `GET /objects/{id}/references`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReferenceListParams {
+    /// Language code used to resolve the referenced objects' labels.
+    pub locale: Option<String>,
+}
+
 /// Lists all references of an object (incoming and outgoing).
+///
+/// Each reference is enhanced with `in_object`/`out_object` (`{id, type, label,
+/// status}`) so the client can render them as chips with a resolved label.
 #[utoipa::path(
     get,
     path = "/objects/{id}/references",
+    params(ReferenceListParams),
     responses(
         (status = 200, description = "References", body = Vec<Value>),
         (status = 400, description = "Invalid id", body = Value),
@@ -309,6 +344,7 @@ pub async fn list_object_references(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<ReferenceListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     if !claims.is_editor() {
         return Err(ApiError::forbidden("requires editor role"));
@@ -329,7 +365,97 @@ pub async fn list_object_references(
         .await?
         .check()?;
     let references: Vec<Value> = response.take(1)?;
-    Ok(Json(references))
+
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+
+    let chain: Option<Arc<Vec<String>>> = match locale {
+        Some(locale) => Some(state.cache.fallback_chain(&state.db, locale).await?),
+        None => None,
+    };
+
+    let mut result = Vec::new();
+    for mut reference in references {
+        for field in ["in", "out"] {
+            let Some(rec) = reference
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let Some(obj) = fetch_object(&state.db, &key_of(&rec)).await? else {
+                continue;
+            };
+            let attributes = obj
+                .get("attributes")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let obj_type = obj
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let label = crate::language::resolve_label(
+                locale,
+                chain.as_deref().map(|v| v.as_slice()),
+                attributes.get("name"),
+            )
+            .unwrap_or_else(|| obj_type.clone());
+            reference[format!("{field}_object")] = json!({
+                "id": rec,
+                "type": obj_type,
+                "label": label,
+                "status": obj.get("status").and_then(Value::as_str).unwrap_or(""),
+            });
+        }
+        result.push(reference);
+    }
+    Ok(Json(result))
+}
+
+/// Deletes a reference (aggregation) by its record id.
+#[utoipa::path(
+    delete,
+    path = "/references/{id}",
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Reference not found", body = Value)
+    )
+)]
+pub async fn delete_reference(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let (table, key) = id
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request(format!("invalid reference id `{id}`")))?;
+    if table != "reference" {
+        return Err(ApiError::bad_request(format!(
+            "id `{id}` does not reference table `reference`"
+        )));
+    }
+    if fetch_record(&state.db, "reference", key).await?.is_none() {
+        return Err(ApiError::not_found(format!("reference `{id}` not found")));
+    }
+    let sql = "DELETE type::record('reference', $key);";
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Query parameters for `GET /objects/{id}/children`.

@@ -61,6 +61,27 @@ pub async fn resolve_attributes(
     Ok(())
 }
 
+/// Resolves an object's display label from its `attributes` `name` value.
+///
+/// Handles both a scalar string and a multilingual object (resolved against the
+/// locale's fallback chain). Returns `None` when there is no usable label.
+pub(crate) fn resolve_label(
+    locale: Option<&str>,
+    chain: Option<&[String]>,
+    value: Option<&Value>,
+) -> Option<String> {
+    let value = value?;
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(_) => match (locale, chain) {
+            (Some(locale), Some(chain)) => resolve_value_with_chain(locale, value, chain)
+                .and_then(|v| v.as_str().map(str::to_owned)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -75,6 +75,8 @@ def row_data(object_: dict, locale: str, attribute_names: list[str] | None = Non
         row["_completeness"] = ""
     for name in attribute_names or []:
         row[f"attr_{name}"] = resolve_value(attributes.get(name), locale)
+    # Action cell: open the reference picker for this row.
+    row["_refs"] = "🔗"
     return row
 
 
@@ -231,6 +233,7 @@ async def products_page() -> None:
             {"headerName": t("grid.type"), "field": "_type", "width": 120},
             {"headerName": t("grid.status"), "field": "_status", "width": 140},
             {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
+            {"headerName": "", "field": "_refs", "width": 60},
         ] + attribute_columns(definitions, locale)
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
@@ -360,7 +363,7 @@ async def products_page() -> None:
 
         # Personal views (step 4b): save/restore the visible column set per user.
         views = app.storage.user.get("views", {})
-        visible_fields: set[str] = {"_id", "_name", "_type", "_status", "_completeness"}
+        visible_fields: set[str] = {"_id", "_name", "_type", "_status", "_completeness", "_refs"}
         checkbox_refs: dict[str, ui.checkbox] = {}
 
         def apply_visibility(fields: set[str]) -> None:
@@ -414,6 +417,125 @@ async def products_page() -> None:
             refresh_views()
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
+
+        # Reference picker (modal): display + add/remove an object's references.
+        relation_options: dict[str, str] = {}
+        try:
+            for definition in await client.list_relation_definitions(token):
+                if str(definition.get("kind")) != "aggregation":
+                    continue
+                # The core's `create_reference` expects the definition's short
+                # record key (e.g. `rel_category_member`, from the record id
+                # `relation_definition:rel_category_member`), not the full id or
+                # the display `name` (which differs, e.g. `category_member`).
+                def_key = str(definition["id"]).split(":", 1)[-1]
+                relation_options[def_key] = (
+                    resolve_value(definition.get("label"), locale) or def_key
+                )
+        except Exception:  # noqa: BLE001 - degrade to an empty picker
+            relation_options = {}
+
+        current_ref_object: dict = {"id": None}
+
+        ref_dialog = ui.dialog()
+        with ref_dialog, ui.card().classes("w-[640px]"):
+            ui.label(t("grid.references")).classes("text-h6")
+            ref_object_label = ui.label().classes("text-caption text-gray-500")
+            ref_chips = ui.column()
+            with ui.row().classes("items-center gap-2 w-full"):
+                ref_definition = ui.select(
+                    relation_options, value=None, label=t("grid.relation_type")
+                ).props("outline dense").classes("grow")
+            ref_search = ui.input(t("grid.reference_search")).props("outline dense").classes(
+                "w-full"
+            )
+            ref_hits = ui.column()
+            with ui.row().classes("w-full justify-end"):
+                ui.button(t("grid.close"), on_click=ref_dialog.close).props("flat dense")
+
+        async def remove_reference(reference_id: str) -> None:
+            try:
+                await client.delete_reference(token, reference_id)
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.ref_remove_failed"), color="negative")
+            await refresh_references()
+
+        async def refresh_references() -> None:
+            ref_chips.clear()
+            target = current_ref_object["id"]
+            if not target:
+                return
+            try:
+                references = await client.list_object_references(token, target, locale=locale)
+            except Exception:  # noqa: BLE001 - degrade to no chips
+                references = []
+            for reference in references:
+                other = (
+                    reference.get("in_object")
+                    if reference.get("out") == target
+                    else reference.get("out_object")
+                )
+                other_label = (other or {}).get("label", "")
+                other_type = (other or {}).get("type", "")
+                with ref_chips, ui.row().classes("items-center gap-2 w-full"):
+                    ui.label(f"{other_label} · {other_type}").classes(
+                        "bg-neutral px-2 py-0.5 rounded text-xs"
+                    )
+                    if str(reference.get("definition_id")) != "rel_depends_on":
+                        ui.button(
+                            icon="close",
+                            on_click=lambda rid=reference["id"]: remove_reference(rid),
+                        ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
+
+        async def add_reference(hit: dict) -> None:
+            definition_id = ref_definition.value
+            if not definition_id:
+                ui.notify(t("grid.ref_relation_required"), color="warning")
+                return
+            try:
+                await client.create_reference(
+                    token, current_ref_object["id"], hit["id"], definition_id
+                )
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.ref_add_failed"), color="negative")
+                return
+            ref_search.value = ""
+            ref_hits.clear()
+            await refresh_references()
+
+        async def search_references(value: str) -> None:
+            q = (value or "").strip()
+            ref_hits.clear()
+            if not q or not current_ref_object["id"]:
+                return
+            try:
+                hits = await client.picker_search(token, q, locale=locale, limit=20)
+            except Exception:  # noqa: BLE001 - degrade to no hits
+                return
+            for hit in hits:
+                with ref_hits, ui.row().classes("items-center gap-2 w-full"):
+                    ui.button(
+                        f"{hit['label']} · {hit['type']}",
+                        on_click=lambda h=hit: add_reference(h),
+                    ).props("outline dense").classes("w-full justify-start")
+
+        async def open_references(object_id: str) -> None:
+            current_ref_object["id"] = object_id
+            ref_object_label.set_text(object_id)
+            ref_definition.value = next(iter(relation_options), None) if relation_options else None
+            ref_search.value = ""
+            ref_hits.clear()
+            await refresh_references()
+            ref_dialog.open()
+
+        async def handle_ref_cell_clicked(e) -> None:
+            args = e.args if isinstance(e.args, dict) else {}
+            if args.get("colId") == "_refs":
+                data = args.get("data")
+                if data and data.get("_id"):
+                    await open_references(data["_id"])
+
+        ref_search.on_value_change(lambda e: search_references(e.value))
 
         current_tree: dict = {"tree": None, "nodes": []}
 
@@ -587,3 +709,4 @@ async def products_page() -> None:
                     ],
                 ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data"])
+                grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])

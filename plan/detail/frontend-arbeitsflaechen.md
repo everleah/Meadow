@@ -89,6 +89,7 @@ Entlang der Kompositionskette `depends_on` ([datenwertvererbung.md](datenwertver
 - **Einheiten-Umschalter** am Eingabefeld (Darstellung/Eingabe in anderer Einheit derselben Dimension; Speicherung in kanonischer SI-Einheit, [einheiten.md](einheiten.md)).
 - **Enum-Option-Creation im Formular:** Fehlt eine Auswahl-Option, wird sie per `+` **direkt im Formular angelegt** und sofort angewendet (MVP).
 - **Suchbarer Referenz-Picker:** Tippen → Trefferliste mit Label, gefiltert nach erlaubten Zieltypen (aus `relation_definition.target_types` bzw. der Attributdefinition); Auswahl erzeugt die Referenz, Anzeige als Chip (MVP). Die Vollständigkeits-Anzeige innerhalb des Pickers folgt später.
+- **Referenz-Picker im Grid (Phase 7, umgesetzt):** eigene Spalte **`_refs` (🔗)**; Klick öffnet ein **Modal** mit dem Objektnamen, den vorhandenen Referenzen als **Chips** (aufgelöste Labels, Entfernen-Button mit Ausnahme der Komposition `rel_depends_on`), einem **Relationstyp-Dropdown** (aus `GET /relation-definitions`, gefiltert auf `kind == 'aggregation'`) und einem **Suchfeld** (→ `GET /objects/picker`); ein Treffer wird per Klick als Referenz angelegt (`POST /references`).
 
 ### 2.5 Kopfzeile & Status
 

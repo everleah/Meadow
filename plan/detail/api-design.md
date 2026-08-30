@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md#5-api-design-openapi-rest))
 - **Relevante Phasen:** Phase 1–9
-- **Stand:** Implementiert bis Phase 6 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs, Import/Export, Webhooks) sowie Batch-Save (`POST /objects/batch-update`, Phase 7). Offene Endpunkte folgen in Phase 7/9 (Bulk, Picker/Graph).
+- **Stand:** Implementiert bis Phase 6 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs, Import/Export, Webhooks) sowie Batch-Save (`POST /objects/batch-update`, Phase 7) und den **Referenz-Picker** (Phase 7): `GET /objects/picker`, `GET /objects/{id}/references` (mit aufgelösten `in_object`/`out_object`-Summaries), `DELETE /references/{id}` und `GET /relation-definitions`. Offene Endpunkte folgen in Phase 7/9 (Bulk, Graph).
 
 Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAPI 3.x.
 
@@ -28,7 +28,8 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/objects/batch-update`                              | Gesammelte Inline-Edits aus dem Grid (Batch-Save) in einem Aufruf anwenden                                                                               |
 | GET     | `/objects/tree`                                      | Kompositionsbaum ab Universal-Root (verschachtelt `{id, children}`; für die Struktur-Navigation im Grid)                                                |
 | GET     | `/objects/{id}/children`                             | Direkte Kompositions-Kinder eines Objekts; **paginiert** (`?limit`/`?offset`) und liefert je Kind ein **`hasChildren`**-Flag (Lazy Loading); überspringt Verweise auf nicht existente Objekte. Mit **`?count_members=true`** tragen `category`-Kinder zusätzlich ein **`memberCount`** (Anzahl zugeordneter Objekte via `category_member` inkl. Unterkategorien, für den Kategorien-Baum-Zähler) |
-| GET     | `/objects/{id}/references`                           | Alle Referenzen eines Objekts (mit Metadaten)                                                                                                            |
+| GET     | `/objects/{id}/references`                           | Alle Referenzen eines Objekts (mit Metadaten); `?locale=` löst `in_object`/`out_object` als `{id, type, label, status}` auf                                                                                 |
+| DELETE  | `/references/{id}`                                   | Referenz löschen (editor+; 204 bei Erfolg)                                                                                                                |
 | GET     | `/objects/{id}/graph?depth=3`                        | Graph-Traversierung ab Objekt                                                                                                                            |
 | GET     | `/attribute-groups`                                  | Attributgruppen verwalten                                                                                                                                |
 | POST    | `/attribute-definitions`                             | Neue Attributdefinition anlegen                                                                                                                          |
@@ -176,4 +177,4 @@ Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- un
 
 ## Referenz-Picker-Suche
 
-Der **suchbare Referenz-Picker** der Oberfläche nutzt `GET /objects/picker` (Label-Volltextsuche, optional eingeschränkt auf erlaubte Zieltypen aus `relation_definition.target_types` bzw. der Attributdefinition). Die Antwort enthält kompakte Treffer (ID, Typ, aufgelöstes Label, Status). Details zur UI: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#24-wertedarstellung).
+Der **suchbare Referenz-Picker** der Oberfläche nutzt `GET /objects/picker` (Label-Volltextsuche, optional eingeschränkt auf erlaubte Zieltypen aus `relation_definition.target_types` bzw. der Attributdefinition). Die Antwort enthält kompakte Treffer (ID, Typ, aufgelöstes Label, Status). Das Auswahl-Dropdown lädt die Relationstypen über **`GET /relation-definitions`** und filtert auf `kind == 'aggregation'`; `POST /references` erwartet als `definition_id` den **kurzen Record-Key** (z. B. `rel_category_member`, abgeleitet aus `relation_definition:rel_category_member`) — nicht die volle Record-ID und nicht den Anzeigenamen (`name`, z. B. `category_member`). Details zur UI: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#24-wertedarstellung).

@@ -3,6 +3,8 @@
 //! Every object is part of the composition tree: creating an object also
 //! creates its `depends_on` edge to the universal root.
 
+use std::sync::Arc;
+
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -512,6 +514,116 @@ pub async fn get_by_source(
         .next()
         .ok_or_else(|| ApiError::not_found("no object matches the given source reference"))?;
     Ok(Json(object))
+}
+
+/// Query parameters for `GET /objects/picker` (reference picker search).
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ObjectPickerParams {
+    /// Search term (case-insensitive, matched against attribute values).
+    pub q: String,
+    /// Comma-separated object types to restrict to (empty = all).
+    pub types: Option<String>,
+    /// Language code used to resolve the displayed label.
+    pub locale: Option<String>,
+    /// Maximum number of hits (capped at 1000).
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+
+/// Searches for objects by label to pick a reference target.
+///
+/// Returns compact hits (`id`, `type`, `label`, `status`); the label is the
+/// resolved multilingual `name` for `?locale=`. Used by the reference picker.
+#[utoipa::path(
+    get,
+    path = "/objects/picker",
+    params(ObjectPickerParams),
+    responses(
+        (status = 200, description = "Picker hits", body = Vec<Value>),
+        (status = 400, description = "Missing query", body = Value)
+    )
+)]
+pub async fn picker(
+    State(state): State<AppState>,
+    Query(params): Query<ObjectPickerParams>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let query = params.q.trim();
+    if query.is_empty() {
+        return Err(ApiError::bad_request("`q` must not be empty"));
+    }
+    let limit = params.limit.clamp(1, 1000) as i64;
+    let types: Vec<String> = params
+        .types
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut sql =
+        String::from("SELECT *, search::score(1) AS score FROM object WHERE attributes @@ $q");
+    if !types.is_empty() {
+        sql.push_str(" AND type IN $types");
+    }
+    sql.push_str(" ORDER BY score DESC LIMIT $limit");
+    let mut request = state.db.inner().query(sql).bind(("q", query.to_owned()));
+    if !types.is_empty() {
+        request = request.bind(("types", types));
+    }
+    let mut response = request.bind(("limit", limit)).await?.check()?;
+    let objects: Vec<Value> = response.take(0)?;
+
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned);
+    let chain: Option<Arc<Vec<String>>> = match &locale {
+        Some(locale) => Some(state.cache.fallback_chain(&state.db, locale).await?),
+        None => None,
+    };
+
+    let mut hits = Vec::new();
+    for object in objects {
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let object_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let status = object
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let attributes = object
+            .get("attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let label = crate::language::resolve_label(
+            locale.as_deref(),
+            chain.as_deref().map(|v| v.as_slice()),
+            attributes.get("name"),
+        )
+        .unwrap_or_else(|| object_type.clone());
+        hits.push(json!({
+            "id": id,
+            "type": object_type,
+            "label": label,
+            "status": status,
+        }));
+    }
+    Ok(Json(hits))
 }
 
 /// Applies a partial object update (attributes/status) with rule evaluation.

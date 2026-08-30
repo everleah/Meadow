@@ -170,3 +170,87 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def list_object_references(
+        self,
+        token: str,
+        object_id: str,
+        *,
+        locale: str | None = None,
+    ) -> list[dict]:
+        """Lists an object's references (incoming + outgoing).
+
+        Each reference carries ``in_object``/``out_object`` (``{id, type, label,
+        status}``) so the UI can render chips with a resolved label.
+        """
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}/references",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def picker_search(
+        self,
+        token: str,
+        q: str,
+        *,
+        types: list[str] | None = None,
+        locale: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Searches objects by label for the reference picker."""
+        params: dict[str, str] = {"q": q, "limit": str(limit)}
+        if types:
+            params["types"] = ",".join(types)
+        if locale:
+            params["locale"] = locale
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/picker",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_reference(
+        self,
+        token: str,
+        source: str,
+        target: str,
+        definition_id: str,
+    ) -> dict:
+        """Creates a reference between two objects."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/references",
+                json={"source": source, "target": target, "definition_id": definition_id},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def delete_reference(self, token: str, reference_id: str) -> None:
+        """Deletes a reference."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/references/{reference_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+
+    async def list_relation_definitions(self, token: str) -> list[dict]:
+        """Lists relation definitions (e.g. for the reference picker)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/relation-definitions",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()

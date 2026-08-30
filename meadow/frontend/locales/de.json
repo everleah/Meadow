@@ -46,6 +46,13 @@
   "grid.category": "Kategorien",
   "grid.all_trees": "Alle Bäume",
   "grid.uncategorized": "Nicht kategorisiert",
+  "grid.references": "Referenzen",
+  "grid.reference_search": "Objekt zum Verknüpfen suchen ...",
+  "grid.relation_type": "Relationstyp",
+  "grid.ref_remove": "Referenz entfernen",
+  "grid.ref_remove_failed": "Die Referenz konnte nicht entfernt werden.",
+  "grid.ref_add_failed": "Die Referenz konnte nicht angelegt werden.",
+  "grid.ref_relation_required": "Bitte einen Relationstyp wählen.",
   "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
   "grid.filter": "Filtern",
 

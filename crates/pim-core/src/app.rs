@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/objects/by-key", get(api::keys::get_by_key))
         .route("/objects/by-source", get(api::objects::get_by_source))
+        .route("/objects/picker", get(api::objects::picker))
         .route(
             "/objects/batch-update",
             post(api::objects::batch_update_objects),
@@ -52,6 +53,14 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(api::objects::update_computed),
         )
         .route("/references", post(api::references::create_reference))
+        .route(
+            "/references/{id}",
+            axum::routing::delete(api::references::delete_reference),
+        )
+        .route(
+            "/relation-definitions",
+            get(api::references::list_relation_definitions),
+        )
         .route("/search", post(api::search::search))
         .route(
             "/rules",
