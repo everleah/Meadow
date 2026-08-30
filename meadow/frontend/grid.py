@@ -261,6 +261,44 @@ async def products_page() -> None:
             all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
             grid.run_grid_method("setGridOption", "rowData", all_rows)
 
+        # Category tree (left-panel view): aggregation-based navigation. Category
+        # nodes are objects of type `category`; their hierarchy is `depends_on`
+        # (so the generic LazyTree renders it), but selecting a node filters the
+        # grid via `?category=<id>` (category_member aggregation), not `?ancestor=`.
+        category_tree_nodes: list[dict] = []
+
+        async def load_category_children(node_id: str) -> list[dict]:
+            children = await client.list_object_children(token, node_id, limit=100)
+            return [
+                tree_node_from_object(child, locale)
+                for child in children
+                if child.get("type") == "category"
+            ]
+
+        try:
+            top_children = await client.list_object_children(token, root_id, limit=100)
+            category_tree_nodes = [
+                tree_node_from_object(child, locale)
+                for child in top_children
+                if child.get("type") == "category"
+            ]
+        except Exception:  # noqa: BLE001 - degrade to a structure-only panel
+            category_tree_nodes = []
+
+        async def handle_category_select(e) -> None:
+            nonlocal all_rows
+            selected = e.value if hasattr(e, "value") else None
+            if not selected:
+                selected_objects = objects
+            else:
+                selected_objects = await client.list_objects(
+                    token, category=selected, limit=1000, locale=locale
+                )
+            original_by_id.clear()
+            original_by_id.update({str(o.get("id")): o for o in selected_objects})
+            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
+            grid.run_grid_method("setGridOption", "rowData", all_rows)
+
         staged_ids: set[str] = set()
 
         def mark_changed(event) -> None:
@@ -362,56 +400,84 @@ async def products_page() -> None:
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=views_dialog.close).props("flat dense")
 
+        current_tree: dict = {"tree": None, "nodes": []}
+
         def collapse_all() -> None:
-            tree.collapse()
+            if current_tree["tree"] is not None:
+                current_tree["tree"].collapse()
 
         def expand_all() -> None:
-            tree.expand()
+            if current_tree["tree"] is not None:
+                current_tree["tree"].expand()
+
+        def apply_tree_filter(value: str) -> None:
+            tree = current_tree["tree"]
+            if tree is not None:
+                tree.props["nodes"] = filter_tree_nodes(current_tree["nodes"], value)
+                tree.update()
 
         def toggle_panel() -> None:
             if splitter.value is None:
                 splitter.value = 25
             splitter.value = 0 if splitter.value > 0 else 25
 
+        host: ui.column | None = None
+
+        def render_tree(view: str) -> None:
+            nonlocal current_tree
+            if host is None:
+                return
+            host.clear()
+            if view == "category" and category_tree_nodes:
+                nodes = category_tree_nodes
+                loader = load_category_children
+                on_select = handle_category_select
+            elif tree_nodes:
+                nodes = tree_nodes
+                loader = load_children
+                on_select = handle_tree_select
+            else:
+                with host:
+                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
+                current_tree = {"tree": None, "nodes": []}
+                return
+            with host:
+                tree = LazyTree(
+                    nodes,
+                    on_select=on_select,
+                    load_children=loader,
+                    virtual_scroll=True,
+                ).classes("w-full")
+                tree.add_slot(
+                    "default-header",
+                    '<span :props="props">{{ props.node.label }}'
+                    '<small v-if="props.node.type" class="text-caption text-gray-500">'
+                    " &middot; {{ props.node.type }}</small></span>",
+                )
+            current_tree = {"tree": tree, "nodes": nodes}
+
         with ui.splitter(value=25, limits=(0, 60)).classes(
             "w-full h-[calc(100vh-210px)]"
         ) as splitter:
-            # Left: resizable structure tree card.
+            # Left: resizable tree card (structure or categories via toggle).
             with splitter.before, ui.card().classes("w-full h-full p-0"):  # noqa: SIM117 - layout nesting
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):  # noqa: SIM117 - filter row
+                    view_toggle = ui.toggle(
+                        {"structure": t("grid.structure"), "category": t("grid.category")},
+                        value="structure",
+                    ).props("dense")
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
-                    if tree_nodes:
+                    if tree_nodes or category_tree_nodes:
                         ui.button(icon="unfold_less", on_click=collapse_all).props(
                             "flat dense shrink-0"
                         ).tooltip(t("grid.collapse_all"))
                         ui.button(icon="unfold_more", on_click=expand_all).props(
                             "flat dense shrink-0"
                         ).tooltip(t("grid.expand_all"))
-                if tree_nodes:
-                    tree = (
-                        LazyTree(
-                            tree_nodes,
-                            on_select=handle_tree_select,
-                            load_children=load_children,
-                            virtual_scroll=True,
-                        )
-                        .classes("w-full grow")
-                        .style("min-height: 0; overflow-y: auto")
-                    )
-                    tree.add_slot(
-                        "default-header",
-                        '<span :props="props">{{ props.node.label }}'
-                        '<small v-if="props.node.type" class="text-caption text-gray-500">'
-                        " &middot; {{ props.node.type }}</small></span>",
-                    )
-
-                    def apply_tree_filter(value: str) -> None:
-                        tree.props["nodes"] = filter_tree_nodes(tree_nodes, value)
-                        tree.update()
-
-                    filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
-                else:
-                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
+                host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
+                render_tree("structure")
+                view_toggle.on_value_change(lambda e: render_tree(e.value))
+                filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
             # Right: grid area (fills the remaining width and height).
             with splitter.after, ui.column().classes("w-full h-full"):  # noqa: SIM117 - layout
                 with ui.row().classes("items-center gap-2 w-full"):

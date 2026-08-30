@@ -544,6 +544,36 @@ pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiErro
     Ok(result.iter().map(|id| key_of(id)).collect())
 }
 
+/// Returns the bare keys of every object assigned (via `category_member`) to
+/// the given category or any of its composition descendants. Used for the
+/// server-side category filter (`GET /objects?category=...`).
+pub async fn category_member_keys(db: &Db, category_id: &str) -> Result<Vec<String>, ApiError> {
+    let category_keys = subtree_keys(db, category_id).await?;
+    let sql = "
+        LET $cats = array::map($keys, |$k| type::record('object', $k));
+        SELECT in AS member FROM reference
+        WHERE definition_id = 'rel_category_member' AND out IN $cats;
+    ";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("keys", category_keys))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut result: Vec<String> = Vec::new();
+    for row in &rows {
+        if let Some(member) = row.get("member").and_then(Value::as_str) {
+            let key = key_of(member).to_owned();
+            if seen.insert(key.clone()) {
+                result.push(key);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Changes an object's composition parent (re-parenting with cycle protection).
 #[utoipa::path(
     patch,

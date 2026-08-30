@@ -67,20 +67,25 @@ class CoreClient:
         *,
         object_type: str | None = None,
         ancestor: str | None = None,
+        category: str | None = None,
         locale: str | None = None,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
-        """Lists objects, optionally filtered by type or composition ancestor.
+        """Lists objects, optionally filtered by type, composition ancestor or category.
 
-        With ``locale``, each object carries a ``completeness`` value for that
-        language (computed in the core).
+        With ``ancestor`` the result is limited to that composition subtree; with
+        ``category`` to objects assigned (via ``category_member``) to that category
+        or its descendants. With ``locale``, each object carries a ``completeness``
+        value for that language (computed in the core).
         """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
             params["type"] = object_type
         if ancestor:
             params["ancestor"] = ancestor
+        if category:
+            params["category"] = category
         if locale:
             params["locale"] = locale
         async with httpx.AsyncClient(timeout=self.timeout) as client:

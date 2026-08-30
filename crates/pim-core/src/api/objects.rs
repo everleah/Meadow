@@ -90,6 +90,10 @@ pub struct ListObjects {
     /// Filter to the composition subtree of this object (server-side lazy tree filter).
     #[serde(default)]
     pub ancestor: Option<String>,
+    /// Filter to objects assigned (via `category_member`) to this category or
+    /// any of its composition descendants (category tree in the grid).
+    #[serde(default)]
+    pub category: Option<String>,
     /// Working language code (e.g. `en-US`); when set, each object gets a
     /// `completeness` value for this language.
     pub locale: Option<String>,
@@ -379,6 +383,11 @@ pub async fn list_objects(
         conditions
             .push("id IN array::map($ancestor_ids, |$k| type::record('object', $k))".to_owned());
     }
+    if params.category.is_some() {
+        conditions.push(
+            "id IN array::map($category_member_ids, |$k| type::record('object', $k))".to_owned(),
+        );
+    }
     let where_clause = if conditions.is_empty() {
         String::new()
     } else {
@@ -395,6 +404,10 @@ pub async fn list_objects(
     if let Some(ancestor) = &params.ancestor {
         let keys = crate::api::references::subtree_keys(&state.db, ancestor).await?;
         query = query.bind(("ancestor_ids", keys));
+    }
+    if let Some(category) = &params.category {
+        let keys = crate::api::references::category_member_keys(&state.db, category).await?;
+        query = query.bind(("category_member_ids", keys));
     }
     let mut response = query
         .bind(("limit", limit))
