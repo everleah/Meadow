@@ -270,6 +270,9 @@ async def products_page() -> None:
         category_roots: list[dict] = []
         # Currently selected category tree root id (None = show all roots/trees).
         selected_tree: dict = {"id": None}
+        # Special "Nicht kategorisiert" entry (lists objects with no category_member).
+        uncategorized_id = "__uncategorized__"
+        uncategorized_node = {"id": uncategorized_id, "label": t("grid.uncategorized")}
 
         async def load_category_children(node_id: str) -> list[dict]:
             children = await client.list_object_children(
@@ -296,7 +299,11 @@ async def products_page() -> None:
         async def handle_category_select(e) -> None:
             nonlocal all_rows
             selected = e.value if hasattr(e, "value") else None
-            if not selected:
+            if selected == uncategorized_id:
+                selected_objects = await client.list_objects(
+                    token, uncategorized=True, limit=1000, locale=locale
+                )
+            elif not selected:
                 selected_objects = objects
             else:
                 selected_objects = await client.list_objects(
@@ -444,6 +451,7 @@ async def products_page() -> None:
                         nodes = category_roots
                 else:
                     nodes = category_roots
+                nodes = [uncategorized_node, *nodes]
                 loader = load_category_children
                 on_select = handle_category_select
             elif tree_nodes:

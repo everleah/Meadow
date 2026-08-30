@@ -45,6 +45,7 @@
   "grid.structure": "Structure",
   "grid.category": "Catégories",
   "grid.all_trees": "Tous les arbres",
+  "grid.uncategorized": "Non catégorisé",
   "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
   "grid.filter": "Filtrer",
 

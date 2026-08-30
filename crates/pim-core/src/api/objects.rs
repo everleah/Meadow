@@ -94,6 +94,10 @@ pub struct ListObjects {
     /// any of its composition descendants (category tree in the grid).
     #[serde(default)]
     pub category: Option<String>,
+    /// Only return objects that are NOT assigned to any category (no
+    /// `category_member` reference as member); the "Nicht kategorisiert" entry.
+    #[serde(default)]
+    pub uncategorized: bool,
     /// Working language code (e.g. `en-US`); when set, each object gets a
     /// `completeness` value for this language.
     pub locale: Option<String>,
@@ -386,6 +390,12 @@ pub async fn list_objects(
     if params.category.is_some() {
         conditions.push(
             "id IN array::map($category_member_ids, |$k| type::record('object', $k))".to_owned(),
+        );
+    }
+    if params.uncategorized {
+        conditions.push(
+            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = 'rel_category_member') AND type NOT IN ['category', 'root']"
+                .to_owned(),
         );
     }
     let where_clause = if conditions.is_empty() {
