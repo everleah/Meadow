@@ -25,7 +25,7 @@ Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprach
 
 **Leitbild (Bildsprache):** „Eine grüne Wiese in einem Tal mit Fluss, umrandet mit Wäldern und Bergen.“
 
-Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild. Die **Login-Seite** nutzt bereits das SVG-Logo (`/static/logos/meadow_logo.svg`) und einen Wiesen-Hintergrund (WebP + PNG-Fallback, `/static/images/meadow_login_bg.webp`); statische Assets werden unter `/static` aus `meadow/frontend/static/` ausgeliefert. Weitere Grafiken (v. a. UI-Icons) folgen später und sind noch **nicht** Teil des MVP.
+Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild. Die **Login-Seite** nutzt bereits das SVG-Logo (`/static/logos/meadow_logo.svg`) und einen Wiesen-Hintergrund (WebP + PNG-Fallback, `/static/images/meadow_login_bg.webp`); statische Assets werden unter `/static` aus `meadow/frontend/static/` ausgeliefert. Im **Header** der Hauptseiten wird das SVG-Logo transparent (ohne weiße Box) direkt auf dem grünen `bg-primary`-Header angezeigt; da die Logo-Grüntöne dort nur ~1,5:1 Kontrast erreichen, ist für gute Sichtbarkeit ggf. eine weiße Monochrom-Variante vorgesehen. Weitere Grafiken (v. a. UI-Icons) folgen später und sind noch **nicht** Teil des MVP.
 
 **Farbpalette (Startwerte):**
 

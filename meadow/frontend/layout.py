@@ -6,7 +6,7 @@ from nicegui import app, ui
 
 from meadow.frontend.auth import is_admin, logout
 from meadow.frontend.i18n import current_locale, set_locale, supported_locales, t
-from meadow.frontend.theme import NAV_GRADIENT_BOTTOM, NAV_GRADIENT_TOP
+from meadow.frontend.theme import MEADOW_LOGO, NAV_GRADIENT_BOTTOM, NAV_GRADIENT_TOP
 
 #: Keep the drawer language selector text readable on the dark gradient.
 ui.add_css(
@@ -35,6 +35,7 @@ def build_shell(*, active: str) -> None:
     with ui.header(elevated=True).classes("items-center justify-between bg-primary"):
         with ui.row().classes("items-center gap-2"):
             ui.button(icon="menu", on_click=lambda: drawer.toggle()).props("flat round color=white")
+            ui.image(MEADOW_LOGO).classes("w-8 h-8 object-contain")
             ui.label("Meadow PIM").classes("text-lg font-bold text-white")
         with ui.row().classes("items-center gap-3"):
             ui.label(app.storage.user.get("username", "")).classes("text-white")
@@ -55,7 +56,7 @@ def build_shell(*, active: str) -> None:
             classes = "items-center w-full px-4 py-2 cursor-pointer text-white"
             if path == active:
                 classes += " bg-primary"
-            with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):
+            with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):  # type: ignore
                 ui.label(t(key))
         ui.separator().props("color=white")
         with ui.row().classes("items-center gap-2 px-4 py-2"):
