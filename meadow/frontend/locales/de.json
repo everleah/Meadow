@@ -44,6 +44,7 @@
   "grid.close": "Schließen",
   "grid.structure": "Struktur",
   "grid.category": "Kategorien",
+  "grid.all_trees": "Alle Bäume",
   "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
   "grid.filter": "Filtern",
 

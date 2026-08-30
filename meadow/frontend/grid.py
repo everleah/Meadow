@@ -180,6 +180,8 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     node = {"id": node_id, "label": label, "type": obj_type}
     if object_.get("hasChildren"):
         node["lazy"] = True
+    if "memberCount" in object_:
+        node["count"] = object_.get("memberCount")
     return node
 
 
@@ -265,10 +267,14 @@ async def products_page() -> None:
         # nodes are objects of type `category`; their hierarchy is `depends_on`
         # (so the generic LazyTree renders it), but selecting a node filters the
         # grid via `?category=<id>` (category_member aggregation), not `?ancestor=`.
-        category_tree_nodes: list[dict] = []
+        category_roots: list[dict] = []
+        # Currently selected category tree root id (None = show all roots/trees).
+        selected_tree: dict = {"id": None}
 
         async def load_category_children(node_id: str) -> list[dict]:
-            children = await client.list_object_children(token, node_id, limit=100)
+            children = await client.list_object_children(
+                token, node_id, limit=100, count_members=True
+            )
             return [
                 tree_node_from_object(child, locale)
                 for child in children
@@ -276,14 +282,16 @@ async def products_page() -> None:
             ]
 
         try:
-            top_children = await client.list_object_children(token, root_id, limit=100)
-            category_tree_nodes = [
+            top_children = await client.list_object_children(
+                token, root_id, limit=100, count_members=True
+            )
+            category_roots = [
                 tree_node_from_object(child, locale)
                 for child in top_children
                 if child.get("type") == "category"
             ]
         except Exception:  # noqa: BLE001 - degrade to a structure-only panel
-            category_tree_nodes = []
+            category_roots = []
 
         async def handle_category_select(e) -> None:
             nonlocal all_rows
@@ -428,8 +436,14 @@ async def products_page() -> None:
             if host is None:
                 return
             host.clear()
-            if view == "category" and category_tree_nodes:
-                nodes = category_tree_nodes
+            if view == "category" and category_roots:
+                selected_id = selected_tree["id"]
+                if selected_id:
+                    nodes = [r for r in category_roots if r["id"] == selected_id]
+                    if not nodes:
+                        nodes = category_roots
+                else:
+                    nodes = category_roots
                 loader = load_category_children
                 on_select = handle_category_select
             elif tree_nodes:
@@ -452,7 +466,10 @@ async def products_page() -> None:
                     "default-header",
                     '<span :props="props">{{ props.node.label }}'
                     '<small v-if="props.node.type" class="text-caption text-gray-500">'
-                    " &middot; {{ props.node.type }}</small></span>",
+                    " &middot; {{ props.node.type }}</small>"
+                    '<small v-if="props.node.count !== undefined" '
+                    'class="text-caption text-gray-500">'
+                    " &middot; {{ props.node.count }}</small></span>",
                 )
             current_tree = {"tree": tree, "nodes": nodes}
 
@@ -471,6 +488,7 @@ async def products_page() -> None:
                 def set_view(view: str) -> None:
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
+                    tree_select.set_visibility(view == "category")
                     render_tree(view)
 
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
@@ -479,10 +497,23 @@ async def products_page() -> None:
                         category_btn = ui.button(icon="category").tooltip(t("grid.category"))
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
+                    tree_select = ui.select(
+                        {
+                            "all": t("grid.all_trees"),
+                            **{r["id"]: r["label"] for r in category_roots},
+                        },
+                        value="all",
+                    ).props("outline dense").classes("grow")
+
+                    def on_tree_select(value: str) -> None:
+                        selected_tree["id"] = None if value in (None, "all") else value
+                        render_tree("category")
+
+                    tree_select.on_value_change(lambda e: on_tree_select(e.value))
                 # Line 2: filter + collapse buttons.
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
-                    if tree_nodes or category_tree_nodes:
+                    if tree_nodes or category_roots:
                         ui.button(icon="unfold_less", on_click=collapse_all).props(
                             "flat dense shrink-0"
                         ).tooltip(t("grid.collapse_all"))

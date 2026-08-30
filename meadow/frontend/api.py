@@ -121,18 +121,22 @@ class CoreClient:
         *,
         limit: int | None = None,
         offset: int = 0,
+        count_members: bool = False,
     ) -> list[dict]:
         """Lists an object's composition children (``rel_depends_on``).
 
         Each child carries ``hasChildren`` so the tree can show the expand arrow
         without loading the whole subtree; ``limit``/``offset`` paginate nodes
-        with many direct children.
+        with many direct children. With ``count_members``, category children also
+        carry a ``memberCount`` (objects assigned via ``category_member``).
         """
         params: dict[str, str] = {}
         if limit is not None:
             params["limit"] = str(limit)
         if offset:
             params["offset"] = str(offset)
+        if count_members:
+            params["count_members"] = "true"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/children",

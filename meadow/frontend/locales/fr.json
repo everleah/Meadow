@@ -44,6 +44,7 @@
   "grid.close": "Fermer",
   "grid.structure": "Structure",
   "grid.category": "Catégories",
+  "grid.all_trees": "Tous les arbres",
   "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
   "grid.filter": "Filtrer",
 

@@ -342,6 +342,10 @@ pub struct ChildrenListParams {
     /// Number of children to skip.
     #[serde(default)]
     pub offset: u32,
+    /// When true, each returned category child carries a `memberCount` (number
+    /// of objects assigned via `category_member`, including subcategories).
+    #[serde(default)]
+    pub count_members: bool,
 }
 
 /// Lists the direct composition children of an object.
@@ -349,7 +353,8 @@ pub struct ChildrenListParams {
 /// Each child is returned as its object (`id`/`type`/`status`/`attributes`) plus
 /// a `hasChildren` flag so the structure tree can show the expand arrow without
 /// loading the whole subtree (lazy loading); `?limit`/`?offset` paginate nodes
-/// with many direct children.
+/// with many direct children. With `?count_members=true`, category children also
+/// carry a `memberCount` for the category tree's counter.
 #[utoipa::path(
     get,
     path = "/objects/{id}/children",
@@ -451,6 +456,20 @@ pub async fn list_object_children(
             Some(value)
         })
         .collect();
+    if params.count_members {
+        // Category children: add the number of objects assigned via
+        // `category_member` to the category subtree (category tree counter).
+        let mut counted: Vec<Value> = Vec::new();
+        for mut value in result {
+            if value.get("type").and_then(Value::as_str) == Some("category") {
+                let cid = value.get("id").and_then(Value::as_str).unwrap_or("");
+                let keys = category_member_keys(&state.db, cid).await?;
+                value["memberCount"] = json!(keys.len());
+            }
+            counted.push(value);
+        }
+        return Ok(Json(counted));
+    }
     Ok(Json(result))
 }
 
