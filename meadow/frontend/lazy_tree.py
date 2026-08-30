@@ -35,6 +35,12 @@ class LazyTree(Tree):
         returns the child node objects (``id``/``label``/``type``, ``lazy`` for
         nodes with children).
     :param virtual_scroll: render only visible rows (needs a bounded height).
+
+    NiceGUI re-sends the whole ``nodes`` prop on *every* prop change (including
+    ``selected``). Re-sending a pure lazy node list would discard the client-side
+    lazy children and collapse the tree. ``update()`` is therefore a no-op: the
+    node list lives client-side and is only replaced explicitly via
+    ``set_nodes()`` (used by the tree's search filter).
     """
 
     def __init__(
@@ -50,6 +56,18 @@ class LazyTree(Tree):
         if virtual_scroll:
             self._props["virtual-scroll"] = True
         self.on("lazy-load", self._handle_lazy_load, js_handler=_JS_HANDLER)
+
+    def update(self) -> None:
+        """Do not re-send the node tree on prop changes (prevents collapse)."""
+
+    def set_nodes(self, nodes: list[dict]) -> None:
+        """Replace the node list on the client for the tree's search filter.
+
+        ``update()`` is a no-op to keep the lazy children across selection
+        changes, so an explicit re-send is performed here.
+        """
+        self._props["nodes"] = nodes
+        super().update()
 
     async def _handle_lazy_load(self, e: GenericEventArguments) -> None:
         try:

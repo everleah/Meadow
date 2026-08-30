@@ -587,8 +587,7 @@ async def products_page() -> None:
         def apply_tree_filter(value: str) -> None:
             tree = current_tree["tree"]
             if tree is not None:
-                tree.props["nodes"] = filter_tree_nodes(current_tree["nodes"], value)
-                tree.update()
+                tree.set_nodes(filter_tree_nodes(current_tree["nodes"], value))
 
         def toggle_panel() -> None:
             if splitter.value is None:
