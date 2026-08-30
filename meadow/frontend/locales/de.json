@@ -53,6 +53,7 @@
   "grid.ref_remove_failed": "Die Referenz konnte nicht entfernt werden.",
   "grid.ref_add_failed": "Die Referenz konnte nicht angelegt werden.",
   "grid.ref_relation_required": "Bitte einen Relationstyp wählen.",
+  "grid.ref_empty": "Noch keine Referenzen.",
   "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
   "grid.filter": "Filtern",
 

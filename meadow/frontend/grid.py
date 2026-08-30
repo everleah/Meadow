@@ -471,23 +471,58 @@ async def products_page() -> None:
                 references = await client.list_object_references(token, target, locale=locale)
             except Exception:  # noqa: BLE001 - degrade to no chips
                 references = []
+            # Resolve relation-type labels for the group headings (all kinds,
+            # including the composition `rel_depends_on`).
+            def_labels: dict[str, str] = {}
+            try:
+                for definition in await client.list_relation_definitions(token):
+                    dk = str(definition["id"]).split(":", 1)[-1]
+                    def_labels[dk] = resolve_value(definition.get("label"), locale) or dk
+            except Exception:  # noqa: BLE001 - fall back to raw keys
+                def_labels = {}
+            # Group the object's references by relation type; the chip shows the
+            # "other" object (the one *this* object points to / is pointed by).
+            groups: dict[str, list[dict]] = {}
             for reference in references:
+                dk = str(reference.get("definition_id") or "")
                 other = (
                     reference.get("in_object")
                     if reference.get("out") == target
                     else reference.get("out_object")
+                ) or {}
+                groups.setdefault(dk, []).append(
+                    {
+                        "id": reference.get("id"),
+                        "label": other.get("label") or "",
+                        "type": other.get("type") or "",
+                        "definition_id": dk,
+                        "removable": dk != "rel_depends_on",
+                    }
                 )
-                other_label = (other or {}).get("label", "")
-                other_type = (other or {}).get("type", "")
-                with ref_chips, ui.row().classes("items-center gap-2 w-full"):
-                    ui.label(f"{other_label} · {other_type}").classes(
-                        "bg-neutral px-2 py-0.5 rounded text-xs"
-                    )
-                    if str(reference.get("definition_id")) != "rel_depends_on":
-                        ui.button(
-                            icon="close",
-                            on_click=lambda rid=reference["id"]: remove_reference(rid),
-                        ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
+            if not groups:
+                with ref_chips, ui.column().classes("w-full"):
+                    ui.label(t("grid.ref_empty")).classes("text-caption text-gray-500")
+                return
+
+            # Order groups: composition first, then aggregations by their label.
+            def group_sort_key(dk: str) -> tuple:
+                rank = 0 if dk == "rel_depends_on" else 1
+                return (rank, def_labels.get(dk, dk).lower())
+
+            for dk in sorted(groups, key=group_sort_key):
+                label = def_labels.get(dk, dk)
+                with ref_chips, ui.column().classes("w-full gap-1"):
+                    ui.label(label).classes("text-caption font-medium text-gray-500")
+                    for chip in sorted(groups[dk], key=lambda c: (c["label"].lower(), c["type"])):
+                        with ui.row().classes("items-center gap-2 w-full"):
+                            ui.label(f"{chip['label']} · {chip['type']}").classes(
+                                "bg-neutral px-2 py-0.5 rounded text-xs"
+                            )
+                            if chip["removable"]:
+                                ui.button(
+                                    icon="close",
+                                    on_click=lambda rid=chip["id"]: remove_reference(rid),
+                                ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
 
         async def add_reference(hit: dict) -> None:
             definition_id = ref_definition.value

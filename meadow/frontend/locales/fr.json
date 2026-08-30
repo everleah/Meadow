@@ -53,6 +53,7 @@
   "grid.ref_remove_failed": "Impossible de supprimer la référence.",
   "grid.ref_add_failed": "Impossible d'ajouter la référence.",
   "grid.ref_relation_required": "Veuillez choisir un type de relation.",
+  "grid.ref_empty": "Aucune référence pour le moment.",
   "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
   "grid.filter": "Filtrer",
 

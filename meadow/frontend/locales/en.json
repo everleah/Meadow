@@ -53,6 +53,7 @@
   "grid.ref_remove_failed": "Could not remove the reference.",
   "grid.ref_add_failed": "Could not add the reference.",
   "grid.ref_relation_required": "Please choose a relation type.",
+  "grid.ref_empty": "No references yet.",
   "grid.tree_load_failed": "Could not load the structure tree.",
   "grid.filter": "Filter",
   "grid.toggle_tree": "Toggle structure panel",
