@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient
 from meadow.frontend.i18n import best_locale, t
+from meadow.frontend.theme import LOGIN_BG_PNG, LOGIN_BG_WEBP, MEADOW_LOGO
 
 #: Static routes that must be reachable without authentication.
 UNRESTRICTED_ROUTES = {"/login", "/favicon.ico"}
@@ -25,6 +26,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             app.storage.user.get("authenticated")
             or path in UNRESTRICTED_ROUTES
             or path.startswith("/_nicegui")
+            or path.startswith("/static")
         ):
             return await call_next(request)
         return RedirectResponse(f"/login?redirect_to={path}")
@@ -54,6 +56,14 @@ def login(redirect_to: str = "/", request: Request = None) -> RedirectResponse |
     if not app.storage.user.get("locale"):
         app.storage.user["locale"] = best_locale(request.headers.get("accept-language"))
 
+    # Full-viewport meadow background: WebP with a PNG fallback and a dark base.
+    ui.query("body").style(
+        f"background-image:url('{LOGIN_BG_PNG}');"
+        f"background-image:url('{LOGIN_BG_WEBP}');"
+        "background-size:cover;background-position:center;background-repeat:no-repeat;"
+        "background-color:#1e293b;"
+    )
+
     async def try_login() -> None:
         client = CoreClient(config.CORE_URL)
         try:
@@ -75,8 +85,8 @@ def login(redirect_to: str = "/", request: Request = None) -> RedirectResponse |
         ui.navigate.to(redirect_to)
 
     with ui.card().classes("absolute-center items-stretch w-96"):
-        ui.label("Meadow PIM").classes("text-h5 font-bold text-primary")
-        ui.label(t("login.sign_in")).classes("text-subtitle1")
+        ui.image(MEADOW_LOGO).classes("w-32 self-center mb-2")
+        ui.label(t("login.sign_in")).classes("text-subtitle1 self-center")
         username = (
             ui.input(t("login.username"))
             .props("autofocus")

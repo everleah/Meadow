@@ -6,7 +6,17 @@ a green meadow in a valley with a river, surrounded by forests and mountains.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from nicegui import app
+
+#: Directory with static brand assets (served under `/static`).
+STATIC_DIR = Path(__file__).parent / "static"
+
+#: Brand asset URLs (relative to the served `/static` prefix).
+MEADOW_LOGO = "/static/logos/meadow_logo.svg"
+LOGIN_BG_WEBP = "/static/images/meadow_login_bg.webp"
+LOGIN_BG_PNG = "/static/images/meadow_login_bg.png"
 
 #: Primary: the meadow (brand color).
 MEADOW_GREEN = "#16a34a"
@@ -40,3 +50,8 @@ def apply_branding() -> None:
         info=RIVER_DEEP,
         warning=WARNING_AMBER,
     )
+
+
+def register_static() -> None:
+    """Mounts the frontend static asset directory under `/static`."""
+    app.add_static_files("/static", str(STATIC_DIR))

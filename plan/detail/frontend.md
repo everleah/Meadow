@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 7, 9
-- **Stand:** Entwurf
+- **Stand:** Entwurf (Login-Branding umgesetzt)
 
 Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprachigkeit der Oberfläche und die Modulübersicht. Die konkreten **Arbeitsflächen** (Grid, Produkt-Formular, Massendatenpflege, Dashboard) sind im Detaildokument [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) spezifiziert. Die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum) ist separat im Dokument [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md) beschrieben.
 
@@ -25,7 +25,7 @@ Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprach
 
 **Leitbild (Bildsprache):** „Eine grüne Wiese in einem Tal mit Fluss, umrandet mit Wäldern und Bergen.“
 
-Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild. Logos und weitere Grafiken folgen später und sind **nicht** Teil des MVP.
+Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild. Die **Login-Seite** nutzt bereits das SVG-Logo (`/static/logos/meadow_logo.svg`) und einen Wiesen-Hintergrund (WebP + PNG-Fallback, `/static/images/meadow_login_bg.webp`); statische Assets werden unter `/static` aus `meadow/frontend/static/` ausgeliefert. Weitere Grafiken (v. a. UI-Icons) folgen später und sind noch **nicht** Teil des MVP.
 
 **Farbpalette (Startwerte):**
 
@@ -46,6 +46,7 @@ Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild.
 - **Eigene Markenfarbe:** `app.colors(brand='#16a34a')` definiert eine Zusatzfarbe `brand`, nutzbar als `color='brand'` bzw. Tailwind-Klasse `text-brand`/`bg-brand` (muss vor der ersten Verwendung gesetzt werden).
 - **Element-Ebene:** `.classes(…)`/`.default_classes(…)` nehmen Tailwind-, Quasar- und eigene CSS-Klassen an; `.style(…)` nimmt inline CSS. NiceGUI-Elemente tragen Quasar-Default-Styles – bei Überschreibung auf Element-Ebene ist daher häufig der Tailwind-`!`-Präfix (`!important`) nötig, z. B. `.classes("!bg-[#16a34a]/20 !text-[#0ea5e9]")` (Arbitrary-Value-Syntax `[#hex]`, Opacity-Modifier `/20`).
 - **Seiten-CSS:** `ui.add_css(…)` ergänzt globale CSS-Regeln (dort ggf. mit `!important`); `ui.add_head_html(…)` für `<style>`/Meta.
+- **Statische Assets:** `app.add_static_files('/static', 'meadow/frontend/static')` liefert Logo & Bilder aus; `/static` ist in `UNRESTRICTED_ROUTES` (`auth.py`) von der Auth-Middleware ausgenommen, damit die Login-Seite Branding-Assets laden kann.
 - Tailwind ist standardmäßig aktiv (`ui.run(tailwind=True)`); alternativ UnoCSS-Presets (`ui.run(unocss=…)`).
 
 Die Palette sind **Startwerte**; sie werden später über eine zentrale Theme-Konstante bzw. die Admin-UI („System-Einstellungen“) pflegbar – die Quasar-Slots bleiben dabei die Implementierungs-Schnittstelle.

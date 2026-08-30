@@ -7,7 +7,7 @@ import logging
 from nicegui import ui
 
 from meadow.frontend import auth, config, views
-from meadow.frontend.theme import apply_branding
+from meadow.frontend.theme import apply_branding, register_static
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,6 +15,7 @@ logging.basicConfig(level=logging.INFO)
 def main() -> None:
     """Applies branding, registers pages/middleware and starts the server."""
     apply_branding()
+    register_static()
     auth.register()
     views.register_pages()
     ui.run(
