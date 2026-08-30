@@ -37,6 +37,11 @@ RIVER_DEEP = "#0891b2"
 #: Warning.
 WARNING_AMBER = "#f59e0b"
 
+#: Sidebar navigation drawer gradient (top / bottom).
+#: The bottom stays dark enough for white text (>= 4.5:1 contrast).
+NAV_GRADIENT_TOP = "#2d5f4f"
+NAV_GRADIENT_BOTTOM = "#4a7c59"
+
 
 def apply_branding() -> None:
     """Sets the app-wide Quasar theme to the Meadow palette."""

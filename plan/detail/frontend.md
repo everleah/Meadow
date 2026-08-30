@@ -47,6 +47,7 @@ Das Default-Branding startet mit einer **Farbskala** passend zu diesem Leitbild.
 - **Element-Ebene:** `.classes(…)`/`.default_classes(…)` nehmen Tailwind-, Quasar- und eigene CSS-Klassen an; `.style(…)` nimmt inline CSS. NiceGUI-Elemente tragen Quasar-Default-Styles – bei Überschreibung auf Element-Ebene ist daher häufig der Tailwind-`!`-Präfix (`!important`) nötig, z. B. `.classes("!bg-[#16a34a]/20 !text-[#0ea5e9]")` (Arbitrary-Value-Syntax `[#hex]`, Opacity-Modifier `/20`).
 - **Seiten-CSS:** `ui.add_css(…)` ergänzt globale CSS-Regeln (dort ggf. mit `!important`); `ui.add_head_html(…)` für `<style>`/Meta.
 - **Statische Assets:** `app.add_static_files('/static', 'meadow/frontend/static')` liefert Logo & Bilder aus; `/static` ist in `UNRESTRICTED_ROUTES` (`auth.py`) von der Auth-Middleware ausgenommen, damit die Login-Seite Branding-Assets laden kann.
+- **Navigations-Drawer:** vertikaler Farbverlauf über `NAV_GRADIENT_TOP`/`NAV_GRADIENT_BOTTOM` (`theme.py`, aktuell `#2d5f4f` → `#4a7c59`). Der untere Farbwert bleibt dunkel genug, damit weiße Nav-Texte mindestens 4,5:1 Kontrast (WCAG AA) erreichen; für den Sprach-Selektor gilt zusätzlich eine `ui.add_css(..., shared=True)`-Regel im Drawer.
 - Tailwind ist standardmäßig aktiv (`ui.run(tailwind=True)`); alternativ UnoCSS-Presets (`ui.run(unocss=…)`).
 
 Die Palette sind **Startwerte**; sie werden später über eine zentrale Theme-Konstante bzw. die Admin-UI („System-Einstellungen“) pflegbar – die Quasar-Slots bleiben dabei die Implementierungs-Schnittstelle.
