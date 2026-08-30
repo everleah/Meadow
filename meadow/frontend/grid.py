@@ -364,12 +364,16 @@ async def products_page() -> None:
                             "flat dense shrink-0"
                         ).tooltip(t("grid.expand_all"))
                 if tree_nodes:
-                    tree = LazyTree(
-                        tree_nodes,
-                        on_select=handle_tree_select,
-                        load_children=load_children,
-                        virtual_scroll=True,
-                    ).classes("w-full grow")
+                    tree = (
+                        LazyTree(
+                            tree_nodes,
+                            on_select=handle_tree_select,
+                            load_children=load_children,
+                            virtual_scroll=True,
+                        )
+                        .classes("w-full grow")
+                        .style("min-height: 0; overflow-y: auto")
+                    )
                     tree.add_slot(
                         "default-header",
                         '<span :props="props">{{ props.node.label }}'
