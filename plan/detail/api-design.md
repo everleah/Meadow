@@ -158,7 +158,7 @@ Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- un
 - **Definition:** Anteil der **Pflichtattribute des Objekttyps** (aus `required_types` der Attributdefinition, siehe [datenmodell.md](datenmodell.md)), die gesetzt sind – inklusive **vererbter** Werte (entlang `depends_on`). Granularität im MVP: **pro (Objekttyp × Sprache)**.
 - **Lieferung (implementiert):** `GET /objects?locale=<code>` liefert pro Objekt ein Feld `completeness: { "<code>": <0–100> }` (für die angeforderte Arbeitssprache; nur gesetzt, wenn `?locale=` angegeben ist). `GET /objects/{id}?locale=<code>` liefert zusätzlich die **Liste fehlender Pflichtattribute** (`missing_required`, für das Formular-Widget). Berechnung in `crates/pim-core/src/completeness.rs`.
 - **Filterung (offen):** Query-Parameter `?completeness_lt=100` bzw. `?missing_required=true` („nur unvollständige Produkte“) sind noch **nicht** umgesetzt; sie folgen mit der Grid-Filterleiste.
-- **Berechnungsbasis:** Aufgelöste Sicht (`resolve_inheritance`, entlang `depends_on`); **leere Werte (Vererbungsunterbrechung) zählen als „gesetzt“** (eigener Schlüssel vorhanden). Ein vererbter Wert gilt als gesetzt, wenn er nicht `null` ist. 
+- **Berechnungsbasis:** Aufgelöste Sicht (`resolve_inheritance`, entlang `depends_on`); **leere Werte (Vererbungsunterbrechung) zählen als „gesetzt“** (eigener Schlüssel vorhanden). Ein vererbter Wert gilt als gesetzt, wenn er nicht `null` ist.
 - Details zur UI-Darstellung: [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness).
 
 ## Massenoperationen (Bulk) & Batch-Save
