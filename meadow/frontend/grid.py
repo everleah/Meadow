@@ -179,7 +179,7 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     attributes = object_.get("attributes") or {}
     obj_type = str(object_.get("type", ""))
     label = resolve_value(attributes.get("name"), locale) or obj_type or node_id
-    node = {"id": node_id, "label": label, "type": obj_type}
+    node: dict = {"id": node_id, "label": label, "type": obj_type}
     if object_.get("hasChildren"):
         node["lazy"] = True
     if "memberCount" in object_:
@@ -401,8 +401,8 @@ async def products_page() -> None:
             views_container.clear()
             for name in views:
                 with views_container, ui.row().classes("items-center gap-1 w-full"):
-                    ui.button(name, on_click=lambda n=name: load_view(n)).props("flat dense")
-                    ui.button(icon="delete", on_click=lambda n=name: delete_view(n)).props(
+                    ui.button(name, on_click=lambda n=name: load_view(n)).props("flat dense")  # type: ignore
+                    ui.button(icon="delete", on_click=lambda n=name: delete_view(n)).props(  # type: ignore
                         "flat dense color=negative"
                     )
 
@@ -521,7 +521,7 @@ async def products_page() -> None:
                             if chip["removable"]:
                                 ui.button(
                                     icon="close",
-                                    on_click=lambda rid=chip["id"]: remove_reference(rid),
+                                    on_click=lambda rid=chip["id"]: remove_reference(rid),  # type: ignore
                                 ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
 
         async def add_reference(hit: dict) -> None:
@@ -553,7 +553,7 @@ async def products_page() -> None:
                 with ref_hits, ui.row().classes("items-center gap-2 w-full"):
                     ui.button(
                         f"{hit['label']} · {hit['type']}",
-                        on_click=lambda h=hit: add_reference(h),
+                        on_click=lambda h=hit: add_reference(h),  # type: ignore
                     ).props("outline dense").classes("w-full justify-start")
 
         async def open_references(object_id: str) -> None:
@@ -572,7 +572,7 @@ async def products_page() -> None:
                 if data and data.get("_id"):
                     await open_references(data["_id"])
 
-        ref_search.on_value_change(lambda e: search_references(e.value))
+        ref_search.on_value_change(lambda e: search_references(e.value))  # type: ignore
 
         current_tree: dict = {"tree": None, "nodes": []}
 

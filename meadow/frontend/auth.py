@@ -49,12 +49,15 @@ def is_admin() -> bool:
 
 
 @ui.page("/login")
-def login(redirect_to: str = "/", request: Request = None) -> RedirectResponse | None:
+def login(redirect_to: str = "/", request: Request | None = None) -> RedirectResponse | None:
     """Login page: exchanges credentials with the core and stores the JWT."""
     if is_authenticated():
         return RedirectResponse("/")
     if not app.storage.user.get("locale"):
-        app.storage.user["locale"] = best_locale(request.headers.get("accept-language"))
+        if request is not None:
+            app.storage.user["locale"] = best_locale(request.headers.get("accept-language"))
+        else:
+            app.storage.user["locale"] = best_locale(None)
 
     # Full-viewport meadow background: WebP with a PNG fallback and a dark base.
     ui.query("body").style(
@@ -65,6 +68,9 @@ def login(redirect_to: str = "/", request: Request = None) -> RedirectResponse |
     )
 
     async def try_login() -> None:
+        if not username.value or not password.value:
+            ui.notify(t("login.missing_credentials"), color="negative")
+            return
         client = CoreClient(config.CORE_URL)
         try:
             login_response = await client.login(username.value, password.value)
