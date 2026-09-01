@@ -58,5 +58,21 @@
   "grid.filter": "Filter",
   "grid.toggle_tree": "Toggle structure panel",
   "grid.collapse_all": "Collapse all",
-  "grid.expand_all": "Expand all"
+  "grid.expand_all": "Expand all",
+  "form.back": "Back",
+  "form.load_failed": "Could not load the object.",
+  "form.missing_required": "Missing required fields: {count}",
+  "form.general": "General",
+  "form.status": "Status",
+  "form.inherited": "Inherited (edit to set an own value)",
+  "form.saved": "Saved.",
+  "form.save_failed": "Could not save the object.",
+  "form.back": "Back",
+  "form.load_failed": "Could not load the object.",
+  "form.missing_required": "Missing required fields: {count}",
+  "form.general": "General",
+  "form.status": "Status",
+  "form.inherited": "Inherited (edit to set an own value)",
+  "form.saved": "Saved.",
+  "form.save_failed": "Could not save the object."
 }

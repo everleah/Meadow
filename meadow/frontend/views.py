@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from nicegui import ui
 
-from meadow.frontend import grid  # noqa: F401  (registers the /products page)
+from meadow.frontend import (
+    form,  # noqa: F401  (registers the product form page)
+    grid,  # noqa: F401  (registers the /products page)
+)
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import NAV_ITEMS, build_shell
 

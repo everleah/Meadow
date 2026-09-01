@@ -60,6 +60,8 @@ Auswahl eines Knotens setzt den **Grid-Filter** auf den Teilbaum. Die Anzeige im
 
 Das Formular öffnet ein einzelnes Objekt zur tiefen Bearbeitung und Anreicherung.
 
+> **Stand (Phase 7, umgesetzt):** `<meadow/frontend/form.py>`, Route `/products/{object_id}`, erreichbar per **Doppelklick** auf eine Grid-Zeile (`cellDoubleClicked`). Umgesetzt: scrollbare Seite, **einklappbare Gruppen** (`ui.expansion`), **typspezifische Controls** (text/number/boolean/enum/date), **Hybrid-Sprach-Spalten** für mehrsprachige Attribute (eine Spalte je unterstützter Sprache), **Vererbungs-Marker** (gedimmt + Icon; Bearbeitung = Override), **Vollständigkeits-Widget** und **Status-Auswahl**; Speichern via `PATCH /objects/{id}` (mergt in mehrsprachige Dicts, erhält übrige Attribute/`sku`). Noch offen: **Sprung-Menü**, „Nur fehlende Pflichtfelder“, Enum-Option-Creation, Sprach-Fallback-Marker, Referenz-Picker im Formular (im Grid bereits umgesetzt).
+
 ### 2.1 Layout
 
 - **Eine scrollbare Seite** mit Attributgruppen als **überschriebene, einklappbare Abschnitte** (Accordion; Standard aufgeklappt). Ein **Sprung-Menü** oben navigiert zu einer Gruppe (und klappt sie ggf. auf). Keine Tabs pro Gruppe – beim Anreichern arbeitet man über Gruppengrenzen hinweg, alle Gruppen sind gleichzeitig sichtbar.

@@ -9,6 +9,8 @@ Kategorien toggle and the completeness column follow in later steps.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -572,6 +574,15 @@ async def products_page() -> None:
                 if data and data.get("_id"):
                     await open_references(data["_id"])
 
+        def handle_open_cell(e) -> None:
+            """Opens the product form on a row double-click."""
+            args = e.args if isinstance(e.args, dict) else {}
+            if args.get("colId") == "_refs":
+                return
+            data = args.get("data")
+            if data and data.get("_id"):
+                ui.navigate.to(f"/products/{quote(str(data['_id']), safe='')}")
+
         ref_search.on_value_change(lambda e: search_references(e.value))  # type: ignore
 
         current_tree: dict = {"tree": None, "nodes": []}
@@ -750,3 +761,4 @@ async def products_page() -> None:
                 ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data"])
                 grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])
+                grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])

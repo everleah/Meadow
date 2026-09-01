@@ -118,6 +118,71 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_object(
+        self,
+        token: str,
+        object_id: str,
+        *,
+        locale: str | None = None,
+        resolve_inheritance: bool = False,
+    ) -> dict:
+        """Loads a single object in detail (used by the product form)."""
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        if resolve_inheritance:
+            params["resolve_inheritance"] = "true"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def update_object(
+        self,
+        token: str,
+        object_id: str,
+        *,
+        attributes: dict | None = None,
+        status: str | None = None,
+        locale: str | None = None,
+    ) -> dict:
+        """Applies a partial object update (attributes and/or status)."""
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        payload: dict = {}
+        if attributes is not None:
+            payload["attributes"] = attributes
+        if status is not None:
+            payload["status"] = status
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/objects/{object_id}",
+                params=params,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def list_attribute_groups(self, token: str) -> list[dict]:
+        """Lists attribute groups (used for the product form's sections)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/attribute-groups",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            # Defensive: a single group is returned as a bare object.
+            if isinstance(data, dict):
+                return [data]
+            return data
+
     async def list_object_children(
         self,
         token: str,

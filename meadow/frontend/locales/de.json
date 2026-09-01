@@ -59,5 +59,21 @@
 
   "grid.toggle_tree": "Struktur ein-/ausblenden",
   "grid.collapse_all": "Alle einklappen",
-  "grid.expand_all": "Alle aufklappen"
+  "grid.expand_all": "Alle aufklappen",
+  "form.back": "Zurück",
+  "form.load_failed": "Das Objekt konnte nicht geladen werden.",
+  "form.missing_required": "Fehlende Pflichtfelder: {count}",
+  "form.general": "Allgemein",
+  "form.status": "Status",
+  "form.inherited": "Vererbt (bearbeiten setzt einen eigenen Wert)",
+  "form.saved": "Gespeichert.",
+  "form.save_failed": "Das Objekt konnte nicht gespeichert werden.",
+  "form.back": "Zurück",
+  "form.load_failed": "Das Objekt konnte nicht geladen werden.",
+  "form.missing_required": "Fehlende Pflichtfelder: {count}",
+  "form.general": "Allgemein",
+  "form.status": "Status",
+  "form.inherited": "Vererbt (bearbeiten setzt einen eigenen Wert)",
+  "form.saved": "Gespeichert.",
+  "form.save_failed": "Das Objekt konnte nicht gespeichert werden."
 }
