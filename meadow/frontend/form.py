@@ -147,18 +147,20 @@ async def product_form(object_id: str) -> None:
         lang_options = {
             str(lang.get("code")): resolve_value(lang.get("label"), locale) for lang in base_langs
         }
-        with ui.row().classes("items-center gap-3 w-full mt-2 flex-wrap"):
-            ui.select(
-                lang_options,
-                value=edit_lang,
-                on_change=lambda e: on_lang_change(e.value),
-            ).props("outline dense").classes("w-40").tooltip(t("form.edit_language"))
+        with ui.row().classes("items-center gap-3 w-full mt-2"):
+            ui.space()
             ui.label(name).classes("text-h5")
             ui.label(object_type).classes("text-caption text-gray-500")
             ui.html(status_badge(str(resolved.get("status", "")))).classes("text-sm")
             ui.html(completeness_badge(int(completeness))).classes("text-sm").tooltip(
                 t("form.missing_required").format(count=len(missing))
             )
+            ui.space()
+            ui.select(
+                lang_options,
+                value=edit_lang,
+                on_change=lambda e: on_lang_change(e.value),
+            ).props("outline dense").classes("w-40").tooltip(t("form.edit_language"))
 
         # Working copy of the raw (own) attribute values. Multilingual values
         # are kept as ``{lang: value}`` dicts.
