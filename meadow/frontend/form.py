@@ -1,10 +1,19 @@
 """Product form (drill-down): deep editing of a single object.
 
-Phase 7, step 6. A single scrollable page with collapsible attribute groups
-(``ui.expansion``), type-specific inputs, hybrid-language editing for
-multilingual attributes, an inherited-value marker (with "back to inherited"),
-a completeness widget in the header and a status selector. Saves via
-``PATCH /objects/{id}``.
+Phase 7, step 6. A single scrollable page with three collapsible sections:
+
+1. **Stammdaten** – object id (read-only), the virtual ``name`` and the
+   business-key / required attributes for the object's type.
+2. **Attribute ohne Gruppe** – attributes that carry no ``group_id``.
+3. **Attributgruppen** – the remaining attributes, grouped and sorted by the
+   group's ``position``.
+
+Multilingual editing uses a hybrid model: a "Haupteditiersprache" selector at
+the top picks which language is edited inline for every multilingual attribute,
+and a per-attribute "Sprachen (n)" button opens a dialog to edit all data
+languages (from ``GET /languages``). Saves via ``PATCH /objects/{id}`` and
+surfaces the core's validation error (e.g. ``height: Height is required``)
+instead of only showing a generic failure message.
 """
 
 from __future__ import annotations
@@ -12,14 +21,10 @@ from __future__ import annotations
 from nicegui import app, ui
 
 from meadow.frontend import config
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.grid import completeness_badge, resolve_value, status_badge
-from meadow.frontend.i18n import current_locale, supported_locales, t
+from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
-
-#: Attribute names that are not declared as ``attribute_definition`` rows but
-#: still live on the object (the human-readable display name).
-_VIRTUAL_ATTRIBUTES = ("name",)
 
 #: Workflow statuses offered in the status selector. The core validates the
 #: actual transition via the workflow guard.
@@ -41,12 +46,45 @@ def _applicable(defn: dict, object_type: str) -> bool:
     return not types or object_type in types
 
 
-def _raw_value(raw_attributes: dict, name: str, locale: str) -> object | None:
-    """Returns the raw value of an attribute for a locale (dict value or scalar)."""
+def _is_summary(defn: dict | None, object_type: str) -> bool:
+    """Whether an attribute belongs to the "Stammdaten" section.
+
+    The virtual ``name`` always does; otherwise it is a summary attribute when
+    it is a business key (``is_key``) or required for the object's type
+    (``required_types``).
+    """
+    if defn is None:
+        return True
+    if defn.get("is_key"):
+        return True
+    return object_type in (defn.get("required_types") or [])
+
+
+def _base_lang(locale: str) -> str:
+    """Returns the base language code of a locale (e.g. ``de-DE`` -> ``de``)."""
+    return locale.split("-")[0]
+
+
+def _raw_value(raw_attributes: dict, name: str, lang: str) -> object | None:
+    """Returns the raw own value of an attribute for a language (or scalar)."""
     value = raw_attributes.get(name)
     if isinstance(value, dict):
-        return value.get(locale)
+        return value.get(lang)
     return value
+
+
+def _coerce(atype: str, raw: object) -> object:
+    """Coerces a dialog string to the attribute's native type."""
+    if raw in (None, ""):
+        return None
+    if atype == "number":
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return raw
+    if atype == "boolean":
+        return str(raw).strip().lower() in ("true", "1", "on", "yes")
+    return str(raw)
 
 
 @ui.page("/products/{object_id}", response_timeout=15)
@@ -54,6 +92,8 @@ async def product_form(object_id: str) -> None:
     """Opens a single object for deep editing."""
     build_shell(active="/products")
     locale = current_locale()
+    edit_lang = app.storage.user.get("edit_lang") or _base_lang(locale)
+
     with ui.column().classes("w-full p-6"):
         ui.button(
             t("form.back"),
@@ -70,6 +110,7 @@ async def product_form(object_id: str) -> None:
             )
             definitions = await client.list_attribute_definitions(token)
             groups = await client.list_attribute_groups(token)
+            languages = await client.list_languages(token)
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -81,6 +122,17 @@ async def product_form(object_id: str) -> None:
         missing = resolved.get("missing_required") or []
         completeness = (resolved.get("completeness") or {}).get(locale, 0)
 
+        # Data languages (base languages for the selector, all for the dialog).
+        base_langs = [
+            lang
+            for lang in languages
+            if lang.get("parent") == "lang_root" and lang.get("code") != "root"
+        ]
+        all_langs = [lang for lang in languages if lang.get("code") != "root"]
+        data_lang_codes = [str(lang.get("code")) for lang in all_langs]
+        if edit_lang not in data_lang_codes:
+            edit_lang = _base_lang(locale)
+
         # --- Header: name, type, status badge, completeness widget. -----------
         with ui.row().classes("items-center gap-3 w-full mt-2"):
             ui.label(name).classes("text-h5")
@@ -90,31 +142,62 @@ async def product_form(object_id: str) -> None:
                 t("form.missing_required").format(count=len(missing))
             )
 
-        # Attribute definitions applicable to this object type, grouped.
-        defs = [d for d in definitions if d.get("name") and _applicable(d, object_type)]
-        group_by_id = {str(g.get("id")): g for g in groups}
-        sections: dict[str, list] = {}
-        for d in defs:
-            gid = str(d.get("group_id") or "")
-            sections.setdefault(gid, []).append(d)
-        # The virtual `name` attribute always goes into the default section.
-        sections.setdefault("", []).insert(0, None)
-        ordered_sections = sorted(
-            sections.items(),
-            key=lambda kv: (
-                int(group_by_id[kv[0]].get("position") or 0) if kv[0] in group_by_id else 0,
-                kv[0],
-            ),
-        )
+        # --- Main-edit-language selector. --------------------------------------
+        lang_options = {
+            str(lang.get("code")): resolve_value(lang.get("label"), locale)
+            for lang in base_langs
+        }
+        with ui.row().classes("items-center gap-2 w-full mt-2"):
+            ui.label(t("form.edit_language")).classes("text-caption")
+            ui.select(
+                lang_options,
+                value=edit_lang,
+                on_change=lambda e: on_lang_change(e.value),
+            ).props("outline dense").classes("w-64")
+            ui.label(
+                t("form.languages").format(count=len(all_langs))
+            ).classes("text-caption text-gray-500")
 
-        # Holds the edited value of each rendered field.
-        field_ui: dict[tuple[str, str], object] = {}
+        # Working copy of the raw (own) attribute values. Multilingual values
+        # are kept as ``{lang: value}`` dicts.
+        edited: dict[str, object] = {}
+        for key, value in raw_attributes.items():
+            edited[key] = dict(value) if isinstance(value, dict) else value
 
-        def build_widget(name: str, defn: dict | None, value: object, loc: str) -> None:
+        def set_value(
+            attr_name: str, lang: str, value: object, *, multilingual: bool
+        ) -> None:
+            """Updates the working copy for a single attribute + language."""
+            if multilingual:
+                current = edited.get(attr_name)
+                new = dict(current) if isinstance(current, dict) else {}
+                if value in (None, ""):
+                    new.pop(lang, None)
+                else:
+                    new[lang] = value
+                if new:
+                    edited[attr_name] = new
+                else:
+                    edited.pop(attr_name, None)
+            else:
+                if value in (None, ""):
+                    edited.pop(attr_name, None)
+                else:
+                    edited[attr_name] = value
+
+        def on_lang_change(new_value: str) -> None:
+            if new_value:
+                app.storage.user["edit_lang"] = new_value
+            ui.navigate.reload()
+
+        def build_value_widget(
+            attr_name: str, defn: dict | None, value: object, *, multilingual: bool
+        ) -> None:
+            """Creates the inline widget for the main-edit language."""
             atype = (defn or {}).get("type", "text")
 
             def on_change(e) -> None:
-                field_ui[(name, loc)] = e.value
+                set_value(attr_name, edit_lang, e.value, multilingual=multilingual)
 
             if atype == "number":
                 field: ui.element = (
@@ -143,44 +226,141 @@ async def product_form(object_id: str) -> None:
                 )
             field.classes("w-full")
 
-        # --- Sections (attribute groups as collapsible accordions). ------------
-        with ui.column().classes("w-full gap-2 mt-4"):
-            for gid, section_defs in ordered_sections:
-                group = group_by_id.get(gid)
-                label = _label(group, gid, locale) if group else t("form.general")
-                with (
-                    ui.expansion(label, value=True).classes("w-full"),
-                    ui.column().classes("w-full gap-2"),
-                ):
-                    for d in section_defs:
-                        attr_name = "name" if d is None else str(d.get("name"))
-                        is_virtual = d is None
-                        is_multilingual = bool(is_virtual or (d or {}).get("multilingual"))
-                        attribute_label = _label(d, attr_name, locale)
-                        if is_multilingual:
-                            for loc in supported_locales():
-                                value = _raw_value(raw_attributes, attr_name, loc)
-                                if value is None:
-                                    value = _raw_value(resolved_attributes, attr_name, loc)
-                                with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label(f"{attribute_label} · {loc}").classes(
-                                        "w-48 text-caption"
-                                    )
-                                    build_widget(attr_name, d, value, loc)
-                        else:
-                            value = _raw_value(resolved_attributes, attr_name, locale)
-                            own = _raw_value(raw_attributes, attr_name, locale)
-                            with ui.row().classes("items-center gap-2 w-full"):
-                                ui.label(attribute_label).classes("w-48 text-caption")
-                                if own is None and value is not None:
-                                    ui.icon("swap_horiz").classes("text-gray-400").tooltip(
-                                        t("form.inherited")
-                                    )
-                                build_widget(attr_name, d, value, locale)
+        def render_section(
+            title: str,
+            items: list[tuple[str, dict | None]],
+            *,
+            open_: bool = True,
+            id_label: str | None = None,
+        ) -> None:
+            """Renders a collapsible section with one row per attribute."""
+            with (
+                ui.expansion(title, value=open_).classes("w-full"),
+                ui.column().classes("w-full gap-1 p-2"),
+            ):
+                if id_label is not None:
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.label(t("form.object_id")).classes("w-56 text-caption")
+                        ui.label(id_label).classes("text-caption text-gray-500")
+                for attr_name, defn in items:
+                    multilingual = bool(defn is None or (defn or {}).get("multilingual"))
+                    label = _label(defn, attr_name, locale)
+                    own = _raw_value(raw_attributes, attr_name, edit_lang)
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        # Left: label (+ inherited marker / hint).
+                        with ui.column().classes("w-56"):
+                            ui.label(label).classes("text-caption")
+                            if not multilingual and own is None:
+                                resolved_val = _raw_value(
+                                    resolved_attributes, attr_name, edit_lang
+                                )
+                                if resolved_val is not None:
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.icon("swap_horiz").classes(
+                                            "text-gray-400 text-xs"
+                                        ).tooltip(t("form.inherited"))
+                                        ui.label(str(resolved_val)).classes(
+                                            "text-xs text-gray-500"
+                                        )
+                        # Value widget in the main-edit language.
+                        value = own
+                        if value is None:
+                            value = _raw_value(resolved_attributes, attr_name, edit_lang)
+                        build_value_widget(attr_name, defn, value, multilingual=multilingual)
+                        # Multilingual: "Sprachen (n)" opens the language editor.
+                        if multilingual:
+                            ui.button(
+                                t("form.languages").format(count=len(all_langs)),
+                                icon="translate",
+                            ).props("dense flat").on_click(
+                                lambda n=attr_name, d=defn: open_lang_dialog(n, d)
+                            )
 
-        # --- Status selector. --------------------------------------------------
+        # --- Language dialog: edit one attribute across all data languages. --
+        def open_lang_dialog(attr_name: str, defn: dict | None) -> None:
+            atype = (defn or {}).get("type", "text")
+            multilingual = bool(defn is None or (defn or {}).get("multilingual"))
+            with ui.dialog() as dialog, ui.card().classes("max-w-xl"):
+                ui.label(
+                    f"{_label(defn, attr_name, locale)} · {t('form.languages_edit')}"
+                ).classes("text-subtitle1")
+                inputs: dict[str, ui.element] = {}
+                for lang in all_langs:
+                    code = str(lang.get("code"))
+                    own = _raw_value(raw_attributes, attr_name, code)
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.label(code).classes("w-24 text-caption")
+                        inputs[code] = ui.input(
+                            value="" if own is None else str(own)
+                        ).props("outline dense").classes("flex-1")
+                with ui.row().classes("justify-end w-full mt-2 gap-2"):
+                    ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
+                    ui.button(t("form.apply")).props("flat").on_click(
+                        lambda: apply_languages(attr_name, inputs, atype, multilingual, dialog)
+                    )
+            dialog.open()
+
+        def apply_languages(
+            attr_name: str,
+            inputs: dict[str, ui.element],
+            atype: str,
+            multilingual: bool,
+            dialog: ui.dialog,
+        ) -> None:
+            for code, field in inputs.items():
+                set_value(
+                    attr_name,
+                    code,
+                    _coerce(atype, field.value),
+                    multilingual=multilingual,
+                )
+            dialog.close()
+
+        # Attribute definitions applicable to this object type.
+        defs = [
+            d for d in definitions if d.get("name") and _applicable(d, object_type)
+        ]
+        defs_sorted = sorted(defs, key=lambda d: str(d.get("name", "")))
+        group_by_id = {str(g.get("id")): g for g in groups}
+
+        # Partition into summary, ungrouped and grouped.
+        summary_items: list[tuple[str, dict | None]] = [("name", None)]
+        ungrouped_items: list[tuple[str, dict | None]] = []
+        grouped: dict[str, list[tuple[str, dict | None]]] = {}
+        for d in defs_sorted:
+            name_ = str(d.get("name"))
+            if _is_summary(d, object_type):
+                summary_items.append((name_, d))
+            else:
+                gid = str(d.get("group_id") or "")
+                if not gid:
+                    ungrouped_items.append((name_, d))
+                else:
+                    grouped.setdefault(gid, []).append((name_, d))
+        ordered_groups = sorted(
+            grouped.items(),
+            key=lambda kv: (
+                int(group_by_id[kv[0]].get("position") or 0) if kv[0] in group_by_id else 0,
+                kv[0],
+            ),
+        )
+
+        # --- Render the three sections. --------------------------------------
+        with ui.column().classes("w-full gap-2 mt-4"):
+            render_section(t("form.summary"), summary_items, open_=True, id_label=object_id)
+            if ungrouped_items:
+                render_section(t("form.ungrouped"), ungrouped_items, open_=False)
+            for gid, items in ordered_groups:
+                group = group_by_id.get(gid)
+                render_section(
+                    _label(group, gid, locale) if group else t("form.general"),
+                    items,
+                    open_=False,
+                )
+
+        # --- Status selector. -------------------------------------------------
         with ui.row().classes("items-center gap-2 w-full mt-4"):
-            ui.label(t("form.status")).classes("w-48 text-caption")
+            ui.label(t("form.status")).classes("w-56 text-caption")
             status_select = (
                 ui.select(
                     list(_STATUS_OPTIONS),
@@ -193,31 +373,9 @@ async def product_form(object_id: str) -> None:
         # --- Save. -------------------------------------------------------------
         async def save() -> None:
             new_attrs: dict = {
-                k: (dict(v) if isinstance(v, dict) else v) for k, v in raw_attributes.items()
+                k: (dict(v) if isinstance(v, dict) else v) for k, v in edited.items()
             }
-            changed = False
-            for (attr_name, loc), value in field_ui.items():
-                current = new_attrs.get(attr_name)
-                if isinstance(current, dict):
-                    new_current = dict(current)
-                    if value in (None, ""):
-                        new_current.pop(loc, None)
-                    else:
-                        new_current[loc] = value
-                    if new_current != raw_attributes.get(attr_name):
-                        changed = True
-                    if new_current:
-                        new_attrs[attr_name] = new_current
-                    else:
-                        new_attrs.pop(attr_name, None)
-                else:
-                    if value in (None, ""):
-                        if attr_name in new_attrs:
-                            changed = True
-                            new_attrs.pop(attr_name, None)
-                    elif value != raw_attributes.get(attr_name):
-                        changed = True
-                        new_attrs[attr_name] = value
+            changed = new_attrs != raw_attributes
             status = status_select.value if status_select.value else None
             if status is not None and status != resolved.get("status"):
                 changed = True
@@ -230,6 +388,8 @@ async def product_form(object_id: str) -> None:
                 )
                 ui.notify(t("form.saved"), color="positive")
                 ui.navigate.reload()
+            except CoreError as error:
+                ui.notify(t("form.save_failed_reason").format(reason=error), color="negative")
             except Exception:  # noqa: BLE001 - show a friendly message
                 ui.notify(t("form.save_failed"), color="negative")
 

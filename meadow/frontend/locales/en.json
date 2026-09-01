@@ -67,12 +67,13 @@
   "form.inherited": "Inherited (edit to set an own value)",
   "form.saved": "Saved.",
   "form.save_failed": "Could not save the object.",
-  "form.back": "Back",
-  "form.load_failed": "Could not load the object.",
-  "form.missing_required": "Missing required fields: {count}",
-  "form.general": "General",
-  "form.status": "Status",
-  "form.inherited": "Inherited (edit to set an own value)",
-  "form.saved": "Saved.",
-  "form.save_failed": "Could not save the object."
+  "form.save_failed_reason": "Could not save: {reason}",
+  "form.summary": "Basic data",
+  "form.ungrouped": "Attributes without group",
+  "form.edit_language": "Main edit language",
+  "form.languages": "Languages ({count})",
+  "form.languages_edit": "Edit all data languages",
+  "form.object_id": "Object ID",
+  "form.apply": "Apply",
+  "form.cancel": "Cancel"
 }

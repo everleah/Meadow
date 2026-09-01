@@ -68,12 +68,13 @@
   "form.inherited": "Vererbt (bearbeiten setzt einen eigenen Wert)",
   "form.saved": "Gespeichert.",
   "form.save_failed": "Das Objekt konnte nicht gespeichert werden.",
-  "form.back": "Zurück",
-  "form.load_failed": "Das Objekt konnte nicht geladen werden.",
-  "form.missing_required": "Fehlende Pflichtfelder: {count}",
-  "form.general": "Allgemein",
-  "form.status": "Status",
-  "form.inherited": "Vererbt (bearbeiten setzt einen eigenen Wert)",
-  "form.saved": "Gespeichert.",
-  "form.save_failed": "Das Objekt konnte nicht gespeichert werden."
+  "form.save_failed_reason": "Speichern fehlgeschlagen: {reason}",
+  "form.summary": "Stammdaten",
+  "form.ungrouped": "Attribute ohne Gruppe",
+  "form.edit_language": "Haupteditiersprache",
+  "form.languages": "Sprachen ({count})",
+  "form.languages_edit": "Alle Datensprachen bearbeiten",
+  "form.object_id": "Objekt-ID",
+  "form.apply": "Übernehmen",
+  "form.cancel": "Abbrechen"
 }

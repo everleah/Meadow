@@ -6,6 +6,20 @@ import httpx
 from pydantic import BaseModel
 
 
+class CoreError(Exception):
+    """Raised when the core returns a non-success response.
+
+    Carries the human-readable message the core put in its ``error`` field
+    (e.g. a validation failure such as ``height: Height is required``) plus the
+    HTTP status code, so the UI can show the actual reason instead of a generic
+    "could not save" notice.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 def is_session_expired(results: list[dict]) -> bool:
     """True if any batch result signals an invalid/expired bearer token.
 
@@ -166,8 +180,31 @@ class CoreClient:
                 json=payload,
                 headers={"Authorization": f"Bearer {token}"},
             )
-            response.raise_for_status()
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - response body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
             return response.json()
+
+    async def list_languages(self, token: str) -> list[dict]:
+        """Lists the active data languages from the language-tree table.
+
+        Used by the product form to offer multilingual editing across every
+        configured data language, not just the three UI languages.
+        """
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/languages",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                return [data]
+            return data
 
     async def list_attribute_groups(self, token: str) -> list[dict]:
         """Lists attribute groups (used for the product form's sections)."""

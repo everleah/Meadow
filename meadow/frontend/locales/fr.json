@@ -68,12 +68,13 @@
   "form.inherited": "Hérité (modifier pour définir une valeur propre)",
   "form.saved": "Enregistré.",
   "form.save_failed": "Impossible d'enregistrer l'objet.",
-  "form.back": "Retour",
-  "form.load_failed": "Impossible de charger l'objet.",
-  "form.missing_required": "Champs obligatoires manquants : {count}",
-  "form.general": "Général",
-  "form.status": "Statut",
-  "form.inherited": "Hérité (modifier pour définir une valeur propre)",
-  "form.saved": "Enregistré.",
-  "form.save_failed": "Impossible d'enregistrer l'objet."
+  "form.save_failed_reason": "Échec de l'enregistrement : {reason}",
+  "form.summary": "Informations principales",
+  "form.ungrouped": "Attributs sans groupe",
+  "form.edit_language": "Langue principale d'édition",
+  "form.languages": "Langues ({count})",
+  "form.languages_edit": "Modifier toutes les langues de données",
+  "form.object_id": "ID d'objet",
+  "form.apply": "Appliquer",
+  "form.cancel": "Annuler"
 }

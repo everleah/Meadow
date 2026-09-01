@@ -9,6 +9,7 @@ pub mod health;
 pub mod imports;
 pub mod jobs;
 pub mod keys;
+pub mod languages;
 pub mod objects;
 pub mod references;
 pub mod rules;
@@ -49,6 +50,7 @@ use utoipa::OpenApi;
         objects::update_computed,
         objects::batch_update_objects,
         keys::get_by_key,
+        languages::list_languages,
         objects::get_by_source,
         references::create_reference,
         references::list_object_references,

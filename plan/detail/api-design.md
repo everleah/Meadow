@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 5 ([API-Design](../meadow-pim-architektur.md#5-api-design-openapi-rest))
 - **Relevante Phasen:** Phase 1–9
-- **Stand:** Implementiert bis Phase 6 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs, Import/Export, Webhooks) sowie Batch-Save (`POST /objects/batch-update`, Phase 7) und den **Referenz-Picker** (Phase 7): `GET /objects/picker`, `GET /objects/{id}/references` (mit aufgelösten `in_object`/`out_object`-Summaries), `DELETE /references/{id}` und `GET /relation-definitions`. Das **Produkt-Formular** (Phase 7) nutzt die bestehenden `GET /objects/{id}` (`?locale=&resolve_inheritance=true`) und `PATCH /objects/{id}`. Offene Endpunkte folgen in Phase 7/9 (Bulk, Graph).
+- **Stand:** Implementiert bis Phase 6 (Objekte, Suche, Regeln, Jobs/Scheduler, System/Logs, Import/Export, Webhooks) sowie Batch-Save (`POST /objects/batch-update`, Phase 7) und den **Referenz-Picker** (Phase 7): `GET /objects/picker`, `GET /objects/{id}/references` (mit aufgelösten `in_object`/`out_object`-Summaries), `DELETE /references/{id}` und `GET /relation-definitions`. Das **Produkt-Formular** (Phase 7) nutzt die bestehenden `GET /objects/{id}` (`?locale=&resolve_inheritance=true`) und `PATCH /objects/{id}`; neu ist **`GET /languages`** (Daten-Sprachen aus `language_tree` für die Hybrid-Mehrsprachigkeit des Formulars). Offene Endpunkte folgen in Phase 7/9 (Bulk, Graph).
 
 Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAPI 3.x.
 
@@ -32,6 +32,7 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | DELETE  | `/references/{id}`                                   | Referenz löschen (editor+; 204 bei Erfolg)                                                                                                                |
 | GET     | `/objects/{id}/graph?depth=3`                        | Graph-Traversierung ab Objekt                                                                                                                            |
 | GET     | `/attribute-groups`                                  | Attributgruppen verwalten                                                                                                                                |
+| GET     | `/languages`                                         | Daten-Sprachen aus `language_tree` auflisten (`code`, `parent`, `label`, `fallback_order`; für die Hybrid-Mehrsprachigkeit des Formulars)                 |
 | POST    | `/attribute-definitions`                             | Neue Attributdefinition anlegen                                                                                                                          |
 | GET     | `/units`                                             | Einheiten-Katalog auflisten (Filter:`dimension`, `system`)                                                                                               |
 | POST    | `/units`                                             | Benutzerdefinierte Einheit anlegen                                                                                                                       |

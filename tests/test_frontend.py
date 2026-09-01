@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 
-from meadow.frontend.api import LoginResponse, MeResponse, is_session_expired
+from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.grid import (
     attribute_columns,
     build_patch,
@@ -255,3 +255,20 @@ def test_filter_tree_nodes() -> None:
     assert [c["id"] for c in filtered[0]["children"]] == ["b"]
     assert filtered[0]["children"][0]["children"][0]["id"] == "b1"
     assert filter_tree_nodes(nodes, "zzz") == []
+
+
+def test_form_i18n_keys_translate() -> None:
+    assert t("form.summary", locale="de") == "Stammdaten"
+    assert t("form.summary", locale="en") == "Basic data"
+    assert t("form.summary", locale="fr") == "Informations principales"
+    assert t("form.ungrouped", locale="de") == "Attribute ohne Gruppe"
+    assert t("form.languages", locale="de").format(count=9) == "Sprachen (9)"
+    assert t("form.save_failed_reason", locale="en").format(
+        reason="validation failed: sku: SKU is required (required)"
+    ) == "Could not save: validation failed: sku: SKU is required (required)"
+
+
+def test_core_error_carries_message_and_status() -> None:
+    error = CoreError("validation failed: sku: SKU is required (required)", status=400)
+    assert str(error) == "validation failed: sku: SKU is required (required)"
+    assert error.status == 400

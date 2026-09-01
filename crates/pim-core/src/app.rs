@@ -175,6 +175,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/units", get(api::units::list_units))
         .route("/units/convert", get(api::units::convert))
+        .route("/languages", get(api::languages::list_languages))
         .with_state(state)
 }
 
