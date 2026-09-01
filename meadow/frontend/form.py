@@ -8,11 +8,14 @@ Phase 7, step 6. A single scrollable page with three collapsible sections:
 3. **Attributgruppen** – the remaining attributes, grouped and sorted by the
    group's ``position``.
 
-Multilingual editing uses a hybrid model: a "Haupteditiersprache" selector at
-the top picks which language is edited inline for every multilingual attribute,
-and a per-attribute "Sprachen (n)" button opens a dialog to edit all data
-languages (from ``GET /languages``). Saves via ``PATCH /objects/{id}`` and
-surfaces the core's validation error (e.g. ``height: Height is required``)
+Multilingual editing uses a hybrid model: a "Haupteditiersprache" selector in
+the header picks which language is edited inline for every multilingual
+attribute, and a per-attribute language-icon button opens a dialog to edit all
+data languages (from ``GET /languages``); the dialog reads/writes the session's
+working copy so applied values persist on reopen. Attribute rows are rendered
+as an aligned, table-like grid (label | value | language icon) inside
+``ui.expansion`` sections with coloured headers. Saves via ``PATCH /objects/{id}``
+and surfaces the core's validation error (e.g. ``height: Height is required``)
 instead of only showing a generic failure message.
 """
 
@@ -60,6 +63,13 @@ def _is_summary(defn: dict | None, object_type: str) -> bool:
     return object_type in (defn.get("required_types") or [])
 
 
+def _is_required(defn: dict | None, object_type: str) -> bool:
+    """Whether an attribute is required for the object's type."""
+    if defn is None:
+        return False
+    return object_type in (defn.get("required_types") or [])
+
+
 def _base_lang(locale: str) -> str:
     """Returns the base language code of a locale (e.g. ``de-DE`` -> ``de``)."""
     return locale.split("-")[0]
@@ -80,7 +90,7 @@ def _coerce(atype: str, raw: object) -> object:
     if atype == "number":
         try:
             return float(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return raw
     if atype == "boolean":
         return str(raw).strip().lower() in ("true", "1", "on", "yes")
@@ -133,8 +143,16 @@ async def product_form(object_id: str) -> None:
         if edit_lang not in data_lang_codes:
             edit_lang = _base_lang(locale)
 
-        # --- Header: name, type, status badge, completeness widget. -----------
-        with ui.row().classes("items-center gap-3 w-full mt-2"):
+        # --- Header: main-edit-language selector, name, type, badges. --------
+        lang_options = {
+            str(lang.get("code")): resolve_value(lang.get("label"), locale) for lang in base_langs
+        }
+        with ui.row().classes("items-center gap-3 w-full mt-2 flex-wrap"):
+            ui.select(
+                lang_options,
+                value=edit_lang,
+                on_change=lambda e: on_lang_change(e.value),
+            ).props("outline dense").classes("w-40").tooltip(t("form.edit_language"))
             ui.label(name).classes("text-h5")
             ui.label(object_type).classes("text-caption text-gray-500")
             ui.html(status_badge(str(resolved.get("status", "")))).classes("text-sm")
@@ -142,31 +160,14 @@ async def product_form(object_id: str) -> None:
                 t("form.missing_required").format(count=len(missing))
             )
 
-        # --- Main-edit-language selector. --------------------------------------
-        lang_options = {
-            str(lang.get("code")): resolve_value(lang.get("label"), locale)
-            for lang in base_langs
-        }
-        with ui.row().classes("items-center gap-2 w-full mt-2"):
-            ui.label(t("form.edit_language")).classes("text-caption")
-            ui.select(
-                lang_options,
-                value=edit_lang,
-                on_change=lambda e: on_lang_change(e.value),
-            ).props("outline dense").classes("w-64")
-            ui.label(
-                t("form.languages").format(count=len(all_langs))
-            ).classes("text-caption text-gray-500")
-
         # Working copy of the raw (own) attribute values. Multilingual values
         # are kept as ``{lang: value}`` dicts.
         edited: dict[str, object] = {}
         for key, value in raw_attributes.items():
             edited[key] = dict(value) if isinstance(value, dict) else value
+        main_widgets: dict[str, ui.element] = {}
 
-        def set_value(
-            attr_name: str, lang: str, value: object, *, multilingual: bool
-        ) -> None:
+        def set_value(attr_name: str, lang: str, value: object, *, multilingual: bool) -> None:
             """Updates the working copy for a single attribute + language."""
             if multilingual:
                 current = edited.get(attr_name)
@@ -193,7 +194,7 @@ async def product_form(object_id: str) -> None:
         def build_value_widget(
             attr_name: str, defn: dict | None, value: object, *, multilingual: bool
         ) -> None:
-            """Creates the inline widget for the main-edit language."""
+            """Creates the inline value widget for the main-edit language."""
             atype = (defn or {}).get("type", "text")
 
             def on_change(e) -> None:
@@ -201,30 +202,29 @@ async def product_form(object_id: str) -> None:
 
             if atype == "number":
                 field: ui.element = (
-                    ui.number(value=value).props("outline dense").on_value_change(on_change)
+                    ui.number(value=value).props("filled dense").on_value_change(on_change)
                 )
             elif atype == "boolean":
                 field = ui.switch(value=bool(value)).props("dense").on_value_change(on_change)
             elif atype == "enum":
                 options = ((defn or {}).get("constraints") or {}).get("enum_values") or []
                 field = (
-                    ui.select(options, value=value)
-                    .props("outline dense")
-                    .on_value_change(on_change)
+                    ui.select(options, value=value).props("filled dense").on_value_change(on_change)
                 )
             elif atype == "date":
                 field = (
                     ui.input(value="" if value is None else str(value))
-                    .props("outline dense type=date")
+                    .props("filled dense type=date")
                     .on_value_change(on_change)
                 )
             else:
                 field = (
                     ui.input(value="" if value is None else str(value))
-                    .props("outline dense")
+                    .props("filled dense")
                     .on_value_change(on_change)
                 )
-            field.classes("w-full")
+            field.classes("flex-1")
+            main_widgets[attr_name] = field
 
         def render_section(
             title: str,
@@ -233,66 +233,73 @@ async def product_form(object_id: str) -> None:
             open_: bool = True,
             id_label: str | None = None,
         ) -> None:
-            """Renders a collapsible section with one row per attribute."""
+            """Renders a collapsible section as an aligned attribute table."""
             with (
-                ui.expansion(title, value=open_).classes("w-full"),
-                ui.column().classes("w-full gap-1 p-2"),
+                ui.expansion(title, value=open_)
+                .classes("w-full")
+                .props("header-class=bg-green-2 text-green-9"),
+                ui.column().classes("w-full gap-0 p-2"),
             ):
                 if id_label is not None:
-                    with ui.row().classes("items-center gap-2 w-full"):
-                        ui.label(t("form.object_id")).classes("w-56 text-caption")
+                    with ui.row().classes("items-center gap-2 w-full py-1"):
+                        ui.label(t("form.object_id")).classes(
+                            "w-56 shrink-0 text-caption text-gray-500"
+                        )
                         ui.label(id_label).classes("text-caption text-gray-500")
+                # Column header.
+                with ui.row().classes("items-center gap-2 w-full py-1 text-caption text-gray-500"):
+                    ui.label(t("form.column_attr")).classes("w-56 shrink-0")
+                    ui.label(t("form.column_value")).classes("flex-1")
+                    ui.label("").classes("w-10 shrink-0")
                 for attr_name, defn in items:
                     multilingual = bool(defn is None or (defn or {}).get("multilingual"))
                     label = _label(defn, attr_name, locale)
                     own = _raw_value(raw_attributes, attr_name, edit_lang)
-                    with ui.row().classes("items-center gap-2 w-full"):
-                        # Left: label (+ inherited marker / hint).
-                        with ui.column().classes("w-56"):
+                    required = _is_required(defn, object_type)
+                    with ui.row().classes("items-center gap-2 w-full py-1"):
+                        # Label cell (+ required marker, inherited marker).
+                        with ui.row().classes("items-center gap-1 shrink-0 w-56"):
                             ui.label(label).classes("text-caption")
-                            if not multilingual and own is None:
-                                resolved_val = _raw_value(
-                                    resolved_attributes, attr_name, edit_lang
+                            if required:
+                                ui.label("*").classes("text-caption text-negative").tooltip(
+                                    t("form.required")
                                 )
+                            if not multilingual and own is None:
+                                resolved_val = _raw_value(resolved_attributes, attr_name, edit_lang)
                                 if resolved_val is not None:
-                                    with ui.row().classes("items-center gap-1"):
-                                        ui.icon("swap_horiz").classes(
-                                            "text-gray-400 text-xs"
-                                        ).tooltip(t("form.inherited"))
-                                        ui.label(str(resolved_val)).classes(
-                                            "text-xs text-gray-500"
-                                        )
-                        # Value widget in the main-edit language.
+                                    ui.icon("swap_horiz").classes("text-gray-400 text-xs").tooltip(
+                                        t("form.inherited")
+                                    )
+                        # Value cell in the main-edit language.
                         value = own
                         if value is None:
                             value = _raw_value(resolved_attributes, attr_name, edit_lang)
                         build_value_widget(attr_name, defn, value, multilingual=multilingual)
-                        # Multilingual: "Sprachen (n)" opens the language editor.
+                        # Language cell (icon only) opens the language editor.
                         if multilingual:
-                            ui.button(
-                                t("form.languages").format(count=len(all_langs)),
-                                icon="translate",
-                            ).props("dense flat").on_click(
+                            ui.button(icon="translate").props("dense flat round").on_click(
                                 lambda n=attr_name, d=defn: open_lang_dialog(n, d)
-                            )
+                            ).tooltip(t("form.languages_edit"))
 
         # --- Language dialog: edit one attribute across all data languages. --
         def open_lang_dialog(attr_name: str, defn: dict | None) -> None:
             atype = (defn or {}).get("type", "text")
             multilingual = bool(defn is None or (defn or {}).get("multilingual"))
-            with ui.dialog() as dialog, ui.card().classes("max-w-xl"):
-                ui.label(
-                    f"{_label(defn, attr_name, locale)} · {t('form.languages_edit')}"
-                ).classes("text-subtitle1")
+            with ui.dialog() as dialog, ui.card().classes("w-[34rem] max-w-[90vw]"):
+                ui.label(f"{_label(defn, attr_name, locale)} · {t('form.languages_edit')}").classes(
+                    "text-subtitle1"
+                )
                 inputs: dict[str, ui.element] = {}
                 for lang in all_langs:
                     code = str(lang.get("code"))
-                    own = _raw_value(raw_attributes, attr_name, code)
+                    own = _raw_value(edited, attr_name, code)
                     with ui.row().classes("items-center gap-2 w-full"):
-                        ui.label(code).classes("w-24 text-caption")
-                        inputs[code] = ui.input(
-                            value="" if own is None else str(own)
-                        ).props("outline dense").classes("flex-1")
+                        ui.label(code).classes("w-24 shrink-0 text-caption")
+                        inputs[code] = (
+                            ui.input(value="" if own is None else str(own))
+                            .props("filled dense")
+                            .classes("flex-1")
+                        )
                 with ui.row().classes("justify-end w-full mt-2 gap-2"):
                     ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
                     ui.button(t("form.apply")).props("flat").on_click(
@@ -314,12 +321,14 @@ async def product_form(object_id: str) -> None:
                     _coerce(atype, field.value),
                     multilingual=multilingual,
                 )
+            # Reflect the change in the inline main-edit-language widget.
+            widget = main_widgets.get(attr_name)
+            if widget is not None:
+                widget.value = _raw_value(edited, attr_name, edit_lang)
             dialog.close()
 
         # Attribute definitions applicable to this object type.
-        defs = [
-            d for d in definitions if d.get("name") and _applicable(d, object_type)
-        ]
+        defs = [d for d in definitions if d.get("name") and _applicable(d, object_type)]
         defs_sorted = sorted(defs, key=lambda d: str(d.get("name", "")))
         group_by_id = {str(g.get("id")): g for g in groups}
 

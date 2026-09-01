@@ -263,9 +263,12 @@ def test_form_i18n_keys_translate() -> None:
     assert t("form.summary", locale="fr") == "Informations principales"
     assert t("form.ungrouped", locale="de") == "Attribute ohne Gruppe"
     assert t("form.languages", locale="de").format(count=9) == "Sprachen (9)"
-    assert t("form.save_failed_reason", locale="en").format(
-        reason="validation failed: sku: SKU is required (required)"
-    ) == "Could not save: validation failed: sku: SKU is required (required)"
+    assert (
+        t("form.save_failed_reason", locale="en").format(
+            reason="validation failed: sku: SKU is required (required)"
+        )
+        == "Could not save: validation failed: sku: SKU is required (required)"
+    )
 
 
 def test_core_error_carries_message_and_status() -> None:

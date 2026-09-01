@@ -76,5 +76,8 @@
   "form.languages_edit": "Modifier toutes les langues de données",
   "form.object_id": "ID d'objet",
   "form.apply": "Appliquer",
-  "form.cancel": "Annuler"
+  "form.cancel": "Annuler",
+  "form.required": "Obligatoire",
+  "form.column_attr": "Attribut",
+  "form.column_value": "Valeur"
 }
