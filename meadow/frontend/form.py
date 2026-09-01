@@ -235,18 +235,22 @@ async def product_form(object_id: str) -> None:
             open_: bool = True,
             id_label: str | None = None,
             show_missing_only: bool = False,
-        ) -> None:
+        ) -> tuple[ui.expansion, ui.column] | None:
             """Renders a collapsible section as an aligned attribute table."""
             if show_missing_only:
                 missing_set = set(missing)
                 items = [(n, d) for n, d in items if n in missing_set]
                 if not items and id_label is None:
-                    return
-            with (
+                    return None
+            expansion = (
                 ui.expansion(title, value=open_)
                 .classes("w-full")
-                .props("header-class=bg-green-2 text-green-9"),
-                ui.column().classes("w-full gap-0 p-2"),
+                .props("header-class=bg-green-2 text-green-9")
+            )
+            content = ui.column().classes("w-full gap-0 p-2")
+            with (
+                expansion,
+                content,
             ):
                 if id_label is not None:
                     with ui.row().classes("items-center gap-2 w-full py-1"):
@@ -288,6 +292,7 @@ async def product_form(object_id: str) -> None:
                             ui.button(icon="translate").props("dense flat round").on_click(
                                 lambda n=attr_name, d=defn: open_lang_dialog(n, d)
                             ).tooltip(t("form.languages_edit"))
+            return expansion, content
 
         # --- Language dialog: edit one attribute across all data languages. --
         def open_lang_dialog(attr_name: str, defn: dict | None) -> None:
@@ -367,32 +372,52 @@ async def product_form(object_id: str) -> None:
 
         @ui.refreshable
         def render_sections() -> None:
+            jump_refs: list[tuple[str, ui.expansion, ui.column]] = []
+
+            def go_to(label: str) -> None:
+                for lab, exp, content in jump_refs:
+                    if lab == label:
+                        exp.open()
+                        content.run_method('scrollIntoView')
+                        break
+
             with ui.column().classes("w-full gap-2 mt-4"):
                 if show_missing_only and not missing:
                     ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
                     return
-                render_section(
+                jump = ui.select(
+                    [], label=t("form.jump"), on_change=lambda e: go_to(str(e.value))
+                ).props("outline dense").classes("w-64")
+                result = render_section(
                     t("form.summary"),
                     summary_items,
                     open_=True,
                     id_label=object_id,
                     show_missing_only=show_missing_only,
                 )
+                if result is not None:
+                    jump_refs.append((t("form.summary"), *result))
                 if ungrouped_items:
-                    render_section(
+                    result = render_section(
                         t("form.ungrouped"),
                         ungrouped_items,
                         open_=False,
                         show_missing_only=show_missing_only,
                     )
+                    if result is not None:
+                        jump_refs.append((t("form.ungrouped"), *result))
                 for gid, items in ordered_groups:
                     group = group_by_id.get(gid)
-                    render_section(
-                        _label(group, gid, locale) if group else t("form.general"),
+                    title = _label(group, gid, locale) if group else t("form.general")
+                    result = render_section(
+                        title,
                         items,
                         open_=False,
                         show_missing_only=show_missing_only,
                     )
+                    if result is not None:
+                        jump_refs.append((title, *result))
+                jump.set_options([label for label, _, _ in jump_refs])
 
         def on_missing_toggle(value: bool) -> None:
             nonlocal show_missing_only

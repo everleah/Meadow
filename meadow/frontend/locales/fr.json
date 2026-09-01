@@ -81,5 +81,6 @@
   "form.column_attr": "Attribut",
   "form.column_value": "Valeur",
   "form.only_missing": "Seulement les champs obligatoires manquants",
-  "form.no_missing": "Aucun champ obligatoire manquant."
+  "form.no_missing": "Aucun champ obligatoire manquant.",
+  "form.jump": "Aller à"
 }
