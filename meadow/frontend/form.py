@@ -160,7 +160,7 @@ async def product_form(object_id: str) -> None:
                 lang_options,
                 value=edit_lang,
                 on_change=lambda e: on_lang_change(e.value),
-            ).props("outline dense").classes("w-40").tooltip(t("form.edit_language"))
+            ).props("filled dense").classes("w-40").tooltip(t("form.edit_language"))
 
         # Working copy of the raw (own) attribute values. Multilingual values
         # are kept as ``{lang: value}`` dicts.
@@ -193,6 +193,46 @@ async def product_form(object_id: str) -> None:
                 app.storage.user["edit_lang"] = new_value
             ui.navigate.reload()
 
+        def open_enum_creation(attr_name: str, defn: dict | None, field: ui.element) -> None:
+            """Adds a new enum option to the attribute definition (MVP)."""
+            multilingual = bool(defn is not None and (defn or {}).get("multilingual"))
+
+            with ui.dialog() as dialog, ui.card().classes("w-[24rem] max-w-[90vw]"):
+                ui.label(t("form.add_option")).classes("text-subtitle1")
+                inp = ui.input(label=t("form.new_option")).props("filled dense").classes("w-full")
+
+                async def create() -> None:
+                    value = (inp.value or "").strip()
+                    if not value:
+                        return
+                    constraints = dict((defn or {}).get("constraints") or {})
+                    current = constraints.get("enum_values") or []
+                    if value in current:
+                        ui.notify(t("form.option_exists"), color="info")
+                        dialog.close()
+                        return
+                    new_values = list(current) + [value]
+                    constraints["enum_values"] = new_values
+                    try:
+                        await client.update_attribute_definition(
+                            token, defn["id"], constraints=constraints
+                        )
+                    except CoreError as error:
+                        ui.notify(
+                            t("form.save_failed_reason").format(reason=error), color="negative"
+                        )
+                        dialog.close()
+                        return
+                    field.set_options(new_values, value=value)
+                    set_value(attr_name, edit_lang, value, multilingual=multilingual)
+                    ui.notify(t("form.option_added"), color="positive")
+                    dialog.close()
+
+                with ui.row().classes("justify-end w-full mt-2 gap-2"):
+                    ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
+                    ui.button(t("form.add"), on_click=create).props("flat")
+            dialog.open()
+
         def build_value_widget(
             attr_name: str, defn: dict | None, value: object, *, multilingual: bool
         ) -> None:
@@ -213,6 +253,12 @@ async def product_form(object_id: str) -> None:
                 field = (
                     ui.select(options, value=value).props("filled dense").on_value_change(on_change)
                 )
+                field.classes("flex-1")
+                main_widgets[attr_name] = field
+                ui.button(icon="add").props("dense flat round").on_click(
+                    lambda: open_enum_creation(attr_name, defn, field)
+                ).tooltip(t("form.add_option"))
+                return
             elif atype == "date":
                 field = (
                     ui.input(value="" if value is None else str(value))
@@ -378,16 +424,18 @@ async def product_form(object_id: str) -> None:
                 for lab, exp, content in jump_refs:
                     if lab == label:
                         exp.open()
-                        content.run_method('scrollIntoView')
+                        content.run_method("scrollIntoView")
                         break
 
             with ui.column().classes("w-full gap-2 mt-4"):
                 if show_missing_only and not missing:
                     ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
                     return
-                jump = ui.select(
-                    [], label=t("form.jump"), on_change=lambda e: go_to(str(e.value))
-                ).props("outline dense").classes("w-64")
+                jump = (
+                    ui.select([], label=t("form.jump"), on_change=lambda e: go_to(str(e.value)))
+                    .props("filled dense")
+                    .classes("w-64")
+                )
                 result = render_section(
                     t("form.summary"),
                     summary_items,
@@ -442,7 +490,7 @@ async def product_form(object_id: str) -> None:
                     list(_STATUS_OPTIONS),
                     value=str(resolved.get("status", "")),
                 )
-                .props("outline dense")
+                .props("filled dense")
                 .classes("w-64")
             )
 

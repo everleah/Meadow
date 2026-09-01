@@ -132,6 +132,37 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def update_attribute_definition(
+        self,
+        token: str,
+        definition_id: str,
+        *,
+        constraints: dict | None = None,
+    ) -> dict:
+        """Updates an attribute definition (currently only ``constraints``).
+
+        Used by the product form to add a new enum option via ``PATCH
+        /attribute-definitions/{id}`` (the whole ``constraints`` object is
+        replaced, so pass the full set including any other constraint keys).
+        """
+        payload: dict = {}
+        if constraints is not None:
+            payload["constraints"] = constraints
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/attribute-definitions/{definition_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
     async def get_object(
         self,
         token: str,

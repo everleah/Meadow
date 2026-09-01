@@ -82,5 +82,10 @@
   "form.column_value": "Valeur",
   "form.only_missing": "Seulement les champs obligatoires manquants",
   "form.no_missing": "Aucun champ obligatoire manquant.",
-  "form.jump": "Aller à"
+  "form.jump": "Aller à",
+  "form.add_option": "Ajouter une option",
+  "form.new_option": "Nouvelle valeur",
+  "form.add": "Ajouter",
+  "form.option_exists": "Cette option existe déjà.",
+  "form.option_added": "Option ajoutée."
 }
