@@ -466,6 +466,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 - **Datentypwechsel für Attributdefinitionen inkl. Migration vorhandener Werte (Kompatibilitätsmatrix, verlustfreie vs. verlustbehaftete Übergänge)**
 - **Weitere Sprachen für die Oberfläche (Deutsch, Französisch, …)**
 - **Frontend-Ausbau: Pinned Attributes, Attribut-Suchleiste im Formular, Find & Replace, sequenzielles Editieren, Send-for-approval bei Bulk-Änderungen, per-Kanal-Vollständigkeit**
+- **Zentrale Enum-Options-Pflege:** Enum-Optionen zentral verwalten/entfernen (in der Attributdefinition-Verwaltung, `constraints.enum_values`) mit **Nutzungscheck** – Entfernen nur, wenn der Wert von keinem Objekt verwendet wird, sonst blockieren bzw. Umhängen/Migration anbieten
 - **SSO-Anbindung (OIDC) inkl. Gruppen-/Claim-Mapping**
 - **Optionale zentrale Log-Aggregation (Loki + Grafana) für Volltextsuche und Dashboards – dokumentiert, im MVP nicht umgesetzt**
 
