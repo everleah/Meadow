@@ -78,5 +78,7 @@
   "form.cancel": "Cancel",
   "form.required": "Required",
   "form.column_attr": "Attribute",
-  "form.column_value": "Value"
+  "form.column_value": "Value",
+  "form.only_missing": "Only missing required fields",
+  "form.no_missing": "No missing required fields."
 }

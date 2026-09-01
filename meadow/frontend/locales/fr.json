@@ -79,5 +79,7 @@
   "form.cancel": "Annuler",
   "form.required": "Obligatoire",
   "form.column_attr": "Attribut",
-  "form.column_value": "Valeur"
+  "form.column_value": "Valeur",
+  "form.only_missing": "Seulement les champs obligatoires manquants",
+  "form.no_missing": "Aucun champ obligatoire manquant."
 }
