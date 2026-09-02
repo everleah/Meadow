@@ -159,6 +159,11 @@ Beschreibt die **typisierten Relationen** zwischen Objekten (`reference`-RELATIO
 - **Letzte Aktivität** (System-Logs) und **laufende/letzte Jobs** (Status aus `GET /jobs/runs`, [jobs-scheduler.md](jobs-scheduler.md)).
 - Bewusst **nicht im MVP** (später, Phase 9): Starred-Entitäten, Work Areas/Aufgabenwarteschlangen, Kanäle.
 
+> **Performanz-Beobachtung (behalten, Phase 7/8):** Das Dashboard aggregiert client-seitig aus `GET /objects?limit=1000` (alle Objekte inkl. `completeness` der Arbeitssprache) die Kacheln (Anzahl pro Typ/Status, unvollständige je Typ). Bei **großen Datenmengen** wird der Aufbau dadurch langsam – teils werden Daten geladen/analysiert, die gar nicht gebraucht werden, weil die API aktuell keine gezieltere Möglichkeit bietet. **Haltung:**
+> - Im Zweifel solche Kacheln **nicht anzeigen** oder auf das Nötigste begrenzen (z. B. nur die Standard-Typen, `limit` reduziert, spätes/gestertes Laden).
+> - Falls sinnvoll, stellt der **Kern** eine effiziente Aggregation bereit (z. B. `GET /dashboard/stats` bzw. `GET /objects/stats`): nur die wenigen benötigten Zahlen (Anzahl pro Typ/Status, unvollständige je Typ für eine Sprache) **server-seitig** berechnet – ohne dass die UI alle Objekte ziehen muss.
+> - **Nicht verhandelbar:** Nur weil die UI etwas braucht, wird die **Performanz des Kerns nicht gefährdet** – ein Stats-Endpunkt muss dem Graph-/Performanz-USP genügen (Indizes, Edge-Queries; keine Vollscans/teuren Traversierungen allein fürs Dashboard). Follow-up in Phase 8 (Performance/Benchmarks) bzw. Phase 9.
+
 ## 6. Phasierung
 
 | Arbeitsfläche     | MVP (Phase 7)                                                                                                                                                              | Später (Phase 9)                                                                                     |

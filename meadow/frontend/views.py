@@ -60,16 +60,19 @@ async def home() -> None:
             if _is_incomplete(obj, locale):
                 incomplete_by_type[otype] = incomplete_by_type.get(otype, 0) + 1
 
-        # Objects by type.
+        # Objects by type (compact pills).
         with ui.card().classes("w-full mt-4"):
             ui.label(t("dashboard.objects")).classes("text-subtitle1")
-            with ui.row().classes("gap-4 w-full mt-2 flex-wrap"):
-                for otype in sorted(counts_by_type):
-                    with ui.column().classes("items-center p-3 rounded bg-neutral min-w-[6rem]"):
-                        ui.label(str(counts_by_type[otype])).classes("text-h4")
-                        ui.label(otype).classes("text-caption text-gray-500")
+            with ui.row().classes("gap-2 w-full mt-2 flex-wrap"):
                 if not counts_by_type:
                     ui.label(t("grid.no_objects")).classes("text-caption text-gray-500")
+                else:
+                    for otype in sorted(counts_by_type):
+                        with ui.row().classes("items-center gap-1 px-2 py-0.5 rounded bg-neutral"):
+                            ui.label(otype).classes("text-caption font-medium")
+                            ui.label(str(counts_by_type[otype])).classes(
+                                "text-caption text-gray-500"
+                            )
 
         # Completeness shortcuts (clickable).
         with ui.card().classes("w-full mt-4"):
@@ -86,11 +89,14 @@ async def home() -> None:
                             )
                         )
                         .props("flat")
-                        .classes("items-center p-3 rounded bg-orange-1 min-w-[6rem] gap-1")
+                        .classes("p-3 rounded bg-orange-1 min-w-[6rem]")
                     ):
-                        ui.label(str(count)).classes("text-h4 text-orange-9")
-                        ui.label(t("dashboard.incomplete").format(type=otype)).classes(
-                            "text-caption text-gray-600"
+                        label = t("dashboard.incomplete").format(type=otype)
+                        ui.html(
+                            '<div class="flex flex-col items-center gap-1">'
+                            f'<span class="text-h4 text-orange-9">{count}</span>'
+                            f'<span class="text-caption text-gray-600 text-center">{label}</span>'
+                            "</div>"
                         )
                 if not incomplete_by_type:
                     ui.label(t("dashboard.no_incomplete")).classes("text-caption text-gray-500")

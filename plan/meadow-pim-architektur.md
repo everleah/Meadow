@@ -451,6 +451,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 
 - Sicherheit, Monitoring, Logging, Backup
 - Load-Testing und Optimierung
+- **Dashboard bei großen Datenmengen beobachten:** Das Frontend aggregiert die Kacheln aktuell aus `GET /objects?limit=1000` (client-seitig) – der Aufbau wird bei großen Mengen langsam; ggf. Kacheln begrenzen/nicht anzeigen oder einen **effizienten Kern-Aggregations-Endpunkt** (`GET /objects/stats` bzw. `/dashboard/stats`) anbieten, der nur die wenigen benötigten Zahlen server-seitig liefert. **Dabei gilt: nichts gefährdet die Core-Performance** (Indizes/Edge-Queries, keine Vollscans nur fürs Dashboard).
 - **Dokumentation für MEF und Eventsystem**
 - **Request-/Upload-Limits und Rate-Limits an der API; NATS-Stream-Retention und Queue-Tiefen-Monitoring (Port 8222)**
 - **Backpressure-/Ausfalltests: NATS- und Worker-Ausfall ohne Blockade des Kerns (Outbox-Nachlieferung)**
