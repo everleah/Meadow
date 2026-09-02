@@ -122,6 +122,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 5. **Attributdefinitionen & -gruppen**
    - Verwaltung von Attributgruppen und -definitionen (nur `admin`/`superadmin`)
    - Festlegung von Datentyp, Wertelisten, Mehrsprachigkeit, `inheritable`-Flag, Einheit (`unit_id`/`display_unit_id`), `is_key`-Markierung (Business-Schlüssel, z. B. SKU) sowie Template-Feldern (`applicable_types`/`required_types`)
+   - **(Attributdefinitionen umgesetzt:)** `meadow/frontend/attribute_definitions.py` (`/attribute-definitions`, admin-only) – Liste (AG-Grid) + Anlegen/Bearbeiten-Dialog über `POST`/`PATCH /attribute-definitions`; Feldumfang: `type`, `label` (en/de), `group_id`, `inheritable`, `is_key`, `multilingual`, `applicable_types`/`required_types`, `unit_id`/`display_unit_id`, `constraints.enum_values`, `description` und `computed`-Felder. Attributgruppen-Verwaltung folgt.
 
 6. **Kategorien & Relationen**
    - Anlegen und Hierarchisieren von Kategorien als normale Objekte (mehrere Kategorie-Bäume möglich)

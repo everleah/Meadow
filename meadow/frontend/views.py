@@ -5,6 +5,7 @@ from __future__ import annotations
 from nicegui import app, ui
 
 from meadow.frontend import (
+    attribute_definitions,  # noqa: F401  (registers the /attribute-definitions page)
     config,
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
@@ -16,7 +17,7 @@ from meadow.frontend.layout import NAV_ITEMS, build_shell
 
 #: Routes that have a real page and must be skipped by the placeholder
 #: registration.
-_IMPLEMENTED_ROUTES = {"/products"}
+_IMPLEMENTED_ROUTES = {"/products", "/attribute-definitions"}
 
 
 def _is_incomplete(obj: dict, locale: str) -> bool:

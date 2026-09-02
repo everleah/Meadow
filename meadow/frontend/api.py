@@ -138,19 +138,84 @@ class CoreClient:
         definition_id: str,
         *,
         constraints: dict | None = None,
+        **fields: object,
     ) -> dict:
-        """Updates an attribute definition (currently only ``constraints``).
+        """Updates an attribute definition (partial PATCH).
 
-        Used by the product form to add a new enum option via ``PATCH
-        /attribute-definitions/{id}`` (the whole ``constraints`` object is
-        replaced, so pass the full set including any other constraint keys).
+        ``constraints`` is kept for backward compatibility (the product form
+        adds enum options); additional fields (``label``, ``group_id``,
+        ``applicable_types``, ``required_types``, ...) are merged in.
         """
-        payload: dict = {}
+        payload: dict[str, object] = {k: v for k, v in fields.items() if v is not None}
         if constraints is not None:
             payload["constraints"] = constraints
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.patch(
                 f"{self.base_url}/attribute-definitions/{definition_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def create_attribute_definition(
+        self,
+        token: str,
+        *,
+        name: str,
+        definition_type: str,
+        label: dict | None = None,
+        group_id: str | None = None,
+        inheritable: bool = False,
+        is_key: bool = False,
+        applicable_types: list[str] | None = None,
+        required_types: list[str] | None = None,
+        computed: bool = False,
+        computed_rule: str | None = None,
+        dependencies: list[str] | None = None,
+        computed_reads_inherited: bool = False,
+        multilingual: bool = False,
+        unit_id: str | None = None,
+        display_unit_id: str | None = None,
+        constraints: dict | None = None,
+        default_value: object | None = None,
+        description: str | None = None,
+    ) -> dict:
+        """Creates an attribute definition (``POST /attribute-definitions``)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "type": definition_type,
+            "label": label or {},
+            "inheritable": bool(inheritable),
+            "is_key": bool(is_key),
+            "applicable_types": applicable_types or [],
+            "required_types": required_types or [],
+            "computed": bool(computed),
+            "computed_reads_inherited": bool(computed_reads_inherited),
+            "multilingual": bool(multilingual),
+        }
+        optional = {
+            "group_id": group_id,
+            "computed_rule": computed_rule,
+            "dependencies": dependencies,
+            "unit_id": unit_id,
+            "display_unit_id": display_unit_id,
+            "constraints": constraints,
+            "default_value": default_value,
+            "description": description,
+        }
+        for key, value in optional.items():
+            if value is not None:
+                payload[key] = value
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/attribute-definitions",
                 json=payload,
                 headers={"Authorization": f"Bearer {token}"},
             )
