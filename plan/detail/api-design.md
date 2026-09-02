@@ -155,11 +155,11 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 
 ## Attributkatalog (Definitionen & Gruppen) in der API
 
-- **`POST /attribute-definitions`** und **`PATCH /attribute-definitions/{id}`** nehmen **`group_ids: [„attr_group_01“, …]`** (viele-zu-viele) statt eines einzelnen `group_id`. Intern werden die `attribute_group_member`-Zeilen ersetzt (idempotent); `group_ids = []` = „ohne Gruppe“. `applicable_types`/`required_types` bleiben wie gehabt (Objekttyp-Zuordnung des Attributs).
-- **`DELETE /attribute-definitions/{id}`** (nur `admin`/`superadmin`): entfernt die Definition und ihre Gruppen-Links. Sind bereits **Objekt-Attributwerte** vorhanden, antwortet der Kern mit **HTTP 409** (`attribute in use`) und der Anzahl betroffener Objekte; mit **`?force=true`** werden die Werte asynchron als Hintergrundjob entfernt (Typ `bulk_operation`/`remove_attribute`).
-- **`DELETE /attribute-groups/{id}`** (nur `admin`/`superadmin`): entfernt die Gruppe und ihre `attribute_group_member`-Links; die Attribute bleiben erhalten.
+- **`POST /attribute-definitions`** und **`PATCH /attribute-definitions/{id}`** nehmen **`group_ids: [„attr_group_01“, …]`** (viele-zu-viele) statt eines einzelnen `group_id`. Die Zuordnung wird als **Inline-Array** direkt am `attribute_definition`-Datensatz gespeichert (Typ `array`; keine separate Join-Tabelle `attribute_group_member`). `group_ids = []` = „ohne Gruppe“. `applicable_types`/`required_types` bleiben wie gehabt (Objekttyp-Zuordnung des Attributs).
+- **`DELETE /attribute-definitions/{id}`** (nur `admin`/`superadmin`): entfernt die Definition und ihre Gruppen-Verknüpfungen. Sind bereits **Objekt-Attributwerte** vorhanden, antwortet der Kern mit **HTTP 409** (`attribute in use`) und der Anzahl betroffener Objekte; mit **`?force=true`** werden die Werte asynchron als Hintergrundjob entfernt (Typ `bulk_operation`, Operation `clear_attribute`).
+- **`DELETE /attribute-groups/{id}`** (nur `admin`/`superadmin`): entfernt die Gruppe; dabei wird die Gruppen-Referenz aus dem `group_ids`-Array aller betroffenen Attributdefinitionen entfernt (Dangling-Referenzen werden aufgeräumt). Die Attribute selbst bleiben erhalten.
 - **`attribute_group`** trägt **optional `applicable_types`** (leer = aus den Mitgliedern abgeleitet). `POST`/`PATCH /attribute-groups` akzeptieren das Feld; `GET /attribute-groups` liefert es mit.
-- **`create_attribute_definition`/`update_attribute_definition`** im Rust-Kern (`crates/pim-core/src/api/attribute_definitions.rs`) schreiben die Gruppen-Zuordnung transaktional in `attribute_group_member`; die Antwort serialisiert `group_ids` (aufgelöst auf die kurzen Group-Keys).
+- **`create_attribute_definition`/`update_attribute_definition`** im Rust-Kern (`crates/pim-core/src/api/attribute_definitions.rs`) speichern das `group_ids`-Array direkt am Datensatz (ersetzen es bei Update idempotent); die Antwort liefert `group_ids` als Liste der vollen Group-Record-IDs.
 
 ## Vollständigkeit (Completeness) in der API
 

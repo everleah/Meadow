@@ -31,7 +31,7 @@ DEFINE TABLE IF NOT EXISTS attribute_definition;
 DEFINE FIELD IF NOT EXISTS name ON TABLE attribute_definition TYPE string;
 DEFINE FIELD IF NOT EXISTS label ON TABLE attribute_definition TYPE object;
 DEFINE FIELD IF NOT EXISTS type ON TABLE attribute_definition TYPE string;
-DEFINE FIELD IF NOT EXISTS group_id ON TABLE attribute_definition TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS group_ids ON TABLE attribute_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS inheritable ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS is_key ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS applicable_types ON TABLE attribute_definition TYPE array;
@@ -51,13 +51,14 @@ DEFINE FIELD OVERWRITE created_at ON TABLE attribute_definition TYPE datetime DE
 DEFINE FIELD OVERWRITE updated_at ON TABLE attribute_definition TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_by ON TABLE attribute_definition TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_attr_def_name ON TABLE attribute_definition FIELDS name UNIQUE;
-DEFINE INDEX IF NOT EXISTS idx_attr_def_group ON TABLE attribute_definition FIELDS group_id;
+DEFINE INDEX IF NOT EXISTS idx_attr_def_group ON TABLE attribute_definition FIELDS group_ids;
 
 -- Attribute groups: UI grouping for attribute definitions.
 DEFINE TABLE IF NOT EXISTS attribute_group;
 DEFINE FIELD IF NOT EXISTS name ON TABLE attribute_group TYPE string;
 DEFINE FIELD IF NOT EXISTS label ON TABLE attribute_group TYPE object;
 DEFINE FIELD IF NOT EXISTS position ON TABLE attribute_group TYPE int;
+DEFINE FIELD IF NOT EXISTS applicable_types ON TABLE attribute_group TYPE array;
 DEFINE INDEX IF NOT EXISTS idx_attr_group_name ON TABLE attribute_group FIELDS name UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_attr_group_position ON TABLE attribute_group FIELDS position;
 

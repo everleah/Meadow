@@ -95,7 +95,8 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/attribute-definitions/{id}",
             get(api::attribute_definitions::get_attribute_definition)
-                .patch(api::attribute_definitions::update_attribute_definition),
+                .patch(api::attribute_definitions::update_attribute_definition)
+                .delete(api::attribute_definitions::delete_attribute_definition),
         )
         .route(
             "/attribute-groups",

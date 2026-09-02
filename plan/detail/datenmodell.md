@@ -176,7 +176,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 ```
 
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
-- `group_ids` (viele-zu-viele): Ein Attribut kann in **mehreren** Attributgruppen erscheinen; die Zuordnung liegt in der Tabelle `attribute_group_member`. Am Objekt instanziert ist es **dasselbe** Attribut (ein Feld, mehrere UI-Gruppen). Ist `group_ids` leer, gehört das Attribut keiner Gruppe („Attribute ohne Gruppe“).
+- `group_ids` (viele-zu-viele): Ein Attribut kann in **mehreren** Attributgruppen erscheinen; die Zuordnung wird als **Inline-Array der Group-Keys** direkt am `attribute_definition`-Datensatz gespeichert (Typ `array`, keine separate Join-Tabelle). Am Objekt instanziert ist es **dasselbe** Attribut (ein Feld, mehrere UI-Gruppen). Ist `group_ids` leer/`[]`, gehört das Attribut keiner Gruppe („Attribute ohne Gruppe“).
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp (anwendungsseitig beim Schreiben erzwungen, konzeptionell `(type, attributes.<name>)`). Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
 - `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)). **Dies ist der zentrale Mechanismus, damit nicht jedes Attribut überall auftaucht.**
@@ -226,11 +226,11 @@ Gruppiert Attributdefinitionen für die UI.
 ```
 
 - `applicable_types` (optional, leer = **aus den Mitgliedern abgeleitet**): Eine Gruppe erscheint für einen Objekttyp, wenn `applicable_types` leer ist **oder** der Typ enthalten ist; bei leer wird die Sichtbarkeit aus den `applicable_types` ihrer Mitglieder bestimmt („Nur Gruppen mit mindestens einem für den Typ gültigen Attribut erscheinen“, ~frontend-arbeitsflaechen.md). So lässt sich die Gruppe pro Typ explizit einschränken, ohne die Attribut-Typen zu duplizieren.
-- **Löschen:** `DELETE /attribute-groups/{id}` entfernt die Gruppe und ihre `attribute_group_member`-Links; die Attribute bleiben erhalten (und werden ggf. zu „ohne Gruppe“ bzw. liegen weiter in anderen Gruppen).
+- **Löschen:** `DELETE /attribute-groups/{id}` entfernt die Gruppe; dabei wird die Gruppen-Referenz aus dem `group_ids`-Array aller betroffenen Attributdefinitionen entfernt (Dangling-Referenzen werden aufgeräumt). Die Attribute bleiben erhalten (und liegen ggf. weiter in anderen Gruppen bzw. werden zu „ohne Gruppe“).
 
-### Tabelle `attribute_group_member`
+### Tabelle `attribute_group_member` *(nicht erforderlich — Inline `group_ids`)*
 
-Viele-zu-viele-Zuordnung Attribut ↔ Gruppe (damit ein Attribut in **mehreren** Gruppen erscheinen kann).
+Ursprünglich als Viele-zu-viele-Zuordnung Attribut ↔ Gruppe geplant. **In der aktuellen Implementierung nicht verwendet:** Die Zuordnung wird als Inline-Array `group_ids` direkt am `attribute_definition`-Datensatz gespeichert (Typ `array`), sodass eine separate Join-Tabelle entfällt.
 
 ```json
 {
@@ -241,8 +241,8 @@ Viele-zu-viele-Zuordnung Attribut ↔ Gruppe (damit ein Attribut in **mehreren**
 }
 ```
 
-- Eindeutigkeit über `(attribute_definition_id, attribute_group_id)`; `group_ids` auf der Attributdefinition wird als Abkürzung serialisiert und intern auf diese Zeilen gemappt.
-- Attribute ohne Gruppe haben keinen Eintrag (`group_ids = []`).
+- Eindeutigkeit über `(attribute_definition_id, attribute_group_id)`; bei Nutzung der Tabelle würde `group_ids` als Abkürzung serialisiert und intern auf diese Zeilen gemappt.
+- Attribute ohne Gruppe hätten keinen Eintrag (`group_ids = []`).
 
 ### Tabelle `reference`
 

@@ -143,7 +143,7 @@ class CoreClient:
         """Updates an attribute definition (partial PATCH).
 
         ``constraints`` is kept for backward compatibility (the product form
-        adds enum options); additional fields (``label``, ``group_id``,
+        adds enum options); additional fields (``label``, ``group_ids``,
         ``applicable_types``, ``required_types``, ...) are merged in.
         """
         payload: dict[str, object] = {k: v for k, v in fields.items() if v is not None}
@@ -171,7 +171,7 @@ class CoreClient:
         name: str,
         definition_type: str,
         label: dict | None = None,
-        group_id: str | None = None,
+        group_ids: list[str] | None = None,
         inheritable: bool = False,
         is_key: bool = False,
         applicable_types: list[str] | None = None,
@@ -192,6 +192,7 @@ class CoreClient:
             "name": name,
             "type": definition_type,
             "label": label or {},
+            "group_ids": group_ids or [],
             "inheritable": bool(inheritable),
             "is_key": bool(is_key),
             "applicable_types": applicable_types or [],
@@ -201,7 +202,6 @@ class CoreClient:
             "multilingual": bool(multilingual),
         }
         optional = {
-            "group_id": group_id,
             "computed_rule": computed_rule,
             "dependencies": dependencies,
             "unit_id": unit_id,
@@ -227,6 +227,29 @@ class CoreClient:
                     detail = None
                 raise CoreError(detail or response.text, status=response.status_code)
             return response.json()
+
+    async def delete_attribute_definition(
+        self, token: str, definition_id: str, *, force: bool = False
+    ) -> None:
+        """Deletes an attribute definition (``DELETE /attribute-definitions/{id}``).
+
+        Raises :class:`CoreError` with status 409 if the attribute is in use
+        and ``force`` is not set; ``force=True`` removes values asynchronously.
+        """
+        params = {"force": "true"} if force else {}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/attribute-definitions/{definition_id}",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
 
     async def get_object(
         self,
@@ -315,6 +338,88 @@ class CoreClient:
             if isinstance(data, dict):
                 return [data]
             return data
+
+    async def create_attribute_group(
+        self,
+        token: str,
+        *,
+        name: str,
+        label: dict | None = None,
+        position: int = 0,
+        applicable_types: list[str] | None = None,
+    ) -> dict:
+        """Creates an attribute group (``POST /attribute-groups``)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "label": label or {},
+            "position": position,
+            "applicable_types": applicable_types or [],
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/attribute-groups",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def update_attribute_group(
+        self,
+        token: str,
+        group_id: str,
+        *,
+        name: str | None = None,
+        label: dict | None = None,
+        position: int | None = None,
+        applicable_types: list[str] | None = None,
+    ) -> dict:
+        """Partially updates an attribute group (``PATCH /attribute-groups/{id}``)."""
+        payload: dict[str, object] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "label": label,
+                "position": position,
+                "applicable_types": applicable_types,
+            }.items()
+            if v is not None
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/attribute-groups/{group_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def delete_attribute_group(self, token: str, group_id: str) -> None:
+        """Deletes an attribute group (``DELETE /attribute-groups/{id}``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/attribute-groups/{group_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
 
     async def list_object_children(
         self,

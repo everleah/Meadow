@@ -4,7 +4,7 @@ Phase 7, step 6. A single scrollable page with three collapsible sections:
 
 1. **Stammdaten** – object id (read-only), the virtual ``name`` and the
    business-key / required attributes for the object's type.
-2. **Attribute ohne Gruppe** – attributes that carry no ``group_id``.
+2. **Attribute ohne Gruppe** – attributes that carry no ``group_ids``.
 3. **Attributgruppen** – the remaining attributes, grouped and sorted by the
    group's ``position``.
 
@@ -676,11 +676,15 @@ async def product_form(object_id: str) -> None:
             if _is_summary(d, object_type):
                 summary_items.append((name_, d))
             else:
-                gid = str(d.get("group_id") or "")
-                if not gid:
+                gids = [str(g) for g in (d.get("group_ids") or []) if g]
+                if not gids:
                     ungrouped_items.append((name_, d))
                 else:
-                    grouped.setdefault(gid, []).append((name_, d))
+                    for gid in gids:
+                        # An attribute may belong to several groups (same field
+                        # on the object) — avoid duplicates within one group.
+                        if not any(existing[0] == name_ for existing in grouped.get(gid, [])):
+                            grouped.setdefault(gid, []).append((name_, d))
         ordered_groups = sorted(
             grouped.items(),
             key=lambda kv: (

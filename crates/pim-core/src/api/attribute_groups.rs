@@ -23,6 +23,9 @@ pub struct CreateAttributeGroup {
     /// Sort position in the UI.
     #[serde(default)]
     pub position: i64,
+    /// Object types the group applies to (empty = derive from members).
+    #[serde(default)]
+    pub applicable_types: Vec<String>,
 }
 
 fn default_object() -> Value {
@@ -38,6 +41,8 @@ pub struct UpdateAttributeGroup {
     pub label: Option<Value>,
     #[serde(default)]
     pub position: Option<i64>,
+    #[serde(default)]
+    pub applicable_types: Option<Vec<String>>,
 }
 
 /// Query parameters for listing attribute groups.
@@ -99,6 +104,7 @@ pub async fn create_attribute_group(
         "name": body.name,
         "label": body.label,
         "position": body.position,
+        "applicable_types": body.applicable_types,
     });
 
     let sql = "
@@ -213,6 +219,12 @@ pub async fn update_attribute_group(
     if let Some(position) = body.position {
         changes.insert("position".to_owned(), Value::from(position));
     }
+    if let Some(applicable_types) = body.applicable_types {
+        changes.insert(
+            "applicable_types".to_owned(),
+            Value::Array(applicable_types.into_iter().map(Value::String).collect()),
+        );
+    }
     let changes = Value::Object(changes);
 
     let sql = "
@@ -252,8 +264,12 @@ pub async fn delete_attribute_group(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
     let key = parse_key(&id, TABLE)?;
+    let gid_full = format!("{TABLE}:{key}");
     let sql = "
         LET $g = type::record('attribute_group', $key);
+        UPDATE attribute_definition
+            SET group_ids = array::difference(group_ids ?? [], [$gid])
+            WHERE $gid IN group_ids;
         DELETE $g;
     ";
     state
@@ -261,6 +277,7 @@ pub async fn delete_attribute_group(
         .inner()
         .query(sql)
         .bind(("key", key))
+        .bind(("gid", gid_full))
         .await?
         .check()?;
     Ok(StatusCode::NO_CONTENT)

@@ -26,9 +26,9 @@ pub struct CreateAttributeDefinition {
     /// Attribute data type: `text`, `number`, `boolean`, `date`, `enum`, `reference`, ...
     #[serde(rename = "type")]
     pub definition_type: String,
-    /// Optional attribute group id.
+    /// Attribute groups (many-to-many; full group record ids).
     #[serde(default)]
-    pub group_id: Option<String>,
+    pub group_ids: Vec<String>,
     /// Whether the value may be inherited along `depends_on`.
     #[serde(default)]
     pub inheritable: bool,
@@ -82,7 +82,7 @@ pub struct UpdateAttributeDefinition {
     #[serde(default)]
     pub label: Option<Value>,
     #[serde(default)]
-    pub group_id: Option<String>,
+    pub group_ids: Option<Vec<String>>,
     #[serde(default)]
     pub inheritable: Option<bool>,
     #[serde(default)]
@@ -181,7 +181,7 @@ pub async fn create_attribute_definition(
         name,
         label,
         definition_type,
-        group_id,
+        group_ids,
         inheritable,
         is_key,
         applicable_types,
@@ -222,9 +222,10 @@ pub async fn create_attribute_definition(
     content.insert("name".to_owned(), Value::String(name));
     content.insert("label".to_owned(), label);
     content.insert("type".to_owned(), Value::String(definition_type));
-    if let Some(group_id) = group_id {
-        content.insert("group_id".to_owned(), Value::String(group_id));
-    }
+    content.insert(
+        "group_ids".to_owned(),
+        Value::Array(group_ids.into_iter().map(Value::String).collect()),
+    );
     content.insert("inheritable".to_owned(), Value::Bool(inheritable));
     content.insert("is_key".to_owned(), Value::Bool(is_key));
     content.insert(
@@ -447,8 +448,11 @@ pub async fn update_attribute_definition(
     if let Some(label) = body.label {
         changes.insert("label".to_owned(), label);
     }
-    if let Some(group_id) = body.group_id {
-        changes.insert("group_id".to_owned(), Value::String(group_id));
+    if let Some(group_ids) = body.group_ids {
+        changes.insert(
+            "group_ids".to_owned(),
+            Value::Array(group_ids.into_iter().map(Value::String).collect()),
+        );
     }
     if let Some(inheritable) = body.inheritable {
         changes.insert("inheritable".to_owned(), Value::Bool(inheritable));
@@ -569,4 +573,131 @@ pub async fn update_attribute_definition(
     state.cache.invalidate_attribute_definitions().await;
 
     Ok(Json(definition))
+}
+
+/// Query parameters for deleting an attribute definition.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DeleteAttributeDefinition {
+    /// Also remove the attribute value from all objects (asynchronously).
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Deletes an attribute definition (admin/superadmin).
+#[utoipa::path(
+    delete,
+    path = "/attribute-definitions/{id}",
+    params(DeleteAttributeDefinition),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 409, description = "Attribute in use", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn delete_attribute_definition(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<DeleteAttributeDefinition>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let user_id = claims.sub.clone();
+
+    // Load the definition name (for the usage check and value removal).
+    let def_sql = "
+        LET $obj = type::record('attribute_definition', $key);
+        SELECT * FROM $obj;
+    ";
+    let mut def_resp = state
+        .db
+        .inner()
+        .query(def_sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let defs: Vec<Value> = def_resp.take(1)?;
+    let definition = defs
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("attribute definition `{id}` not found")))?;
+    let name = definition
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    // Count objects that already carry a value for this attribute.
+    let count_sql =
+        format!("SELECT count() FROM object WHERE attributes.{name} IS NOT NONE GROUP ALL;");
+    let mut count_resp = state.db.inner().query(&count_sql).await?.check()?;
+    let count_rows: Vec<Value> = count_resp.take(0)?;
+    let used = count_rows
+        .first()
+        .and_then(|row| row.get("count"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    if used > 0 && !params.force {
+        return Err(ApiError::conflict(format!(
+            "attribute `{name}` is in use by {used} object(s)"
+        )));
+    }
+
+    // Delete the definition.
+    let del_sql = "
+        LET $obj = type::record('attribute_definition', $key);
+        DELETE $obj;
+    ";
+    state
+        .db
+        .inner()
+        .query(del_sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+
+    // Force: clear the value on affected objects asynchronously.
+    if used > 0 && params.force {
+        let ids_sql = format!("SELECT id FROM object WHERE attributes.{name} IS NOT NONE;");
+        let mut ids_resp = state.db.inner().query(&ids_sql).await?.check()?;
+        let obj_rows: Vec<Value> = ids_resp.take(0)?;
+        let object_ids: Vec<String> = obj_rows
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str).map(String::from))
+            .collect();
+        let parameters = json!({
+            "op": "clear_attribute",
+            "object_ids": object_ids,
+            "parameters": { "attribute": name },
+        });
+        let _ = crate::api::jobs::queue_run(
+            &state.db,
+            &state.config,
+            None,
+            "bulk_operation",
+            parameters,
+            "manual",
+            &user_id,
+        )
+        .await?;
+    }
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "attribute_definition_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+    state.cache.invalidate_attribute_definitions().await;
+    Ok(StatusCode::NO_CONTENT)
 }
