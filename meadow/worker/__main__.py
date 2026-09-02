@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 
+from meadow.worker.bulk import build_bulk_handler
 from meadow.worker.business_rules import build_business_rule_handler
 from meadow.worker.connectors import load_webhook_configs
 from meadow.worker.exports import build_export_handler
@@ -63,6 +64,7 @@ async def main() -> None:
                 "business_rule": build_business_rule_handler(core_url, api_key=api_key),
                 "inbound_import": build_import_handler(core_url, api_key=api_key),
                 "outbound_export": build_export_handler(core_url, api_key=api_key),
+                "bulk_operation": build_bulk_handler(core_url, api_key=api_key),
             },
             log_sender=log_sender,
         )

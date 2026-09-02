@@ -136,6 +136,8 @@ Beschreibt die **typisierten Relationen** zwischen Objekten (`reference`-RELATIO
   - **Massen-Löschen** (Soft-Delete-Kaskade über den Teilbaum; Warnung „irreversibel").
 - **Validierung:** Der Kern prüft pro Objekt (Typrestriktionen, Eindeutigkeit, Workflow); Verstöße erscheinen im Report.
 
+> **Stand (Bulk-Wizard, Phase 7, umgesetzt):** Der `fact_check`-Button in der Grid-Toolbar (`meadow/frontend/grid.py`) öffnet den Bulk-Dialog: Auswahl-Scope (**„Alle geladenen Objekte“** / **„Ausgewählte Zeilen“**, live an die Grid-Auswahl gekoppelt), Operations-Select (7 Operationen) und eine **dynamische Konfigurationsfläche** (Attribut+Wert, Status, Kategorie, Elternobjekt, Lösch-Warnung). `POST /objects/bulk` (`crates/pim-core/src/api/objects.rs`) validiert Editor-Rolle/Operation und reiht einen `bulk_operation`-Job ein; der Worker (`meadow/worker/bulk.py`) wendet die Operation pro Objekt an und liefert `job_run.result` (`op`, `processed`, `succeeded`, `failed`, `results[]`). Das Frontend pollt `GET /jobs/runs?ids=…` und zeigt den Report (Erfolg/Fail pro Objekt). Die Auswahl wird über die Grid-API `get_selected_rows()` gelesen (der NiceGUI-`selectionChanged`-Event überträgt **kein** `selectedRows`).
+
 ### 3.2 Weitere Modi & Abgrenzung
 
 - **Im MVP bereits enthalten:** Inline-Editing im Grid (Abschnitt 1.3) als „Spreadsheet-artige" Massenpflege; **MEF-Import/Export** ist Bestandteil von Phase 6 ([integration-eventsystem.md](integration-eventsystem.md)).

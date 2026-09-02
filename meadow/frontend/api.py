@@ -415,17 +415,39 @@ class CoreClient:
         self,
         token: str,
         *,
+        ids: list[str] | None = None,
         status: str | None = None,
         limit: int = 10,
     ) -> list[dict]:
         """Lists job runs (newest first) for the dashboard / polling."""
         params: dict[str, str] = {"limit": str(limit)}
+        if ids:
+            params["ids"] = ",".join(ids)
         if status:
             params["status"] = status
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/jobs/runs",
                 params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def post_bulk(
+        self,
+        token: str,
+        *,
+        op: str,
+        object_ids: list[str],
+        parameters: dict,
+    ) -> dict:
+        """Queues a mass operation (`POST /objects/bulk`) and returns the job run."""
+        payload = {"op": op, "object_ids": object_ids, "parameters": parameters}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/objects/bulk",
+                json=payload,
                 headers={"Authorization": f"Bearer {token}"},
             )
             response.raise_for_status()

@@ -9,6 +9,7 @@ Kategorien toggle and the completeness column follow in later steps.
 
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import quote
 
 from fastapi import Request
@@ -603,6 +604,259 @@ async def products_page(request: Request) -> None:
 
         ref_search.on_value_change(lambda e: search_references(e.value))  # type: ignore
 
+        # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
+        bulk_selected_ids: set[str] = set()
+        bulk_selected_label: ui.element | None = None
+        bulk_scope: ui.select | None = None
+        bulk_dialog: ui.dialog | None = None
+
+        def _row_id(row: object) -> str | None:
+            """Extract the object id from a selected row (data dict or row node)."""
+            if not isinstance(row, dict):
+                return None
+            oid = row.get("_id")
+            if not oid:
+                data = row.get("data")
+                if isinstance(data, dict):
+                    oid = data.get("_id")
+            return str(oid) if oid else None
+
+        async def handle_selection(event) -> None:
+            try:
+                selected_rows = await grid.get_selected_rows()
+            except Exception:  # noqa: BLE001 - degrade if the grid is not ready
+                selected_rows = []
+            bulk_selected_ids.clear()
+            for row in selected_rows:
+                oid = _row_id(row)
+                if oid:
+                    bulk_selected_ids.add(oid)
+            bulk_selected_label.set_text(
+                t("grid.bulk_selected").format(count=len(bulk_selected_ids))
+            )
+            if bulk_scope is not None:
+                bulk_scope.set_value("selected" if bulk_selected_ids else "all")
+
+        # Load category objects and candidate parents for the wizard pickers.
+        categories: list[dict] = []
+        try:
+            categories = await client.list_objects(token, object_type="category", limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to an empty picker
+            categories = []
+        category_options = {
+            str(c.get("id")): (
+                resolve_value((c.get("attributes") or {}).get("name"), locale)
+                or str(c.get("type"))
+                or str(c.get("id"))
+            )
+            for c in categories
+        }
+        parent_options: dict[str, str] = {}
+        try:
+            for obj in await client.list_objects(token, limit=1000):
+                oid = str(obj.get("id"))
+                parent_options[oid] = (
+                    resolve_value((obj.get("attributes") or {}).get("name"), locale)
+                    or str(obj.get("type"))
+                    or oid
+                )
+        except Exception:  # noqa: BLE001 - degrade to an empty picker
+            parent_options = {}
+
+        bulk_attr_options = {name: name for name in attribute_names}
+        bulk_status_options = {
+            "draft": "draft",
+            "in_review": "in_review",
+            "published": "published",
+            "archived": "archived",
+        }
+        bulk_fields: dict[str, ui.element] = {}
+
+        bulk_dialog = ui.dialog()
+        with bulk_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
+            ui.label(t("grid.bulk_title")).classes("text-h6")
+            ui.label(t("grid.bulk_selection")).classes("text-caption text-gray-600")
+            bulk_scope = (
+                ui.select(
+                    {
+                        "all": t("grid.bulk_scope_all").format(count=len(objects)),
+                        "selected": t("grid.bulk_scope_selected"),
+                    },
+                    value="selected" if bulk_selected_ids else "all",
+                )
+                .props("filled dense")
+                .classes("w-full")
+            )
+            bulk_selected_label = ui.label("").classes("text-caption")
+            ui.label(t("grid.bulk_operation")).classes("text-caption text-gray-600")
+            bulk_op = (
+                ui.select(
+                    {
+                        "set_attribute": t("grid.op_set_attribute"),
+                        "clear_attribute": t("grid.op_clear_attribute"),
+                        "change_status": t("grid.op_change_status"),
+                        "add_category": t("grid.op_add_category"),
+                        "remove_category": t("grid.op_remove_category"),
+                        "change_parent": t("grid.op_change_parent"),
+                        "delete": t("grid.op_delete"),
+                    },
+                    value=None,
+                    on_change=lambda e: refresh_config(),
+                )
+                .props("filled dense")
+                .classes("w-full")
+            )
+            config_area = ui.column().classes("w-full mt-2 gap-2")
+
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=bulk_dialog.close).props("flat")
+                ui.button(
+                    t("grid.bulk_start"), icon="play_arrow", on_click=lambda: start_bulk()
+                ).props("flat")
+
+        def refresh_config() -> None:
+            config_area.clear()
+            bulk_fields.clear()
+            op = bulk_op.value or ""
+            with config_area:
+                if op in ("set_attribute", "clear_attribute"):
+                    select = (
+                        ui.select(bulk_attr_options, label=t("grid.bulk_attribute"))
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["attribute"] = select
+                    if op == "set_attribute":
+                        value = (
+                            ui.input(label=t("grid.bulk_value"))
+                            .props("filled dense")
+                            .classes("w-full")
+                        )
+                        bulk_fields["value"] = value
+                elif op == "change_status":
+                    select = (
+                        ui.select(
+                            bulk_status_options, value=None, label=t("grid.bulk_status_label")
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["status"] = select
+                elif op in ("add_category", "remove_category"):
+                    select = (
+                        ui.select(category_options, value=None, label=t("grid.bulk_category"))
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["category"] = select
+                elif op == "change_parent":
+                    select = (
+                        ui.select(parent_options, value=None, label=t("grid.bulk_parent"))
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["parent"] = select
+                elif op == "delete":
+                    ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
+
+        async def start_bulk() -> None:
+            op = bulk_op.value
+            if not op:
+                ui.notify(t("grid.bulk_op_required"), color="warning")
+                return
+            if bulk_scope.value == "selected":
+                selected: list = await grid.get_selected_rows()
+                ids = [oid for oid in (_row_id(row) for row in selected) if oid]
+            else:
+                ids = [str(o.get("id") or "") for o in objects]
+            ids = [oid for oid in ids if oid]
+            if not ids:
+                ui.notify(t("grid.bulk_no_objects"), color="warning")
+                return
+            parameters: dict = {}
+            if op in ("set_attribute", "clear_attribute"):
+                attribute = bulk_fields.get("attribute")
+                parameters["attribute"] = attribute.value if attribute else None
+                if op == "set_attribute":
+                    value = bulk_fields.get("value")
+                    parameters["value"] = value.value if value else None
+            elif op == "change_status":
+                status = bulk_fields.get("status")
+                parameters["status"] = status.value if status else None
+            elif op in ("add_category", "remove_category"):
+                category = bulk_fields.get("category")
+                parameters["category"] = category.value if category else None
+            elif op == "change_parent":
+                parent = bulk_fields.get("parent")
+                parameters["parent"] = parent.value if parent else None
+
+            missing = [k for k, v in parameters.items() if not v]
+            if missing:
+                ui.notify(t("grid.bulk_config_incomplete"), color="warning")
+                return
+            try:
+                run = await client.post_bulk(token, op=op, object_ids=ids, parameters=parameters)
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.bulk_start_failed"), color="negative")
+                return
+            run_id = str(run.get("id") or "")
+            bulk_dialog.close()
+            ui.notify(t("grid.bulk_started"), color="positive")
+            if run_id:
+                await poll_bulk(run_id)
+
+        async def poll_bulk(run_id: str) -> None:
+            with ui.dialog() as progress_dialog, ui.card().classes("w-[32rem]"):
+                ui.label(t("grid.bulk_running")).classes("text-subtitle1")
+                status_label = ui.label("").classes("text-caption")
+                ui.linear_progress(value=0.5).classes("w-full")
+                with ui.row().classes("w-full justify-end"):
+                    ui.button(t("grid.close"), on_click=progress_dialog.close).props("flat")
+            progress_dialog.open()
+            runs: list[dict] = []
+            for _ in range(120):
+                try:
+                    runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+                except Exception:  # noqa: BLE001 - retry on transient errors
+                    runs = []
+                if not runs:
+                    break
+                status = str(runs[0].get("status") or "")
+                status_label.set_text(t("grid.bulk_status").format(status=status))
+                if status in ("success", "failed"):
+                    break
+                await asyncio.sleep(2)
+            progress_dialog.close()
+            if runs and runs[0].get("status") == "success":
+                _show_bulk_report(runs[0].get("result") or {})
+            else:
+                ui.notify(t("grid.bulk_failed"), color="negative")
+
+        def _show_bulk_report(result: dict) -> None:
+            processed = str(result.get("processed", 0))
+            succeeded = str(result.get("succeeded", 0))
+            failed = str(result.get("failed", 0))
+            with (
+                ui.dialog() as report_dialog,
+                ui.card().classes("w-[32rem] max-h-[60vh] overflow-y-auto"),
+            ):
+                ui.label(t("grid.bulk_report")).classes("text-subtitle1")
+                ui.label(
+                    t("grid.bulk_report_summary").format(
+                        processed=processed, succeeded=succeeded, failed=failed
+                    )
+                ).classes("text-caption")
+                errors = [r for r in result.get("results", []) if r.get("status") == "error"]
+                if errors:
+                    with ui.column().classes("w-full mt-2 gap-1"):
+                        for r in errors:
+                            ui.label(f"{r.get('object_id')} · {r.get('error')}").classes(
+                                "text-caption text-negative"
+                            )
+                with ui.row().classes("w-full justify-end mt-2"):
+                    ui.button(t("grid.close"), on_click=report_dialog.close).props("flat")
+            report_dialog.open()
+
         current_tree: dict = {"tree": None, "nodes": []}
 
         def collapse_all() -> None:
@@ -742,6 +996,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="bookmarks", on_click=views_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.views"))
+                    ui.button(icon="fact_check", on_click=bulk_dialog.open).props(
+                        "outline"
+                    ).tooltip(t("grid.bulk_actions"))
 
                     def make_toggler(field: str):
                         def toggle(event) -> None:
@@ -780,3 +1037,4 @@ async def products_page(request: Request) -> None:
                 grid.on("cellValueChanged", mark_changed, ["data"])
                 grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])
+                grid.on("selectionChanged", handle_selection, ["selectedRows"])

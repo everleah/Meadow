@@ -15,6 +15,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::keys;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
+use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 const TABLE: &str = "object";
@@ -970,6 +971,81 @@ pub async fn batch_update_objects(
         }
     }
     Ok(Json(results))
+}
+
+/// Payload for `POST /objects/bulk` (a mass operation on a selection).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BulkObjectRequest {
+    /// Operation key: `set_attribute` | `clear_attribute` | `change_status` |
+    /// `add_category` | `remove_category` | `change_parent` | `delete`.
+    pub op: String,
+    /// Explicit object ids (full record ids) the operation applies to. The
+    /// frontend resolves the selection (all filter hits / page / checked rows)
+    /// into this list; the core stays lean and does not re-resolve a filter.
+    #[serde(default)]
+    pub object_ids: Vec<String>,
+    /// Op-specific parameters (attribute name/value, status, category, parent).
+    #[serde(default)]
+    pub parameters: Value,
+}
+
+const BULK_OPS: [&str; 7] = [
+    "set_attribute",
+    "clear_attribute",
+    "change_status",
+    "add_category",
+    "remove_category",
+    "change_parent",
+    "delete",
+];
+
+/// `POST /objects/bulk` queues a `bulk_operation` job over a selection.
+#[utoipa::path(
+    post,
+    path = "/objects/bulk",
+    request_body = BulkObjectRequest,
+    responses(
+        (status = 202, description = "Bulk job queued", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 503, description = "Job queue unavailable", body = Value)
+    )
+)]
+pub async fn bulk_objects(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<BulkObjectRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    if !BULK_OPS.contains(&body.op.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "unknown bulk operation `{}`",
+            body.op
+        )));
+    }
+    if body.object_ids.is_empty() {
+        return Err(ApiError::bad_request(
+            "`object_ids` must contain at least one object",
+        ));
+    }
+    let parameters = json!({
+        "op": body.op,
+        "object_ids": body.object_ids,
+        "parameters": body.parameters,
+    });
+    crate::api::jobs::queue_run(
+        &state.db,
+        &state.config,
+        None,
+        "bulk_operation",
+        parameters,
+        "manual",
+        &claims.sub,
+    )
+    .await
 }
 
 /// Payload for persisting worker-computed attribute values.
