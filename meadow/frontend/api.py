@@ -378,6 +378,17 @@ class CoreClient:
             )
             response.raise_for_status()
 
+    async def reparent_object(self, token: str, object_id: str, parent: str) -> dict:
+        """Re-parents an object to a new composition parent (full record id)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/objects/{object_id}/parent",
+                json={"parent": parent},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def list_relation_definitions(self, token: str) -> list[dict]:
         """Lists relation definitions (e.g. for the reference picker)."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:

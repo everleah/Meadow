@@ -14,12 +14,16 @@ attribute, and a per-attribute language-icon button opens a dialog to edit all
 data languages (from ``GET /languages``); the dialog reads/writes the session's
 working copy so applied values persist on reopen. Attribute rows are rendered
 as an aligned, table-like grid (label | value | language icon) inside
-``ui.expansion`` sections with coloured headers. Saves via ``PATCH /objects/{id}``
+``ui.expansion`` sections with coloured headers. A fourth section, **Relationen**,
+shows the object's graph-edge relations (composition ``depends_on`` + aggregations)
+grouped by relation type. Saves via ``PATCH /objects/{id}``
 and surfaces the core's validation error (e.g. ``height: Height is required``)
 instead of only showing a generic failure message.
 """
 
 from __future__ import annotations
+
+import inspect
 
 from nicegui import app, ui
 
@@ -121,6 +125,8 @@ async def product_form(object_id: str) -> None:
             definitions = await client.list_attribute_definitions(token)
             groups = await client.list_attribute_groups(token)
             languages = await client.list_languages(token)
+            relation_definitions = await client.list_relation_definitions(token)
+            references = await client.list_object_references(token, object_id, locale=locale)
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -451,6 +457,195 @@ async def product_form(object_id: str) -> None:
                 widget.value = _raw_value(edited, attr_name, edit_lang)
             dialog.close()
 
+        # --- Relations (graph edges) helpers. --------------------------------
+        def rel_label(dk: str) -> str:
+            """Resolves a relation-type label (or its short key)."""
+            return resolve_value(rel_def_by_key.get(dk, {}).get("label"), locale) or dk
+
+        def rel_kind(dk: str) -> str:
+            """Returns the relation kind (`composition` | `aggregation`)."""
+            return str(rel_def_by_key.get(dk, {}).get("kind", "aggregation"))
+
+        def kind_badge(dk: str) -> str:
+            """Renders a coloured badge for the relation kind."""
+            if rel_kind(dk) == "composition":
+                cls, text = "bg-orange-2 text-orange-9", t("form.relation_composition")
+            else:
+                cls, text = "bg-blue-2 text-blue-9", t("form.relation_aggregation")
+            return f'<span class="{cls} px-1.5 py-0.5 rounded text-xs">{text}</span>'
+
+        def open_object(obj_id: str) -> None:
+            """Navigates to the referenced object's product form."""
+            if obj_id:
+                ui.navigate.to(f"/products/{obj_id}")
+
+        def build_reference_rows() -> dict[str, list[dict]]:
+            """Groups the object's references by relation type (short key)."""
+            grouped: dict[str, list[dict]] = {}
+            for ref in all_references:
+                dk = str(ref.get("definition_id") or "")
+                is_out_target = ref.get("out") == object_id
+                other = ref.get("in_object") if is_out_target else ref.get("out_object")
+                other = other or {}
+                role = ""
+                if dk == "rel_depends_on":
+                    role = "parent" if not is_out_target else "child"
+                grouped.setdefault(dk, []).append(
+                    {
+                        "id": ref.get("id"),
+                        "label": other.get("label") or "",
+                        "type": other.get("type") or "",
+                        "other_id": other.get("id") or "",
+                        "role": role,
+                    }
+                )
+            return grouped
+
+        def open_relation_picker(title: str, target_types: list[str] | None, on_pick) -> None:
+            """Pick a target object by label search (add aggregation / re-parent)."""
+            with ui.dialog() as dialog, ui.card().classes("w-[32rem] max-w-[90vw]"):
+                ui.label(title).classes("text-subtitle1")
+                search = (
+                    ui.input(placeholder=t("form.reference_search"))
+                    .props("filled dense")
+                    .classes("w-full")
+                )
+                hits = ui.column().classes("w-full gap-1")
+
+                async def choose(hit: dict) -> None:
+                    dialog.close()
+                    if inspect.isawaitable(on_pick(hit)):
+                        await on_pick(hit)
+
+                async def do_search(value: str) -> None:
+                    q = (value or "").strip()
+                    hits.clear()
+                    if not q:
+                        return
+                    try:
+                        found = await client.picker_search(
+                            token, q, types=target_types, locale=locale, limit=20
+                        )
+                    except Exception:  # noqa: BLE001 - degrade to no hits
+                        return
+                    for hit in found:
+                        with hits:
+                            ui.button(
+                                f"{hit.get('label')} · {hit.get('type')}",
+                                on_click=lambda h=hit: choose(h),
+                            ).props("outline dense").classes("w-full justify-start")
+
+                search.on_value_change(lambda e: do_search(e.value))
+                with ui.row().classes("justify-end w-full mt-2"):
+                    ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
+            dialog.open()
+
+        async def on_add_ref(defn: dict, hit: dict) -> None:
+            """Creates an aggregation reference from the current object to a hit."""
+            dk = str(defn.get("id", "")).split(":", 1)[-1]
+            try:
+                await client.create_reference(token, object_id, hit["id"], dk)
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.ref_add_failed"), color="negative")
+                return
+            ui.notify(t("form.relation_added"), color="positive")
+            await reload_relations()
+
+        async def on_remove_ref(reference_id: str) -> None:
+            """Deletes an aggregation reference."""
+            try:
+                await client.delete_reference(token, reference_id)
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.ref_remove_failed"), color="negative")
+                return
+            await reload_relations()
+
+        async def on_reparent(hit: dict) -> None:
+            """Re-parents the object to a new composition parent."""
+            try:
+                await client.reparent_object(token, object_id, hit["id"])
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("form.relation_reparent_failed"), color="negative")
+                return
+            ui.notify(t("form.relation_reparented"), color="positive")
+            await reload_relations()
+
+        def build_relations_section() -> tuple[ui.expansion, ui.column] | None:
+            """Renders the collapsible relations (graph edges) section."""
+            if not rel_defs:
+                return None
+            rows_by_dk = build_reference_rows()
+            total = len(all_references)
+            expansion = (
+                ui.expansion(f"{t('form.relations')} ({total})", value=True)
+                .classes("w-full")
+                .props("header-class=bg-green-2 text-green-9")
+            )
+            content = ui.column().classes("w-full gap-0 p-2")
+            with expansion, content:
+
+                def sort_key(dk: str) -> tuple:
+                    rank = 0 if dk == "rel_depends_on" else 1
+                    return (rank, rel_label(dk).lower())
+
+                for dk in sorted(rel_def_by_key, key=sort_key):
+                    defn = rel_def_by_key[dk]
+                    kind = rel_kind(dk)
+                    rows = rows_by_dk.get(dk, [])
+                    target_types = (defn.get("target_types") or []) or None
+                    with ui.row().classes("items-center gap-2 w-full py-1"):
+                        ui.label(rel_label(dk)).classes("text-caption font-medium text-gray-500")
+                        ui.html(kind_badge(dk))
+                        ui.label(str(len(rows))).classes("text-caption text-gray-500")
+                        ui.space()
+                        if kind == "aggregation":
+                            ui.button(
+                                icon="add",
+                                on_click=lambda d=defn: open_relation_picker(
+                                    rel_label(str(d.get("id", "")).split(":", 1)[-1]),
+                                    (d.get("target_types") or []) or None,
+                                    lambda h, dd=d: on_add_ref(dd, h),
+                                ),
+                            ).props("dense flat round").tooltip(t("form.relation_add"))
+                    if not rows:
+                        with ui.row().classes("items-center gap-2 w-full py-1"):
+                            ui.label(t("form.relation_none")).classes(
+                                "text-caption text-gray-400 italic"
+                            )
+                        continue
+                    for row in rows:
+                        with ui.row().classes("items-center gap-2 w-full py-1"):
+                            if row["role"] == "parent":
+                                ui.label(t("form.relation_parent")).classes(
+                                    "w-16 shrink-0 text-caption text-gray-400"
+                                )
+                            elif row["role"] == "child":
+                                ui.label(t("form.relation_children")).classes(
+                                    "w-16 shrink-0 text-caption text-gray-400"
+                                )
+                            else:
+                                ui.label("").classes("w-16 shrink-0")
+                            ui.label(f"{row['label']} · {row['type']}").classes(
+                                "flex-1 text-caption"
+                            )
+                            ui.button(
+                                icon="open_in_new",
+                                on_click=lambda oid=row["other_id"]: open_object(oid),
+                            ).props("flat dense round").tooltip(t("form.relation_open"))
+                            if dk == "rel_depends_on" and row["role"] == "parent":
+                                ui.button(
+                                    icon="drive_file_move",
+                                    on_click=lambda dk=dk, tt=target_types: open_relation_picker(
+                                        rel_label(dk), tt, lambda hit: on_reparent(hit)
+                                    ),
+                                ).props("flat dense round").tooltip(t("form.relation_reparent"))
+                            elif kind == "aggregation":
+                                ui.button(
+                                    icon="close",
+                                    on_click=lambda rid=row["id"]: on_remove_ref(rid),
+                                ).props("flat dense round").tooltip(t("grid.ref_remove"))
+            return expansion, content
+
         # Attribute definitions applicable to this object type.
         defs = [d for d in definitions if d.get("name") and _applicable(d, object_type)]
         defs_sorted = sorted(defs, key=lambda d: str(d.get("name", "")))
@@ -500,6 +695,13 @@ async def product_form(object_id: str) -> None:
                     except Exception:  # noqa: BLE001 - fall back to the raw id
                         ref_labels[name_] = {"id": val, "label": val, "type": ""}
 
+        # --- Relations (graph edges): definitions + the object's references. --
+        rel_defs: list[dict] = list(relation_definitions)
+        all_references: list[dict] = list(references)
+        rel_def_by_key: dict[str, dict] = {
+            str(d.get("id", "")).split(":", 1)[-1]: d for d in rel_defs
+        }
+
         # --- "Nur fehlende Pflichtfelder" toggle + attribute sections. ------
         show_missing_only = bool(app.storage.user.get("form_show_missing", False))
 
@@ -515,44 +717,59 @@ async def product_form(object_id: str) -> None:
                         break
 
             with ui.column().classes("w-full gap-2 mt-4"):
-                if show_missing_only and not missing:
-                    ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
-                    return
                 jump = (
                     ui.select([], label=t("form.jump"), on_change=lambda e: go_to(str(e.value)))
                     .props("filled dense")
                     .classes("w-64")
                 )
-                result = render_section(
-                    t("form.summary"),
-                    summary_items,
-                    open_=True,
-                    id_label=object_id,
-                    show_missing_only=show_missing_only,
-                )
+                if show_missing_only and not missing:
+                    ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
+                else:
+                    result = render_section(
+                        t("form.summary"),
+                        summary_items,
+                        open_=True,
+                        id_label=object_id,
+                        show_missing_only=show_missing_only,
+                    )
+                    if result is not None:
+                        jump_refs.append((t("form.summary"), *result))
+                    if ungrouped_items:
+                        result = render_section(
+                            t("form.ungrouped"),
+                            ungrouped_items,
+                            open_=False,
+                            show_missing_only=show_missing_only,
+                        )
+                        if result is not None:
+                            jump_refs.append((t("form.ungrouped"), *result))
+                    for gid, items in ordered_groups:
+                        group = group_by_id.get(gid)
+                        title = _label(group, gid, locale) if group else t("form.general")
+                        result = render_section(
+                            title,
+                            items,
+                            open_=False,
+                            show_missing_only=show_missing_only,
+                        )
+                        if result is not None:
+                            jump_refs.append((title, *result))
+                # Relations (graph edges) — always visible.
+                result = build_relations_section()
                 if result is not None:
-                    jump_refs.append((t("form.summary"), *result))
-                if ungrouped_items:
-                    result = render_section(
-                        t("form.ungrouped"),
-                        ungrouped_items,
-                        open_=False,
-                        show_missing_only=show_missing_only,
-                    )
-                    if result is not None:
-                        jump_refs.append((t("form.ungrouped"), *result))
-                for gid, items in ordered_groups:
-                    group = group_by_id.get(gid)
-                    title = _label(group, gid, locale) if group else t("form.general")
-                    result = render_section(
-                        title,
-                        items,
-                        open_=False,
-                        show_missing_only=show_missing_only,
-                    )
-                    if result is not None:
-                        jump_refs.append((title, *result))
+                    jump_refs.append((t("form.relations"), *result))
                 jump.set_options([label for label, _, _ in jump_refs])
+
+        async def reload_relations() -> None:
+            """Re-fetches the object's references and re-renders the sections."""
+            nonlocal all_references
+            try:
+                all_references = await client.list_object_references(
+                    token, object_id, locale=locale
+                )
+            except Exception:  # noqa: BLE001 - degrade to an empty list
+                all_references = []
+            render_sections.refresh()
 
         def on_missing_toggle(value: bool) -> None:
             nonlocal show_missing_only

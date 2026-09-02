@@ -88,5 +88,17 @@
   "form.add": "Hinzufügen",
   "form.option_exists": "Diese Option existiert bereits.",
   "form.option_added": "Option hinzugefügt.",
-  "form.reference_search": "Objekt suchen…"
+  "form.reference_search": "Objekt suchen…",
+  "form.relations": "Relationen",
+  "form.relation_composition": "Komposition",
+  "form.relation_aggregation": "Aggregation",
+  "form.relation_add": "Relation hinzufügen",
+  "form.relation_added": "Relation hinzugefügt.",
+  "form.relation_reparent": "Umhängen",
+  "form.relation_reparented": "Umgehängt.",
+  "form.relation_reparent_failed": "Umhängen fehlgeschlagen.",
+  "form.relation_parent": "Elternteil",
+  "form.relation_children": "Kinder",
+  "form.relation_open": "Objekt öffnen",
+  "form.relation_none": "Keine Relationen dieses Typs."
 }

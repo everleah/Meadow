@@ -87,5 +87,17 @@
   "form.add": "Add",
   "form.option_exists": "This option already exists.",
   "form.option_added": "Option added.",
-  "form.reference_search": "Search object…"
+  "form.reference_search": "Search object…",
+  "form.relations": "Relations",
+  "form.relation_composition": "Composition",
+  "form.relation_aggregation": "Aggregation",
+  "form.relation_add": "Add relation",
+  "form.relation_added": "Relation added.",
+  "form.relation_reparent": "Re-parent",
+  "form.relation_reparented": "Re-parented.",
+  "form.relation_reparent_failed": "Could not re-parent.",
+  "form.relation_parent": "Parent",
+  "form.relation_children": "Children",
+  "form.relation_open": "Open object",
+  "form.relation_none": "No relations of this type."
 }

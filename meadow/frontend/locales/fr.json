@@ -88,5 +88,17 @@
   "form.add": "Ajouter",
   "form.option_exists": "Cette option existe déjà.",
   "form.option_added": "Option ajoutée.",
-  "form.reference_search": "Rechercher un objet…"
+  "form.reference_search": "Rechercher un objet…",
+  "form.relations": "Relations",
+  "form.relation_composition": "Composition",
+  "form.relation_aggregation": "Agrégation",
+  "form.relation_add": "Ajouter une relation",
+  "form.relation_added": "Relation ajoutée.",
+  "form.relation_reparent": "Réassigner",
+  "form.relation_reparented": "Réassigné.",
+  "form.relation_reparent_failed": "Échec de la réassignation.",
+  "form.relation_parent": "Parent",
+  "form.relation_children": "Enfants",
+  "form.relation_open": "Ouvrir l'objet",
+  "form.relation_none": "Aucune relation de ce type."
 }
