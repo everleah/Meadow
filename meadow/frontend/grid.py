@@ -635,7 +635,7 @@ async def products_page(request: Request) -> None:
                 t("grid.bulk_selected").format(count=len(bulk_selected_ids))
             )
             if bulk_scope is not None:
-                bulk_scope.set_value("selected" if bulk_selected_ids else "all")
+                bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
 
         # Load category objects and candidate parents for the wizard pickers.
         categories: list[dict] = []
@@ -679,10 +679,11 @@ async def products_page(request: Request) -> None:
             bulk_scope = (
                 ui.select(
                     {
-                        "all": t("grid.bulk_scope_all").format(count=len(objects)),
+                        "filtered": t("grid.bulk_scope_filtered").format(count=len(all_rows)),
+                        "page": t("grid.bulk_scope_page"),
                         "selected": t("grid.bulk_scope_selected"),
                     },
-                    value="selected" if bulk_selected_ids else "all",
+                    value="selected" if bulk_selected_ids else "filtered",
                 )
                 .props("filled dense")
                 .classes("w-full")
@@ -759,6 +760,17 @@ async def products_page(request: Request) -> None:
                 elif op == "delete":
                     ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
 
+        async def _current_page_ids() -> list[str]:
+            """Return the object ids of the rows on the current grid page."""
+            try:
+                page = int(await grid.run_grid_method("paginationGetCurrentPage") or 0)
+                size = int(await grid.run_grid_method("paginationGetPageSize") or 50)
+            except Exception:  # noqa: BLE001 - fall back to the configured page size
+                page, size = 0, 50
+            start = page * size
+            end = start + size
+            return [oid for oid in (_row_id(r) for r in all_rows[start:end]) if oid]
+
         async def start_bulk() -> None:
             op = bulk_op.value
             if not op:
@@ -767,8 +779,10 @@ async def products_page(request: Request) -> None:
             if bulk_scope.value == "selected":
                 selected: list = await grid.get_selected_rows()
                 ids = [oid for oid in (_row_id(row) for row in selected) if oid]
+            elif bulk_scope.value == "page":
+                ids = await _current_page_ids()
             else:
-                ids = [str(o.get("id") or "") for o in objects]
+                ids = [oid for oid in (_row_id(r) for r in all_rows) if oid]
             ids = [oid for oid in ids if oid]
             if not ids:
                 ui.notify(t("grid.bulk_no_objects"), color="warning")
