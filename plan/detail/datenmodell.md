@@ -153,7 +153,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "name": "price",
     "label": { "de": "Preis", "en": "Price" },
     "type": "number",                // text, number, boolean, date, enum, reference, ...
-    "group_id": "attr_group_01",
+    "group_ids": ["attr_group_01"],  // viele-zu-viele: Attribut kann in mehreren Gruppen sein
     "inheritable": true,             // true: Wert kann über Vererbung bezogen werden
     "is_key": false,                 // true: Business-Schlüssel (z. B. SKU), eindeutig pro Typ
     "applicable_types": [],          // optional: Objekttypen, für die das Attribut gilt (leer = alle)
@@ -176,12 +176,14 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 ```
 
 - `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
+- `group_ids` (viele-zu-viele): Ein Attribut kann in **mehreren** Attributgruppen erscheinen; die Zuordnung liegt in der Tabelle `attribute_group_member`. Am Objekt instanziert ist es **dasselbe** Attribut (ein Feld, mehrere UI-Gruppen). Ist `group_ids` leer, gehört das Attribut keiner Gruppe („Attribute ohne Gruppe“).
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp (anwendungsseitig beim Schreiben erzwungen, konzeptionell `(type, attributes.<name>)`). Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
-- `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)).
+- `applicable_types` (leer = alle Typen) bestimmt, für welche Objekttypen das Attribut im Formular/Grid erscheint – die **Produktvorlage** pro Typ (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md)). **Dies ist der zentrale Mechanismus, damit nicht jedes Attribut überall auftaucht.**
 - `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
 - `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` kennzeichnen **berechnete Attribute** (Abschnitt 8 / [business-rules.md](business-rules.md)): Der Wert wird beim Schreiben **synchron** von einer `computed`-Regel berechnet und gespeichert (stored-first, kein On-Read-Modus); `dependencies` deklarieren die Eingaben der Formel (Grundlage der Recompute-Kaskade; async bei `computed_reads_inherited`).
 - Weitere optionale Felder: `multilingual`, `default_value`, `unit_id`, `display_unit_id`, `description`; die geschlossene Werteliste `enum_values` liegt optional in `constraints` (siehe Beispiel). Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
+- **Löschen:** `DELETE /attribute-definitions/{id}` entfernt die Definition und ihre `attribute_group_member`-Links. Sind bereits Objekt-Attributwerte vorhanden, wird die Löschung mit HTTP 409 verweigert; `?force=true` entfernt die Werte asynchron als Hintergrundjob (Massenoperation, [jobs-scheduler.md](jobs-scheduler.md)).
 
 ### Tabelle `business_rule`
 
@@ -218,9 +220,29 @@ Gruppiert Attributdefinitionen für die UI.
     "id": "attr_group_01",
     "name": "pricing",
     "label": { "de": "Preise", "en": "Pricing" },
-    "position": 2
+    "position": 2,
+    "applicable_types": []           // optional: Objekttypen, für die die Gruppe erscheint (leer = aus Mitgliedern abgeleitet)
 }
 ```
+
+- `applicable_types` (optional, leer = **aus den Mitgliedern abgeleitet**): Eine Gruppe erscheint für einen Objekttyp, wenn `applicable_types` leer ist **oder** der Typ enthalten ist; bei leer wird die Sichtbarkeit aus den `applicable_types` ihrer Mitglieder bestimmt („Nur Gruppen mit mindestens einem für den Typ gültigen Attribut erscheinen“, ~frontend-arbeitsflaechen.md). So lässt sich die Gruppe pro Typ explizit einschränken, ohne die Attribut-Typen zu duplizieren.
+- **Löschen:** `DELETE /attribute-groups/{id}` entfernt die Gruppe und ihre `attribute_group_member`-Links; die Attribute bleiben erhalten (und werden ggf. zu „ohne Gruppe“ bzw. liegen weiter in anderen Gruppen).
+
+### Tabelle `attribute_group_member`
+
+Viele-zu-viele-Zuordnung Attribut ↔ Gruppe (damit ein Attribut in **mehreren** Gruppen erscheinen kann).
+
+```json
+{
+    "id": "attr_group_member_001",
+    "attribute_definition_id": "attr_def_001",   // record<attribute_definition>
+    "attribute_group_id": "attr_group_01",       // record<attribute_group>
+    "position": 1                                 // Reihenfolge innerhalb der Gruppe
+}
+```
+
+- Eindeutigkeit über `(attribute_definition_id, attribute_group_id)`; `group_ids` auf der Attributdefinition wird als Abkürzung serialisiert und intern auf diese Zeilen gemappt.
+- Attribute ohne Gruppe haben keinen Eintrag (`group_ids = []`).
 
 ### Tabelle `reference`
 

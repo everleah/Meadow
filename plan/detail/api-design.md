@@ -153,6 +153,14 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 - Der Datentyp eines Attributs wird über `type` in der Attributdefinition festgelegt; die API behandelt `type` als **erweiterbare Werteliste** (neue Typen dürfen ergänzt, bestehende nicht umbenannt werden).
 - In der ersten Version ist **kein** Endpunkt zum Wechseln des Datentyps vorgesehen. Ein späterer Wechsel (Phase 9) erfordert eine Migration der vorhandenen Werte, einen Audit-Log-Eintrag und folgt der Kompatibilitätsmatrix in [datenmodell.md](datenmodell.md#datentypwechsel).
 
+## Attributkatalog (Definitionen & Gruppen) in der API
+
+- **`POST /attribute-definitions`** und **`PATCH /attribute-definitions/{id}`** nehmen **`group_ids: [„attr_group_01“, …]`** (viele-zu-viele) statt eines einzelnen `group_id`. Intern werden die `attribute_group_member`-Zeilen ersetzt (idempotent); `group_ids = []` = „ohne Gruppe“. `applicable_types`/`required_types` bleiben wie gehabt (Objekttyp-Zuordnung des Attributs).
+- **`DELETE /attribute-definitions/{id}`** (nur `admin`/`superadmin`): entfernt die Definition und ihre Gruppen-Links. Sind bereits **Objekt-Attributwerte** vorhanden, antwortet der Kern mit **HTTP 409** (`attribute in use`) und der Anzahl betroffener Objekte; mit **`?force=true`** werden die Werte asynchron als Hintergrundjob entfernt (Typ `bulk_operation`/`remove_attribute`).
+- **`DELETE /attribute-groups/{id}`** (nur `admin`/`superadmin`): entfernt die Gruppe und ihre `attribute_group_member`-Links; die Attribute bleiben erhalten.
+- **`attribute_group`** trägt **optional `applicable_types`** (leer = aus den Mitgliedern abgeleitet). `POST`/`PATCH /attribute-groups` akzeptieren das Feld; `GET /attribute-groups` liefert es mit.
+- **`create_attribute_definition`/`update_attribute_definition`** im Rust-Kern (`crates/pim-core/src/api/attribute_definitions.rs`) schreiben die Gruppen-Zuordnung transaktional in `attribute_group_member`; die Antwort serialisiert `group_ids` (aufgelöst auf die kurzen Group-Keys).
+
 ## Vollständigkeit (Completeness) in der API
 
 Die Vollständigkeit wird **im Rust-Kern berechnet** und ist Teil der Listen- und Detailantworten (nicht nur im Frontend), damit sie überall konsistent ist.
