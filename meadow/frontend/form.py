@@ -168,6 +168,7 @@ async def product_form(object_id: str) -> None:
         for key, value in raw_attributes.items():
             edited[key] = dict(value) if isinstance(value, dict) else value
         main_widgets: dict[str, ui.element] = {}
+        ref_labels: dict[str, dict] = {}
 
         def set_value(attr_name: str, lang: str, value: object, *, multilingual: bool) -> None:
             """Updates the working copy for a single attribute + language."""
@@ -233,6 +234,67 @@ async def product_form(object_id: str) -> None:
                     ui.button(t("form.add"), on_click=create).props("flat")
             dialog.open()
 
+        def build_reference_widget(
+            attr_name: str, defn: dict | None, value: object, *, multilingual: bool
+        ) -> None:
+            """Renders a searchable reference picker storing the target object ID."""
+            target_types = ((defn or {}).get("constraints") or {}).get("target_types") or None
+            existing = ref_labels.get(attr_name)
+            if existing is None and value:
+                existing = {"id": str(value), "label": str(value), "type": ""}
+
+            container = ui.column().classes("flex-1 gap-1")
+            with container:
+                search = (
+                    ui.input(placeholder=t("form.reference_search"))
+                    .props("filled dense")
+                    .classes("w-full")
+                )
+                chip_slot = ui.column().classes("w-full")
+                results = ui.column().classes("w-full gap-1")
+
+            def render_chip(ref: dict | None) -> None:
+                chip_slot.clear()
+                if not ref:
+                    return
+                with chip_slot, ui.row().classes("items-center gap-2 w-full"):
+                    ui.label(f"{ref.get('label')} · {ref.get('type')}").classes(
+                        "bg-neutral px-2 py-0.5 rounded text-xs"
+                    )
+                    ui.button(icon="close").props("flat dense size=sm").on_click(
+                        lambda: on_pick(None)
+                    ).tooltip(t("grid.ref_remove"))
+
+            def on_pick(hit: dict | None) -> None:
+                if hit is None:
+                    edited.pop(attr_name, None)
+                else:
+                    set_value(attr_name, "scalar", hit["id"], multilingual=False)
+                render_chip(hit)
+                search.value = ""
+                results.clear()
+
+            async def on_search(text: str) -> None:
+                q = (text or "").strip()
+                results.clear()
+                if not q:
+                    return
+                try:
+                    hits = await client.picker_search(
+                        token, q, types=target_types, locale=locale, limit=10
+                    )
+                except Exception:  # noqa: BLE001 - degrade to no hits
+                    return
+                for hit in hits:
+                    with results:
+                        ui.button(
+                            f"{hit.get('label')} · {hit.get('type')}",
+                            on_click=lambda h=hit: on_pick(h),
+                        ).props("outline dense").classes("w-full justify-start")
+
+            search.on_value_change(lambda e: on_search(e.value))
+            render_chip(existing)
+
         def build_value_widget(
             attr_name: str, defn: dict | None, value: object, *, multilingual: bool
         ) -> None:
@@ -248,6 +310,9 @@ async def product_form(object_id: str) -> None:
                 )
             elif atype == "boolean":
                 field = ui.switch(value=bool(value)).props("dense").on_value_change(on_change)
+            elif atype == "reference":
+                build_reference_widget(attr_name, defn, value, multilingual=multilingual)
+                return
             elif atype == "enum":
                 options = ((defn or {}).get("constraints") or {}).get("enum_values") or []
                 field = (
@@ -412,6 +477,28 @@ async def product_form(object_id: str) -> None:
                 kv[0],
             ),
         )
+
+        # Resolve existing reference-attribute values to a display label.
+        for d in defs:
+            if d.get("type") == "reference":
+                name_ = str(d.get("name"))
+                val = edited.get(name_)
+                if isinstance(val, str) and val:
+                    try:
+                        target = await client.get_object(token, val, locale=locale)
+                        attrs = target.get("attributes") or {}
+                        label = (
+                            resolve_value(attrs.get("name"), locale)
+                            or str(target.get("type", ""))
+                            or val
+                        )
+                        ref_labels[name_] = {
+                            "id": val,
+                            "label": label,
+                            "type": str(target.get("type", "")),
+                        }
+                    except Exception:  # noqa: BLE001 - fall back to the raw id
+                        ref_labels[name_] = {"id": val, "label": val, "type": ""}
 
         # --- "Nur fehlende Pflichtfelder" toggle + attribute sections. ------
         show_missing_only = bool(app.storage.user.get("form_show_missing", False))

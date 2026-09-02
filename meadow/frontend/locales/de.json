@@ -87,5 +87,6 @@
   "form.new_option": "Neuer Wert",
   "form.add": "Hinzufügen",
   "form.option_exists": "Diese Option existiert bereits.",
-  "form.option_added": "Option hinzugefügt."
+  "form.option_added": "Option hinzugefügt.",
+  "form.reference_search": "Objekt suchen…"
 }

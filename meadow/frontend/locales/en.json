@@ -86,5 +86,6 @@
   "form.new_option": "New value",
   "form.add": "Add",
   "form.option_exists": "This option already exists.",
-  "form.option_added": "Option added."
+  "form.option_added": "Option added.",
+  "form.reference_search": "Search object…"
 }
