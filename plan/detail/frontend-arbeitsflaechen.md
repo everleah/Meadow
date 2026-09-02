@@ -152,9 +152,11 @@ Beschreibt die **typisierten Relationen** zwischen Objekten (`reference`-RELATIO
 
 ## 5. Dashboard (Arbeitsübersicht)
 
-- **Kacheln:** Anzahl Objekte pro Typ/Status.
-- **Vollständigkeits-Kacheln als Aufgaben-Shortcuts:** z. B. „42 Produkte unvollständig (de)" – Klick öffnet das **Grid mit voreingestelltem Filter** „nur unvollständige Produkte" in der Arbeitssprache. Das Dashboard wird damit zum **Einstieg in die Pflegearbeit** („Was fehlt?"), ohne eine eigene Aufgabenmaschine.
-- **Letzte Änderungen** (Audit-Auszug) und **laufende/letzte Jobs** (Status aus [jobs-scheduler.md](jobs-scheduler.md)).
+> **Stand (Phase 7, umgesetzt):** `meadow/frontend/views.py` (`views.home`, `GET /`, `response_timeout=15`) lädt `GET /objects?limit=1000&locale=`, `GET /system/logs` und `GET /jobs/runs` und rendert Kacheln/Listen. Kein Audit-Read-Endpoint ist vorhanden, daher zeigt „Letzte Aktivität“ aktuell die **System-Logs** (`GET /system/logs`, admin) als Proxy statt eines Audit-Auszugs.
+
+- **Kacheln:** Anzahl Objekte pro Typ/Status (aus `GET /objects`, farblich abgesetzte Kacheln je Typ; Status als Badges mit Zähler).
+- **Vollständigkeits-Kacheln als Aufgaben-Shortcuts (implementiert):** z. B. „23 unvollständig (product)“ – Klick öffnet das **Grid mit voreingestelltem Filter** `/products?incomplete=1&type=<typ>` (das Grid filtert client-seitig auf `completeness < 100` der Arbeitssprache und optional den Typ). Das Dashboard wird damit zum **Einstieg in die Pflegearbeit** („Was fehlt?“), ohne eine eigene Aufgabenmaschine.
+- **Letzte Aktivität** (System-Logs) und **laufende/letzte Jobs** (Status aus `GET /jobs/runs`, [jobs-scheduler.md](jobs-scheduler.md)).
 - Bewusst **nicht im MVP** (später, Phase 9): Starred-Entitäten, Work Areas/Aufgabenwarteschlangen, Kanäle.
 
 ## 6. Phasierung

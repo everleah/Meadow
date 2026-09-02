@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from nicegui import ui
+from nicegui import app, ui
 
 from meadow.frontend import (
+    config,
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
 )
-from meadow.frontend.i18n import t
+from meadow.frontend.api import CoreClient
+from meadow.frontend.grid import status_badge
+from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import NAV_ITEMS, build_shell
 
 #: Routes that have a real page and must be skipped by the placeholder
@@ -16,16 +19,131 @@ from meadow.frontend.layout import NAV_ITEMS, build_shell
 _IMPLEMENTED_ROUTES = {"/products"}
 
 
-@ui.page("/")
-def home() -> None:
-    """Dashboard overview (expanded in a later Phase 7 step)."""
+def _is_incomplete(obj: dict, locale: str) -> bool:
+    """Whether an object's completeness for the locale is below 100 %."""
+    percent = (obj.get("completeness") or {}).get(locale)
+    return percent is None or int(percent) < 100
+
+
+@ui.page("/", response_timeout=15)
+async def home() -> None:
+    """Dashboard: work overview (objects, completeness, recent activity/jobs)."""
     build_shell(active="/")
+    locale = current_locale()
+    client = CoreClient(config.CORE_URL)
+    token = app.storage.user.get("token", "")
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.dashboard")).classes("text-h4")
-        ui.label(t("dashboard.overview_placeholder")).classes("text-subtitle1")
-        with ui.card().classes("w-full"):
-            ui.label(t("dashboard.welcome")).classes("text-body1")
-            ui.label(t("dashboard.milestone_note")).classes("text-body2")
+        ui.label(t("dashboard.subtitle")).classes("text-subtitle1")
+
+        try:
+            objects = await client.list_objects(token, limit=1000, locale=locale)
+        except Exception:  # noqa: BLE001 - degrade to an empty overview
+            objects = []
+        try:
+            logs = await client.list_system_logs(token, limit=10)
+        except Exception:  # noqa: BLE001 - degrade
+            logs = []
+        try:
+            job_runs = await client.list_job_runs(token, limit=5)
+        except Exception:  # noqa: BLE001 - degrade
+            job_runs = []
+
+        counts_by_type: dict[str, int] = {}
+        counts_by_status: dict[str, int] = {}
+        incomplete_by_type: dict[str, int] = {}
+        for obj in objects:
+            otype = str(obj.get("type", ""))
+            counts_by_type[otype] = counts_by_type.get(otype, 0) + 1
+            status = str(obj.get("status", ""))
+            counts_by_status[status] = counts_by_status.get(status, 0) + 1
+            if _is_incomplete(obj, locale):
+                incomplete_by_type[otype] = incomplete_by_type.get(otype, 0) + 1
+
+        # Objects by type.
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("dashboard.objects")).classes("text-subtitle1")
+            with ui.row().classes("gap-4 w-full mt-2 flex-wrap"):
+                for otype in sorted(counts_by_type):
+                    with ui.column().classes("items-center p-3 rounded bg-neutral min-w-[6rem]"):
+                        ui.label(str(counts_by_type[otype])).classes("text-h4")
+                        ui.label(otype).classes("text-caption text-gray-500")
+                if not counts_by_type:
+                    ui.label(t("grid.no_objects")).classes("text-caption text-gray-500")
+
+        # Completeness shortcuts (clickable).
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("dashboard.completeness")).classes("text-subtitle1")
+            with ui.row().classes("gap-4 w-full mt-2 flex-wrap"):
+                for otype in sorted(incomplete_by_type):
+                    count = incomplete_by_type[otype]
+                    if count <= 0:
+                        continue
+                    with (
+                        ui.button(
+                            on_click=lambda t=otype: ui.navigate.to(
+                                f"/products?incomplete=1&type={t}"
+                            )
+                        )
+                        .props("flat")
+                        .classes("items-center p-3 rounded bg-orange-1 min-w-[6rem] gap-1")
+                    ):
+                        ui.label(str(count)).classes("text-h4 text-orange-9")
+                        ui.label(t("dashboard.incomplete").format(type=otype)).classes(
+                            "text-caption text-gray-600"
+                        )
+                if not incomplete_by_type:
+                    ui.label(t("dashboard.no_incomplete")).classes("text-caption text-gray-500")
+
+        # Status breakdown.
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("dashboard.status")).classes("text-subtitle1")
+            with ui.row().classes("gap-2 w-full mt-2 flex-wrap"):
+                for status in sorted(counts_by_status):
+                    with ui.column().classes("items-center gap-1"):
+                        ui.html(status_badge(status))
+                        ui.label(str(counts_by_status[status])).classes(
+                            "text-caption text-gray-500"
+                        )
+
+        # Recent activity.
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("dashboard.recent_activity")).classes("text-subtitle1")
+            if not logs:
+                ui.label(t("dashboard.no_activity")).classes("text-caption text-gray-500")
+            with ui.column().classes("w-full gap-1 mt-2"):
+                for log in logs:
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        level = str(log.get("level") or "")
+                        if level == "error":
+                            level_cls = "bg-negative text-white"
+                        elif level == "warn":
+                            level_cls = "bg-orange text-white"
+                        else:
+                            level_cls = "bg-secondary text-white"
+                        ui.html(
+                            '<span class="px-2 py-0.5 rounded text-xs w-20 text-center '
+                            f'{level_cls}">{level}</span>'
+                        ).classes("shrink-0")
+                        ui.label(str(log.get("created_at") or "")).classes(
+                            "text-caption text-gray-400 w-44 shrink-0"
+                        )
+                        ui.label(str(log.get("message") or "")).classes("flex-1 text-caption")
+
+        # Recent jobs.
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("dashboard.recent_jobs")).classes("text-subtitle1")
+            if not job_runs:
+                ui.label(t("dashboard.no_jobs")).classes("text-caption text-gray-500")
+            with ui.column().classes("w-full gap-1 mt-2"):
+                for run in job_runs:
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.html(status_badge(str(run.get("status") or ""))).classes("w-24 shrink-0")
+                        def_label = str(run.get("job_definition_id") or "").split(":")[-1]
+                        ui.label(def_label).classes("flex-1 text-caption")
+                        ui.label(str(run.get("created_at") or "")).classes(
+                            "text-caption text-gray-400"
+                        )
 
 
 def register_placeholders() -> None:

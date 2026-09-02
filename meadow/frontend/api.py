@@ -398,3 +398,35 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def list_system_logs(self, token: str, *, limit: int = 10, start: int = 0) -> list[dict]:
+        """Lists curated system log entries (admin only)."""
+        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/system/logs",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def list_job_runs(
+        self,
+        token: str,
+        *,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Lists job runs (newest first) for the dashboard / polling."""
+        params: dict[str, str] = {"limit": str(limit)}
+        if status:
+            params["status"] = status
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/jobs/runs",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()

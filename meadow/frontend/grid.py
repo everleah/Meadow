@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from fastapi import Request
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -53,6 +54,12 @@ def completeness_badge(percent: int) -> str:
     else:
         classes = "bg-grey text-white"
     return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{percent}%</span>'
+
+
+def _is_incomplete(obj: dict, locale: str) -> bool:
+    """Whether an object's completeness for the locale is below 100 %."""
+    percent = (obj.get("completeness") or {}).get(locale)
+    return percent is None or int(percent) < 100
 
 
 def row_data(object_: dict, locale: str, attribute_names: list[str] | None = None) -> dict:
@@ -205,19 +212,30 @@ def build_patch(object_id: str, client_name: object, original: dict, locale: str
 
 
 @ui.page("/products", response_timeout=10)
-async def products_page() -> None:
+async def products_page(request: Request) -> None:
     """Lists objects in the main grid with inline editing + batch save."""
     build_shell(active="/products")
     locale = current_locale()
+    incomplete_only = request.query_params.get("incomplete") == "1"
+    type_filter = request.query_params.get("type")
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.products")).classes("text-h4")
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
         try:
-            objects = await client.list_objects(token, limit=100, locale=locale)
+            objects = await client.list_objects(
+                token, limit=1000 if incomplete_only else 100, locale=locale
+            )
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("grid.load_failed")).classes("text-subtitle1 text-negative")
             return
+        if incomplete_only or type_filter:
+            objects = [
+                obj
+                for obj in objects
+                if (not incomplete_only or _is_incomplete(obj, locale))
+                and (not type_filter or str(obj.get("type")) == type_filter)
+            ]
         if not objects:
             ui.label(t("grid.no_objects")).classes("text-subtitle1")
             return
