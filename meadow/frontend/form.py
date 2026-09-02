@@ -597,13 +597,14 @@ async def product_form(object_id: str) -> None:
                     rows = rows_by_dk.get(dk, [])
                     target_types = (defn.get("target_types") or []) or None
                     bg = "bg-orange-1" if kind == "composition" else "bg-blue-1"
-                    with ui.column().classes(f"rounded p-2 gap-1 mb-1 {bg}"):
-                        with ui.row().classes("items-center gap-2 w-full"):
+                    head_bg = "bg-orange-2" if kind == "composition" else "bg-blue-2"
+                    with ui.column().classes(f"rounded w-full overflow-hidden mb-1 {bg}"):
+                        with ui.row().classes(f"items-center gap-2 w-full px-2 py-1 {head_bg}"):
                             ui.label(rel_label(dk)).classes(
-                                "text-caption font-medium text-gray-700"
+                                "text-caption font-medium text-gray-800"
                             )
                             ui.html(kind_badge(dk))
-                            ui.label(str(len(rows))).classes("text-caption text-gray-500")
+                            ui.label(str(len(rows))).classes("text-caption text-gray-600")
                             ui.space()
                             if kind == "aggregation":
                                 ui.button(
@@ -614,46 +615,51 @@ async def product_form(object_id: str) -> None:
                                         lambda h, dd=d: on_add_ref(dd, h),
                                     ),
                                 ).props("dense flat round").tooltip(t("form.relation_add"))
-                        if not rows:
-                            ui.label(t("form.relation_none")).classes(
-                                "text-caption text-gray-400 italic"
-                            )
-                        else:
-                            for row in rows:
-                                with ui.row().classes("items-center gap-2 w-full"):
-                                    if row["role"] == "parent":
-                                        ui.label(t("form.relation_parent")).classes(
-                                            "w-16 shrink-0 text-caption text-gray-400"
+                        with ui.column().classes("w-full gap-1 p-2"):
+                            if not rows:
+                                ui.label(t("form.relation_none")).classes(
+                                    "text-caption text-gray-400 italic"
+                                )
+                            else:
+                                for row in rows:
+                                    with ui.row().classes("items-center gap-2 w-full"):
+                                        if row["role"] == "parent":
+                                            ui.label(t("form.relation_parent")).classes(
+                                                "w-16 shrink-0 text-caption text-gray-400"
+                                            )
+                                        elif row["role"] == "child":
+                                            ui.label(t("form.relation_children")).classes(
+                                                "w-16 shrink-0 text-caption text-gray-400"
+                                            )
+                                        else:
+                                            ui.label("").classes("w-16 shrink-0")
+                                        ui.label(f"{row['label']} · {row['type']}").classes(
+                                            "flex-1 text-caption"
                                         )
-                                    elif row["role"] == "child":
-                                        ui.label(t("form.relation_children")).classes(
-                                            "w-16 shrink-0 text-caption text-gray-400"
-                                        )
-                                    else:
-                                        ui.label("").classes("w-16 shrink-0")
-                                    ui.label(f"{row['label']} · {row['type']}").classes(
-                                        "flex-1 text-caption"
-                                    )
-                                    ui.button(
-                                        icon="open_in_new",
-                                        on_click=lambda oid=row["other_id"]: open_object(oid),
-                                    ).props("flat dense round").tooltip(t("form.relation_open"))
-                                    if dk == "rel_depends_on" and row["role"] == "parent":
                                         ui.button(
-                                            icon="drive_file_move",
-                                            on_click=lambda dk=dk, tt=target_types: (
-                                                open_relation_picker(
-                                                    rel_label(dk), tt, lambda hit: on_reparent(hit)
-                                                )
-                                            ),
-                                        ).props("flat dense round").tooltip(
-                                            t("form.relation_reparent")
-                                        )
-                                    elif kind == "aggregation":
-                                        ui.button(
-                                            icon="close",
-                                            on_click=lambda rid=row["id"]: on_remove_ref(rid),
-                                        ).props("flat dense round").tooltip(t("grid.ref_remove"))
+                                            icon="open_in_new",
+                                            on_click=lambda oid=row["other_id"]: open_object(oid),
+                                        ).props("flat dense round").tooltip(t("form.relation_open"))
+                                        if dk == "rel_depends_on" and row["role"] == "parent":
+                                            ui.button(
+                                                icon="drive_file_move",
+                                                on_click=lambda dk=dk, tt=target_types: (
+                                                    open_relation_picker(
+                                                        rel_label(dk),
+                                                        tt,
+                                                        lambda hit: on_reparent(hit),
+                                                    )
+                                                ),
+                                            ).props("flat dense round").tooltip(
+                                                t("form.relation_reparent")
+                                            )
+                                        elif kind == "aggregation":
+                                            ui.button(
+                                                icon="close",
+                                                on_click=lambda rid=row["id"]: on_remove_ref(rid),
+                                            ).props("flat dense round").tooltip(
+                                                t("grid.ref_remove")
+                                            )
             return expansion, content
 
         # Attribute definitions applicable to this object type.
