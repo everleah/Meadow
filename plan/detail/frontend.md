@@ -158,6 +158,11 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
     - Änderungen werden im Audit-Log protokolliert
     - **(Umgesetzt:)** `meadow/frontend/settings.py` (`/system-settings`, admin-only) – eine Karte je Setting (Schlüssel + **Herkunfts-Badge** `default`/`env`/`db`) mit typspezifischem Editor (Select / Multi-Select / Zahl) sowie **Save** (`PUT /system/settings/{key}`) und **Reset mit Bestätigung** (`DELETE /system/settings/{key}`). Backend: `GET /system/settings?include_source=true` liefert `{key: {value, source}}` (ohne Param weiterhin die flache `{key: value}`-Map für den Worker).
 
+13. **Konnektoren (Connectors)** (nur `admin`/`superadmin`)
+    - Verwaltung der **Inbound-/Outbound-Konnektoren** (Anbindung externer Systeme): Tabelle `connector`, Endpunkte `GET`/`POST`/`PATCH`/`DELETE /connectors` – Konnektoren **auflisten** (Filter: `type`, `enabled`), **anlegen**, **bearbeiten**, **löschen** und **aktivieren/deaktivieren** (`enabled`)
+    - Konfiguration je Konnektor (Typ `json_import`/`json_export`/`webhook_outbound`, `enabled`, `match_by_key`-Upsert, `emit_events`-Summary, Ziel-URL/Filter, Retry/Coalescing); Anzeige der Herkunft (persistiert in DB, Env nur als Bootstrap)
+    - **Geplant (noch nicht umgesetzt):** Der Menüpunkt `nav.connectors` → `/connectors` ist in `NAV_ITEMS` bereits vorregistriert (admin-only, zeigt aktuell „Unter Konstruktion“). Das **Backend** ist fertig (Phase-6-Schritt 11, `integration-eventsystem.md`: Tabelle `connector`, `/connectors`-API, Multi-Konnektor-Fanout im Worker, Live-Reload). Die **Admin-Oberfläche** hierfür ist als eigenes Frontend-Modul noch offen.
+
 **Spätere Ausbaustufen (nicht im MVP):**
 
 - Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections
