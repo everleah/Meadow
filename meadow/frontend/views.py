@@ -11,6 +11,7 @@ from meadow.frontend import (
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
     jobs,  # noqa: F401  (registers the /jobs page)
+    logs,  # noqa: F401  (registers the /system-logs page)
     settings,  # noqa: F401  (registers the /system-settings page)
     users,  # noqa: F401  (registers the /users page)
 )
@@ -28,6 +29,7 @@ _IMPLEMENTED_ROUTES = {
     "/users",
     "/groups",
     "/system-settings",
+    "/system-logs",
 }
 
 

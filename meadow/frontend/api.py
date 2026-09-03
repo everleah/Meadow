@@ -571,9 +571,37 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
-    async def list_system_logs(self, token: str, *, limit: int = 10, start: int = 0) -> list[dict]:
-        """Lists curated system log entries (admin only)."""
+    async def list_system_logs(
+        self,
+        token: str,
+        *,
+        limit: int = 10,
+        start: int = 0,
+        service: str | None = None,
+        category: str | None = None,
+        level: str | None = None,
+        from_dt: str | None = None,
+        to_dt: str | None = None,
+        q: str | None = None,
+    ) -> list[dict]:
+        """Lists curated system log entries (admin only).
+
+        Filters (all optional): ``service``, ``category``, ``level``, ``from_dt``/
+        ``to_dt`` (ISO-8601), ``q`` (substring match on ``message``).
+        """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        if service:
+            params["service"] = service
+        if category:
+            params["category"] = category
+        if level:
+            params["level"] = level
+        if from_dt:
+            params["from"] = from_dt
+        if to_dt:
+            params["to"] = to_dt
+        if q:
+            params["q"] = q
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/system/logs",

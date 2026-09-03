@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 7, 9
-- **Stand:** Entwurf (Login-Branding umgesetzt)
+- **Stand:** Entwurf (Admin-Module „Benutzer & Gruppen“, „Jobs & Scheduler“, „System-Logs“, „System-Einstellungen“ und Login-Branding umgesetzt)
 
 Dieses Dokument beschreibt die Weboberfläche (NiceGUI): Architektur, Mehrsprachigkeit der Oberfläche und die Modulübersicht. Die konkreten **Arbeitsflächen** (Grid, Produkt-Formular, Massendatenpflege, Dashboard) sind im Detaildokument [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) spezifiziert. Die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum) ist separat im Dokument [sprachbaum-mehrsprachigkeit.md](sprachbaum-mehrsprachigkeit.md) beschrieben.
 
@@ -152,6 +152,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
     - Filterleiste: Dienst, Kategorie, Level, Zeitraum, Textsuche auf `message`
     - Auto-Refresh per **Polling** (≈ 5 s, analog Job-Status); Detailansicht per Klick (volle `message`, `context` als JSON, `trace_id`) mit Kontext-Links zu Job/Objekt/Rule, sofern `context` IDs trägt
     - CSV-Export der gefilterten Ansicht (optional, Phase 8)
+    - **(Umgesetzt:)** `meadow/frontend/logs.py` (`/system-logs`, admin-only) – AG-Grid der Log-Einträge (neueste zuerst, füllt die **verbleibende Viewport-Höhe** via `height: calc(100vh - 318px)` + `domLayout: 'normal'`, so dass nur das Grid intern scrollt) mit **HTML-Level-Badge** (`html_columns`); Filterleiste (Dienst, Kategorie, Level, `from`/`to`-Zeitraum, Textsuche) und **Reload**; Polling alle ~5 s; **Doppelklick → Detail-Dialog** (vollständige `message` mit Copy-Button, Meta-Zeile Zeit/Dienst/Kategorie, `trace_id` und `context` als JSON sowie Kontext-Links) – `context`/`trace_id` werden bedingt gerendert und über die Zeilen-`id` gegen `logs` aufgelöst.
 
 12. **System-Einstellungen** (nur `admin`/`superadmin`)
     - Logging-Einstellungen im Betrieb ändern (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); Anzeige der Herkunft (Default/ENV/DB), „Auf Default zurücksetzen“
