@@ -132,6 +132,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
    - Anzeige laufender und abgeschlossener Jobs (Historie)
    - Manuelles Starten von Job-Definitionen
    - Anzeige von Dead-Letter-Einträgen (nur `admin`)
+   - **(Umgesetzt:)** `meadow/frontend/jobs.py` (`/jobs`, admin-only) mit zwei Tabs. **Definitionen**: AG-Grid-Liste (`name`, `type`, `schedule`, `enabled`, `updated`), Neuanlage/Bearbeiten-Dialog (Name, Typ, Cron-Zeitplan, `enabled`, `parameters` als JSON), **manuelles Ausführen** (`POST /jobs/{id}/run`) mit Bestätigungsdialog. **Läufe**: AG-Grid der `job_run`-Historie (neueste zuerst) mit Status-Badge (HTML-Spalte via `html_columns`), Trigger, Start/Fertig, Dauer, Fehler und **DLQ-Marker** (❗ bei „dead lettered“); Status-Filter + **„Nur Dead Letters“**-Schalter, Polling alle ~5 s, Doppelklick → Detail-Dialog (Status, Fehler, `result`-JSON).
 
 8. **Sprachbaum-Administration**
    - Anzeige und Pflege des Sprachbaums (Knoten, Eltern, Fallback-Order)

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 7: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz) + DLQ-Überwachung. Log-Retention folgt.
+- **Stand:** Implementiert bis Phase-5-Schritt 7: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz) + DLQ-Überwachung. Log-Retention folgt. **Phase 7:** Admin-Seite „Jobs & Scheduler“ (`meadow/frontend/jobs.py`, `/jobs`) mit Definitions-CRUD, manuellem Start und Run-Historie (Status/Dead-Letter).
 
 ## Architektur
 

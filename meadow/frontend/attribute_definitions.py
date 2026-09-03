@@ -195,6 +195,8 @@ async def attribute_definitions_page() -> None:
                     )
 
             def open_group_editor(group: dict | None) -> None:
+                if isinstance(group, str):
+                    group = next((g for g in groups if str(g.get("id")) == group), None)
                 editing = group is not None
                 group_title.set_text(
                     t("attr_def.groups_edit") if editing else t("attr_def.groups_create")
@@ -278,6 +280,7 @@ async def attribute_definitions_page() -> None:
                         or str(g.get("id"))
                     )
                     for g in groups
+                    if isinstance(g, dict)
                 }
                 group_grid.run_grid_method("setGridOption", "rowData", _group_rows())
                 grid.run_grid_method("setGridOption", "rowData", _rows())
@@ -565,6 +568,8 @@ async def attribute_definitions_page() -> None:
             confirm.open()
 
         def open_editor(definition: dict | None) -> None:
+            if isinstance(definition, str):
+                definition = next((d for d in definitions if str(d.get("id")) == definition), None)
             if definition is None:
                 editing_id = None
                 full = None

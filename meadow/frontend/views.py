@@ -9,6 +9,7 @@ from meadow.frontend import (
     config,
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
+    jobs,  # noqa: F401  (registers the /jobs page)
 )
 from meadow.frontend.api import CoreClient
 from meadow.frontend.grid import status_badge
@@ -17,7 +18,7 @@ from meadow.frontend.layout import NAV_ITEMS, build_shell
 
 #: Routes that have a real page and must be skipped by the placeholder
 #: registration.
-_IMPLEMENTED_ROUTES = {"/products", "/attribute-definitions"}
+_IMPLEMENTED_ROUTES = {"/products", "/attribute-definitions", "/jobs"}
 
 
 def _is_incomplete(obj: dict, locale: str) -> bool:

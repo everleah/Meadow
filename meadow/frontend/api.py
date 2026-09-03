@@ -604,6 +604,137 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_job_definitions(
+        self,
+        token: str,
+        *,
+        job_type: str | None = None,
+        enabled: bool | None = None,
+        limit: int = 100,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists job definitions (admin only)."""
+        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        if job_type:
+            params["type"] = job_type
+        if enabled is not None:
+            params["enabled"] = "true" if enabled else "false"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/jobs",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_job_definition(
+        self,
+        token: str,
+        *,
+        name: str,
+        job_type: str,
+        schedule: str | None = None,
+        parameters: dict | None = None,
+        enabled: bool = True,
+    ) -> dict:
+        """Creates a job definition (``POST /jobs``, admin only)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "type": job_type,
+            "parameters": parameters or {},
+            "enabled": enabled,
+        }
+        if schedule:
+            payload["schedule"] = schedule
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/jobs",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def update_job_definition(
+        self,
+        token: str,
+        definition_id: str,
+        *,
+        name: str,
+        schedule: str | None,
+        enabled: bool,
+        parameters: dict,
+    ) -> dict:
+        """Partially updates a job definition (``PATCH /jobs/{id}``, admin only).
+
+        ``schedule=None`` clears the schedule (manual only); ``parameters`` is
+        always sent as the full JSON object.
+        """
+        payload: dict[str, object] = {
+            "name": name,
+            "schedule": schedule,
+            "enabled": enabled,
+            "parameters": parameters,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/jobs/{definition_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def run_job(self, token: str, definition_id: str) -> dict:
+        """Manually triggers a job definition (``POST /jobs/{id}/run``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/jobs/{definition_id}/run",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def list_definition_runs(
+        self,
+        token: str,
+        definition_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Lists job runs for a definition (``GET /jobs/{id}/runs``)."""
+        params: dict[str, str] = {"limit": str(limit)}
+        if status:
+            params["status"] = status
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/jobs/{definition_id}/runs",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def post_bulk(
         self,
         token: str,
