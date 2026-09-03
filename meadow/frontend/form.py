@@ -577,7 +577,11 @@ async def product_form(object_id: str) -> None:
             if not rel_defs:
                 return None
             rows_by_dk = build_reference_rows()
-            total = len(all_references)
+            # Category assignment is handled in the dedicated "Categories"
+            # section; hide `category_member` here to avoid duplication.
+            total = len(
+                [r for r in all_references if r.get("definition_id") != "rel_category_member"]
+            )
             expansion = (
                 ui.expansion(f"{t('form.relations')} ({total})", value=True)
                 .classes("w-full")
@@ -592,6 +596,8 @@ async def product_form(object_id: str) -> None:
                     return (rank, rel_label(dk).lower())
 
                 for dk in sorted(rel_def_by_key, key=sort_key):
+                    if dk == "rel_category_member":
+                        continue
                     defn = rel_def_by_key[dk]
                     kind = rel_kind(dk)
                     rows = rows_by_dk.get(dk, [])
@@ -722,6 +728,109 @@ async def product_form(object_id: str) -> None:
             str(d.get("id", "")).split(":", 1)[-1]: d for d in rel_defs
         }
 
+        # --- Categories (product-centric assignment, vgl. Akeneo) -----------
+        async def _load_category_tree() -> list[dict]:
+            """Builds the category tree as nested ``ui.tree`` nodes (one round-trip)."""
+            try:
+                cats = await client.list_objects(token, object_type="category", limit=1000)
+                tree = await client.get_object_tree(token)
+            except Exception:  # noqa: BLE001 - degrade to no category tree
+                return []
+            cat_by_id: dict[str, dict] = {
+                str(c.get("id")): c for c in cats if isinstance(c, dict) and c.get("id")
+            }
+
+            def prune(nodes: list[dict]) -> list[dict]:
+                result: list[dict] = []
+                for node in nodes:
+                    nid = str(node.get("id"))
+                    if nid not in cat_by_id:
+                        continue
+                    children = prune(node.get("children") or [])
+                    obj = cat_by_id[nid]
+                    result.append(
+                        {
+                            "id": nid,
+                            "label": resolve_value(
+                                (obj.get("attributes") or {}).get("name"), locale
+                            )
+                            or str(obj.get("type"))
+                            or nid,
+                            "children": children,
+                        }
+                    )
+                return result
+
+            # `get_object_tree` returns `[{<root>, children}]`; keep only the
+            # category subtrees under the universal root.
+            if not tree:
+                return []
+            return prune(tree[0].get("children") or [])
+
+        category_tree_nodes = await _load_category_tree()
+        current_ticked: set[str] = {
+            str(ref.get("out"))
+            for ref in all_references
+            if ref.get("definition_id") == "rel_category_member" and ref.get("out")
+        }
+        # Live map of category id -> `category_member` reference id, so
+        # tick/untick can add/remove even for references created this session
+        # (the original `all_references` snapshot is not updated on tick).
+        cat_ref_ids: dict[str, str] = {
+            str(ref.get("out")): ref.get("id")
+            for ref in all_references
+            if ref.get("definition_id") == "rel_category_member"
+            and ref.get("out")
+            and ref.get("id")
+        }
+
+        async def handle_category_tick(e) -> None:
+            """Creates/removes ``category_member`` edges when a category is ticked."""
+            new_ticked = set(e.value or [])
+            added = new_ticked - current_ticked
+            removed = current_ticked - new_ticked
+            current_ticked.clear()
+            current_ticked.update(new_ticked)
+            for cat_id in added:
+                try:
+                    created = await client.create_reference(
+                        token, object_id, cat_id, "rel_category_member"
+                    )
+                    if created and created.get("id"):
+                        cat_ref_ids[cat_id] = created["id"]
+                except Exception as exc:  # noqa: BLE001 - show a friendly message
+                    ui.notify(str(exc), color="negative")
+            for cat_id in removed:
+                rid = cat_ref_ids.get(cat_id)
+                if not rid:
+                    continue
+                try:
+                    await client.delete_reference(token, rid)
+                except Exception as exc:  # noqa: BLE001 - show a friendly message
+                    ui.notify(str(exc), color="negative")
+                cat_ref_ids.pop(cat_id, None)
+
+        def build_categories_section() -> tuple[ui.expansion, ui.column] | None:
+            """Renders the collapsible product-centric categories section."""
+            if not category_tree_nodes:
+                return None
+            expansion = (
+                ui.expansion(f"{t('form.categories')} ({len(current_ticked)})", value=False)
+                .classes("w-full")
+                .props("header-class=bg-blue-2 text-blue-9")
+            )
+            with expansion:
+                content = ui.column().classes("w-full gap-2 p-2")
+            with expansion, content:
+                cat_tree = ui.tree(
+                    category_tree_nodes,
+                    on_tick=handle_category_tick,
+                    tick_strategy="strict",
+                ).classes("w-full")
+                cat_tree.tick(list(current_ticked))
+                ui.label(t("form.categories_hint")).classes("text-caption text-gray-500")
+            return expansion, content
+
         # --- "Nur fehlende Pflichtfelder" toggle + attribute sections. ------
         show_missing_only = bool(app.storage.user.get("form_show_missing", False))
 
@@ -774,6 +883,10 @@ async def product_form(object_id: str) -> None:
                         )
                         if result is not None:
                             jump_refs.append((title, *result))
+                # Categories (product-centric assignment) — always visible.
+                result = build_categories_section()
+                if result is not None:
+                    jump_refs.append((t("form.categories"), *result))
                 # Relations (graph edges) — always visible.
                 result = build_relations_section()
                 if result is not None:

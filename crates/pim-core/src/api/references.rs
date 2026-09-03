@@ -534,7 +534,7 @@ pub async fn list_object_children(
     let keys: Vec<String> = child_ids.iter().map(|id| key_of(id)).collect();
     let object_sql = "
         LET $recs = array::map($keys, |$k| type::record('object', $k));
-        SELECT * FROM object WHERE id IN $recs;
+        SELECT * FROM object WHERE id IN $recs AND deleted_at IS NONE;
     ";
     let mut response = state
         .db

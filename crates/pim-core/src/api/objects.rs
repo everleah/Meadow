@@ -283,6 +283,119 @@ pub async fn create_object(
     Ok((StatusCode::CREATED, Json(object)))
 }
 
+/// Deletes an object (soft delete) with cascade over its composition subtree.
+///
+/// `DELETE /objects/{id}` marks the object and every `depends_on` descendant
+/// as deleted (`deleted_at`), removes all reference edges (composition and
+/// aggregation) that touch a deleted object so the graph stays clean, and
+/// writes an `object.deleted` outbox event. The universal root cannot be
+/// deleted. Aggregation edges never cascade — they are removed, but the
+/// connected objects stay intact.
+#[utoipa::path(
+    delete,
+    path = "/objects/{id}",
+    params(WriteObjectQuery),
+    responses(
+        (status = 204, description = "Object deleted"),
+        (status = 400, description = "Invalid id or undeletable object", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Object not found", body = Value)
+    )
+)]
+pub async fn delete_object(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<WriteObjectQuery>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let key = parse_key(&id, TABLE)?;
+    if key == "object_root" {
+        return Err(ApiError::bad_request(
+            "the universal root cannot be deleted",
+        ));
+    }
+    let emit_events = params.emit_events.unwrap_or(true);
+
+    // Ensure the object exists and is not already soft-deleted.
+    let mut existing = state
+        .db
+        .inner()
+        .query("SELECT * FROM type::record('object', $key) WHERE deleted_at IS NONE;")
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let existing_rows: Vec<Value> = existing.take(0)?;
+    let object_type = existing_rows
+        .first()
+        .and_then(|row| row.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    if existing_rows.is_empty() {
+        return Err(ApiError::not_found(format!("object `{id}` not found")));
+    }
+
+    // Cascade set: the object itself and every `depends_on` descendant (bare keys).
+    let cascade_keys = crate::api::references::subtree_keys(&state.db, &id).await?;
+    let object_ids: Vec<String> = cascade_keys.iter().map(|k| format!("object:{k}")).collect();
+
+    // Statements: BEGIN(0), LET(1), UPDATE(2), DELETE refs(3), [CREATE outbox(4)],
+    // COMMIT(4|5).
+    let sql = if emit_events {
+        "
+        BEGIN TRANSACTION;
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
+        DELETE reference WHERE in IN $recs OR out IN $recs;
+        CREATE outbox_event CONTENT $outbox;
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    } else {
+        "
+        BEGIN TRANSACTION;
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
+        DELETE reference WHERE in IN $recs OR out IN $recs;
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    };
+    let outbox = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_OBJECT_DELETED,
+        object_type,
+        object_id: id.clone(),
+        changes: json!({ "cascade": cascade_keys.len(), "object_ids": object_ids }),
+        metadata: json!({ "user_id": user_id.clone() }),
+    });
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("keys", cascade_keys))
+        .bind(("user_id", user_id.clone()))
+        .bind(("outbox", outbox))
+        .await?
+        .check()?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "object_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: Some(json!({ "cascade": object_ids.len() })),
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Loads a single object by id, optionally resolving multilingual attributes.
 #[utoipa::path(
     get,
@@ -300,10 +413,10 @@ pub async fn get_object(
     Query(params): Query<GetObjectQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let key = parse_key(&id, TABLE)?;
-    // Statements: LET(0), SELECT(1).
+    // Statements: LET(0), SELECT(1). A soft-deleted object reads as not found.
     let sql = "
         LET $obj = type::record('object', $key);
-        SELECT * FROM $obj;
+        SELECT * FROM $obj WHERE deleted_at IS NONE;
     ";
     let mut response = state
         .db
@@ -382,7 +495,8 @@ pub async fn list_objects(
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
-    let mut conditions: Vec<String> = Vec::new();
+    // Soft-deleted objects (and their cascade descendants) are hidden.
+    let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
     if params.object_type.is_some() {
         conditions.push("type = $type".to_owned());
     }
@@ -499,7 +613,8 @@ pub async fn get_by_source(
         return Err(ApiError::bad_request("`source_id` must not be empty"));
     }
     let sql = "
-        SELECT * FROM object WHERE source_id = $source_id AND source = $source LIMIT 1;
+        SELECT * FROM object WHERE source_id = $source_id AND source = $source
+        AND deleted_at IS NONE LIMIT 1;
     ";
     let mut response = state
         .db
@@ -565,8 +680,10 @@ pub async fn picker(
         })
         .unwrap_or_default();
 
-    let mut sql =
-        String::from("SELECT *, search::score(1) AS score FROM object WHERE attributes @@ $q");
+    let mut sql = String::from(
+        "SELECT *, search::score(1) AS score FROM object \
+         WHERE attributes @@ $q AND deleted_at IS NONE",
+    );
     if !types.is_empty() {
         sql.push_str(" AND type IN $types");
     }

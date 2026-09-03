@@ -21,6 +21,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.dashboard", "/", False),
     ("nav.products", "/products", False),
     ("nav.attribute_definitions", "/attribute-definitions", True),
+    ("nav.categories", "/categories", True),
     ("nav.jobs", "/jobs", True),
     ("nav.users", "/users", True),
     ("nav.groups", "/groups", True),

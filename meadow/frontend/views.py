@@ -6,6 +6,7 @@ from nicegui import app, ui
 
 from meadow.frontend import (
     attribute_definitions,  # noqa: F401  (registers the /attribute-definitions page)
+    categories,  # noqa: F401  (registers the /categories page)
     config,
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
@@ -25,6 +26,7 @@ from meadow.frontend.layout import NAV_ITEMS, build_shell
 _IMPLEMENTED_ROUTES = {
     "/products",
     "/attribute-definitions",
+    "/categories",
     "/jobs",
     "/users",
     "/groups",

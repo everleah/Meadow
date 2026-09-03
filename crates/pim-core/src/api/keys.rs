@@ -166,7 +166,8 @@ pub async fn get_by_key(
     let value = params.value.trim();
 
     let sql = "
-        SELECT * FROM object WHERE type = $type AND attributes[$key] = $value LIMIT 1;
+        SELECT * FROM object WHERE type = $type AND attributes[$key] = $value
+        AND deleted_at IS NONE LIMIT 1;
     ";
     let mut response = state
         .db

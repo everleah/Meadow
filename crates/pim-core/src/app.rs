@@ -51,7 +51,9 @@ pub fn router(state: AppState) -> Router {
         .route("/objects/tree", get(api::references::get_object_tree))
         .route(
             "/objects/{id}",
-            get(api::objects::get_object).patch(api::objects::update_object),
+            get(api::objects::get_object)
+                .patch(api::objects::update_object)
+                .delete(api::objects::delete_object),
         )
         .route(
             "/objects/{id}/computed",

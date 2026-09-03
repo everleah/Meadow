@@ -310,6 +310,62 @@ class CoreClient:
                 raise CoreError(detail or response.text, status=response.status_code)
             return response.json()
 
+    async def create_object(
+        self,
+        token: str,
+        *,
+        object_type: str,
+        attributes: dict | None = None,
+        status: str = "draft",
+        source_id: str | None = None,
+        source: str | None = None,
+        locale: str | None = None,
+        emit_events: bool = True,
+    ) -> dict:
+        """Creates an object (``POST /objects``).
+
+        Categories are ordinary objects of ``type: "category"``; ``attributes``
+        may carry a multilingual ``name`` map (``{en: ..., de: ...}``).
+        """
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        if not emit_events:
+            params["emit_events"] = "false"
+        payload: dict[str, object] = {
+            "type": object_type,
+            "attributes": attributes or {},
+            "status": status,
+        }
+        if source_id:
+            payload["source_id"] = source_id
+        if source:
+            payload["source"] = source
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/objects",
+                params=params,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_object(self, token: str, object_id: str) -> None:
+        """Deletes an object (soft delete with cascade, ``DELETE /objects/{id}``).
+
+        Deleting a category also removes it and its sub-categories from every
+        category tree and from member assignments.
+        """
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/objects/{object_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
     async def list_languages(self, token: str) -> list[dict]:
         """Lists the active data languages from the language-tree table.
 
