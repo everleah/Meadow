@@ -934,6 +934,49 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    # --- System settings ----------------------------------------------------
+    async def list_system_settings(
+        self,
+        token: str,
+        *,
+        include_source: bool = True,
+    ) -> dict:
+        """Lists runtime settings (admin). ``include_source`` returns
+        ``{key: {value, source}}`` (source `default`|`env`|`db`)."""
+        params: dict[str, str] = {}
+        if include_source:
+            params["include_source"] = "true"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/system/settings",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def put_setting(self, token: str, key: str, value: object) -> dict:
+        """Persists a runtime setting (``PUT /system/settings/{key}``, admin)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.put(
+                f"{self.base_url}/system/settings/{key}",
+                json={"value": value},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_setting(self, token: str, key: str) -> None:
+        """Resets a runtime setting to its default (``DELETE /system/settings/{key}``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/system/settings/{key}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
     def _error_detail(self, response: httpx.Response) -> str:
         """Extracts the core's ``error`` field (or the response text)."""
         try:

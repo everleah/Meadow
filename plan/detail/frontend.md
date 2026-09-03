@@ -156,6 +156,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 12. **System-Einstellungen** (nur `admin`/`superadmin`)
     - Logging-Einstellungen im Betrieb ändern (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); Anzeige der Herkunft (Default/ENV/DB), „Auf Default zurücksetzen“
     - Änderungen werden im Audit-Log protokolliert
+    - **(Umgesetzt:)** `meadow/frontend/settings.py` (`/system-settings`, admin-only) – eine Karte je Setting (Schlüssel + **Herkunfts-Badge** `default`/`env`/`db`) mit typspezifischem Editor (Select / Multi-Select / Zahl) sowie **Save** (`PUT /system/settings/{key}`) und **Reset mit Bestätigung** (`DELETE /system/settings/{key}`). Backend: `GET /system/settings?include_source=true` liefert `{key: {value, source}}` (ohne Param weiterhin die flache `{key: value}`-Map für den Worker).
 
 **Spätere Ausbaustufen (nicht im MVP):**
 

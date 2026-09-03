@@ -144,6 +144,7 @@ use utoipa::OpenApi;
         system::IngestLogEntry,
         system::ListLogs,
         system::PutSetting,
+        system::SettingsQuery,
         search::SearchRequest,
         units::ListUnits,
         units::ConvertQuery,

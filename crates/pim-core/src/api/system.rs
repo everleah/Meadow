@@ -71,6 +71,16 @@ pub struct PutSetting {
     pub value: Value,
 }
 
+/// Query parameters for `GET /system/settings`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SettingsQuery {
+    /// When true, each setting is returned as `{ value, source }`
+    /// (`default` | `env` | `db`); otherwise a flat `{ key: value }` map.
+    #[serde(default)]
+    pub include_source: Option<bool>,
+}
+
 fn default_limit() -> u32 {
     100
 }
@@ -338,6 +348,7 @@ pub async fn list_logs(
 #[utoipa::path(
     get,
     path = "/system/settings",
+    params(SettingsQuery),
     responses(
         (status = 200, description = "Resolved settings", body = Value),
         (status = 401, description = "Unauthorized", body = Value),
@@ -347,6 +358,7 @@ pub async fn list_logs(
 pub async fn list_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(params): Query<SettingsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     // Machine-to-machine API key or admin JWT (same policy as log ingestion).
     let api_key_ok = match &state.config.log_ingest_api_key {
@@ -365,7 +377,11 @@ pub async fn list_settings(
     if !api_key_ok && !jwt_ok {
         return Err(ApiError::forbidden("requires API key or admin role"));
     }
-    resolve_settings(&state.db).await.map(Json)
+    if params.include_source.unwrap_or(false) {
+        resolve_settings_detailed(&state.db).await.map(Json)
+    } else {
+        resolve_settings(&state.db).await.map(Json)
+    }
 }
 
 /// Sets a runtime setting, persisting it in the database (admin only).
@@ -514,6 +530,43 @@ async fn resolve_settings(db: &Db) -> Result<Value, ApiError> {
     }
 
     Ok(Value::Object(resolved))
+}
+
+/// Resolves all settings as `{ key: { value, source } }` (source: default|env|db).
+async fn resolve_settings_detailed(db: &Db) -> Result<Value, ApiError> {
+    let mut result = Map::new();
+    for (key, default_value) in default_settings() {
+        let mut value = default_value;
+        let mut source = "default".to_owned();
+        if let Some(env_value) = env_setting(&key) {
+            value = env_value;
+            source = "env".to_owned();
+        }
+        result.insert(
+            key.clone(),
+            json!({ "value": value.clone(), "source": source }),
+        );
+    }
+
+    let sql = "SELECT * FROM system_setting;";
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        let Some(key) = row.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(value) = row.get("value") else {
+            continue;
+        };
+        if result.contains_key(key) {
+            result.insert(
+                key.to_owned(),
+                json!({ "value": value.clone(), "source": "db" }),
+            );
+        }
+    }
+
+    Ok(Value::Object(result))
 }
 
 /// Resolves the configured log-retention window in days (default 30).

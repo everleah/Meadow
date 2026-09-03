@@ -11,6 +11,7 @@ from meadow.frontend import (
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
     jobs,  # noqa: F401  (registers the /jobs page)
+    settings,  # noqa: F401  (registers the /system-settings page)
     users,  # noqa: F401  (registers the /users page)
 )
 from meadow.frontend.api import CoreClient
@@ -26,6 +27,7 @@ _IMPLEMENTED_ROUTES = {
     "/jobs",
     "/users",
     "/groups",
+    "/system-settings",
 }
 
 
