@@ -183,7 +183,15 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/units", get(api::units::list_units))
         .route("/units/convert", get(api::units::convert))
-        .route("/languages", get(api::languages::list_languages))
+        .route(
+            "/languages",
+            get(api::languages::list_languages).post(api::languages::create_language),
+        )
+        .route(
+            "/languages/{code}",
+            axum::routing::patch(api::languages::update_language)
+                .delete(api::languages::delete_language),
+        )
         .with_state(state)
 }
 

@@ -32,7 +32,7 @@ def _source_badge(source: str) -> str:
 
 @ui.page("/system-settings", response_timeout=15)
 async def settings_page() -> None:
-    build_shell(active="/system-settings")
+    await build_shell(active="/system-settings")
     if not auth.is_admin():
         ui.navigate.to("/")
         return

@@ -43,7 +43,7 @@ async def _category_roots(client: CoreClient, token: str, locale: str) -> list[d
 
 @ui.page("/categories", response_timeout=15)
 async def categories_page() -> None:
-    build_shell(active="/categories")
+    await build_shell(active="/categories")
     locale = current_locale()
     client = CoreClient(config.CORE_URL)
     token = app.storage.user.get("token", "")

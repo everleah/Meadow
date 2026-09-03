@@ -104,7 +104,7 @@ def _coerce(atype: str, raw: object) -> object:
 @ui.page("/products/{object_id}", response_timeout=15)
 async def product_form(object_id: str) -> None:
     """Opens a single object for deep editing."""
-    build_shell(active="/products")
+    await build_shell(active="/products")
     locale = current_locale()
     edit_lang = app.storage.user.get("edit_lang") or _base_lang(locale)
 
@@ -138,13 +138,18 @@ async def product_form(object_id: str) -> None:
         missing = resolved.get("missing_required") or []
         completeness = (resolved.get("completeness") or {}).get(locale, 0)
 
-        # Data languages (base languages for the selector, all for the dialog).
+        # Data languages (base languages for the selector, all for the dialog);
+        # only `active` languages are offered for data maintenance.
         base_langs = [
             lang
             for lang in languages
-            if lang.get("parent") == "lang_root" and lang.get("code") != "root"
+            if lang.get("parent") == "lang_root"
+            and lang.get("code") != "root"
+            and lang.get("active", True)
         ]
-        all_langs = [lang for lang in languages if lang.get("code") != "root"]
+        all_langs = [
+            lang for lang in languages if lang.get("code") != "root" and lang.get("active", True)
+        ]
         data_lang_codes = [str(lang.get("code")) for lang in all_langs]
         if edit_lang not in data_lang_codes:
             edit_lang = _base_lang(locale)

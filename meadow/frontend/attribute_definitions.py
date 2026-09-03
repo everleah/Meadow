@@ -21,7 +21,7 @@ ATTR_TYPES = ("text", "number", "boolean", "date", "enum", "reference")
 
 @ui.page("/attribute-definitions", response_timeout=15)
 async def attribute_definitions_page() -> None:
-    build_shell(active="/attribute-definitions")
+    await build_shell(active="/attribute-definitions")
     locale = current_locale()
     client = CoreClient(config.CORE_URL)
     token = app.storage.user.get("token", "")

@@ -215,7 +215,7 @@ def build_patch(object_id: str, client_name: object, original: dict, locale: str
 @ui.page("/products", response_timeout=10)
 async def products_page(request: Request) -> None:
     """Lists objects in the main grid with inline editing + batch save."""
-    build_shell(active="/products")
+    await build_shell(active="/products")
     locale = current_locale()
     incomplete_only = request.query_params.get("incomplete") == "1"
     type_filter = request.query_params.get("type")

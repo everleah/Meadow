@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Sprachbaum für sprachabhängige Daten](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 1–2, 7
-- **Stand:** Entwurf
+- **Stand:** Umgesetzt – Sprachbaum-Administration (`meadow/frontend/languages.py`, `/languages`, admin/superadmin) mit `active`/`is_ui`-Steuerung (siehe §„Verwaltung & Aktivierung“)
 
 Dieses Dokument beschreibt die Mehrsprachigkeit der **fachlichen Daten** (Sprachbaum). Die Mehrsprachigkeit der **Benutzeroberfläche** ist separat im Dokument [frontend.md](frontend.md) beschrieben.
 
@@ -94,3 +94,10 @@ root
 
 - Die Sprachbaum-Logik betrifft ausschließlich **fachliche Attributwerte** (Produktname, Beschreibung, etc.).
 - Die Übersetzung der Benutzeroberfläche (Menü, Buttons) bleibt davon getrennt und folgt dem im Dokument [frontend.md](frontend.md) beschriebenen Ansatz.
+
+## Verwaltung & Aktivierung (Sprachbaum-Administration)
+
+- **Tabelle:** `language_tree` (code, parent, label, fallback_order) plus `active` (bool, default true) und `is_ui` (bool, default false). Basissprachen (`en`/`de`/`fr`) sind `is_ui: true`.
+- **Endpunkte (admin/superadmin):** `GET /languages` (alle Knoten inkl. `active`/`is_ui`), `POST /languages`, `PATCH /languages/{code}`, `DELETE /languages/{code}`. `fallback_order` wird aus der Elternkette berechnet (`[parent.code] + parent.fallback_order`); bei Elternwechsel wird der Teilbaum rekursiv neu berechnet (Zyklenschutz). `root` ist unlöschbar; Knoten mit Kind-Sprachen sind nicht löschbar.
+- **Wirkung:** `active` steuert, welche **Daten-Sprachen** das Produkt-Formular für die Pflege anbietet (Sprach-Dialog + „Haupteditiersprache“); `is_ui` (in Kombination mit `active`) steuert, welche **UI-Sprachen** der Sprachumschalter im Drawer anbietet (nur Codes mit vorhandener Übersetzungsdatei).
+- **Cache:** Änderungen invalidieren die gecachten Fallback-Ketten (`cache.invalidate_language_tree()`).

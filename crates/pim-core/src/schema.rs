@@ -92,6 +92,8 @@ DEFINE FIELD IF NOT EXISTS code ON TABLE language_tree TYPE string;
 DEFINE FIELD IF NOT EXISTS parent ON TABLE language_tree TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS label ON TABLE language_tree TYPE object;
 DEFINE FIELD IF NOT EXISTS fallback_order ON TABLE language_tree TYPE array;
+DEFINE FIELD IF NOT EXISTS active ON TABLE language_tree TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS is_ui ON TABLE language_tree TYPE bool DEFAULT false;
 DEFINE INDEX IF NOT EXISTS idx_lang_code ON TABLE language_tree FIELDS code UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_lang_parent ON TABLE language_tree FIELDS parent;
 

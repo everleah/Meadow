@@ -54,7 +54,7 @@ def _json_pretty(value: object) -> str:
 
 @ui.page("/system-logs", response_timeout=15)
 async def logs_page() -> None:
-    build_shell(active="/system-logs")
+    await build_shell(active="/system-logs")
     if not auth.is_admin():
         ui.navigate.to("/")
         return

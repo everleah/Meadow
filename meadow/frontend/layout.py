@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from nicegui import app, ui
 
+from meadow.frontend import config
+from meadow.frontend.api import CoreClient
 from meadow.frontend.auth import is_admin, logout
 from meadow.frontend.i18n import current_locale, set_locale, supported_locales, t
 from meadow.frontend.theme import MEADOW_LOGO, NAV_GRADIENT_BOTTOM, NAV_GRADIENT_TOP
@@ -22,6 +24,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.products", "/products", False),
     ("nav.attribute_definitions", "/attribute-definitions", True),
     ("nav.categories", "/categories", True),
+    ("nav.languages", "/languages", True),
     ("nav.jobs", "/jobs", True),
     ("nav.users", "/users", True),
     ("nav.groups", "/groups", True),
@@ -31,7 +34,27 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
 ]
 
 
-def build_shell(*, active: str) -> None:
+async def _active_ui_languages() -> list[str]:
+    """Returns the `active` + `is_ui` language codes the frontend can translate.
+
+    Falls back to the fixed `supported_locales()` set when the core is
+    unreachable or yields no usable UI languages (only codes with a
+    translation file are offered, so the UI never shows an untranslated key).
+    """
+    token = app.storage.user.get("token", "")
+    try:
+        langs = await CoreClient(config.CORE_URL).list_languages(token)
+    except Exception:  # noqa: BLE001 - fall back to the fixed set
+        return list(supported_locales())
+    active_ui = [
+        str(lang.get("code")) for lang in langs if lang.get("active", True) and lang.get("is_ui")
+    ]
+    known = set(supported_locales())
+    result = [c for c in active_ui if c in known]
+    return result or list(supported_locales())
+
+
+async def build_shell(*, active: str) -> None:
     """Builds the page shell (header + drawer) for an authenticated page."""
     impersonator = app.storage.user.get("impersonator")
     if impersonator:
@@ -71,10 +94,14 @@ def build_shell(*, active: str) -> None:
             with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):  # type: ignore
                 ui.label(t(key))
         ui.separator().props("color=white")
+        ui_langs = await _active_ui_languages()
+        current = current_locale()
+        if current not in ui_langs:
+            current = ui_langs[0] if ui_langs else "en"
         with ui.row().classes("items-center gap-2 px-4 py-2"):
             ui.label(t("language")).classes("text-caption text-white")
             ui.select(
-                {code: code.upper() for code in supported_locales()},
-                value=current_locale(),
+                {code: code.upper() for code in ui_langs},
+                value=current,
                 on_change=lambda event: set_locale(event.value),
             ).classes("w-28 text-white")

@@ -27,7 +27,7 @@ def _join(value: object) -> str:
 
 @ui.page("/groups", response_timeout=15)
 async def groups_page() -> None:
-    build_shell(active="/groups")
+    await build_shell(active="/groups")
     if not auth.is_admin():
         ui.navigate.to("/")
         return

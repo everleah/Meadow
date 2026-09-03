@@ -367,10 +367,11 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def list_languages(self, token: str) -> list[dict]:
-        """Lists the active data languages from the language-tree table.
+        """Lists the data languages from the language-tree table.
 
         Used by the product form to offer multilingual editing across every
-        configured data language, not just the three UI languages.
+        configured data language. Each node carries ``code``, ``parent``,
+        ``label``, ``fallback_order``, ``active`` and ``is_ui``.
         """
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
@@ -382,6 +383,82 @@ class CoreClient:
             if isinstance(data, dict):
                 return [data]
             return data
+
+    async def create_language(
+        self,
+        token: str,
+        *,
+        code: str,
+        parent: str | None = None,
+        label: dict | None = None,
+        active: bool = True,
+        is_ui: bool = False,
+    ) -> dict:
+        """Creates a language tree node (``POST /languages``, admin only).
+
+        ``parent`` is the parent record key (e.g. ``lang_de``) or ``None``/empty
+        for the universal root.
+        """
+        payload: dict[str, object] = {
+            "code": code,
+            "parent": parent or "",
+            "label": label or {},
+            "active": active,
+            "is_ui": is_ui,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/languages",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_language(
+        self,
+        token: str,
+        code: str,
+        *,
+        parent: str | None | object = None,
+        label: dict | None = None,
+        active: bool | None = None,
+        is_ui: bool | None = None,
+    ) -> dict:
+        """Partially updates a language tree node (``PATCH /languages/{code}``).
+
+        ``parent`` is a special sentinel: omit it to keep the parent, pass an
+        empty string to reset to the universal root, or pass a parent record key.
+        """
+        payload: dict[str, object] = {}
+        if parent is not None:
+            payload["parent"] = "" if parent == "" else str(parent)
+        if label is not None:
+            payload["label"] = label
+        if active is not None:
+            payload["active"] = active
+        if is_ui is not None:
+            payload["is_ui"] = is_ui
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/languages/{code}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_language(self, token: str, code: str) -> None:
+        """Deletes a language tree node (``DELETE /languages/{code}``, admin)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/languages/{code}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def list_attribute_groups(self, token: str) -> list[dict]:
         """Lists attribute groups (used for the product form's sections)."""

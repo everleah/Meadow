@@ -12,6 +12,7 @@ from meadow.frontend import (
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
     jobs,  # noqa: F401  (registers the /jobs page)
+    languages,  # noqa: F401  (registers the /languages page)
     logs,  # noqa: F401  (registers the /system-logs page)
     settings,  # noqa: F401  (registers the /system-settings page)
     users,  # noqa: F401  (registers the /users page)
@@ -30,6 +31,7 @@ _IMPLEMENTED_ROUTES = {
     "/jobs",
     "/users",
     "/groups",
+    "/languages",
     "/system-settings",
     "/system-logs",
 }
@@ -44,7 +46,7 @@ def _is_incomplete(obj: dict, locale: str) -> bool:
 @ui.page("/", response_timeout=15)
 async def home() -> None:
     """Dashboard: work overview (objects, completeness, recent activity/jobs)."""
-    build_shell(active="/")
+    await build_shell(active="/")
     locale = current_locale()
     client = CoreClient(config.CORE_URL)
     token = app.storage.user.get("token", "")
@@ -175,8 +177,8 @@ def register_placeholders() -> None:
             continue
 
         @ui.page(path)
-        def page(path: str = path, key: str = key) -> None:
-            build_shell(active=path)
+        async def page(path: str = path, key: str = key) -> None:
+            await build_shell(active=path)
             with ui.column().classes("w-full p-6"):
                 ui.label(t(key)).classes("text-h4")
                 ui.label(t("placeholder.under_construction")).classes("text-subtitle1")

@@ -23,7 +23,7 @@ LOCALES = ("en", "de", "fr")
 
 @ui.page("/users", response_timeout=15)
 async def users_page() -> None:
-    build_shell(active="/users")
+    await build_shell(active="/users")
     if not auth.is_admin():
         ui.navigate.to("/")
         return

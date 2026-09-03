@@ -830,9 +830,11 @@ fn lang_upsert(lang: &LangSeed) -> String {
         .map(|code| format!("'{code}'"))
         .collect::<Vec<_>>()
         .join(", ");
+    // Base languages (root's children) are offered as UI languages.
+    let is_ui = lang.parent == Some("lang_root") && lang.code != "root";
     format!(
-        "UPSERT type::record('language_tree', 'lang_{}') CONTENT {{ code: '{}', parent: {}, label: {{ de: '{}', en: '{}' }}, fallback_order: [{}] }};",
-        lang.code, lang.code, parent, lang.de, lang.en, fallback_order,
+        "UPSERT type::record('language_tree', 'lang_{}') CONTENT {{ code: '{}', parent: {}, label: {{ de: '{}', en: '{}' }}, fallback_order: [{}], active: true, is_ui: {} }};",
+        lang.code, lang.code, parent, lang.de, lang.en, fallback_order, is_ui,
     )
 }
 

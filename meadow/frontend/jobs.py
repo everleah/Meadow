@@ -81,7 +81,7 @@ def _run_job_label(run: dict) -> str:
 
 @ui.page("/jobs", response_timeout=15)
 async def jobs_page() -> None:
-    build_shell(active="/jobs")
+    await build_shell(active="/jobs")
     if not auth.is_admin():
         ui.navigate.to("/")
         return

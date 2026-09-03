@@ -135,8 +135,8 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
    - **(Umgesetzt:)** `meadow/frontend/jobs.py` (`/jobs`, admin-only) mit zwei Tabs. **Definitionen**: AG-Grid-Liste (`name`, `type`, `schedule`, `enabled`, `updated`), Neuanlage/Bearbeiten-Dialog (Name, Typ, Cron-Zeitplan, `enabled`, `parameters` als JSON), **manuelles Ausführen** (`POST /jobs/{id}/run`) mit Bestätigungsdialog. **Läufe**: AG-Grid der `job_run`-Historie (neueste zuerst) mit Status-Badge (HTML-Spalte via `html_columns`), Trigger, Start/Fertig, Dauer, Fehler und **DLQ-Marker** (❗ bei „dead lettered“); Status-Filter + **„Nur Dead Letters“**-Schalter, Polling alle ~5 s, Doppelklick → Detail-Dialog (Status, Fehler, `result`-JSON).
 
 8. **Sprachbaum-Administration**
-   - Anzeige und Pflege des Sprachbaums (Knoten, Eltern, Fallback-Order)
-   - Aktivieren/Deaktivieren von Sprachen für die Oberfläche und Datenpflege
+   - **(Umgesetzt:)** `meadow/frontend/languages.py` (`/languages`, admin/superadmin) zeigt den **Sprachbaum** als `ui.tree` (Wurzel → Basissprachen → regionale Varianten) und pflegt ihn: Knoten **anlegen** (`POST /languages`), **bearbeiten**/**umhängen** (`PATCH /languages/{code}`, Fallback-Reihenfolge wird bei Elternwechsel neu berechnet), **löschen** (`DELETE /languages/{code}`, nur ohne Kind-Sprachen; `root` unlöschbar) sowie **`active`** (Datenpflege) und **`is_ui`** (Oberfläche) als Häkchen.
+   - **Aktivieren/Deaktivieren:** Das Produkt-Formular bietet nur **`active`** Daten-Sprachen an (Sprach-Dialog + „Haupteditiersprache“); der **UI-Sprachumschalter** im Drawer listet nur **`active` + `is_ui`** Sprachen (mit vorhandener Übersetzungsdatei). Dafür ist `build_shell` async und lädt die aktiven UI-Sprachen.
 
 9. **Dashboard (Arbeitsübersicht)**
    - Kacheln (Anzahl Objekte pro Typ/Status), Vollständigkeits-Shortcuts ins Grid, letzte Änderungen, Job-Status

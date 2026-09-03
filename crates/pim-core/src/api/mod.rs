@@ -95,6 +95,9 @@ use utoipa::OpenApi;
         search::search,
         units::list_units,
         units::convert,
+        languages::create_language,
+        languages::update_language,
+        languages::delete_language,
     ),
     components(schemas(
         auth::LoginRequest,
@@ -149,6 +152,9 @@ use utoipa::OpenApi;
         search::SearchRequest,
         units::ListUnits,
         units::ConvertQuery,
+        languages::LanguageNode,
+        languages::CreateLanguage,
+        languages::UpdateLanguage,
     ))
 )]
 pub struct ApiDoc;
