@@ -42,9 +42,7 @@ def build_shell(*, active: str) -> None:
                     actor=impersonator.get("username", ""),
                 )
             ).classes("grow text-subtitle2")
-            ui.button(t("users.back_to_self"), on_click=logout).props(
-                "flat color=white size=sm"
-            )
+            ui.button(t("users.back_to_self"), on_click=logout).props("flat color=white size=sm")
     with ui.header(elevated=True).classes("items-center justify-between bg-primary"):
         with ui.row().classes("items-center gap-2"):
             ui.button(icon="menu", on_click=lambda: drawer.toggle()).props("flat round color=white")
