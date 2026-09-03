@@ -48,6 +48,11 @@ def is_admin() -> bool:
     return "admin" in current_roles or "superadmin" in current_roles
 
 
+def is_superadmin() -> bool:
+    """Whether the current user has superadmin privileges (impersonation)."""
+    return "superadmin" in roles()
+
+
 @ui.page("/login")
 def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
     """Login page: exchanges credentials with the core and stores the JWT."""
@@ -83,6 +88,7 @@ def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
             sub=me.sub,
             username=me.username,
             roles=me.roles,
+            impersonator=None,
             authenticated=True,
         )
         ui.navigate.to(redirect_to)

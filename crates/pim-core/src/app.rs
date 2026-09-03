@@ -33,6 +33,10 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login", post(api::auth::login))
         .route("/auth/me", get(api::auth::me))
         .route(
+            "/auth/impersonate/{user_id}",
+            post(api::auth::impersonate_user),
+        )
+        .route(
             "/objects",
             get(api::objects::list_objects).post(api::objects::create_object),
         )

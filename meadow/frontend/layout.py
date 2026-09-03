@@ -32,6 +32,19 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
 
 def build_shell(*, active: str) -> None:
     """Builds the page shell (header + drawer) for an authenticated page."""
+    impersonator = app.storage.user.get("impersonator")
+    if impersonator:
+        with ui.row().classes("w-full items-center gap-3 px-4 py-2 bg-warning text-white"):
+            ui.icon("swap_horiz").classes("shrink-0")
+            ui.label(
+                t("users.banner").format(
+                    username=app.storage.user.get("username", ""),
+                    actor=impersonator.get("username", ""),
+                )
+            ).classes("grow text-subtitle2")
+            ui.button(t("users.back_to_self"), on_click=logout).props(
+                "flat color=white size=sm"
+            )
     with ui.header(elevated=True).classes("items-center justify-between bg-primary"):
         with ui.row().classes("items-center gap-2"):
             ui.button(icon="menu", on_click=lambda: drawer.toggle()).props("flat round color=white")

@@ -26,6 +26,7 @@ use utoipa::OpenApi;
     paths(
         auth::login,
         auth::me,
+        auth::impersonate_user,
         health::health,
         jobs::create_job_definition,
         jobs::get_job_definition,
@@ -98,6 +99,7 @@ use utoipa::OpenApi;
         auth::LoginRequest,
         auth::LoginResponse,
         auth::MeResponse,
+        crate::auth::Impersonator,
         connectors::CreateConnector,
         connectors::UpdateConnector,
         connectors::ListConnectors,

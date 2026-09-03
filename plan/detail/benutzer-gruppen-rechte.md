@@ -125,6 +125,17 @@ Der Kern übersetzt diese Regeln beim Lesen in SurrealQL-`WHERE`-Bedingungen (se
 - Neue Endpunkte: `GET /auth/me`, `POST|PATCH|DELETE /users`, `POST|PATCH|DELETE /groups`, `POST /groups/{id}/members`, `POST /groups/{id}/children`.
 - **Service-Accounts:** Der Worker greift über API-Keys/Service-Accounts (Machine-to-Machine) auf den Kern zu, nicht über Personen-Logins.
 
+## Impersonation („Login als Benutzer XY“, `superadmin`)
+
+Zum Testen/Support kann ein `superadmin` vorübergehend **als ein anderer Benutzer** arbeiten (derselbe Daten-Scope, dessen Rollen/Gruppen). Es ist **kein Rechtetransfer**: Die Sitzung läuft mit den Rechten des Zielbenutzers, bleibt aber als Impersonation gekennzeichnet und wird auditiert („wer hat wann als wen agiert“).
+
+- **Endpunkt:** `POST /auth/impersonate/{user_id}` (nur `superadmin`; sonst 403). Fremde (nicht eigene) Benutzer werden als `impersonator`-Claim getragen.
+- **Verhalten:** Der Kern lädt den Zielbenutzer (muss `status == "active"` sein, sonst 404/400), baut ein reguläres JWT für diesen Benutzer (`sub`, `username`, `roles`, `token_version`, `exp`) und ergänzt einen **`impersonator`-Claim** `{ sub, username }` (der ausführende `superadmin`). Antwort `200 { token, token_type, impersonator: true }`.
+- **Validierung:** Das Token bindet an das aktuelle `token_version` des Zielbenutzers (sofortige Invalidierung bei Sperre/Logout). Der `superadmin` darf sich nicht selbst impersonieren (kein `user_id == claims.sub`).
+- **Audit:** `audit_log`-Eintrag `user_impersonated` (from = Superadmin, to = Zielbenutzer) + `log_entry` (Kategorie `auth`, Level INFO). Jede Impersonation ist nachvollziehbar.
+- **Frontend:** Auf der Admin-Seite „Benutzer“ ein „Login als“-Button je Zeile (nur sichtbar für `superadmin`). Nach dem Aufruf wird das Ziel-Token als aktive Sitzung gespeichert (`app.storage.user`), zusätzlich `impersonator`; ein **Banner** „Angemeldet als `<user>` (Superadmin)“ mit „Zurück zur eigenen Sitzung“ (Logout → Login als eigener `superadmin`). `GET /auth/me` liefert den `impersonator`-Claim mit, damit die Oberfläche den Hinweis anzeigen kann.
+- **Abgrenzung:** Kein Ersatz für echte Benutzer-Authentifizierung und kein sicherheitsrelevanter „Privilege Escalation“-Pfad — der `impersonator` ist ein reiner Audit-/Hinweis-Zusatz, die Rechte stammen vom Zielbenutzer.
+
 ## UI & Branding
 
 - Sichtbarkeit von Menüs/Aktionen anhand der Berechtigungen aus `GET /auth/me`.

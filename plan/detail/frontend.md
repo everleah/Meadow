@@ -107,6 +107,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 1. **Login & Benutzerverwaltung**
    - Anmeldung mit JWT, Passwort-Reset (optional)
    - Anzeige und Bearbeitung von Benutzern, Gruppen und Rollen (nur `admin`/`superadmin`)
+   - **(Umgesetzt:)** `meadow/frontend/users.py` (`/users`, admin-only) – AG-Grid-Liste (Benutzername, E-Mail, Rollen, Status, Locale) + Anlegen/Bearbeiten/Löschen-Dialog (`POST`/`PATCH`/`DELETE /users`; Felder `username`, `email`, `password`, `roles`, `status`, `locale`). **„Login als“** je Zeile (`POST /auth/impersonate/{user_id}`, nur `superadmin`) – speichert das Ziel-Token als aktive Sitzung, zeigt ein **Impersonations-Banner** („Angemeldet als X“). `meadow/frontend/groups.py` (`/groups`, admin-only) – AG-Grid-Liste (Name, Grant-/Deny-Permissions, Scope, Branding) + Anlegen/Bearbeiten/Löschen-Dialog (`POST`/`PATCH`/`DELETE /groups`).
 
 2. **Grid & Suche (Hauptarbeitsfläche)**
    - Grid-first mit `ui.aggrid`: Kategorien-/Strukturbaum, konfigurierbare/pinnbare Spalten, persönliche Ansichten

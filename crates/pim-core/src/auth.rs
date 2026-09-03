@@ -8,6 +8,7 @@ use axum::extract::FromRequestParts;
 use axum::http::{HeaderMap, header, request::Parts};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::app::AppState;
 use crate::config::Config;
@@ -19,6 +20,13 @@ pub const ROLE_ADMIN: &str = "admin";
 pub const ROLE_EDITOR: &str = "editor";
 pub const ROLE_VIEWER: &str = "viewer";
 
+/// The acting user in an impersonation session (plan: `impersonator` claim).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct Impersonator {
+    pub sub: String,
+    pub username: String,
+}
+
 /// JWT claims (plan: `sub`, `username`, `roles[]`, `token_version`, `exp`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -27,6 +35,9 @@ pub struct Claims {
     pub roles: Vec<String>,
     pub token_version: u64,
     pub exp: usize,
+    /// Set when a superadmin impersonates another user (see plan section 9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impersonator: Option<Impersonator>,
 }
 
 impl Claims {
@@ -168,6 +179,7 @@ mod tests {
             roles: vec![ROLE_SUPERADMIN.to_owned()],
             token_version: 1,
             exp: 0,
+            impersonator: None,
         }
     }
 

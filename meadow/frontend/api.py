@@ -46,6 +46,8 @@ class MeResponse(BaseModel):
     sub: str
     username: str
     roles: list[str]
+    #: Present when the session impersonates another user (superadmin).
+    impersonator: dict | None = None
 
 
 class CoreClient:
@@ -753,3 +755,188 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    # --- Users / Groups / Impersonation ------------------------------------
+    async def list_users(self, token: str, *, limit: int = 100, start: int = 0) -> list[dict]:
+        """Lists users (admin only)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/users",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_user(
+        self,
+        token: str,
+        *,
+        username: str,
+        email: str,
+        password: str,
+        roles: list[str] | None = None,
+        locale: str = "en",
+        status: str = "active",
+    ) -> dict:
+        """Creates a user (admin only)."""
+        payload: dict[str, object] = {
+            "username": username,
+            "email": email,
+            "password": password,
+            "roles": roles or [],
+            "locale": locale,
+            "status": status,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/users",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_user(
+        self,
+        token: str,
+        user_id: str,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+        roles: list[str] | None = None,
+        status: str | None = None,
+        locale: str | None = None,
+    ) -> dict:
+        """Partially updates a user (admin only)."""
+        payload: dict[str, object] = {
+            k: v
+            for k, v in {
+                "email": email,
+                "password": password,
+                "roles": roles,
+                "status": status,
+                "locale": locale,
+            }.items()
+            if v is not None
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/users/{user_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_user(self, token: str, user_id: str) -> None:
+        """Deletes a user (admin only)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/users/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def list_groups(self, token: str, *, limit: int = 100, start: int = 0) -> list[dict]:
+        """Lists groups (admin only)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/groups",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_group(
+        self,
+        token: str,
+        *,
+        name: str,
+        grant_permissions: list[str] | None = None,
+        deny_permissions: list[str] | None = None,
+        scope: dict | None = None,
+        branding: dict | None = None,
+    ) -> dict:
+        """Creates a group (admin only)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "grant_permissions": grant_permissions or [],
+            "deny_permissions": deny_permissions or [],
+            "scope": scope or {},
+            "branding": branding or {},
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/groups",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_group(
+        self,
+        token: str,
+        group_id: str,
+        *,
+        name: str | None = None,
+        grant_permissions: list[str] | None = None,
+        deny_permissions: list[str] | None = None,
+        scope: dict | None = None,
+        branding: dict | None = None,
+    ) -> dict:
+        """Partially updates a group (admin only)."""
+        payload: dict[str, object] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "grant_permissions": grant_permissions,
+                "deny_permissions": deny_permissions,
+                "scope": scope,
+                "branding": branding,
+            }.items()
+            if v is not None
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/groups/{group_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_group(self, token: str, group_id: str) -> None:
+        """Deletes a group (admin only)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/groups/{group_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def impersonate_user(self, token: str, user_id: str) -> dict:
+        """Impersonates a user (superadmin only) and returns a token for them."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/auth/impersonate/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    def _error_detail(self, response: httpx.Response) -> str:
+        """Extracts the core's ``error`` field (or the response text)."""
+        try:
+            return response.json().get("error") or response.text
+        except Exception:  # noqa: BLE001 - body may not be JSON
+            return response.text
