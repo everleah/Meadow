@@ -27,6 +27,11 @@ pub struct AppState {
 
 /// Builds the application router with the given state.
 pub fn router(state: AppState) -> Router {
+    let body_limit = state.config.max_body_bytes;
+    let limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::new(
+        state.config.rate_limit_per_minute,
+    ));
+
     Router::new()
         .route("/health", get(api::health::health))
         .route("/api-docs/openapi.json", get(openapi_json))
@@ -195,6 +200,11 @@ pub fn router(state: AppState) -> Router {
                 .delete(api::languages::delete_language),
         )
         .with_state(state)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            crate::rate_limit::middleware,
+        ))
 }
 
 /// Serves the generated OpenAPI 3 document.

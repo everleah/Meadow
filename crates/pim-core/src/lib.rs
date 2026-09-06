@@ -18,6 +18,7 @@ pub mod inheritance;
 pub mod jobqueue;
 pub mod language;
 pub mod log_cleanup;
+pub mod rate_limit;
 pub mod rules;
 pub mod scheduler;
 pub mod schema;
@@ -63,7 +64,10 @@ pub async fn run() {
     // Start the event relay (publishes outbox events to NATS JetStream).
     tokio::spawn(event::run_relay(state.db.clone(), state.config.clone()));
 
-    axum::serve(listener, app::router(state))
-        .await
-        .expect("server error");
+    axum::serve(
+        listener,
+        app::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("server error");
 }

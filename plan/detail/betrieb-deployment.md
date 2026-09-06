@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 2, 4–5, 7, 8
-- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt.
+- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt. **Phase 8:** Request-Limits (Body-/Rate-Limit) und Backup/Monitoring präzisiert – inkl. der **verifizierten SurrealDB-CLI** (`/surreal`, `--namespace`/`--database`, `is-ready`) für diesen Image-Stand und der lokalen Dev-Skripte `scripts/backup-db.ps1`/`restore-db.ps1`.
 
 Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**. Konkretes Ziel für das erste Deployment ist der **VPS unter `example.com`**, auf dem bereits Traefik als Reverse Proxy läuft. Die Deployment-Organisation folgt dabei dem erprobten VPS-Muster von **the predecessor project** (`deploy-vps-*.sh`, `.env.vps`, Traefik-Labels, Healthchecks, Backup/Restore). Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
 
@@ -277,7 +277,11 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 
 ## 10. Backup & Wiederherstellung
 
-- **SurrealDB:** regelmäßige Exporte (`surreal export` gegen den Container, z. B. `--conn http://surrealdb:8000 --ns meadow --db meadow`), Zeitplan über Host-Cron.
+- **SurrealDB:** regelmäßige Exporte über den Container, Zeitplan über Host-Cron.
+  - **CLI-Version beachten (verifiziert):** Im `surrealdb/surrealdb:latest`-Image liegt das Binary unter **`/surreal`** (nicht auf `$PATH`); die Export-/Import-Subcommands heißen **`export`/`import`** und verwenden **`--namespace`/`--database`** (Aliase `--ns`/`--db`) sowie **`-e/--endpoint`** und **`-u/--username`/`-p/--password`** (Aliase `--user`/`--pass`). Die alten Schreibweisen `--conn`, `isready` (statt `is-ready`) und der bloße Befehl `surreal` sind in dieser Version **ungültig**.
+  - **Beispiel:** `/surreal export --namespace meadow --database meadow --endpoint http://surrealdb:8000 --username root --password root /tmp/backup.surql`; Wiederherstellung über `/surreal import … /tmp/backup.surql` (Datei-Upload in den Container, da kein Shell/kein stdin-`-`-Support).
+  - **Kodierung:** Export **im Container** in eine Datei schreiben und per `docker cp` holen — eine PowerShell-`>`-Umleitung kodiert UTF-16 und erzeugt einen ungültigen Import.
+- **Lokale Dev-Äquivalente (Windows):** `scripts/backup-db.ps1` (Export nach `backups/`, Retention `-RetentionDays`, Default 14) und `scripts/restore-db.ps1` (`-File`); `.gitignore` schließt `backups/` aus.
 - **Objektstorage:** Synchronisation der Buckets auf einen zweiten Speicherort (z. B. `mc mirror`/rclone bei MinIO).
 - **NATS JetStream:** Stream-Snapshots optional; für den MVP genügt Wiederherstellung aus der Quelle, da Events rekonstruierbar sind.
 - **Wiederherstellungstests:** mindestens vierteljährlich durchführen.
@@ -309,7 +313,8 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 
 ### 11.2 Health-Checks, Metriken & Queue-Tiefe
 
-- **Health-Checks:** jeder Container stellt einen Health-Endpoint bereit (siehe 3.4); Compose startet Container bei Ausfall neu.
+- **Health-Checks:** jeder Container stellt einen Health-Endpoint bereit (siehe 3.4); Compose startet Container bei Ausfall neu. Im Dev-Compose ist der SurrealDB-Healthcheck auf `/surreal is-ready` korrigiert (siehe Abschnitt 10 CLI-Hinweis).
+- **Request-Limits (Phase 8):** API-Body-Limit (`PIM_MAX_BODY_BYTES`, Default 10 MiB) und per-IP-Rate-Limit (`PIM_RATE_LIMIT_PER_MINUTE`, Default 0 = aus) begrenzen Eingabe-Fluten; Überschreitungen antworten `413`/`429` und sind über `log_entry` bzw. die 8222-Queue-Tiefe beobachtbar. Details in [api-design.md](api-design.md#inbound-import--request-limits).
 - **Metriken (optional, ab Phase 8):** Prometheus-Endpunkte im Kern und Worker (Jobs, Event-Durchsatz, API-Latenz), Grafana-Dashboards.
 - **Queue-/Stream-Tiefe (verbindlich):** Die NATS-JetStream-Tiefe wird über den Monitoring-Port 8222 beobachtet (Pending-Messages je Consumer, Stream-Belegung vs. Max-Bytes, Outbox-Rückstau im Kern); Alarmschwellen bei anhaltender Queue-Tiefe (Worker-Stau) sind dokumentiert.
 

@@ -22,7 +22,10 @@ services:
     volumes:
       - surrealdb_data:/data
     healthcheck:
-      test: ["CMD", "surreal", "isready", "--conn", "http://localhost:8000"]
+      # The SurrealDB CLI binary lives at /surreal and the readiness subcommand is
+      # `is-ready`. In this image `surreal` (without path) and the old `isready`/
+      # `--conn` spellings are not available, so use the full path and default endpoint.
+      test: ["CMD", "/surreal", "is-ready"]
       interval: 10s
       timeout: 5s
       retries: 5

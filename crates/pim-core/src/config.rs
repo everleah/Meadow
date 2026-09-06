@@ -50,6 +50,11 @@ pub struct Config {
     pub scheduler_interval_seconds: u64,
     /// Log-retention cleanup interval, in seconds.
     pub log_cleanup_interval_seconds: u64,
+    /// Maximum request body size in bytes (0 = axum default). File upload
+    /// endpoints override this with their own larger limit.
+    pub max_body_bytes: usize,
+    /// Per-IP request rate limit (requests per minute). 0 = disabled.
+    pub rate_limit_per_minute: u64,
 }
 
 impl Config {
@@ -81,6 +86,8 @@ impl Config {
             rules_breaker_threshold: env_or_parse("RULES_BREAKER_THRESHOLD", 3),
             scheduler_interval_seconds: env_or_parse("SCHEDULER_INTERVAL_S", 60),
             log_cleanup_interval_seconds: env_or_parse("LOG_CLEANUP_INTERVAL_S", 3600),
+            max_body_bytes: env_or_parse("PIM_MAX_BODY_BYTES", 10_485_760usize),
+            rate_limit_per_minute: env_or_parse("PIM_RATE_LIMIT_PER_MINUTE", 0u64),
         }
     }
 }

@@ -104,6 +104,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - The repository contains the Rust workspace scaffold (`crates/pim-core/`) and Python packaging (`pyproject.toml` + `uv.lock`); keep all implementation work consistent with `plan/meadow-pim-architektur.md`.
 - When the plan changes, update `plan/meadow-pim-architektur.md` and `plan/AGENTS.md` together, and run the DOX pass.
 - The architecture and planning documents are written in German; keep new planning documents in German unless otherwise directed.
+- Local dev infrastructure helpers live in `scripts/`: `backup-db.ps1` (SurrealDB-Export nach `backups/`, Retention `-RetentionDays`), `restore-db.ps1` (`-File`), `run-dev.ps1`, `setup.ps1`. SurrealDB-Export/-Import erfolgen im Container (Binary `/surreal`, Flags `--namespace`/`--database`) und werden per `docker cp` geholt – eine PowerShell-`>`-Umleitung kodiert UTF-16 und erzeugt einen ungültigen Import. In der verwendeten `surrealdb/surrealdb:latest`-Version ist der Healthcheck `surreal isready --conn …` ungültig; korrekt ist `/surreal is-ready` (siehe `docker-compose.dev.yml`).
 
 ## Coding Guidelines
 
