@@ -1319,6 +1319,107 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    # --- Connectors --------------------------------------------------------
+    async def list_connectors(
+        self,
+        token: str,
+        *,
+        connector_type: str | None = None,
+        enabled: bool | None = None,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists connector configurations, optionally filtered by type/enabled."""
+        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        if connector_type:
+            params["type"] = connector_type
+        if enabled is not None:
+            params["enabled"] = "true" if enabled else "false"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/connectors",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def get_connector(self, token: str, connector_id: str) -> dict:
+        """Loads a single connector (``GET /connectors/{id}``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/connectors/{connector_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_connector(
+        self,
+        token: str,
+        *,
+        name: str,
+        connector_type: str,
+        parameters: dict | None = None,
+        enabled: bool = True,
+    ) -> dict:
+        """Creates a connector (``POST /connectors``, admin)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "type": connector_type,
+            "enabled": bool(enabled),
+            "parameters": parameters or {},
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/connectors",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_connector(
+        self,
+        token: str,
+        connector_id: str,
+        *,
+        name: str | None = None,
+        connector_type: str | None = None,
+        parameters: dict | None = None,
+        enabled: bool | None = None,
+    ) -> dict:
+        """Partially updates a connector (``PATCH /connectors/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if name is not None:
+            payload["name"] = name
+        if connector_type is not None:
+            payload["type"] = connector_type
+        if parameters is not None:
+            payload["parameters"] = parameters
+        if enabled is not None:
+            payload["enabled"] = enabled
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/connectors/{connector_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_connector(self, token: str, connector_id: str) -> None:
+        """Deletes a connector (``DELETE /connectors/{id}``, admin)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.delete(
+                f"{self.base_url}/connectors/{connector_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
     def _error_detail(self, response: httpx.Response) -> str:
         """Extracts the core's ``error`` field (or the response text)."""
         try:

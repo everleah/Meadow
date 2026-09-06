@@ -8,6 +8,7 @@ from meadow.frontend import (
     attribute_definitions,  # noqa: F401  (registers the /attribute-definitions page)
     categories,  # noqa: F401  (registers the /categories page)
     config,
+    connectors,  # noqa: F401  (registers the /connectors page)
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
@@ -29,6 +30,7 @@ _IMPLEMENTED_ROUTES = {
     "/products",
     "/attribute-definitions",
     "/categories",
+    "/connectors",
     "/jobs",
     "/users",
     "/groups",
