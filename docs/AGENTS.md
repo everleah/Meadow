@@ -20,6 +20,7 @@ Owns all durable project documentation that does not belong to planning: user-fa
 - Structure `docs/` hierarchically by topic or audience (e.g. user, developer, operations).
 - Split documents into subfolders when they outgrow a single page; keep an index where useful.
 - Refine conventions once the first real documents are added.
+- Current content: `README.md` (index) and `integration/mef-and-events.md` (MEF & event system integration reference). The authoritative spec stays in `plan/`; this doc is the audience-facing contract.
 
 ## Verification
 

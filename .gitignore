@@ -141,6 +141,10 @@ ipython_config.py
 
 # Database backups (exported via scripts/backup-db.ps1)
 backups/
+
+# Production secrets & ad-hoc diagnostics bundles
+.env.vps
+diagnostics-*/
 .pdm-python
 .pdm-build/
 

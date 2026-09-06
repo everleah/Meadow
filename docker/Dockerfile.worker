@@ -1,0 +1,15 @@
+# pim-worker — Python worker (rules, jobs, webhooks, connectors).
+#
+# Build:  docker build -f docker/Dockerfile.worker -t "${PIM_REGISTRY}/pim-worker:${PIM_WORKER_TAG}" .
+# Run:    docker compose -f docker-compose.vps.yml up -d pim-worker
+
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
+WORKDIR /app
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+# Install runtime dependencies only (lockfile frozen for reproducibility).
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+# Install the package itself.
+COPY meadow ./meadow
+RUN uv sync --frozen --no-dev
+CMD ["uv", "run", "python", "-m", "meadow.worker"]

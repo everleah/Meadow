@@ -1,0 +1,19 @@
+# pim-frontend — NiceGUI web app (Python, uv-managed).
+#
+# Build:  docker build -f docker/Dockerfile.frontend -t "${PIM_REGISTRY}/pim-frontend:${PIM_FRONTEND_TAG}" .
+# Run:    docker compose -f docker-compose.vps.yml up -d pim-frontend
+
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
+WORKDIR /app
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+# Install runtime dependencies only (lockfile is frozen for reproducibility).
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+# Install the package itself.
+COPY meadow ./meadow
+RUN uv sync --frozen --no-dev
+# NiceGUI writes session state; use a writable dir (mounted volume in compose).
+ENV PIM_FRONTEND_HOST=0.0.0.0
+ENV PIM_FRONTEND_PORT=8081
+EXPOSE 8081
+CMD ["uv", "run", "python", "-m", "meadow.frontend"]

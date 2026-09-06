@@ -523,42 +523,33 @@ pub async fn object_stats(
     let mut by_type: HashMap<String, i64> = HashMap::new();
     let mut by_status: HashMap<String, i64> = HashMap::new();
     let mut incomplete_by_type: HashMap<String, i64> = HashMap::new();
-    // Cache required attribute names per type so we don't re-query per object.
-    let mut required_by_type: HashMap<String, Vec<String>> = HashMap::new();
 
+    // Build the per-object inputs for the batched completeness computation and
+    // the type/status aggregation in a single pass.
+    let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = Vec::new();
     for object in &objects {
         let otype = object.get("type").and_then(Value::as_str).unwrap_or("");
         let status = object.get("status").and_then(Value::as_str).unwrap_or("");
-        total += 1;
-        *by_type.entry(otype.to_owned()).or_default() += 1;
-        *by_status.entry(status.to_owned()).or_default() += 1;
-
-        if !required_by_type.contains_key(otype) {
-            required_by_type.insert(
-                otype.to_owned(),
-                crate::completeness::required_names(&state.db, otype).await?,
-            );
-        }
-        let required = required_by_type.get(otype).cloned().unwrap_or_default();
-        if required.is_empty() {
-            continue;
-        }
         let object_id = object.get("id").and_then(Value::as_str).unwrap_or("");
         let own_attributes = object
             .get("attributes")
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let completeness = crate::completeness::compute_with_required(
-            &state.cache,
-            &state.db,
-            object_id,
-            locale,
-            &own_attributes,
-            &required,
-        )
-        .await?;
-        if !completeness.missing.is_empty() {
+        total += 1;
+        *by_type.entry(otype.to_owned()).or_default() += 1;
+        *by_status.entry(status.to_owned()).or_default() += 1;
+        items.push((object_id.to_owned(), otype.to_owned(), own_attributes));
+    }
+
+    // Resolve completeness for all objects with a single edge query and
+    // in-memory inheritance resolution (no per-ancestor DB round-trips).
+    let completeness =
+        crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
+    for (object_id, otype, _) in &items {
+        if let Some(result) = completeness.get(object_id)
+            && !result.missing.is_empty()
+        {
             *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
         }
     }

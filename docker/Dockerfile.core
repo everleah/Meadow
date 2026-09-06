@@ -1,0 +1,22 @@
+# pim-core — Rust/Axum headless service.
+#
+# Build:  docker build -f docker/Dockerfile.core -t "${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}" .
+# Run:    docker compose -f docker-compose.vps.yml up -d pim-core
+
+FROM rust:1.90-bookworm AS build
+WORKDIR /src
+# Cache dependency layers.
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --release -p pim-core
+
+# Slim runtime with TLS certificates (needed for outbound HTTPS/S3 if used) and
+# curl (for the `GET /health` healthcheck).
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /src/target/release/pim-core /app/pim-core
+EXPOSE 8080
+CMD ["/app/pim-core"]

@@ -169,6 +169,8 @@ Beschreibt die **typisierten Relationen** zwischen Objekten (`reference`-RELATIO
 > - Falls sinnvoll, stellt der **Kern** eine effiziente Aggregation bereit (z. B. `GET /dashboard/stats` bzw. `GET /objects/stats`): nur die wenigen benötigten Zahlen (Anzahl pro Typ/Status, unvollständige je Typ für eine Sprache) **server-seitig** berechnet – ohne dass die UI alle Objekte ziehen muss.
 > - **Nicht verhandelbar:** Nur weil die UI etwas braucht, wird die **Performanz des Kerns nicht gefährdet** – ein Stats-Endpunkt muss dem Graph-/Performanz-USP genügen (Indizes, Edge-Queries; keine Vollscans/teuren Traversierungen allein fürs Dashboard). Follow-up in Phase 8 (Performance/Benchmarks) bzw. Phase 9.
 
+> **Stand (Phase 8, umgesetzt):** Das Dashboard nutzt jetzt **`GET /objects/stats?locale=<code>`** server-seitig (kein client-seitiges `GET /objects?limit=1000` mehr, kein 1000-Cap/Payload-Transfer). Der Stats-Endpunkt wurde im Phase-8-**Load-Testing** weiter optimiert: `completeness::compute_batch` berechnet die Unvollständigkeits-Zählung mit **einer** `depends_on`-Edge-Query + In-Memory-Walk (`resolve_missing_in_memory`) statt einer Query pro Ebene/Objekt, plus Fast-Path in `compute_with_required`. Messung: `GET /objects/stats` ~175 ms isoliert → **~45–64 ms** isoliert / ~109 ms p50 unter Last (bei 57 Objekten), identische Aggregationswerte. Load-Test-Tool: `scripts/load_test.py`.
+
 ## 6. Phasierung
 
 | Arbeitsfläche     | MVP (Phase 7)                                                                                                                                                              | Später (Phase 9)                                                                                     |
