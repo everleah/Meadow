@@ -80,6 +80,7 @@ pub fn router(state: AppState) -> Router {
         .route("/rules/{id}/activate", post(api::rules::activate_rule))
         .route("/rules/{id}/disable", post(api::rules::disable_rule))
         .route("/rules/{id}/dry-run", post(api::rules::dry_run_rule))
+        .route("/rules/{id}/test-batch", post(api::rules::test_batch_rule))
         .route("/rules/{id}/recompute", post(api::rules::recompute_rule))
         .route(
             "/objects/{id}/references",

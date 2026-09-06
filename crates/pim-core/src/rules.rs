@@ -56,7 +56,7 @@ impl RuleOutcome {
 }
 
 /// A rule to evaluate: its script plus metadata, sent to the Python worker.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RuleSpec {
     pub name: String,
     #[serde(rename = "type")]

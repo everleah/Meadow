@@ -110,6 +110,14 @@ pub struct DryRunRule {
     pub object: Option<DryRunObject>,
 }
 
+/// Payload for a rule test-batch (Rule Lab): evaluate against a selection of
+/// real objects, read-only.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TestBatch {
+    /// Object ids to evaluate the rule against (each `table:key`).
+    pub object_ids: Vec<String>,
+}
+
 /// Splits a `table:key` path segment and verifies the expected table.
 fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     let (actual_table, key) = id
@@ -686,35 +694,41 @@ pub async fn dry_run_rule(
     Ok(Json(outcome))
 }
 
+/// Builds a candidate object view from a real object id (read-only).
+async fn build_candidate_from_object_id(
+    state: &AppState,
+    object_id: &str,
+) -> Result<Value, ApiError> {
+    let key = parse_key(object_id, "object")?;
+    let sql = "
+        LET $o = type::record('object', $key);
+        SELECT * FROM $o;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    let object = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("object `{object_id}` not found")))?;
+    Ok(json!({
+        "id": object_id,
+        "type": object.get("type").cloned().unwrap_or(Value::Null),
+        "status": object.get("status").cloned().unwrap_or(Value::Null),
+        "attributes": object.get("attributes").cloned().unwrap_or_else(|| json!({})),
+    }))
+}
+
 /// Builds the candidate object view for a dry run from a real or constructed
 /// object.
 async fn build_dry_run_candidate(state: &AppState, body: DryRunRule) -> Result<Value, ApiError> {
     match (body.object_id, body.object) {
-        (Some(object_id), None) => {
-            let key = parse_key(&object_id, "object")?;
-            let sql = "
-                LET $o = type::record('object', $key);
-                SELECT * FROM $o;
-            ";
-            let mut response = state
-                .db
-                .inner()
-                .query(sql)
-                .bind(("key", key))
-                .await?
-                .check()?;
-            let rows: Vec<Value> = response.take(1)?;
-            let object = rows
-                .into_iter()
-                .next()
-                .ok_or_else(|| ApiError::not_found(format!("object `{object_id}` not found")))?;
-            Ok(json!({
-                "id": object_id,
-                "type": object.get("type").cloned().unwrap_or(Value::Null),
-                "status": object.get("status").cloned().unwrap_or(Value::Null),
-                "attributes": object.get("attributes").cloned().unwrap_or_else(|| json!({})),
-            }))
-        }
+        (Some(object_id), None) => build_candidate_from_object_id(state, &object_id).await,
         (None, Some(object)) => Ok(json!({
             "id": "",
             "type": object.object_type,
@@ -728,6 +742,107 @@ async fn build_dry_run_candidate(state: &AppState, body: DryRunRule) -> Result<V
             "provide either `object_id` or a constructed `object`",
         )),
     }
+}
+
+/// Evaluates a rule against a selection of real objects, read-only (Rule Lab).
+/// Available to `admin`/`superadmin`; no persistence.
+#[utoipa::path(
+    post,
+    path = "/rules/{id}/test-batch",
+    request_body = TestBatch,
+    responses(
+        (status = 200, description = "Per-object test-batch outcomes", body = Vec<Value>),
+        (status = 400, description = "Invalid id or payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Rule not found", body = Value),
+        (status = 503, description = "Rule service unavailable", body = Value)
+    )
+)]
+pub async fn test_batch_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TestBatch>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    if body.object_ids.is_empty() {
+        return Err(ApiError::bad_request("`object_ids` must not be empty"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let rule = fetch_rule(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rule `{id}` not found")))?;
+    let rule_name = rule
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let rule_type = rule
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let script = rule
+        .get("script")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    // A single-rule lab run derives the evaluation mode from the rule type.
+    let mode = match rule_type.as_str() {
+        "workflow_guard" => "transition",
+        "normalization" => "import",
+        "bulk" => "bulk",
+        _ => "save",
+    };
+    let spec = crate::rules::RuleSpec {
+        name: rule_name.clone(),
+        rule_type: rule_type.clone(),
+        script,
+    };
+
+    let mut results = Vec::new();
+    for object_id in &body.object_ids {
+        let candidate = build_candidate_from_object_id(&state, object_id).await?;
+        let outcome = state
+            .rules
+            .evaluate(
+                std::slice::from_ref(&spec),
+                &candidate,
+                mode,
+                None,
+                Some(&claims.sub),
+            )
+            .await
+            .map_err(|error| ApiError::unavailable(format!("rule service unavailable: {error}")))?;
+        results.push(json!({
+            "object_id": object_id,
+            "outcome": outcome,
+        }));
+    }
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_test_batch",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(json!({
+                "rule": rule_name,
+                "mode": mode,
+                "object_count": results.len(),
+                "object_ids": body.object_ids,
+            })),
+        },
+    )
+    .await;
+
+    Ok(Json(Value::Array(results)))
 }
 
 /// Query parameters for a rule recompute job.

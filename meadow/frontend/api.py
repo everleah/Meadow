@@ -1138,6 +1138,187 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    # --- Business rules ---------------------------------------------------
+    async def list_rules(
+        self,
+        token: str,
+        *,
+        rule_type: str | None = None,
+        state: str | None = None,
+        applies_to: str | None = None,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists business rules, optionally filtered by type, state, applies_to."""
+        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
+        if rule_type:
+            params["type"] = rule_type
+        if state:
+            params["state"] = state
+        if applies_to:
+            params["applies_to"] = applies_to
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/rules",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def get_rule(self, token: str, rule_id: str) -> dict:
+        """Loads a single rule (``GET /rules/{id}``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/rules/{rule_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_rule(
+        self,
+        token: str,
+        *,
+        name: str,
+        rule_type: str,
+        script: str,
+        description: str | None = None,
+        applies_to: list[str] | None = None,
+    ) -> dict:
+        """Creates a business rule (``POST /rules``, admin)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "type": rule_type,
+            "script": script,
+        }
+        if description is not None:
+            payload["description"] = description
+        if applies_to:
+            payload["applies_to"] = applies_to
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_rule(
+        self,
+        token: str,
+        rule_id: str,
+        *,
+        name: str | None = None,
+        script: str | None = None,
+        description: str | None | object = None,
+        applies_to: list[str] | None = None,
+    ) -> dict:
+        """Partially updates a rule (``PATCH /rules/{id}``, admin).
+
+        ``description`` uses a sentinel: omit it to keep the current value, pass
+        ``None`` to clear it, or pass a string to set it.
+        """
+        payload: dict[str, object] = {}
+        if name is not None:
+            payload["name"] = name
+        if script is not None:
+            payload["script"] = script
+        if description is not None:
+            payload["description"] = description
+        if applies_to is not None:
+            payload["applies_to"] = applies_to
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.patch(
+                f"{self.base_url}/rules/{rule_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def activate_rule(self, token: str, rule_id: str) -> dict:
+        """Activates a rule (``POST /rules/{id}/activate``, admin)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules/{rule_id}/activate",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def disable_rule(self, token: str, rule_id: str) -> dict:
+        """Disables a rule (``POST /rules/{id}/disable``, admin)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules/{rule_id}/disable",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def dry_run_rule(
+        self,
+        token: str,
+        rule_id: str,
+        *,
+        object_id: str | None = None,
+        object_data: dict | None = None,
+    ) -> dict:
+        """Runs a rule read-only (``POST /rules/{id}/dry-run``, admin).
+
+        Provide either ``object_id`` (a real object) or ``object_data`` (a
+        constructed candidate ``{type, status, attributes}``).
+        """
+        payload: dict[str, object] = {}
+        if object_id:
+            payload["object_id"] = object_id
+        elif object_data:
+            payload["object"] = object_data
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules/{rule_id}/dry-run",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def test_batch_rule(self, token: str, rule_id: str, object_ids: list[str]) -> list[dict]:
+        """Runs a rule against a selection of objects (``POST /rules/{id}/test-batch``)."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules/{rule_id}/test-batch",
+                json={"object_ids": object_ids},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def recompute_rule(
+        self, token: str, rule_id: str, *, object_ids: list[str] | None = None
+    ) -> dict:
+        """Queues a recompute job (``POST /rules/{id}/recompute``, admin)."""
+        params: dict[str, str] = {}
+        if object_ids:
+            params["object_ids"] = ",".join(object_ids)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/rules/{rule_id}/recompute",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     def _error_detail(self, response: httpx.Response) -> str:
         """Extracts the core's ``error`` field (or the response text)."""
         try:

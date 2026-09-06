@@ -28,6 +28,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.jobs", "/jobs", True),
     ("nav.users", "/users", True),
     ("nav.groups", "/groups", True),
+    ("nav.rules", "/rules", True),
     ("nav.connectors", "/connectors", True),
     ("nav.system_settings", "/system-settings", True),
     ("nav.system_logs", "/system-logs", True),

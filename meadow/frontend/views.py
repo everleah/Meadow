@@ -14,6 +14,7 @@ from meadow.frontend import (
     jobs,  # noqa: F401  (registers the /jobs page)
     languages,  # noqa: F401  (registers the /languages page)
     logs,  # noqa: F401  (registers the /system-logs page)
+    rules,  # noqa: F401  (registers the /rules page)
     settings,  # noqa: F401  (registers the /system-settings page)
     users,  # noqa: F401  (registers the /users page)
 )
@@ -32,6 +33,7 @@ _IMPLEMENTED_ROUTES = {
     "/users",
     "/groups",
     "/languages",
+    "/rules",
     "/system-settings",
     "/system-logs",
 }
