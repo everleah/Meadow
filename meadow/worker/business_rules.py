@@ -86,12 +86,22 @@ async def load_objects(
     core_url: str,
     object_ids: list[str],
     applies_to: list[str],
+    *,
+    locale: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Loads the objects to recompute: explicit ids, or all of `applies_to` types."""
+    """Loads the objects to recompute: explicit ids, or all of `applies_to` types.
+
+    For explicit ids, the **resolved** view is requested (`resolve_inheritance`)
+    so computed rules that read inherited values see them. A locale is threaded
+    through when provided, matching the write-path resolution.
+    """
     if object_ids:
+        params: dict[str, str] = {"resolve_inheritance": "true"}
+        if locale:
+            params["locale"] = locale
         objects: list[dict[str, Any]] = []
         for object_id in object_ids:
-            response = await client.get(f"{core_url}/objects/{object_id}")
+            response = await client.get(f"{core_url}/objects/{object_id}", params=params)
             response.raise_for_status()
             objects.append(response.json())
         return objects
@@ -150,8 +160,10 @@ def build_business_rule_handler(
             raise RuntimeError("business_rule job is missing `parameters.rule.script`")
         object_ids = [str(i) for i in parameters.get("object_ids") or []]
         applies_to = [str(t) for t in parameters.get("applies_to") or []]
+        locale = parameters.get("locale")
+        locale = str(locale) if locale else None
 
-        objects = await load_objects(active, core_url, object_ids, applies_to)
+        objects = await load_objects(active, core_url, object_ids, applies_to, locale=locale)
         results: list[dict[str, Any]] = []
         succeeded = 0
         failed = 0

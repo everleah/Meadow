@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::app::AppState;
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::ApiError;
@@ -523,6 +524,186 @@ fn validate_declared(
                     "computed rule wrote undeclared attribute `{name}`"
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+/// An active `computed` rule that reads inherited values (a cascade rule).
+///
+/// When one of these reads a value from an ancestor, an ancestor save must
+/// schedule a recompute over the affected descendants (eventual consistency).
+#[derive(Debug, Clone)]
+pub struct InheritedComputedRule {
+    pub rule_id: String,
+    pub name: String,
+    pub rule_type: String,
+    pub script: String,
+    pub applies_to: Vec<String>,
+}
+
+/// Returns the active `computed` rules whose attribute definitions are marked
+/// `computed_reads_inherited: true`.
+pub async fn inherited_computed_rules(db: &Db) -> Result<Vec<InheritedComputedRule>, ApiError> {
+    let defs: Vec<Value> = db
+        .inner()
+        .query(
+            "SELECT computed_rule FROM attribute_definition \
+             WHERE computed = true AND computed_reads_inherited = true;",
+        )
+        .await?
+        .check()?
+        .take(0)?;
+    let mut names: Vec<String> = Vec::new();
+    for def in defs {
+        if let Some(rule_name) = def.get("computed_rule").and_then(Value::as_str)
+            && !names.iter().any(|n| n == rule_name)
+        {
+            names.push(rule_name.to_owned());
+        }
+    }
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<Value> = db
+        .inner()
+        .query(
+            "SELECT * FROM business_rule \
+             WHERE name IN $names AND type = 'computed' AND state = 'active';",
+        )
+        .bind(("names", names))
+        .await?
+        .check()?
+        .take(0)?;
+    let mut result = Vec::new();
+    for rule in rows {
+        let Some(rule_id) = rule.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = rule.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(script) = rule.get("script").and_then(Value::as_str) else {
+            continue;
+        };
+        let rule_type = rule
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("computed")
+            .to_owned();
+        let applies_to = rule
+            .get("applies_to")
+            .and_then(Value::as_array)
+            .map(|types| {
+                types
+                    .iter()
+                    .filter_map(|t| t.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        result.push(InheritedComputedRule {
+            rule_id: rule_id.to_owned(),
+            name: name.to_owned(),
+            rule_type,
+            script: script.to_owned(),
+            applies_to,
+        });
+    }
+    Ok(result)
+}
+
+/// Queues a `business_rule` recompute job per affected inherited-computed rule
+/// over the saved object's descendants (best-effort, never inline).
+///
+/// Called from the write path **after** the object is persisted, so the
+/// recompute is eventual-consistent with the ancestor change. Locale is
+/// threaded through so the worker resolves the view consistently with the
+/// write path.
+pub async fn queue_inherited_cascade(
+    state: &AppState,
+    root_id: &str,
+    locale: Option<&str>,
+    actor: &str,
+) -> Result<(), ApiError> {
+    let rules = inherited_computed_rules(&state.db).await?;
+    if rules.is_empty() {
+        return Ok(());
+    }
+    // `subtree_keys` expects the full record id (`object:…`) as the root.
+    let subtree = crate::api::references::subtree_keys(&state.db, root_id).await?;
+    let root_bare = root_id.strip_prefix("object:").unwrap_or(root_id);
+    let descendants: Vec<String> = subtree
+        .iter()
+        .filter(|key| key.as_str() != root_bare)
+        .cloned()
+        .collect();
+    if descendants.is_empty() {
+        return Ok(());
+    }
+    // Load the descendant object types so each rule can be filtered by its
+    // `applies_to` before a recompute is scheduled.
+    let records: Vec<Value> = state
+        .db
+        .inner()
+        .query(
+            "SELECT id, type FROM object \
+             WHERE id IN array::map($keys, |$k| type::record('object', $k));",
+        )
+        .bind(("keys", descendants.clone()))
+        .await?
+        .check()?
+        .take(0)?;
+    let mut type_by_key: HashMap<String, String> = HashMap::new();
+    for record in &records {
+        if let (Some(id), Some(ty)) = (
+            record.get("id").and_then(Value::as_str),
+            record.get("type").and_then(Value::as_str),
+        ) {
+            let bare = id.strip_prefix("object:").unwrap_or(id);
+            type_by_key.insert(bare.to_owned(), ty.to_owned());
+        }
+    }
+    for rule in rules {
+        // Filter on the bare keys, then hand the worker full `object:` ids
+        // (the recompute/worker loads via `GET /objects/{id}`).
+        let matches: Vec<String> = descendants
+            .iter()
+            .filter(|key| {
+                rule.applies_to.is_empty()
+                    || type_by_key
+                        .get(*key)
+                        .is_some_and(|ty| rule.applies_to.contains(ty))
+            })
+            .map(|key| format!("object:{key}"))
+            .collect();
+        if matches.is_empty() {
+            continue;
+        }
+        let mut parameters = json!({
+            "rule_id": rule.rule_id,
+            "rule": { "name": rule.name, "type": rule.rule_type, "script": rule.script },
+            "applies_to": rule.applies_to,
+            "object_ids": matches,
+        });
+        if let Some(locale) = locale {
+            parameters["locale"] = Value::String(locale.to_owned());
+        }
+        let result = crate::api::jobs::queue_run(
+            &state.db,
+            &state.config,
+            None,
+            "business_rule",
+            parameters,
+            "cascade",
+            actor,
+        )
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(
+                ?error,
+                "failed to enqueue inherited-computed cascade for rule {}",
+                rule.name
+            );
         }
     }
     Ok(())

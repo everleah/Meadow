@@ -971,6 +971,22 @@ async fn apply_object_update(
     )
     .await;
 
+    // Inherited-computed cascade: if this object has descendants with a
+    // `computed_reads_inherited` computed attribute, queue a recompute job per
+    // affected rule over those descendants (eventual consistency, never
+    // inline). Best-effort so a queue hiccup never fails the save.
+    if changed_fields.contains(&"attributes") {
+        let locale = params
+            .locale
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty());
+        if let Err(error) = crate::rules::queue_inherited_cascade(state, id, locale, &user_id).await
+        {
+            tracing::warn!(?error, "failed to enqueue inherited-computed cascade");
+        }
+    }
+
     Ok(object)
 }
 

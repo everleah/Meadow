@@ -79,7 +79,7 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - `POST /rules/{id}/recompute` (Kern, `admin`/`superadmin`) queue't einen `business_rule`-Job (ohne `job_definition`); nur `active`-Regeln vom Typ `computed` oder `bulk` sind zulässig. Die Message-Parameter enthalten `{rule_id, rule:{name,type,script}, applies_to, object_ids}`.
 - Der Worker (`meadow/worker/business_rules.py`) lädt die Objekte (`object_ids` oder alle Objekte der `applies_to`-Typen via `GET /objects`), führt das Skript je Objekt in der Sandbox aus (Bulk-Modus, ~30 s Budget) und schreibt deklariert-berechnete Werte über `PATCH /objects/{id}/computed` zurück (kein erneutes Regel-Triggering).
 - Report je Objekt in `job_run.result` (`{processed, succeeded, failed, results:[{object_id, status, computed, errors, warnings, error}]}`); Objekt-Fehler sind isoliert (ein fehlgeschlagenes Objekt bricht den Lauf nicht ab).
-- **Kaskade (`computed_reads_inherited`) noch offen:** Der Handler wertet gegen die **eigenen** Attribute aus (kein `resolve_inheritance`); die vererbt-abhängige Recompute-Kaskade bleibt ein späterer Schritt.
+- **Kaskade (`computed_reads_inherited`) umgesetzt:** Der Handler wertet (bei `object_ids`) gegen die **aufgelöste** Sicht aus (`GET /objects/{id}?resolve_inheritance=true[&locale=…]`); ein Vorfahren-Save löst über `rules::queue_inherited_cascade` **pro Regel** einen `business_rule`-Job (`trigger: cascade`) über die betroffenen Nachfahren aus (best-effort, nie inline). Die vererbt-abhängige Recompute-Kaskade ist damit abgeschlossen.
 
 ## Cron-Scheduler (implementiert, Schritt 5)
 
