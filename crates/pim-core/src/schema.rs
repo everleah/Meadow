@@ -31,7 +31,9 @@ DEFINE TABLE IF NOT EXISTS attribute_definition;
 DEFINE FIELD IF NOT EXISTS name ON TABLE attribute_definition TYPE string;
 DEFINE FIELD IF NOT EXISTS label ON TABLE attribute_definition TYPE object;
 DEFINE FIELD IF NOT EXISTS type ON TABLE attribute_definition TYPE string;
-DEFINE FIELD IF NOT EXISTS group_ids ON TABLE attribute_definition TYPE array;
+-- `group_ids` is `option<array>` (not a bare `array`): records created before
+-- group enforcement may lack the field; the code guards with `group_ids ?? []`.
+DEFINE FIELD OVERWRITE group_ids ON TABLE attribute_definition TYPE option<array>;
 DEFINE FIELD IF NOT EXISTS inheritable ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS is_key ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS applicable_types ON TABLE attribute_definition TYPE array;
