@@ -41,12 +41,6 @@ _IMPLEMENTED_ROUTES = {
 }
 
 
-def _is_incomplete(obj: dict, locale: str) -> bool:
-    """Whether an object's completeness for the locale is below 100 %."""
-    percent = (obj.get("completeness") or {}).get(locale)
-    return percent is None or int(percent) < 100
-
-
 @ui.page("/", response_timeout=15)
 async def home() -> None:
     """Dashboard: work overview (objects, completeness, recent activity/jobs)."""
@@ -59,9 +53,9 @@ async def home() -> None:
         ui.label(t("dashboard.subtitle")).classes("text-subtitle1")
 
         try:
-            objects = await client.list_objects(token, limit=1000, locale=locale)
+            stats = await client.get_object_stats(token, locale=locale)
         except Exception:  # noqa: BLE001 - degrade to an empty overview
-            objects = []
+            stats = {}
         try:
             logs = await client.list_system_logs(token, limit=10)
         except Exception:  # noqa: BLE001 - degrade
@@ -71,16 +65,9 @@ async def home() -> None:
         except Exception:  # noqa: BLE001 - degrade
             job_runs = []
 
-        counts_by_type: dict[str, int] = {}
-        counts_by_status: dict[str, int] = {}
-        incomplete_by_type: dict[str, int] = {}
-        for obj in objects:
-            otype = str(obj.get("type", ""))
-            counts_by_type[otype] = counts_by_type.get(otype, 0) + 1
-            status = str(obj.get("status", ""))
-            counts_by_status[status] = counts_by_status.get(status, 0) + 1
-            if _is_incomplete(obj, locale):
-                incomplete_by_type[otype] = incomplete_by_type.get(otype, 0) + 1
+        counts_by_type: dict[str, int] = stats.get("by_type") or {}
+        counts_by_status: dict[str, int] = stats.get("by_status") or {}
+        incomplete_by_type: dict[str, int] = stats.get("incomplete_by_type") or {}
 
         # Objects by type (compact pills).
         with ui.card().classes("w-full mt-4"):

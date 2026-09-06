@@ -3,6 +3,7 @@
 //! Every object is part of the composition tree: creating an object also
 //! creates its `depends_on` edge to the universal root.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -479,6 +480,95 @@ pub async fn get_object(
     object["missing_required"] = json!(completeness.missing);
 
     Ok(Json(object))
+}
+
+/// Query parameters for `GET /objects/stats`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ObjectStatsQuery {
+    /// Working language for the incomplete counts (optional).
+    pub locale: Option<String>,
+}
+
+/// Server-side dashboard aggregation.
+///
+/// Returns the object counts by type and status plus the number of incomplete
+/// objects per type (for a working locale) — so the frontend no longer loads
+/// up to `limit` objects just to count them.
+#[utoipa::path(
+    get,
+    path = "/objects/stats",
+    params(ObjectStatsQuery),
+    responses(
+        (status = 200, description = "Dashboard stats", body = Value),
+        (status = 401, description = "Unauthorized", body = Value)
+    )
+)]
+pub async fn object_stats(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<ObjectStatsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+
+    let sql = "SELECT id, type, status, attributes FROM object WHERE deleted_at IS NONE;";
+    let mut response = state.db.inner().query(sql).await?.check()?;
+    let objects: Vec<Value> = response.take(0)?;
+
+    let mut total: i64 = 0;
+    let mut by_type: HashMap<String, i64> = HashMap::new();
+    let mut by_status: HashMap<String, i64> = HashMap::new();
+    let mut incomplete_by_type: HashMap<String, i64> = HashMap::new();
+    // Cache required attribute names per type so we don't re-query per object.
+    let mut required_by_type: HashMap<String, Vec<String>> = HashMap::new();
+
+    for object in &objects {
+        let otype = object.get("type").and_then(Value::as_str).unwrap_or("");
+        let status = object.get("status").and_then(Value::as_str).unwrap_or("");
+        total += 1;
+        *by_type.entry(otype.to_owned()).or_default() += 1;
+        *by_status.entry(status.to_owned()).or_default() += 1;
+
+        if !required_by_type.contains_key(otype) {
+            required_by_type.insert(
+                otype.to_owned(),
+                crate::completeness::required_names(&state.db, otype).await?,
+            );
+        }
+        let required = required_by_type.get(otype).cloned().unwrap_or_default();
+        if required.is_empty() {
+            continue;
+        }
+        let object_id = object.get("id").and_then(Value::as_str).unwrap_or("");
+        let own_attributes = object
+            .get("attributes")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let completeness = crate::completeness::compute_with_required(
+            &state.cache,
+            &state.db,
+            object_id,
+            locale,
+            &own_attributes,
+            &required,
+        )
+        .await?;
+        if !completeness.missing.is_empty() {
+            *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
+        }
+    }
+
+    Ok(Json(json!({
+        "total": total,
+        "by_type": by_type,
+        "by_status": by_status,
+        "incomplete_by_type": incomplete_by_type,
+    })))
 }
 
 /// Lists objects, optionally filtered by type.

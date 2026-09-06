@@ -117,6 +117,30 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_object_stats(
+        self,
+        token: str,
+        *,
+        locale: str | None = None,
+    ) -> dict:
+        """Returns server-side dashboard stats (`GET /objects/stats`).
+
+        Aggregates object counts by type/status and the number of incomplete
+        objects per type for a working locale, so the dashboard does not have to
+        load up to `limit` objects client-side.
+        """
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/objects/stats",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def list_attribute_definitions(
         self,
         token: str,

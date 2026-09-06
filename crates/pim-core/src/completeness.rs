@@ -32,7 +32,7 @@ fn key_of(record_id: &str) -> &str {
 }
 
 /// Attribute names required for the given object type (from `required_types`).
-async fn required_names(db: &Db, object_type: &str) -> Result<Vec<String>, ApiError> {
+pub(crate) async fn required_names(db: &Db, object_type: &str) -> Result<Vec<String>, ApiError> {
     let sql = "SELECT VALUE name FROM attribute_definition WHERE $type IN required_types";
     let mut response = db
         .inner()
@@ -87,6 +87,19 @@ pub async fn compute(
     own_attributes: &Map<String, Value>,
 ) -> Result<Completeness, ApiError> {
     let required = required_names(db, object_type).await?;
+    compute_with_required(cache, db, object_id, locale, own_attributes, &required).await
+}
+
+/// Completeness for a single object with the required attribute names already
+/// resolved (so callers aggregating over many objects can reuse them).
+pub(crate) async fn compute_with_required(
+    cache: &MetaCache,
+    db: &Db,
+    object_id: &str,
+    locale: Option<&str>,
+    own_attributes: &Map<String, Value>,
+    required: &[String],
+) -> Result<Completeness, ApiError> {
     if required.is_empty() {
         return Ok(Completeness {
             percent: 100,
@@ -96,7 +109,7 @@ pub async fn compute(
     let mut resolved = own_attributes.clone();
     crate::inheritance::resolve_inheritance(cache, db, key_of(object_id), locale, &mut resolved)
         .await?;
-    let (set, missing) = split_set(&required, own_attributes, &resolved);
+    let (set, missing) = split_set(required, own_attributes, &resolved);
     let percent = (set.len() as i64 * 100 / required.len() as i64).min(100);
     Ok(Completeness { percent, missing })
 }
