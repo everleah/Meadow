@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from meadow.worker.http import loopback_host
 from meadow.worker.webhooks import WebhookCoalesce, WebhookConfig, WebhookFilter
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ async def fetch_webhook_configs(core_url: str, api_key: str | None) -> list[Webh
     the current configuration (live reload) or fall back to the environment
     bootstrap (initial load). Returns an empty list when no connector exists.
     """
+    core_url = loopback_host(core_url)
     url = f"{core_url.rstrip('/')}/connectors?type={CONNECTOR_TYPE_WEBHOOK}&enabled=true"
     headers = {"x-api-key": api_key} if api_key else {}
     async with httpx.AsyncClient(timeout=10.0) as client:

@@ -23,6 +23,7 @@ import nats
 import nats.js.api as jsapi
 from pydantic import BaseModel, Field
 
+from meadow.worker.http import loopback_host
 from meadow.worker.log_sender import LogSender
 
 logger = logging.getLogger(__name__)
@@ -240,6 +241,7 @@ async def serve_jobs(
 
     Up to `concurrency` messages are fetched and processed concurrently.
     """
+    core_url = loopback_host(core_url)
     sem = asyncio.Semaphore(max(1, concurrency))
     nc = await nats.connect(nats_url)
     js = nc.jetstream()

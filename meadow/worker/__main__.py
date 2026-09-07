@@ -11,6 +11,7 @@ from meadow.worker.bulk import build_bulk_handler
 from meadow.worker.business_rules import build_business_rule_handler
 from meadow.worker.connectors import load_webhook_configs
 from meadow.worker.exports import build_export_handler
+from meadow.worker.http import loopback_host
 from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
@@ -26,7 +27,7 @@ async def main() -> None:
     nats_url = os.environ.get("NATS_URL", "nats://localhost:4222")
     subject = os.environ.get("RULES_EVALUATE_SUBJECT", "rules.evaluate")
     compile_subject = os.environ.get("RULES_COMPILE_SUBJECT", "rules.compile")
-    core_url = os.environ.get("PIM_CORE_URL", "http://localhost:8080")
+    core_url = loopback_host(os.environ.get("PIM_CORE_URL", "http://localhost:8080"))
     api_key = os.environ.get("LOG_INGEST_API_KEY") or None
     flush_interval = float(os.environ.get("LOG_FLUSH_INTERVAL_S", "5.0"))
     config_refresh = float(os.environ.get("LOG_CONFIG_REFRESH_INTERVAL_S", "60.0"))

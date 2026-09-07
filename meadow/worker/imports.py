@@ -28,6 +28,7 @@ import httpx
 
 from meadow.rules import Context, execute_rule
 from meadow.worker.business_rules import evaluation_lock
+from meadow.worker.http import loopback_host
 from meadow.worker.jobs import JobHandler, JobMessage
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,7 @@ def build_import_handler(
     `client` may be injected for tests; otherwise a short-lived client is
     created per job.
     """
+    core_url = loopback_host(core_url)
     headers = {"x-api-key": api_key} if api_key else {}
 
     async def run(active: httpx.AsyncClient, message: JobMessage) -> dict[str, Any]:

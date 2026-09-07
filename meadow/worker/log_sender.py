@@ -16,6 +16,8 @@ from typing import Any
 
 import httpx
 
+from meadow.worker.http import loopback_host
+
 logger = logging.getLogger(__name__)
 
 LEVEL_ORDER: dict[str, int] = {
@@ -48,7 +50,7 @@ class LogSender:
         flush_interval_s: float = DEFAULT_FLUSH_INTERVAL_S,
         config_refresh_interval_s: float = DEFAULT_CONFIG_REFRESH_INTERVAL_S,
     ) -> None:
-        self._core_url = core_url.rstrip("/")
+        self._core_url = loopback_host(core_url).rstrip("/")
         self._api_key = api_key
         self._buffer: deque[dict[str, Any]] = deque(maxlen=max_buffer_size)
         self._flush_interval_s = flush_interval_s
