@@ -159,7 +159,6 @@ async def product_form(object_id: str) -> None:
             str(lang.get("code")): resolve_value(lang.get("label"), locale) for lang in base_langs
         }
         with ui.row().classes("items-center gap-3 w-full mt-2"):
-            ui.space()
             ui.label(name).classes("text-h5")
             ui.label(object_type).classes("text-caption text-gray-500")
             ui.html(status_badge(str(resolved.get("status", "")))).classes("text-sm")
@@ -850,12 +849,21 @@ async def product_form(object_id: str) -> None:
                         content.run_method("scrollIntoView")
                         break
 
-            with ui.column().classes("w-full gap-2 mt-4"):
+            # "Jump to" selector (left) + "Only missing required fields" switch (right).
+            with ui.row().classes("items-center gap-2 w-full mt-4"):
                 jump = (
                     ui.select([], label=t("form.jump"), on_change=lambda e: go_to(str(e.value)))
                     .props("filled dense")
                     .classes("w-64")
                 )
+                ui.space()
+                ui.switch(
+                    value=show_missing_only,
+                    on_change=lambda e: on_missing_toggle(e.value),
+                ).props("dense")
+                ui.label(t("form.only_missing")).classes("text-caption")
+
+            with ui.column().classes("w-full gap-2 mt-2"):
                 if show_missing_only and not missing:
                     ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
                 else:
@@ -914,13 +922,6 @@ async def product_form(object_id: str) -> None:
             show_missing_only = bool(value)
             app.storage.user["form_show_missing"] = show_missing_only
             render_sections.refresh()
-
-        with ui.row().classes("items-center gap-2 w-full mt-4"):
-            ui.switch(
-                value=show_missing_only,
-                on_change=lambda e: on_missing_toggle(e.value),
-            ).props("dense")
-            ui.label(t("form.only_missing")).classes("text-caption")
 
         render_sections()
 
