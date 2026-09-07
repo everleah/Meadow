@@ -691,30 +691,41 @@ async def products_page(request: Request) -> None:
                 bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
 
         # Load category objects and candidate parents for the wizard pickers.
-        categories: list[dict] = []
-        try:
-            categories = await client.list_objects(token, object_type="category", limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to an empty picker
-            categories = []
-        category_options = {
-            str(c.get("id")): (
-                resolve_value((c.get("attributes") or {}).get("name"), locale)
-                or str(c.get("type"))
-                or str(c.get("id"))
-            )
-            for c in categories
-        }
+        # Bulk-wizard pickers (category / parent options) are loaded lazily on
+        # first use instead of on every /products render, so a large catalog does
+        # not require fetching all objects just to render the page.
+        category_options: dict[str, str] = {}
         parent_options: dict[str, str] = {}
-        try:
-            for obj in await client.list_objects(token, limit=1000):
-                oid = str(obj.get("id"))
-                parent_options[oid] = (
-                    resolve_value((obj.get("attributes") or {}).get("name"), locale)
-                    or str(obj.get("type"))
-                    or oid
+
+        async def load_category_options() -> None:
+            nonlocal category_options
+            try:
+                objs = await client.list_objects(token, object_type="category", limit=1000)
+            except Exception:  # noqa: BLE001 - degrade to an empty picker
+                objs = []
+            category_options = {
+                str(c.get("id")): (
+                    resolve_value((c.get("attributes") or {}).get("name"), locale)
+                    or str(c.get("type"))
+                    or str(c.get("id"))
                 )
-        except Exception:  # noqa: BLE001 - degrade to an empty picker
-            parent_options = {}
+                for c in objs
+            }
+
+        async def load_parent_options() -> None:
+            nonlocal parent_options
+            try:
+                objs = await client.list_objects(token, limit=1000)
+            except Exception:  # noqa: BLE001 - degrade to an empty picker
+                objs = []
+            parent_options = {
+                str(o.get("id")): (
+                    resolve_value((o.get("attributes") or {}).get("name"), locale)
+                    or str(o.get("type"))
+                    or str(o.get("id"))
+                )
+                for o in objs
+            }
 
         bulk_attr_options = {name: name for name in attribute_names}
         bulk_status_options = {
@@ -743,6 +754,11 @@ async def products_page(request: Request) -> None:
             )
             bulk_selected_label = ui.label("").classes("text-caption")
             ui.label(t("grid.bulk_operation")).classes("text-caption text-gray-600")
+
+            async def _on_bulk_op_change(_event) -> None:
+                """Re-renders the wizard config area, loading pickers lazily."""
+                await refresh_config()
+
             bulk_op = (
                 ui.select(
                     {
@@ -755,7 +771,7 @@ async def products_page(request: Request) -> None:
                         "delete": t("grid.op_delete"),
                     },
                     value=None,
-                    on_change=lambda e: refresh_config(),
+                    on_change=_on_bulk_op_change,
                 )
                 .props("filled dense")
                 .classes("w-full")
@@ -768,7 +784,7 @@ async def products_page(request: Request) -> None:
                     t("grid.bulk_start"), icon="play_arrow", on_click=lambda: start_bulk()
                 ).props("flat")
 
-        def refresh_config() -> None:
+        async def refresh_config(_event=None) -> None:  # noqa: ARG001 - handler arg unused
             config_area.clear()
             bulk_fields.clear()
             op = bulk_op.value or ""
@@ -797,6 +813,8 @@ async def products_page(request: Request) -> None:
                     )
                     bulk_fields["status"] = select
                 elif op in ("add_category", "remove_category"):
+                    if not category_options:
+                        await load_category_options()
                     select = (
                         ui.select(category_options, value=None, label=t("grid.bulk_category"))
                         .props("filled dense")
@@ -804,6 +822,8 @@ async def products_page(request: Request) -> None:
                     )
                     bulk_fields["category"] = select
                 elif op == "change_parent":
+                    if not parent_options:
+                        await load_parent_options()
                     select = (
                         ui.select(parent_options, value=None, label=t("grid.bulk_parent"))
                         .props("filled dense")
