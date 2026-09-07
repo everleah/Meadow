@@ -1057,7 +1057,7 @@ async def products_page(request: Request) -> None:
                 set_view("structure")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
             # Right: grid area (fills the remaining width and height).
-            with splitter.after, ui.column().classes("w-full h-full"):  # noqa: SIM117 - layout
+            with splitter.after, ui.column().classes("w-full h-full pl-3"):  # noqa: SIM117 - layout
                 with ui.row().classes("items-center gap-2 w-full"):
                     # Panel toggle (structure tree): separate function, far left.
                     ui.button(icon="view_sidebar", on_click=toggle_panel).props(

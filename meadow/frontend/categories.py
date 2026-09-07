@@ -512,6 +512,6 @@ async def categories_page() -> None:
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
                 render_tree()
-            with splitter.after, ui.column().classes("w-full h-full"):
+            with splitter.after, ui.column().classes("w-full h-full pl-3"):
                 detail_host = ui.column().classes("w-full h-full")
                 await render_detail()
