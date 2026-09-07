@@ -298,6 +298,7 @@
   "grid.status": "Status",
   "grid.completeness": "Vollständigkeit",
   "grid.no_objects": "Keine Objekte gefunden.",
+  "grid.select_tree_node": "Bitte wählen Sie einen Knoten im Baum aus, um dessen Objekte zu laden.",
   "grid.load_failed": "Objekte konnten nicht geladen werden.",
   "grid.save": "Speichern",
   "grid.discard": "Verwerfen",

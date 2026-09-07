@@ -219,27 +219,58 @@ async def products_page(request: Request) -> None:
     locale = current_locale()
     incomplete_only = request.query_params.get("incomplete") == "1"
     type_filter = request.query_params.get("type")
+    ancestor_filter = request.query_params.get("ancestor") or None
+    category_filter = request.query_params.get("category") or None
+    uncategorized_only = request.query_params.get("uncategorized") == "1"
+    has_filter = bool(
+        incomplete_only or type_filter or ancestor_filter or category_filter or uncategorized_only
+    )
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.products")).classes("text-h4")
+        # Prompt shown when the grid is empty because no node/filter is active.
+        selection_hint = ui.label(t("grid.select_tree_node")).classes(
+            "text-subtitle1 text-gray-500 pb-2"
+        )
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
-        try:
-            objects = await client.list_objects(
-                token, limit=1000 if incomplete_only else 100, locale=locale
+
+        async def fetch_filtered() -> list[dict]:
+            """Loads the objects matching the active URL filter (or an empty list)."""
+            if ancestor_filter:
+                return await client.list_objects(
+                    token, ancestor=ancestor_filter, limit=1000, locale=locale
+                )
+            if category_filter:
+                return await client.list_objects(
+                    token, category=category_filter, limit=1000, locale=locale
+                )
+            if uncategorized_only:
+                return await client.list_objects(
+                    token, uncategorized=True, limit=1000, locale=locale
+                )
+            objs = await client.list_objects(
+                token,
+                limit=1000 if incomplete_only else 100,
+                locale=locale,
+                object_type=type_filter,
             )
+            if incomplete_only:
+                objs = [o for o in objs if _is_incomplete(o, locale)]
+            return objs
+
+        # On a plain /products visit we deliberately avoid loading every object:
+        # the grid stays empty and the user picks a node in the tree. A filter
+        # (e.g. `?incomplete=1&type=product`, `?ancestor=…`, `?category=…`) loads
+        # the targeted objects so shortcuts still work.
+        try:
+            objects = await fetch_filtered() if has_filter else []
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("grid.load_failed")).classes("text-subtitle1 text-negative")
             return
-        if incomplete_only or type_filter:
-            objects = [
-                obj
-                for obj in objects
-                if (not incomplete_only or _is_incomplete(obj, locale))
-                and (not type_filter or str(obj.get("type")) == type_filter)
-            ]
-        if not objects:
+        if has_filter and not objects:
             ui.label(t("grid.no_objects")).classes("text-subtitle1")
             return
+        selection_hint.set_visibility(not has_filter)
 
         try:
             definitions = await client.list_attribute_definitions(token)
@@ -273,19 +304,41 @@ async def products_page(request: Request) -> None:
 
         all_rows = [row_data(object_, locale, attribute_names) for object_ in objects]
 
+        def sync_url_query(params: dict) -> None:
+            """Keeps the URL in sync with the active filter so save/reload keeps it."""
+            parts = []
+            if params.get("incomplete"):
+                parts.append("incomplete=1")
+            if params.get("type"):
+                parts.append(f"type={params['type']}")
+            if params.get("ancestor"):
+                parts.append(f"ancestor={params['ancestor']}")
+            if params.get("category"):
+                parts.append(f"category={params['category']}")
+            if params.get("uncategorized"):
+                parts.append("uncategorized=1")
+            query = "&".join(parts)
+            ui.run_javascript(
+                f"history.replaceState(null, '', '/products{('?' + query) if query else ''}')"
+            )
+
+        async def apply_rows(selected_objects: list[dict]) -> None:
+            nonlocal original_by_id, all_rows
+            original_by_id = {str(o.get("id")): o for o in selected_objects}
+            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
+            grid.run_grid_method("setGridOption", "rowData", all_rows)
+            selection_hint.set_visibility(len(selected_objects) == 0)
+
         async def handle_tree_select(e) -> None:
-            nonlocal all_rows
             selected = e.value if hasattr(e, "value") else None
-            if not selected:
-                selected_objects = objects
-            else:
+            if selected:
                 selected_objects = await client.list_objects(
                     token, ancestor=selected, limit=1000, locale=locale
                 )
-            original_by_id.clear()
-            original_by_id.update({str(o.get("id")): o for o in selected_objects})
-            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
-            grid.run_grid_method("setGridOption", "rowData", all_rows)
+            else:
+                selected_objects = [] if not has_filter else objects
+            await apply_rows(selected_objects)
+            sync_url_query({"ancestor": selected})
 
         # Category tree (left-panel view): aggregation-based navigation. Category
         # nodes are objects of type `category`; their hierarchy is `depends_on`
@@ -321,22 +374,22 @@ async def products_page(request: Request) -> None:
             category_roots = []
 
         async def handle_category_select(e) -> None:
-            nonlocal all_rows
             selected = e.value if hasattr(e, "value") else None
             if selected == uncategorized_id:
                 selected_objects = await client.list_objects(
                     token, uncategorized=True, limit=1000, locale=locale
                 )
-            elif not selected:
-                selected_objects = objects
-            else:
+                params = {"uncategorized": True, "category": None, "ancestor": None}
+            elif selected:
                 selected_objects = await client.list_objects(
                     token, category=selected, limit=1000, locale=locale
                 )
-            original_by_id.clear()
-            original_by_id.update({str(o.get("id")): o for o in selected_objects})
-            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
-            grid.run_grid_method("setGridOption", "rowData", all_rows)
+                params = {"category": selected, "uncategorized": False, "ancestor": None}
+            else:
+                selected_objects = [] if not has_filter else objects
+                params = {"category": None, "uncategorized": False, "ancestor": None}
+            await apply_rows(selected_objects)
+            sync_url_query(params)
 
         staged_ids: set[str] = set()
 

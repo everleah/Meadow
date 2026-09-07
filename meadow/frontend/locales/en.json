@@ -298,6 +298,7 @@
   "grid.status": "Status",
   "grid.completeness": "Completeness",
   "grid.no_objects": "No objects found.",
+  "grid.select_tree_node": "Select a node in the tree to load its objects.",
   "grid.load_failed": "Could not load objects.",
   "grid.save": "Save",
   "grid.discard": "Discard",

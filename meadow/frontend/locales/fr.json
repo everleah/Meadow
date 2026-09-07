@@ -298,6 +298,7 @@
   "grid.status": "Statut",
   "grid.completeness": "Complétude",
   "grid.no_objects": "Aucun objet trouvé.",
+  "grid.select_tree_node": "Sélectionnez un nœud dans l'arbre pour charger ses objets.",
   "grid.load_failed": "Impossible de charger les objets.",
   "grid.save": "Enregistrer",
   "grid.discard": "Annuler",
