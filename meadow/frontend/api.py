@@ -2,8 +2,32 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import httpx
 from pydantic import BaseModel
+
+#: Reused across every CoreClient call so the connection pool stays warm and
+#: no new `httpx.AsyncClient` is built per request (which was the main source
+#: of per-call latency). An optional (single-process) singleton.
+_shared_client: httpx.AsyncClient | None = None
+_SHARED_CLIENT_TIMEOUT = 30.0
+
+
+@contextlib.asynccontextmanager
+async def _api_client() -> httpx.AsyncClient:
+    """Yields the shared ASGI HTTP client without closing it.
+
+    Using an asynccontextmanager keeps the existing `async with ... as client:`
+    call sites unchanged (their indentation and body are untouched) while
+    reusing a single long-lived connection pool. `trust_env=False` ignores
+    proxy/`NO_PROXY` env vars that could otherwise be picked up during a
+    request on Windows.
+    """
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(timeout=_SHARED_CLIENT_TIMEOUT, trust_env=False)
+    yield _shared_client
 
 
 class CoreError(Exception):
@@ -33,6 +57,20 @@ def is_session_expired(results: list[dict]) -> bool:
     )
 
 
+def _loopback_host(base_url: str) -> str:
+    """Rewrites `localhost` to `127.0.0.1` so every connection is instant.
+
+    On Windows `localhost` resolves to `::1` (IPv6) before `127.0.0.1`. The PIM
+    core binds IPv4 only (e.g. `0.0.0.0:8080`), so httpx waits ~2 s for the IPv6
+    attempt to time out and then falls back to IPv4. Every new HTTP connection
+    therefore adds ~2 s — the main cause of the "page starts loading" delay
+    (every CoreClient call opens a fresh connection). Using the explicit IPv4
+    loopback makes each new connection fast (~ms), so the client does not have
+    to rely on the env `PIM_CORE_URL` using the right host.
+    """
+    return base_url.replace("://localhost", "://127.0.0.1")
+
+
 class LoginResponse(BaseModel):
     """Response of `POST /auth/login`."""
 
@@ -54,12 +92,12 @@ class CoreClient:
     """HTTP client for the headless PIM core."""
 
     def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _loopback_host(base_url).rstrip("/")
         self.timeout = timeout
 
     async def login(self, username: str, password: str) -> LoginResponse:
         """Exchanges credentials for a JWT."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/auth/login",
                 json={"username": username, "password": password},
@@ -69,7 +107,7 @@ class CoreClient:
 
     async def me(self, token: str) -> MeResponse:
         """Returns the current user's claims for a bearer token."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/auth/me",
                 headers={"Authorization": f"Bearer {token}"},
@@ -108,7 +146,7 @@ class CoreClient:
             params["uncategorized"] = "true"
         if locale:
             params["locale"] = locale
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects",
                 params=params,
@@ -132,7 +170,7 @@ class CoreClient:
         params: dict[str, str] = {}
         if locale:
             params["locale"] = locale
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/stats",
                 params=params,
@@ -149,7 +187,7 @@ class CoreClient:
         start: int = 0,
     ) -> list[dict]:
         """Lists attribute definitions (used to offer grid columns)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/attribute-definitions",
                 params={"limit": str(limit), "start": str(start)},
@@ -175,7 +213,7 @@ class CoreClient:
         payload: dict[str, object] = {k: v for k, v in fields.items() if v is not None}
         if constraints is not None:
             payload["constraints"] = constraints
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/attribute-definitions/{definition_id}",
                 json=payload,
@@ -239,7 +277,7 @@ class CoreClient:
         for key, value in optional.items():
             if value is not None:
                 payload[key] = value
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/attribute-definitions",
                 json=payload,
@@ -263,7 +301,7 @@ class CoreClient:
         and ``force`` is not set; ``force=True`` removes values asynchronously.
         """
         params = {"force": "true"} if force else {}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/attribute-definitions/{definition_id}",
                 params=params,
@@ -291,7 +329,7 @@ class CoreClient:
             params["locale"] = locale
         if resolve_inheritance:
             params["resolve_inheritance"] = "true"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}",
                 params=params,
@@ -318,7 +356,7 @@ class CoreClient:
             payload["attributes"] = attributes
         if status is not None:
             payload["status"] = status
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/objects/{object_id}",
                 params=params,
@@ -365,7 +403,7 @@ class CoreClient:
             payload["source_id"] = source_id
         if source:
             payload["source"] = source
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/objects",
                 params=params,
@@ -382,7 +420,7 @@ class CoreClient:
         Deleting a category also removes it and its sub-categories from every
         category tree and from member assignments.
         """
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/objects/{object_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -397,7 +435,7 @@ class CoreClient:
         configured data language. Each node carries ``code``, ``parent``,
         ``label``, ``fallback_order``, ``active`` and ``is_ui``.
         """
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/languages",
                 headers={"Authorization": f"Bearer {token}"},
@@ -430,7 +468,7 @@ class CoreClient:
             "active": active,
             "is_ui": is_ui,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/languages",
                 json=payload,
@@ -464,7 +502,7 @@ class CoreClient:
             payload["active"] = active
         if is_ui is not None:
             payload["is_ui"] = is_ui
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/languages/{code}",
                 json=payload,
@@ -476,7 +514,7 @@ class CoreClient:
 
     async def delete_language(self, token: str, code: str) -> None:
         """Deletes a language tree node (``DELETE /languages/{code}``, admin)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/languages/{code}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -486,7 +524,7 @@ class CoreClient:
 
     async def list_attribute_groups(self, token: str) -> list[dict]:
         """Lists attribute groups (used for the product form's sections)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/attribute-groups",
                 headers={"Authorization": f"Bearer {token}"},
@@ -514,7 +552,7 @@ class CoreClient:
             "position": position,
             "applicable_types": applicable_types or [],
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/attribute-groups",
                 json=payload,
@@ -550,7 +588,7 @@ class CoreClient:
             }.items()
             if v is not None
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/attribute-groups/{group_id}",
                 json=payload,
@@ -567,7 +605,7 @@ class CoreClient:
 
     async def delete_attribute_group(self, token: str, group_id: str) -> None:
         """Deletes an attribute group (``DELETE /attribute-groups/{id}``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/attribute-groups/{group_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -603,7 +641,7 @@ class CoreClient:
             params["offset"] = str(offset)
         if count_members:
             params["count_members"] = "true"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/children",
                 params=params,
@@ -614,7 +652,7 @@ class CoreClient:
 
     async def get_object_tree(self, token: str) -> list[dict]:
         """Returns the composition tree (``{id, children}``) from the Universal-Root."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/tree",
                 headers={"Authorization": f"Bearer {token}"},
@@ -624,7 +662,7 @@ class CoreClient:
 
     async def batch_update(self, token: str, items: list[dict]) -> list[dict]:
         """Applies staged grid edits in a single batch call."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/objects/batch-update",
                 json=items,
@@ -648,7 +686,7 @@ class CoreClient:
         params: dict[str, str] = {}
         if locale:
             params["locale"] = locale
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/references",
                 params=params,
@@ -672,7 +710,7 @@ class CoreClient:
             params["types"] = ",".join(types)
         if locale:
             params["locale"] = locale
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/picker",
                 params=params,
@@ -689,7 +727,7 @@ class CoreClient:
         definition_id: str,
     ) -> dict:
         """Creates a reference between two objects."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/references",
                 json={"source": source, "target": target, "definition_id": definition_id},
@@ -700,7 +738,7 @@ class CoreClient:
 
     async def delete_reference(self, token: str, reference_id: str) -> None:
         """Deletes a reference."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/references/{reference_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -709,7 +747,7 @@ class CoreClient:
 
     async def reparent_object(self, token: str, object_id: str, parent: str) -> dict:
         """Re-parents an object to a new composition parent (full record id)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/objects/{object_id}/parent",
                 json={"parent": parent},
@@ -720,7 +758,7 @@ class CoreClient:
 
     async def list_relation_definitions(self, token: str) -> list[dict]:
         """Lists relation definitions (e.g. for the reference picker)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/relation-definitions",
                 headers={"Authorization": f"Bearer {token}"},
@@ -759,7 +797,7 @@ class CoreClient:
             params["to"] = to_dt
         if q:
             params["q"] = q
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/system/logs",
                 params=params,
@@ -782,7 +820,7 @@ class CoreClient:
             params["ids"] = ",".join(ids)
         if status:
             params["status"] = status
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/jobs/runs",
                 params=params,
@@ -806,7 +844,7 @@ class CoreClient:
             params["type"] = job_type
         if enabled is not None:
             params["enabled"] = "true" if enabled else "false"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/jobs",
                 params=params,
@@ -834,7 +872,7 @@ class CoreClient:
         }
         if schedule:
             payload["schedule"] = schedule
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/jobs",
                 json=payload,
@@ -870,7 +908,7 @@ class CoreClient:
             "enabled": enabled,
             "parameters": parameters,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/jobs/{definition_id}",
                 json=payload,
@@ -887,7 +925,7 @@ class CoreClient:
 
     async def run_job(self, token: str, definition_id: str) -> dict:
         """Manually triggers a job definition (``POST /jobs/{id}/run``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/jobs/{definition_id}/run",
                 headers={"Authorization": f"Bearer {token}"},
@@ -913,7 +951,7 @@ class CoreClient:
         params: dict[str, str] = {"limit": str(limit)}
         if status:
             params["status"] = status
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/jobs/{definition_id}/runs",
                 params=params,
@@ -932,7 +970,7 @@ class CoreClient:
     ) -> dict:
         """Queues a mass operation (`POST /objects/bulk`) and returns the job run."""
         payload = {"op": op, "object_ids": object_ids, "parameters": parameters}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/objects/bulk",
                 json=payload,
@@ -944,7 +982,7 @@ class CoreClient:
     # --- Users / Groups / Impersonation ------------------------------------
     async def list_users(self, token: str, *, limit: int = 100, start: int = 0) -> list[dict]:
         """Lists users (admin only)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/users",
                 params={"limit": str(limit), "start": str(start)},
@@ -973,7 +1011,7 @@ class CoreClient:
             "locale": locale,
             "status": status,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/users",
                 json=payload,
@@ -1006,7 +1044,7 @@ class CoreClient:
             }.items()
             if v is not None
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/users/{user_id}",
                 json=payload,
@@ -1018,7 +1056,7 @@ class CoreClient:
 
     async def delete_user(self, token: str, user_id: str) -> None:
         """Deletes a user (admin only)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/users/{user_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1028,7 +1066,7 @@ class CoreClient:
 
     async def list_groups(self, token: str, *, limit: int = 100, start: int = 0) -> list[dict]:
         """Lists groups (admin only)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/groups",
                 params={"limit": str(limit), "start": str(start)},
@@ -1055,7 +1093,7 @@ class CoreClient:
             "scope": scope or {},
             "branding": branding or {},
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/groups",
                 json=payload,
@@ -1088,7 +1126,7 @@ class CoreClient:
             }.items()
             if v is not None
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/groups/{group_id}",
                 json=payload,
@@ -1100,7 +1138,7 @@ class CoreClient:
 
     async def delete_group(self, token: str, group_id: str) -> None:
         """Deletes a group (admin only)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/groups/{group_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1110,7 +1148,7 @@ class CoreClient:
 
     async def impersonate_user(self, token: str, user_id: str) -> dict:
         """Impersonates a user (superadmin only) and returns a token for them."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/auth/impersonate/{user_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1131,7 +1169,7 @@ class CoreClient:
         params: dict[str, str] = {}
         if include_source:
             params["include_source"] = "true"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/system/settings",
                 params=params,
@@ -1142,7 +1180,7 @@ class CoreClient:
 
     async def put_setting(self, token: str, key: str, value: object) -> dict:
         """Persists a runtime setting (``PUT /system/settings/{key}``, admin)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.put(
                 f"{self.base_url}/system/settings/{key}",
                 json={"value": value},
@@ -1154,7 +1192,7 @@ class CoreClient:
 
     async def delete_setting(self, token: str, key: str) -> None:
         """Resets a runtime setting to its default (``DELETE /system/settings/{key}``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/system/settings/{key}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1181,7 +1219,7 @@ class CoreClient:
             params["state"] = state
         if applies_to:
             params["applies_to"] = applies_to
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/rules",
                 params=params,
@@ -1192,7 +1230,7 @@ class CoreClient:
 
     async def get_rule(self, token: str, rule_id: str) -> dict:
         """Loads a single rule (``GET /rules/{id}``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/rules/{rule_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1220,7 +1258,7 @@ class CoreClient:
             payload["description"] = description
         if applies_to:
             payload["applies_to"] = applies_to
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules",
                 json=payload,
@@ -1254,7 +1292,7 @@ class CoreClient:
             payload["description"] = description
         if applies_to is not None:
             payload["applies_to"] = applies_to
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/rules/{rule_id}",
                 json=payload,
@@ -1266,7 +1304,7 @@ class CoreClient:
 
     async def activate_rule(self, token: str, rule_id: str) -> dict:
         """Activates a rule (``POST /rules/{id}/activate``, admin)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules/{rule_id}/activate",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1277,7 +1315,7 @@ class CoreClient:
 
     async def disable_rule(self, token: str, rule_id: str) -> dict:
         """Disables a rule (``POST /rules/{id}/disable``, admin)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules/{rule_id}/disable",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1304,7 +1342,7 @@ class CoreClient:
             payload["object_id"] = object_id
         elif object_data:
             payload["object"] = object_data
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules/{rule_id}/dry-run",
                 json=payload,
@@ -1316,7 +1354,7 @@ class CoreClient:
 
     async def test_batch_rule(self, token: str, rule_id: str, object_ids: list[str]) -> list[dict]:
         """Runs a rule against a selection of objects (``POST /rules/{id}/test-batch``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules/{rule_id}/test-batch",
                 json={"object_ids": object_ids},
@@ -1333,7 +1371,7 @@ class CoreClient:
         params: dict[str, str] = {}
         if object_ids:
             params["object_ids"] = ",".join(object_ids)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/rules/{rule_id}/recompute",
                 params=params,
@@ -1359,7 +1397,7 @@ class CoreClient:
             params["type"] = connector_type
         if enabled is not None:
             params["enabled"] = "true" if enabled else "false"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/connectors",
                 params=params,
@@ -1370,7 +1408,7 @@ class CoreClient:
 
     async def get_connector(self, token: str, connector_id: str) -> dict:
         """Loads a single connector (``GET /connectors/{id}``)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/connectors/{connector_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -1394,7 +1432,7 @@ class CoreClient:
             "enabled": bool(enabled),
             "parameters": parameters or {},
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/connectors",
                 json=payload,
@@ -1424,7 +1462,7 @@ class CoreClient:
             payload["parameters"] = parameters
         if enabled is not None:
             payload["enabled"] = enabled
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/connectors/{connector_id}",
                 json=payload,
@@ -1436,7 +1474,7 @@ class CoreClient:
 
     async def delete_connector(self, token: str, connector_id: str) -> None:
         """Deletes a connector (``DELETE /connectors/{id}``, admin)."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/connectors/{connector_id}",
                 headers={"Authorization": f"Bearer {token}"},
