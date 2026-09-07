@@ -17,6 +17,7 @@ from meadow.frontend import (
     logs,  # noqa: F401  (registers the /system-logs page)
     rules,  # noqa: F401  (registers the /rules page)
     settings,  # noqa: F401  (registers the /system-settings page)
+    units,  # noqa: F401  (registers the /units page)
     users,  # noqa: F401  (registers the /users page)
 )
 from meadow.frontend.api import CoreClient
@@ -38,6 +39,7 @@ _IMPLEMENTED_ROUTES = {
     "/rules",
     "/system-settings",
     "/system-logs",
+    "/units",
 }
 
 

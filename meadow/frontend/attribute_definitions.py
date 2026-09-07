@@ -36,6 +36,32 @@ async def attribute_definitions_page() -> None:
             ui.label(t("attr_def.load_failed")).classes("text-subtitle1 text-negative")
             return
         try:
+            units = await client.list_units(token, limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to no units
+            units = []
+
+        def _unit_key(u: dict) -> str:
+            return str(u.get("id")).split(":")[-1]
+
+        unit_options = {
+            _unit_key(u): (
+                f"{u.get('symbol')} · {resolve_value(u.get('label'), locale) or u.get('symbol')}"
+            )
+            for u in units
+            if u.get("id")
+        }
+        unit_key_by_symbol = {
+            str(u.get("symbol")): _unit_key(u) for u in units if u.get("symbol") and u.get("id")
+        }
+
+        def _resolve_unit_key(value: object) -> str | None:
+            """Maps a stored unit reference (record key or symbol) to an option key."""
+            v = str(value or "")
+            if v in unit_options:
+                return v
+            return unit_key_by_symbol.get(v)
+
+        try:
             groups = await client.list_attribute_groups(token)
         except Exception:  # noqa: BLE001 - degrade to no groups
             groups = []
@@ -457,10 +483,20 @@ async def attribute_definitions_page() -> None:
                 )
                 with ui.row().classes("w-full gap-2"):
                     unit_input = (
-                        ui.input(t("attr_def.field_unit")).props("filled dense").classes("grow")
+                        ui.select(
+                            unit_options,
+                            label=t("attr_def.field_unit"),
+                            value=None,
+                        )
+                        .props("filled dense")
+                        .classes("grow")
                     )
                     display_input = (
-                        ui.input(t("attr_def.field_display_unit"))
+                        ui.select(
+                            unit_options,
+                            label=t("attr_def.field_display_unit"),
+                            value=None,
+                        )
                         .props("filled dense")
                         .classes("grow")
                     )
@@ -545,8 +581,10 @@ async def attribute_definitions_page() -> None:
             required_select.set_value(
                 list(definition.get("required_types") or []) if editing else []
             )
-            unit_input.set_value(str(definition.get("unit_id") or "") if editing else "")
-            display_input.set_value(str(definition.get("display_unit_id") or "") if editing else "")
+            unit_input.set_value(_resolve_unit_key(definition.get("unit_id")) if editing else None)
+            display_input.set_value(
+                _resolve_unit_key(definition.get("display_unit_id")) if editing else None
+            )
             enum_input.set_value(
                 ", ".join((definition.get("constraints") or {}).get("enum_values") or [])
                 if editing

@@ -1522,6 +1522,122 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    async def list_units(
+        self,
+        token: str,
+        *,
+        symbol: str | None = None,
+        dimension: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Lists the unit catalog (``GET /units``)."""
+        params: dict[str, str] = {"limit": str(limit)}
+        if symbol:
+            params["symbol"] = symbol
+        if dimension:
+            params["dimension"] = dimension
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/units",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_unit(
+        self,
+        token: str,
+        *,
+        symbol: str,
+        canonical_unit_id: str,
+        factor: float,
+        offset: float = 0.0,
+        label: dict | None = None,
+    ) -> dict:
+        """Creates a custom unit (``POST /units``, admin)."""
+        payload: dict[str, object] = {
+            "symbol": symbol,
+            "canonical_unit_id": canonical_unit_id,
+            "factor": factor,
+            "offset": offset,
+        }
+        if label:
+            payload["label"] = label
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/units",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_unit(
+        self,
+        token: str,
+        unit_id: str,
+        *,
+        symbol: str | None = None,
+        canonical_unit_id: str | None = None,
+        factor: float | None = None,
+        offset: float | None = None,
+        label: dict | None = None,
+    ) -> dict:
+        """Partially updates a custom unit (``PATCH /units/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if symbol is not None:
+            payload["symbol"] = symbol
+        if canonical_unit_id is not None:
+            payload["canonical_unit_id"] = canonical_unit_id
+        if factor is not None:
+            payload["factor"] = factor
+        if offset is not None:
+            payload["offset"] = offset
+        if label is not None:
+            payload["label"] = label
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/units/{unit_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_unit(self, token: str, unit_id: str) -> None:
+        """Deletes a custom unit (``DELETE /units/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/units/{unit_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def convert_units(
+        self,
+        token: str,
+        *,
+        value: float,
+        from_unit: str,
+        to_unit: str | None = None,
+    ) -> dict:
+        """Converts a value between units (``GET /units/convert``)."""
+        params: dict[str, str] = {"value": str(value), "from": from_unit}
+        if to_unit:
+            params["to"] = to_unit
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/units/convert",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     def _error_detail(self, response: httpx.Response) -> str:
         """Extracts the core's ``error`` field (or the response text)."""
         try:

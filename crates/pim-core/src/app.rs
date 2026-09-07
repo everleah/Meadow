@@ -196,7 +196,14 @@ pub fn router(state: AppState) -> Router {
             "/imports/{document_id}/complete",
             post(api::imports::complete_import),
         )
-        .route("/units", get(api::units::list_units))
+        .route(
+            "/units",
+            get(api::units::list_units).post(api::units::create_unit),
+        )
+        .route(
+            "/units/{id}",
+            axum::routing::patch(api::units::update_unit).delete(api::units::delete_unit),
+        )
         .route("/units/convert", get(api::units::convert))
         .route(
             "/languages",

@@ -147,7 +147,7 @@ Alle Zeitwerte in Requests und Responses folgen der Datumswerte-Konvention (Absc
 
 Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.md](einheiten.md)):
 
-- **Implementiert:** `GET /units` (Katalog, Filter `symbol`/`dimension`) und `GET /units/convert?value=&from=&to=` (linear-affine Umrechnung `value * factor + offset`, `to` optional = kanonische SI-Einheit der Dimension, 400 bei Dimensions-Mismatch, 404 bei unbekannter Einheit). `POST/PATCH/DELETE /units` für benutzerdefinierte Einheiten sind eine spätere Ausbaustufe.
+- **Implementiert:** `GET /units` (Katalog, Filter `symbol`/`dimension`), `GET /units/convert?value=&from=&to=` (linear-affine Umrechnung `value * factor + offset`, `to` optional = kanonische SI-Einheit der Dimension, 400 bei Dimensions-Mismatch, 404 bei unbekannter Einheit) sowie die Admin-CRUD-Endpunkte für benutzerdefinierte Einheiten: `POST /units` (admin/superadmin; `symbol`, `canonical_unit_id` als Symbol **oder** Record-Key, `factor`, `offset`, `label`), `PATCH /units/{id}` (ändert `symbol`/`factor`/`offset`/`label`), `DELETE /units/{id}` (löscht nur `custom`). Mitgelieferte Einheiten (`system: default`) sind read-only (400), und eine von einer Attributdefinition referenzierte Einheit gibt 409 zurück.
 
 Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.md](einheiten.md)):
 

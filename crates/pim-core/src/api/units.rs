@@ -6,12 +6,15 @@
 //! is the linear-affine function `canonical = value * factor + offset`.
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
+use crate::audit::{self, AuditEntry};
+use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -213,6 +216,367 @@ pub async fn convert(
         offset_of(&to),
     );
     Ok(Json(json!({ "value": target, "unit": symbol_of(&to) })))
+}
+
+/// Payload for creating a custom unit.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateUnit {
+    /// Display symbol (e.g. `PAL`).
+    pub symbol: String,
+    /// Multilingual label (optional).
+    #[serde(default)]
+    pub label: Option<Value>,
+    /// Canonical SI unit this custom unit maps to (symbol or record key).
+    pub canonical_unit_id: String,
+    /// Linear factor to canonical: canonical = value * factor + offset.
+    pub factor: f64,
+    /// Offset to canonical.
+    #[serde(default)]
+    pub offset: f64,
+}
+
+/// Payload for a partial custom-unit update.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateUnit {
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub label: Option<Value>,
+    #[serde(default)]
+    pub canonical_unit_id: Option<String>,
+    #[serde(default)]
+    pub factor: Option<f64>,
+    #[serde(default)]
+    pub offset: Option<f64>,
+}
+
+/// Splits a `table:key` path segment and verifies the expected table.
+fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
+    let (actual_table, key) = id
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request(format!("invalid id `{id}`")))?;
+    if actual_table != table {
+        return Err(ApiError::bad_request(format!(
+            "id `{id}` does not reference table `{table}`"
+        )));
+    }
+    Ok(key)
+}
+
+/// Loads a unit by its record key.
+async fn fetch_unit_by_key(db: &Db, key: &str) -> Result<Option<Value>, ApiError> {
+    let sql = "LET $u = type::record('unit', $key); SELECT * FROM $u;";
+    let mut response = db.inner().query(sql).bind(("key", key)).await?.check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Whether a unit is a seeded/default entry (read-only).
+fn is_readonly(unit: &Value) -> bool {
+    unit.get("system")
+        .and_then(Value::as_str)
+        .map(|system| system == "default")
+        .unwrap_or(false)
+        || unit
+            .get("readonly")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+/// Ensures a unit symbol is unique (ignores the record `except`).
+async fn ensure_unique_symbol(db: &Db, symbol: &str, except: Option<&str>) -> Result<(), ApiError> {
+    let rows: Vec<Value> = db
+        .inner()
+        .query("SELECT id FROM unit WHERE symbol = $symbol")
+        .bind(("symbol", symbol.to_owned()))
+        .await?
+        .check()?
+        .take(0)?;
+    let conflict = rows
+        .iter()
+        .any(|row| row.get("id").and_then(Value::as_str) != except);
+    if conflict {
+        return Err(ApiError::conflict(format!(
+            "unit symbol `{symbol}` already exists"
+        )));
+    }
+    Ok(())
+}
+
+/// Resolves a unit reference (symbol or record key) to the canonical (base)
+/// unit of its dimension, following the chain if a display unit is given.
+async fn resolve_canonical(db: &Db, reference: &str) -> Result<(Value, String), ApiError> {
+    let mut current = find_unit(db, reference)
+        .await?
+        .ok_or_else(|| ApiError::bad_request(format!("`{reference}` does not reference a unit")))?;
+    let mut guard = 0;
+    while guard < 4 {
+        let canonical_id = canonical_unit_id_of(&current);
+        if canonical_id.is_empty() {
+            break;
+        }
+        current = find_unit(db, &canonical_id)
+            .await?
+            .ok_or_else(|| ApiError::internal("canonical unit not found"))?;
+        guard += 1;
+    }
+    let canonical_key = current
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .split(':')
+        .next_back()
+        .unwrap_or_default()
+        .to_owned();
+    Ok((current, canonical_key))
+}
+
+/// Creates a custom unit (admin/superadmin).
+#[utoipa::path(
+    post,
+    path = "/units",
+    request_body = CreateUnit,
+    responses(
+        (status = 201, description = "Created unit", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 409, description = "Symbol already exists", body = Value)
+    )
+)]
+pub async fn create_unit(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateUnit>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let symbol = body.symbol.trim().to_owned();
+    if symbol.is_empty() {
+        return Err(ApiError::bad_request("`symbol` must not be empty"));
+    }
+    let factor = body.factor;
+    if !factor.is_finite() || factor == 0.0 {
+        return Err(ApiError::bad_request("`factor` must be a non-zero number"));
+    }
+    ensure_unique_symbol(&state.db, &symbol, None).await?;
+
+    let (canonical, canonical_key) =
+        resolve_canonical(&state.db, body.canonical_unit_id.trim()).await?;
+    let dimension = dimension_of(&canonical);
+
+    let content = json!({
+        "symbol": symbol,
+        "dimension": dimension,
+        "canonical_unit_id": canonical_key,
+        "factor": factor,
+        "offset": body.offset,
+        "label": body.label.unwrap_or_else(|| json!({})),
+        "system": "custom",
+        "readonly": false,
+    });
+    let sql = "
+        LET $u = type::record('unit', rand::ulid());
+        CREATE $u CONTENT $content;
+        SELECT * FROM $u;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let unit = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("created unit was not returned"))?;
+    let unit_id = unit
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "unit_created",
+            object_id: Some(&unit_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "symbol": symbol, "dimension": dimension })),
+        },
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(unit)))
+}
+
+/// Partially updates a custom unit (admin/superadmin).
+#[utoipa::path(
+    patch,
+    path = "/units/{id}",
+    request_body = UpdateUnit,
+    responses(
+        (status = 200, description = "Updated unit", body = Value),
+        (status = 400, description = "Invalid id/payload or default unit", body = Value),
+        (status = 404, description = "Unit not found", body = Value),
+        (status = 409, description = "Symbol already exists", body = Value)
+    )
+)]
+pub async fn update_unit(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateUnit>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, "unit")?;
+    let current = fetch_unit_by_key(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("unit `{id}` not found")))?;
+    if is_readonly(&current) {
+        return Err(ApiError::bad_request("default unit is read-only"));
+    }
+
+    let mut changes = Map::new();
+    if let Some(symbol) = body.symbol {
+        let symbol = symbol.trim().to_owned();
+        if symbol.is_empty() {
+            return Err(ApiError::bad_request("`symbol` must not be empty"));
+        }
+        ensure_unique_symbol(&state.db, &symbol, Some(id.as_str())).await?;
+        changes.insert("symbol".to_owned(), Value::String(symbol));
+    }
+    if let Some(factor) = body.factor {
+        if !factor.is_finite() || factor == 0.0 {
+            return Err(ApiError::bad_request("`factor` must be a non-zero number"));
+        }
+        changes.insert("factor".to_owned(), json!(factor));
+    }
+    if let Some(offset) = body.offset {
+        changes.insert("offset".to_owned(), json!(offset));
+    }
+    if let Some(label) = body.label {
+        changes.insert("label".to_owned(), label);
+    }
+    if let Some(reference) = body.canonical_unit_id {
+        let (canonical, canonical_key) = resolve_canonical(&state.db, reference.trim()).await?;
+        changes.insert("canonical_unit_id".to_owned(), Value::String(canonical_key));
+        changes.insert(
+            "dimension".to_owned(),
+            Value::String(dimension_of(&canonical)),
+        );
+    }
+
+    let sql = "
+        LET $u = type::record('unit', $key);
+        UPDATE $u MERGE $changes;
+        UPDATE $u SET updated_at = time::now();
+        SELECT * FROM $u;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("changes", Value::Object(changes)))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(3)?;
+    let unit = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("unit `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "unit_updated",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(Json(unit))
+}
+
+/// Deletes a custom unit (admin/superadmin). Default units are read-only and a
+/// unit referenced by an attribute definition cannot be deleted.
+#[utoipa::path(
+    delete,
+    path = "/units/{id}",
+    responses(
+        (status = 204, description = "Deleted unit"),
+        (status = 400, description = "Default unit", body = Value),
+        (status = 404, description = "Unit not found", body = Value),
+        (status = 409, description = "Unit in use", body = Value)
+    )
+)]
+pub async fn delete_unit(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, "unit")?;
+    let current = fetch_unit_by_key(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("unit `{id}` not found")))?;
+    if is_readonly(&current) {
+        return Err(ApiError::bad_request("default unit is read-only"));
+    }
+    let symbol = symbol_of(&current);
+    let in_use: Vec<Value> = state
+        .db
+        .inner()
+        .query(
+            "SELECT id FROM attribute_definition WHERE unit_id IN [$id, $key, $symbol] OR display_unit_id IN [$id, $key, $symbol];",
+        )
+        .bind(("id", id.clone()))
+        .bind(("key", key))
+        .bind(("symbol", symbol))
+        .await?
+        .check()?
+        .take(0)?;
+    if !in_use.is_empty() {
+        return Err(ApiError::conflict(
+            "unit is in use by one or more attribute definitions",
+        ));
+    }
+
+    let sql = "LET $u = type::record('unit', $key); DELETE $u;";
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "unit_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
