@@ -75,15 +75,17 @@ Objekttypen sind **verwaltete** Geschäftstypen (STIBO STEP / Akeneo Familien-Mo
     "label": { "de": "Produkt", "en": "Product" },
     "description": "",
     "key_attributes": ["sku"],
-    "label_attribute": "name"
+    "label_attribute": "name",
+    "system": false
 }
 ```
 
 - `name` ist der Objekttyp-Code (gleich dem `type`-Feld am Objekt), eindeutig.
 - `key_attributes` sind die **eindeutigen + Pflicht-Schlüssel** für diesen Typ (leer = kein Schlüssel). Ein Typ, der einen Schlüssel deklariert, behandelt ihn als **Pflicht** (Completeness/Formular).
 - `label_attribute` ist das Attribut, das als Anzeigename dient (optional, Akeneo „Label-Attribut“).
+- `system` kennzeichnet **vom System geseedete/Standard-Typen** (`true`); diese sind unveränderbar geschützt und können **nicht gelöscht** werden (400). Benutzerdefinierte Typen (`system: false`) sind löschbar, solange keine Objekte sie verwenden (409).
 - `key_attributes`/`label_attribute` dürfen nur auf `text`-Attribute (nicht mehrsprachig) verweisen.
-- Unbekannte Typen werden beim ersten Anlegen eines Objekts automatisch registriert (`ensure_registered`).
+- Unbekannte Typen werden beim ersten Anlegen eines Objekts automatisch registriert (`ensure_registered`, `system: false`).
 - **Abgrenzung:** Die **Wert-Vererbung** (`depends_on`) ist objekt-ebene Vererbung von Werten entlang der Komposition – **kein** Typ-Konzept. Gemeinsame Attribute über Typen hinweg entstehen über Attributdefinitionen mit `applicable_types: []` (leer = alle Typen). Verwaltung über `GET/POST/PATCH/DELETE /object-types` (Read editor+, Write admin) und die Admin-Seite `/object-types`.
 
 ## Schlüssel (Business-Schlüssel)

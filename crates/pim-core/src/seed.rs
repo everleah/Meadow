@@ -49,13 +49,13 @@ UPSERT object:object_root CONTENT { type: 'root', attributes: {}, status: 'publi
 /// mandatory keys per type), `label_attribute` defaults to the `name` attribute
 /// for business types.
 const OBJECT_TYPES: &str = r#"
-UPSERT object_type:product CONTENT { name: 'product', label: { de: 'Produkt', en: 'Product' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:category CONTENT { name: 'category', label: { de: 'Kategorie', en: 'Category' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:asset CONTENT { name: 'asset', label: { de: 'Asset', en: 'Asset' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:variant CONTENT { name: 'variant', label: { de: 'Variante', en: 'Variant' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:root CONTENT { name: 'root', label: { de: 'Universal-Root', en: 'Universal root' }, description: 'Der übergeordnete Universal-Root', key_attributes: [], created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:saved_search CONTENT { name: 'saved_search', label: { de: 'Gespeicherte Suche', en: 'Saved search' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:collection CONTENT { name: 'collection', label: { de: 'Collection', en: 'Collection' }, description: '', key_attributes: [], label_attribute: 'name', created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:product CONTENT { name: 'product', label: { de: 'Produkt', en: 'Product' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:category CONTENT { name: 'category', label: { de: 'Kategorie', en: 'Category' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:asset CONTENT { name: 'asset', label: { de: 'Asset', en: 'Asset' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:variant CONTENT { name: 'variant', label: { de: 'Variante', en: 'Variant' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:root CONTENT { name: 'root', label: { de: 'Universal-Root', en: 'Universal root' }, description: 'Der übergeordnete Universal-Root', key_attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:saved_search CONTENT { name: 'saved_search', label: { de: 'Gespeicherte Suche', en: 'Saved search' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT object_type:collection CONTENT { name: 'collection', label: { de: 'Collection', en: 'Collection' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
 "#;
 
 /// Unit catalog covering the 13 dimensions documented in

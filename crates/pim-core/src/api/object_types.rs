@@ -269,6 +269,7 @@ pub async fn create_object_type(
                 .collect(),
         ),
     );
+    attributes.insert("system".to_owned(), Value::Bool(false));
     if let Some(la) = label_attribute {
         attributes.insert("label_attribute".to_owned(), Value::String(la.to_owned()));
     }
@@ -425,6 +426,16 @@ pub async fn delete_object_type(
     let current = fetch_type(&state.db, &name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("object type `{name}` not found")))?;
+    // System (seeded/default) types are protected and cannot be deleted.
+    if current
+        .get("system")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::bad_request(format!(
+            "object type `{name}` is a system type and cannot be deleted"
+        )));
+    }
     let record_id = current
         .get("id")
         .and_then(Value::as_str)
@@ -495,6 +506,7 @@ pub(crate) async fn ensure_registered(db: &Db, object_type: &str) -> Result<(), 
                 "name": object_type,
                 "label": { "en": object_type },
                 "key_attributes": [],
+                "system": false,
             }),
         ))
         .await?

@@ -76,6 +76,7 @@ DEFINE FIELD IF NOT EXISTS label ON TABLE object_type TYPE object;
 DEFINE FIELD IF NOT EXISTS description ON TABLE object_type TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS key_attributes ON TABLE object_type TYPE array;
 DEFINE FIELD IF NOT EXISTS label_attribute ON TABLE object_type TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS system ON TABLE object_type TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE created_at ON TABLE object_type TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON TABLE object_type TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS updated_by ON TABLE object_type TYPE option<string>;

@@ -40,6 +40,20 @@ def _label_attr_of(row: dict) -> str:
     return str(row.get("label_attribute") or "") or "—"
 
 
+def _system_badge(system: bool) -> str:
+    if system:
+        return (
+            '<span class="px-2 py-0.5 rounded text-xs bg-neutral text-gray-600">'
+            + t("object_types.system_default")
+            + "</span>"
+        )
+    return (
+        '<span class="px-2 py-0.5 rounded text-xs bg-warning text-white">'
+        + t("object_types.system_custom")
+        + "</span>"
+    )
+
+
 @ui.page("/object-types", response_timeout=15)
 async def object_types_page() -> None:
     await build_shell(active="/object-types")
@@ -87,6 +101,7 @@ async def object_types_page() -> None:
                     "label": _label(r.get("label"), locale),
                     "keys": _keys_of(r),
                     "label_attr": _label_attr_of(r),
+                    "system": _system_badge(bool(r.get("system"))),
                     "updated": str(r.get("updated_at") or ""),
                 }
                 for r in types
@@ -101,22 +116,25 @@ async def object_types_page() -> None:
                 .on_value_change(lambda e: _set_filter(str(e.value)))
             )
 
+        column_defs = [
+            {"headerName": t("object_types.col_name"), "field": "name", "width": 160},
+            {"headerName": t("object_types.col_label"), "field": "label", "width": 200},
+            {"headerName": t("object_types.col_keys"), "field": "keys", "width": 260},
+            {
+                "headerName": t("object_types.col_label_attr"),
+                "field": "label_attr",
+                "width": 160,
+            },
+            {"headerName": t("object_types.col_system"), "field": "system", "width": 140},
+            {"headerName": t("object_types.col_updated"), "field": "updated", "width": 200},
+        ]
         grid = ui.aggrid(
             {
-                "columnDefs": [
-                    {"headerName": t("object_types.col_name"), "field": "name", "width": 160},
-                    {"headerName": t("object_types.col_label"), "field": "label", "width": 200},
-                    {"headerName": t("object_types.col_keys"), "field": "keys", "width": 260},
-                    {
-                        "headerName": t("object_types.col_label_attr"),
-                        "field": "label_attr",
-                        "width": 160,
-                    },
-                    {"headerName": t("object_types.col_updated"), "field": "updated", "width": 200},
-                ],
+                "columnDefs": column_defs,
                 "rowData": _rows(),
                 "rowSelection": {"mode": "singleRow"},
-            }
+            },
+            html_columns=[i for i, col in enumerate(column_defs) if col["field"] == "system"],
         ).classes("w-full")
 
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
@@ -290,6 +308,13 @@ async def object_types_page() -> None:
                 ui.notify(t("object_types.select_first"), color="warning")
                 return
             name = str(row.get("name"))
+            full = next((r for r in types if str(r.get("name")) == name), None)
+            if bool(full.get("system")) if full else False:
+                ui.notify(
+                    f"{t('object_types.delete_failed')}: {t('object_types.system_locked')}",
+                    color="negative",
+                )
+                return
             with ui.dialog() as confirm, ui.card().classes("w-[28rem] max-w-[90vw]"):
                 ui.label(t("object_types.delete_confirm").format(name=name)).classes(
                     "text-subtitle1"
