@@ -366,7 +366,6 @@
 
   "grid.toggle_tree": "Struktur ein-/ausblenden",
   "grid.collapse_all": "Alle einklappen",
-  "grid.expand_all": "Alle aufklappen",
   "form.back": "Zurück",
   "form.load_failed": "Das Objekt konnte nicht geladen werden.",
   "form.missing_required": "Fehlende Pflichtfelder: {count}",

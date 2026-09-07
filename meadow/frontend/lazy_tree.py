@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Self
 
 from nicegui.elements.tree import Tree
 from nicegui.events import GenericEventArguments
@@ -68,6 +68,23 @@ class LazyTree(Tree):
         """
         self._props["nodes"] = nodes
         super().update()
+
+    def collapse(self, node_keys: list[str] | None = None) -> Self:
+        """Collapse the tree on the client without re-sending the node list.
+
+        The base ``Tree.collapse`` only mutates the ``expanded`` prop; because
+        ``update()`` is a no-op for lazy trees, calling it would never push the
+        change. Re-sending the whole node list (via ``update()``) would discard
+        the client-side lazy children, so we invoke Quasar's ``collapseAll``
+        directly and let the ``update:expanded`` event sync the server prop.
+
+        There is deliberately no ``expand`` override: Quasar's ``expandAll``
+        only iterates nodes that already carry a ``children`` key, so it would
+        silently skip every lazy (not-yet-loaded) node. Expanding a lazy tree
+        therefore happens on demand per node, which is the intended behaviour.
+        """
+        self.run_method("collapseAll")
+        return self
 
     async def _handle_lazy_load(self, e: GenericEventArguments) -> None:
         try:

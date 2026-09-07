@@ -191,10 +191,6 @@ async def categories_page() -> None:
             if current_tree["tree"] is not None:
                 current_tree["tree"].collapse()
 
-        def expand_all() -> None:
-            if current_tree["tree"] is not None:
-                current_tree["tree"].expand()
-
         def apply_tree_filter(value: str) -> None:
             tree = current_tree["tree"]
             if tree is not None:
@@ -229,7 +225,6 @@ async def categories_page() -> None:
             with (
                 detail_host,
                 ui.column().classes("w-full gap-3"),
-                ui.card().classes("w-full"),
             ):
                 with ui.row().classes("items-center gap-2 w-full"):
                     ui.label(selected_category["label"]).classes("text-h6 grow")
@@ -264,7 +259,7 @@ async def categories_page() -> None:
                         "text-caption text-gray-500"
                     )
                 # Inline edit form (name in the current UI language + multilingual).
-                with ui.card().classes("w-full p-3"):
+                with ui.column().classes("w-full mt-2 gap-2"):
                     ui.label(t("categories.edit")).classes("text-subtitle2")
                     with ui.row().classes("w-full items-center gap-2 mt-1"):
                         name_input = (
@@ -514,9 +509,6 @@ async def categories_page() -> None:
                     ui.button(icon="unfold_less", on_click=collapse_all).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.collapse_all"))
-                    ui.button(icon="unfold_more", on_click=expand_all).props(
-                        "flat dense shrink-0"
-                    ).tooltip(t("grid.expand_all"))
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
                 render_tree()

@@ -950,10 +950,6 @@ async def products_page(request: Request) -> None:
             if current_tree["tree"] is not None:
                 current_tree["tree"].collapse()
 
-        def expand_all() -> None:
-            if current_tree["tree"] is not None:
-                current_tree["tree"].expand()
-
         def apply_tree_filter(value: str) -> None:
             tree = current_tree["tree"]
             if tree is not None:
@@ -1057,9 +1053,6 @@ async def products_page(request: Request) -> None:
                         ui.button(icon="unfold_less", on_click=collapse_all).props(
                             "flat dense shrink-0"
                         ).tooltip(t("grid.collapse_all"))
-                        ui.button(icon="unfold_more", on_click=expand_all).props(
-                            "flat dense shrink-0"
-                        ).tooltip(t("grid.expand_all"))
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
                 set_view("structure")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
