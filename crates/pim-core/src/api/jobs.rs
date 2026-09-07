@@ -420,6 +420,61 @@ pub async fn update_job_definition(
     Ok(Json(definition))
 }
 
+/// Deletes a job definition and its associated job runs (admin only).
+#[utoipa::path(
+    delete,
+    path = "/jobs/{id}",
+    responses(
+        (status = 204, description = "Deleted job definition", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn delete_job_definition(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    if fetch_definition(&state.db, key).await?.is_none() {
+        return Err(ApiError::not_found(format!(
+            "job definition `{id}` not found"
+        )));
+    }
+    // Remove the definition and every run that references it (no orphans).
+    let sql = "
+        DELETE FROM job_run WHERE job_definition_id = $id;
+        LET $d = type::record('job_definition', $key);
+        DELETE $d;
+    ";
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("id", id.clone()))
+        .bind(("key", key))
+        .await?
+        .check()?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "job_definition_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Lists job runs for a definition.
 #[utoipa::path(
     get,
@@ -628,6 +683,56 @@ pub async fn update_job_run(
         .ok_or_else(|| ApiError::not_found(format!("job run `{run_id}` not found")))?;
 
     Ok(Json(run))
+}
+
+/// Deletes a single job run (admin only).
+#[utoipa::path(
+    delete,
+    path = "/jobs/runs/{run_id}",
+    responses(
+        (status = 204, description = "Deleted job run", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn delete_job_run(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&run_id, RUN_TABLE)?;
+    if fetch_run(&state.db, key).await?.is_none() {
+        return Err(ApiError::not_found(format!("job run `{run_id}` not found")));
+    }
+    let sql = "
+        LET $r = type::record('job_run', $key);
+        DELETE $r;
+    ";
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "job_run_deleted",
+            object_id: Some(&run_id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Marks a job run as failed (best effort), used when queueing fails.

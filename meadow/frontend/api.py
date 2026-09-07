@@ -939,6 +939,36 @@ class CoreClient:
                 raise CoreError(detail or response.text, status=response.status_code)
             return response.json()
 
+    async def delete_job_definition(self, token: str, definition_id: str) -> None:
+        """Deletes a job definition and its runs (``DELETE /jobs/{id}``, admin only)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/jobs/{definition_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+
+    async def delete_job_run(self, token: str, run_id: str) -> None:
+        """Deletes a single job run (``DELETE /jobs/runs/{run_id}``, admin only)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/jobs/runs/{run_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+
     async def list_definition_runs(
         self,
         token: str,

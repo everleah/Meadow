@@ -66,6 +66,12 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - Schlägt der Publish fehl (NATS nicht erreichbar), setzt der Kern den `job_run` auf `failed` (mit Fehlermeldung und `finished_at`) und antwortet mit 503. Es bleibt kein verwaister `pending`-Run zurück.
 - Antwort: `202 Accepted` mit dem erzeugten `job_run`.
 
+## Definition-CRUD & Löschen (implementiert)
+
+- `GET/POST /jobs` und `GET/PATCH /jobs/{id}`: Admin-CRUD für `job_definition` (Name, Typ, Cron-Zeitplan, `parameters`, `enabled`).
+- **`DELETE /jobs/{id}`** (admin, neu): löscht die Definition **und** entfernt alle zugehörigen `job_run`-Einträge (Kaskade), damit keine verwaisten Läufe zurückbleiben. Antwort `204`. Wird auditiert (`job_definition_deleted`).
+- **`DELETE /jobs/runs/{run_id}`** (admin, neu): löscht einen einzelnen `job_run` (z. B. Altlasten/DLQ), Antwort `204`, auditiert (`job_run_deleted`).
+
 ## Python-Worker-Jobkonsument (implementiert, Schritt 3)
 
 - `python -m meadow.worker` startet neben dem Rule-Service einen **JetStream-Pull-Konsumenten** (`jobs.*`, Stream `JOBS`, Durable `job-worker`; `meadow/worker/jobs.py`).

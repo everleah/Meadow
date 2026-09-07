@@ -2,11 +2,13 @@
 
 Two tabs:
 - **Definitions**: list job definitions (``GET /jobs``) with create/edit dialog
-  (``POST``/``PATCH /jobs``), enable/disable and a manual run (``POST
-  /jobs/{id}/run``).
+  (``POST``/``PATCH /jobs``), enable/disable, a manual run (``POST
+  /jobs/{id}/run``) and a delete action (``DELETE /jobs/{id}``, which also
+  removes the runs referencing the definition).
 - **Runs**: the execution history (``GET /jobs/runs``), newest first, with a
   status filter and a "dead letter only" view. Double-click opens a detail
-  dialog (result / error).
+  dialog (result / error); a single run can be deleted (``DELETE
+  /jobs/runs/{run_id}``).
 """
 
 from __future__ import annotations
@@ -157,6 +159,9 @@ async def jobs_page() -> None:
                             icon="play_arrow",
                             on_click=lambda: run_selected(),
                         ).props("flat")
+                        ui.button(
+                            t("jobs.delete"), icon="delete", on_click=lambda: delete_selected()
+                        ).props("flat color=negative")
                     ui.button(
                         t("jobs.reload"), icon="refresh", on_click=lambda: reload_defs()
                     ).props("flat")
@@ -312,6 +317,44 @@ async def jobs_page() -> None:
                         return
                     await do_run(oid, str(row.get("name") or ""))
 
+                async def delete_selected() -> None:
+                    """Deletes the selected job definition (with confirmation)."""
+                    try:
+                        selected = await def_grid.get_selected_rows()
+                    except Exception:  # noqa: BLE001 - degrade to no selection
+                        selected = []
+                    if not selected:
+                        ui.notify(t("jobs.no_selection"), color="warning")
+                        return
+                    row = selected[0] if isinstance(selected, list) else selected
+                    oid = row.get("id") if isinstance(row, dict) else None
+                    if not oid:
+                        ui.notify(t("jobs.no_selection"), color="warning")
+                        return
+                    name = str(row.get("name") or "")
+                    with ui.dialog() as confirm, ui.card().classes("w-[30rem] max-w-[90vw]"):
+                        ui.label(t("jobs.delete_confirm").format(name=name)).classes(
+                            "text-subtitle1"
+                        )
+                        ui.label(t("jobs.delete_warn")).classes("text-caption text-gray-600")
+                        with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                            ui.button(t("grid.close"), on_click=confirm.close).props("flat")
+
+                            async def _go() -> None:
+                                confirm.close()
+                                try:
+                                    await client.delete_job_definition(token, oid)
+                                except CoreError as error:
+                                    ui.notify(
+                                        f"{t('jobs.delete_failed')}: {error}", color="negative"
+                                    )
+                                    return
+                                ui.notify(t("jobs.deleted"), color="positive")
+                                await reload_defs()
+
+                            ui.button(t("jobs.delete"), on_click=_go).props("flat color=negative")
+                    confirm.open()
+
                 def _definition_for(data: object) -> dict | None:
                     """Resolves a double-click payload to a definition row.
 
@@ -373,6 +416,10 @@ async def jobs_page() -> None:
                     ui.button(
                         t("jobs.reload"), icon="refresh", on_click=lambda: reload_runs()
                     ).props("flat")
+                    ui.space()
+                    ui.button(
+                        t("jobs.delete"), icon="delete", on_click=lambda: delete_selected_run()
+                    ).props("flat color=negative")
 
                 def _apply_filters() -> None:
                     current_status["value"] = str(status_select.value or "")
@@ -451,6 +498,40 @@ async def jobs_page() -> None:
                     if isinstance(data, dict):
                         return data
                     return next((r for r in runs if str(r.get("id")) == str(data)), None)
+
+                async def delete_selected_run() -> None:
+                    """Deletes the selected job run (with confirmation)."""
+                    try:
+                        selected = await runs_grid.get_selected_rows()
+                    except Exception:  # noqa: BLE001 - degrade to no selection
+                        selected = []
+                    if not selected:
+                        ui.notify(t("jobs.no_selection_run"), color="warning")
+                        return
+                    row = selected[0] if isinstance(selected, list) else selected
+                    oid = row.get("id") if isinstance(row, dict) else None
+                    if not oid:
+                        ui.notify(t("jobs.no_selection_run"), color="warning")
+                        return
+                    with ui.dialog() as confirm, ui.card().classes("w-[30rem] max-w-[90vw]"):
+                        ui.label(t("jobs.delete_run_confirm")).classes("text-subtitle1")
+                        with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                            ui.button(t("grid.close"), on_click=confirm.close).props("flat")
+
+                            async def _go() -> None:
+                                confirm.close()
+                                try:
+                                    await client.delete_job_run(token, oid)
+                                except CoreError as error:
+                                    ui.notify(
+                                        f"{t('jobs.delete_failed')}: {error}", color="negative"
+                                    )
+                                    return
+                                ui.notify(t("jobs.deleted"), color="positive")
+                                await reload_runs()
+
+                            ui.button(t("jobs.delete"), on_click=_go).props("flat color=negative")
+                    confirm.open()
 
                 runs_grid.on(
                     "cellDoubleClicked",

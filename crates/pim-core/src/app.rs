@@ -158,11 +158,13 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs/runs", get(api::jobs::list_job_runs))
         .route(
             "/jobs/runs/{run_id}",
-            axum::routing::patch(api::jobs::update_job_run),
+            axum::routing::patch(api::jobs::update_job_run).delete(api::jobs::delete_job_run),
         )
         .route(
             "/jobs/{id}",
-            get(api::jobs::get_job_definition).patch(api::jobs::update_job_definition),
+            get(api::jobs::get_job_definition)
+                .patch(api::jobs::update_job_definition)
+                .delete(api::jobs::delete_job_definition),
         )
         .route("/jobs/{id}/runs", get(api::jobs::list_definition_runs))
         .route("/jobs/{id}/run", post(api::jobs::run_job))
