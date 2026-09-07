@@ -442,6 +442,8 @@
   "categories.search": "Rechercher un objet à assigner…",
   "categories.name_en": "Nom (EN)",
   "categories.name_de": "Nom (DE)",
+  "categories.name": "Nom",
+  "categories.name_edit": "Modifier le nom (toutes les langues)",
   "categories.status": "Statut",
   "categories.create_root": "Nouvelle catégorie",
   "categories.create_sub": "Nouvelle sous-catégorie",

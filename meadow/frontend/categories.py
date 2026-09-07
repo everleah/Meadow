@@ -64,6 +64,66 @@ async def categories_page() -> None:
         selected_tree: dict = {"id": None}
         current_tree: dict = {"tree": None, "nodes": []}
 
+        # --- multilingual name editing (product-form style) ------------------
+        # The category `name` is a ``{lang: value}`` map. The inline field edits
+        # the value for the current UI language (the "main edit language"), and a
+        # language icon opens a dialog to edit it in every active data language.
+        try:
+            languages = await client.list_languages(token)
+        except Exception:  # noqa: BLE001 - fall back to the UI languages only
+            languages = []
+        name_langs = [
+            lang
+            for lang in languages
+            if str(lang.get("code")) != "root" and lang.get("active", True)
+        ]
+        if not any(str(lang.get("code")) == locale for lang in name_langs):
+            name_langs = [{"code": locale, "label": {locale: locale}}] + name_langs
+
+        edit_state: dict[str, object] = {"id": None, "name": {}, "status": "draft", "sub": False}
+        name_input_ref: dict[str, ui.element | None] = {"el": None}
+
+        name_dialog = ui.dialog()
+        with name_dialog, ui.card().classes("w-[34rem] max-w-[90vw]"):
+            ui.label(t("categories.name_edit")).classes("text-h6")
+            name_inputs: dict[str, ui.input] = {}
+            with ui.column().classes("w-full gap-2 mt-2"):
+                for lang in name_langs:
+                    code = str(lang.get("code"))
+                    name_inputs[code] = (
+                        ui.input(resolve_value(lang.get("label"), locale) or code)
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=name_dialog.close).props("flat")
+                ui.button(t("grid.save"), icon="save", on_click=lambda: save_name()).props("flat")
+
+        def open_name() -> None:
+            name = dict(edit_state["name"] or {})
+            for code, inp in name_inputs.items():
+                inp.set_value(str(name.get(code) or ""))
+            name_dialog.open()
+
+        def save_name() -> None:
+            name: dict[str, str] = {}
+            for code, inp in name_inputs.items():
+                if inp.value:
+                    name[code] = inp.value
+            edit_state["name"] = name
+            el = name_input_ref.get("el")
+            if el is not None:
+                el.set_value(str(name.get(locale) or ""))
+            name_dialog.close()
+
+        def _set_name_locale(value: str) -> None:
+            name = dict(edit_state["name"] or {})
+            if value:
+                name[locale] = value
+            else:
+                name.pop(locale, None)
+            edit_state["name"] = name
+
         # --- tree helpers ----------------------------------------------------
         async def load_category_children(node_id: str) -> list[dict]:
             children = await client.list_object_children(
@@ -161,6 +221,11 @@ async def categories_page() -> None:
                 with detail_host, ui.card().classes("w-full h-[60vh]"):
                     ui.label(t("categories.select_hint")).classes("text-subtitle1 text-gray-500")
                 return
+            category = category_objects.get(str(category_id)) or {}
+            raw_name = (category.get("attributes") or {}).get("name") or {}
+            edit_state["id"] = category_id
+            edit_state["name"] = dict(raw_name) if isinstance(raw_name, dict) else {}
+            edit_state["status"] = str(category.get("status") or "draft")
             with (
                 detail_host,
                 ui.column().classes("w-full gap-3"),
@@ -175,12 +240,7 @@ async def categories_page() -> None:
                     ui.button(
                         t("categories.new_sub"),
                         icon="add",
-                        on_click=lambda: open_editor(None, sub=True),
-                    ).props("flat")
-                    ui.button(
-                        t("categories.edit"),
-                        icon="edit",
-                        on_click=lambda: open_editor(selected_category["id"]),
+                        on_click=lambda: open_create(selected_category["id"]),
                     ).props("flat")
                     ui.button(
                         t("categories.move"),
@@ -203,20 +263,84 @@ async def categories_page() -> None:
                     ui.label(t("categories.view_in_grid_hint")).classes(
                         "text-caption text-gray-500"
                     )
+                # Inline edit form (name in the current UI language + multilingual).
+                with ui.card().classes("w-full p-3"):
+                    ui.label(t("categories.edit")).classes("text-subtitle2")
+                    with ui.row().classes("w-full items-center gap-2 mt-1"):
+                        name_input = (
+                            ui.input(t("categories.name") + f" ({locale.upper()})")
+                            .props("filled dense")
+                            .classes("grow")
+                        )
+                        name_input.set_value(str((edit_state["name"] or {}).get(locale) or ""))
+                        name_input.on_value_change(lambda e: _set_name_locale(str(e.value)))
+                        name_input_ref["el"] = name_input
+                        ui.button(icon="translate").props("flat round dense").on_click(
+                            open_name
+                        ).tooltip(t("form.languages_edit"))
+                    status_select = (
+                        ui.select(
+                            {
+                                "draft": "draft",
+                                "in_review": "in_review",
+                                "published": "published",
+                                "archived": "archived",
+                            },
+                            label=t("categories.status"),
+                            value=str(edit_state["status"] or "draft"),
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    status_select.on_value_change(
+                        lambda e: edit_state.__setitem__("status", str(e.value))
+                    )
+                    with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                        ui.button(
+                            t("categories.save"), icon="save", on_click=lambda: save_inline()
+                        ).props("flat")
 
-        # --- create / edit dialog --------------------------------------------
+        async def save_inline() -> None:
+            category_id = str(edit_state.get("id") or "")
+            name = {k: v for k, v in (edit_state.get("name") or {}).items() if v}
+            if not name:
+                ui.notify(t("categories.name_required"), color="warning")
+                return
+            try:
+                current = await client.get_object(token, category_id)
+                attributes = dict(current.get("attributes") or {})
+                attributes["name"] = name
+                await client.update_object(
+                    token,
+                    category_id,
+                    attributes=attributes,
+                    status=str(edit_state.get("status") or "draft"),
+                )
+            except CoreError as exc:
+                ui.notify(f"{t('categories.save_failed')}: {exc}", color="negative")
+                return
+            category_objects.clear()
+            category_objects.update(await _category_objects(client, token, locale))
+            selected_category["label"] = resolve_value(name, locale) or selected_category["label"]
+            await reload_tree()
+            await render_detail()
+            ui.notify(t("categories.saved"), color="positive")
+
+        # --- create dialog (multilingual name, product-form style) ------------
         create_dialog = ui.dialog()
         with create_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
             title_label = ui.label("").classes("text-h6")
             with ui.column().classes("w-full mt-2 gap-2"):
-                with ui.row().classes("w-full gap-2"):
-                    name_en = (
-                        ui.input(t("categories.name_en")).props("filled dense").classes("grow")
+                with ui.row().classes("w-full items-center gap-2"):
+                    create_name_input = (
+                        ui.input(t("categories.name") + f" ({locale.upper()})")
+                        .props("filled dense")
+                        .classes("grow")
                     )
-                    name_de = (
-                        ui.input(t("categories.name_de")).props("filled dense").classes("grow")
-                    )
-                status_select = (
+                    ui.button(icon="translate").props("flat round dense").on_click(
+                        open_name
+                    ).tooltip(t("form.languages_edit"))
+                create_status_select = (
                     ui.select(
                         {
                             "draft": "draft",
@@ -230,66 +354,45 @@ async def categories_page() -> None:
                     .props("filled dense")
                     .classes("w-full")
                 )
+                create_status_select.on_value_change(
+                    lambda e: edit_state.__setitem__("status", str(e.value))
+                )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=create_dialog.close).props("flat")
                 ui.button(
                     t("categories.save"), icon="save", on_click=lambda: save_category()
                 ).props("flat")
 
-        edit_info: dict = {"id": None, "sub": False}
-
-        def open_editor(category_id: str | None, *, sub: bool = False) -> None:
-            edit_info["id"] = category_id
-            edit_info["sub"] = sub
-            if category_id:
-                title_label.set_text(t("categories.edit"))
-                category = category_objects.get(str(category_id)) or {}
-                name = (category.get("attributes") or {}).get("name") or {}
-                name_en.set_value(str(name.get("en") or ""))
-                name_de.set_value(str(name.get("de") or ""))
-                status_select.set_value(str(category.get("status") or "draft"))
-            else:
-                title_label.set_text(
-                    t("categories.create_sub") if sub else t("categories.create_root")
-                )
-                name_en.set_value("")
-                name_de.set_value("")
-                status_select.set_value("draft")
+        def open_create(parent_id: str | None) -> None:
+            edit_state["id"] = None
+            edit_state["name"] = {}
+            edit_state["status"] = "draft"
+            edit_state["sub"] = bool(parent_id)
+            title_label.set_text(
+                t("categories.create_sub") if parent_id else t("categories.create_root")
+            )
+            create_name_input.set_value("")
+            create_name_input.on_value_change(lambda e: _set_name_locale(str(e.value)))
+            create_status_select.set_value("draft")
+            name_input_ref["el"] = create_name_input
             create_dialog.open()
 
         async def save_category() -> None:
-            name: dict[str, str] = {}
-            if name_en.value:
-                name["en"] = name_en.value
-            if name_de.value:
-                name["de"] = name_de.value
+            name: dict[str, str] = {k: v for k, v in (edit_state.get("name") or {}).items() if v}
             if not name:
                 ui.notify(t("categories.name_required"), color="warning")
                 return
-            editing_id = edit_info["id"]
             try:
-                if editing_id:
-                    # Merge the name into the full attributes map (PATCH replaces).
-                    current = await client.get_object(token, editing_id)
-                    attributes = dict(current.get("attributes") or {})
-                    attributes["name"] = name
-                    await client.update_object(
-                        token,
-                        editing_id,
-                        attributes=attributes,
-                        status=status_select.value,
-                    )
-                else:
-                    created = await client.create_object(
-                        token,
-                        object_type="category",
-                        attributes={"name": name},
-                        status=status_select.value or "draft",
-                    )
-                    # A sub-category is re-parented from the universal root to
-                    # the selected category.
-                    if edit_info["sub"] and selected_category["id"]:
-                        await client.reparent_object(token, created["id"], selected_category["id"])
+                created = await client.create_object(
+                    token,
+                    object_type="category",
+                    attributes={"name": name},
+                    status=str(edit_state.get("status") or "draft"),
+                )
+                # A sub-category is re-parented from the universal root to the
+                # selected category.
+                if edit_state.get("sub") and selected_category["id"]:
+                    await client.reparent_object(token, created["id"], selected_category["id"])
             except CoreError as exc:
                 ui.notify(f"{t('categories.save_failed')}: {exc}", color="negative")
                 return
@@ -386,7 +489,7 @@ async def categories_page() -> None:
         ) as splitter:
             with splitter.before, ui.card().classes("w-full h-full p-0"):
                 with ui.row().classes("items-center gap-2 w-full p-2").style("flex-wrap: nowrap"):
-                    ui.button(icon="add", on_click=lambda: open_editor(None)).props(
+                    ui.button(icon="add", on_click=lambda: open_create(None)).props(
                         "flat dense"
                     ).tooltip(t("categories.new_root"))
                     tree_select = (

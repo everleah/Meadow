@@ -440,6 +440,8 @@
   "categories.search": "Objekt zum Zuordnen suchen…",
   "categories.name_en": "Name (EN)",
   "categories.name_de": "Name (DE)",
+  "categories.name": "Name",
+  "categories.name_edit": "Name bearbeiten (alle Sprachen)",
   "categories.status": "Status",
   "categories.create_root": "Neue Kategorie",
   "categories.create_sub": "Neue Unterkategorie",
