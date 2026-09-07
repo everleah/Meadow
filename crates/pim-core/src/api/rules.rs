@@ -605,6 +605,56 @@ pub async fn disable_rule(
     Ok(Json(rule))
 }
 
+/// Deletes a rule (admin/superadmin).
+#[utoipa::path(
+    delete,
+    path = "/rules/{id}",
+    responses(
+        (status = 204, description = "Deleted rule", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Rule not found", body = Value)
+    )
+)]
+pub async fn delete_rule(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    if fetch_rule(&state.db, key).await?.is_none() {
+        return Err(ApiError::not_found(format!("rule `{id}` not found")));
+    }
+    let sql = "
+        LET $r = type::record('business_rule', $key);
+        DELETE $r;
+    ";
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .await?
+        .check()?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "rule_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Evaluates a rule against a real or constructed object, read-only (no
 /// persistence). Available to `admin`/`superadmin` for drafts and active rules.
 #[utoipa::path(

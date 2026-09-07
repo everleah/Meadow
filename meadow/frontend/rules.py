@@ -1,9 +1,10 @@
 """Admin page for business rules and the Rule Lab (admin/superadmin only).
 
-- **Rules**: list rules (``GET /rules``) with create/edit dialog (``POST`` /
-  ``PATCH /rules``), activate/disable (``POST /rules/{id}/activate`` /
-  ``/disable``) and a **Rule Lab** button that opens the interactive lab for the
-  selected rule.
+- **Rules**: list rules (``GET /rules``) with a create/edit dialog (``POST`` /
+  ``PATCH /rules``; edit opens for the selected rule on double-click or via the
+  **Edit** button), activate/disable (``POST /rules/{id}/activate`` /
+  ``/disable``), a **Delete** action (``DELETE /rules/{id}``, with confirmation)
+  and a **Rule Lab** button that opens the interactive lab for the selected rule.
 - **Rule Lab**: run a rule read-only against a real object (``POST
   /rules/{id}/dry-run``), a selection of objects (``POST
   /rules/{id}/test-batch``) or a constructed payload (``dry-run`` with
@@ -151,6 +152,9 @@ async def rules_page() -> None:
                 ui.button(t("rules.new"), icon="add", on_click=lambda: open_editor(None)).props(
                     "flat"
                 )
+                ui.button(t("rules.edit"), icon="edit", on_click=lambda: edit_selected()).props(
+                    "flat"
+                )
                 ui.button(
                     t("rules.activate"),
                     icon="check_circle",
@@ -161,6 +165,9 @@ async def rules_page() -> None:
                     icon="block",
                     on_click=lambda: change_state("disable"),
                 ).props("flat")
+                ui.button(
+                    t("rules.delete"), icon="delete", on_click=lambda: delete_selected()
+                ).props("flat color=negative")
                 ui.button(
                     t("rules.lab"), icon="science", on_click=lambda: open_lab_for_selection()
                 ).props("flat")
@@ -273,6 +280,45 @@ async def rules_page() -> None:
             if isinstance(row, dict) and row.get("id"):
                 return next((r for r in rules if str(r.get("id")) == str(row.get("id"))), row)
             return row if isinstance(row, dict) else None
+
+        async def edit_selected() -> None:
+            rule = await get_selected()
+            if not rule:
+                ui.notify(t("rules.no_selection"), color="warning")
+                return
+            open_editor(rule)
+
+        async def delete_selected() -> None:
+            rule = await get_selected()
+            if not rule:
+                ui.notify(t("rules.no_selection"), color="warning")
+                return
+            rule_id = str(rule.get("id"))
+            name = str(rule.get("name") or "")
+            with ui.dialog() as confirm, ui.card().classes("w-[30rem] max-w-[90vw]"):
+                ui.label(t("rules.delete_confirm").format(name=name)).classes("text-subtitle1")
+                ui.label(t("rules.delete_warn")).classes("text-caption text-gray-600")
+                with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                    ui.button(t("grid.close"), on_click=confirm.close).props("flat")
+
+                    async def _go() -> None:
+                        confirm.close()
+                        try:
+                            await client.delete_rule(token, rule_id)
+                        except CoreError as error:
+                            ui.notify(f"{t('rules.delete_failed')}: {error}", color="negative")
+                            return
+                        ui.notify(t("rules.deleted"), color="positive")
+                        await reload_rules()
+
+                    ui.button(t("rules.delete"), on_click=_go).props("flat color=negative")
+            confirm.open()
+
+        def _rule_for(data: object) -> dict | None:
+            """Resolves a double-click payload to a rule row."""
+            if isinstance(data, dict):
+                return data
+            return next((r for r in rules if str(r.get("id")) == str(data)), None)
 
         async def change_state(action: str) -> None:
             rule = await get_selected()
@@ -560,3 +606,9 @@ async def rules_page() -> None:
             ui.label(label).classes(f"text-sm font-medium {color}")
             if reason:
                 ui.label(f"{t('rules.lab_deny_reason')}: {reason}").classes("text-sm text-negative")
+
+        grid.on(
+            "cellDoubleClicked",
+            lambda e: open_editor(_rule_for(e.args.get("data"))),
+            ["data"],
+        )

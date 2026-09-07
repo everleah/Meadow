@@ -1354,6 +1354,16 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    async def delete_rule(self, token: str, rule_id: str) -> None:
+        """Deletes a rule (``DELETE /rules/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/rules/{rule_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
     async def dry_run_rule(
         self,
         token: str,

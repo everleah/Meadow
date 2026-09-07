@@ -81,7 +81,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/rules/{id}",
-            get(api::rules::get_rule).patch(api::rules::update_rule),
+            get(api::rules::get_rule)
+                .patch(api::rules::update_rule)
+                .delete(api::rules::delete_rule),
         )
         .route("/rules/{id}/activate", post(api::rules::activate_rule))
         .route("/rules/{id}/disable", post(api::rules::disable_rule))
