@@ -126,22 +126,41 @@ async def attribute_definitions_page() -> None:
                     for g in groups
                 ]
 
+            group_col_defs = [
+                {"headerName": t("attr_def.groups_name"), "field": "name", "width": 160},
+                {"headerName": t("attr_def.groups_label"), "field": "label", "width": 140},
+                {"headerName": t("attr_def.groups_position"), "field": "position", "width": 90},
+                {"headerName": t("attr_def.col_applicable"), "field": "applicable", "width": 240},
+            ]
+            #: Persisted per-user column visibility for the groups grid — the same
+            #: "saved header" pattern as the product grid's views (`grid.py`).
+            group_visible: set[str] = set(
+                app.storage.user.get("attr_def_group_columns")
+                or ["name", "label", "position", "applicable"]
+            )
+            for col in group_col_defs:
+                col["hide"] = col["field"] not in group_visible
+
+            # Column picker (dialog, not `ui.menu`) so it opens reliably in all
+            # browsers — mirrors the product grid's column picker. Defined before
+            # the buttons below that open it (the checkbox handlers call the
+            # `_toggle_group_column` function defined later in this scope).
+            group_columns_dialog = ui.dialog()
+            with group_columns_dialog, ui.card().classes("w-[22rem] max-w-[92vw]"):
+                ui.label(t("grid.columns")).classes("text-h6")
+                with ui.column().classes("w-full gap-1 max-h-80 overflow-y-auto"):
+                    for col in group_col_defs:
+                        ui.checkbox(
+                            col["headerName"], value=col["field"] in group_visible
+                        ).on_value_change(
+                            lambda e, field=col["field"]: _toggle_group_column(field, e.value)
+                        )
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button(t("grid.close"), on_click=group_columns_dialog.close).props("flat")
+
             group_grid = ui.aggrid(
                 {
-                    "columnDefs": [
-                        {"headerName": t("attr_def.groups_name"), "field": "name", "width": 160},
-                        {"headerName": t("attr_def.groups_label"), "field": "label", "width": 140},
-                        {
-                            "headerName": t("attr_def.groups_position"),
-                            "field": "position",
-                            "width": 90,
-                        },
-                        {
-                            "headerName": t("attr_def.col_applicable"),
-                            "field": "applicable",
-                            "width": 240,
-                        },
-                    ],
+                    "columnDefs": group_col_defs,
                     "rowData": _group_rows(),
                     "rowSelection": {"mode": "multiRow"},
                 }
@@ -153,8 +172,16 @@ async def attribute_definitions_page() -> None:
                     on_click=lambda: open_group_editor(None),
                 ).props("flat")
                 ui.button(
+                    t("attr_def.groups_edit"),
+                    icon="edit",
+                    on_click=lambda: edit_selected_group(),
+                ).props("flat")
+                ui.button(
                     t("attr_def.groups_delete"), icon="delete", on_click=lambda: delete_group()
                 ).props("flat color=negative")
+                ui.button(icon="view_column").props("flat outline").tooltip(
+                    t("grid.columns")
+                ).on_click(group_columns_dialog.open)
 
             group_dialog = ui.dialog()
             with group_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
@@ -285,8 +312,40 @@ async def attribute_definitions_page() -> None:
                 group_grid.run_grid_method("setGridOption", "rowData", _group_rows())
                 grid.run_grid_method("setGridOption", "rowData", _rows())
 
+            def _group_for(row: dict | None) -> dict | None:
+                """Resolves a rendered row (or its id) to the full group record.
+
+                The grid rows carry resolved display strings (label, comma-joined
+                `applicable`), but the editor needs the raw `label` dict and
+                `applicable_types` list — so look the group up by id.
+                """
+                if not isinstance(row, dict):
+                    return None
+                gid = str(row.get("id") or "")
+                return next((g for g in groups if str(g.get("id")) == gid), None)
+
+            def _toggle_group_column(field: str, visible: bool) -> None:
+                if visible:
+                    group_visible.add(field)
+                else:
+                    group_visible.discard(field)
+                app.storage.user["attr_def_group_columns"] = sorted(group_visible)
+                group_grid.run_grid_method("setColumnsVisible", [field], visible)
+
+            async def edit_selected_group() -> None:
+                try:
+                    selected = await group_grid.get_selected_rows()
+                except Exception:  # noqa: BLE001 - degrade to no selection
+                    selected = []
+                if not selected:
+                    ui.notify(t("attr_def.groups_none_selected"), color="warning")
+                    return
+                open_group_editor(_group_for(selected[0]))
+
             group_grid.on(
-                "cellDoubleClicked", lambda e: open_group_editor(e.args.get("data")), ["data"]
+                "cellDoubleClicked",
+                lambda e: open_group_editor(_group_for(e.args.get("data"))),
+                ["data"],
             )
 
         # --- editor dialog --------------------------------------------------
