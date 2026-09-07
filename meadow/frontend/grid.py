@@ -1097,15 +1097,23 @@ async def products_page(request: Request) -> None:
 
                         return toggle
 
-                    with (
-                        ui.button(icon="view_column").props("outline").tooltip(t("grid.columns")),
-                        ui.menu(),
-                    ):
-                        for column in column_defs:
-                            checkbox = ui.checkbox(
-                                column["headerName"], value=not column.get("hide")
-                            ).on_value_change(make_toggler(column["field"]))
-                            checkbox_refs[column["field"]] = checkbox
+                    # Column picker as a dialog (not a `ui.menu`): Quasar's QMenu
+                    # auto-open doesn't fire in Firefox/Zen, while `ui.dialog` opens
+                    # reliably in all browsers (same pattern as the working "views").
+                    columns_dialog = ui.dialog()
+                    with columns_dialog, ui.card().classes("w-[22rem] max-w-[92vw]"):
+                        ui.label(t("grid.columns")).classes("text-h6")
+                        with ui.column().classes("w-full gap-1 max-h-80 overflow-y-auto"):
+                            for column in column_defs:
+                                checkbox = ui.checkbox(
+                                    column["headerName"], value=not column.get("hide")
+                                ).on_value_change(make_toggler(column["field"]))
+                                checkbox_refs[column["field"]] = checkbox
+                        with ui.row().classes("w-full justify-end gap-2"):
+                            ui.button(t("grid.close"), on_click=columns_dialog.close).props("flat")
+                    ui.button(icon="view_column").props("outline").tooltip(
+                        t("grid.columns")
+                    ).on_click(columns_dialog.open)
 
                 grid = ui.aggrid(
                     {
