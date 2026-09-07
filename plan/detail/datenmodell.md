@@ -64,18 +64,40 @@ Alle Datums- und Zeitwerte folgen einer einheitlichen, verbindlichen Konvention 
 
 Numerische technische Werte (z. B. Breite, Spannung, Leistung) können eine Einheit tragen. Der zugehörige **Einheiten-Katalog** liegt in der Tabelle `unit`; Speicher-Konvention (kanonische SI-Einheit), Umrechnung und benutzerdefinierte Einheiten sind im Detaildokument [einheiten.md](einheiten.md) beschrieben. In der Tabelle `object` werden solche Werte als **reine Zahlen in der kanonischen SI-Einheit** gespeichert; die Einheit ergibt sich aus der Attributdefinition (`unit_id`, optional `display_unit_id`).
 
+## Objekttypen (Registry)
+
+Objekttypen sind **verwaltete** Geschäftstypen (STIBO STEP / Akeneo Familien-Modell, **flach** – keine Typvererbung). Sie stehen in der Tabelle `object_type`:
+
+```json
+{
+    "id": "object_type:product",
+    "name": "product",
+    "label": { "de": "Produkt", "en": "Product" },
+    "description": "",
+    "key_attributes": ["sku"],
+    "label_attribute": "name"
+}
+```
+
+- `name` ist der Objekttyp-Code (gleich dem `type`-Feld am Objekt), eindeutig.
+- `key_attributes` sind die **eindeutigen + Pflicht-Schlüssel** für diesen Typ (leer = kein Schlüssel). Ein Typ, der einen Schlüssel deklariert, behandelt ihn als **Pflicht** (Completeness/Formular).
+- `label_attribute` ist das Attribut, das als Anzeigename dient (optional, Akeneo „Label-Attribut“).
+- `key_attributes`/`label_attribute` dürfen nur auf `text`-Attribute (nicht mehrsprachig) verweisen.
+- Unbekannte Typen werden beim ersten Anlegen eines Objekts automatisch registriert (`ensure_registered`).
+- **Abgrenzung:** Die **Wert-Vererbung** (`depends_on`) ist objekt-ebene Vererbung von Werten entlang der Komposition – **kein** Typ-Konzept. Gemeinsame Attribute über Typen hinweg entstehen über Attributdefinitionen mit `applicable_types: []` (leer = alle Typen). Verwaltung über `GET/POST/PATCH/DELETE /object-types` (Read editor+, Write admin) und die Admin-Seite `/object-types`.
+
 ## Schlüssel (Business-Schlüssel)
 
-Ein **Business-Schlüssel** (z. B. SKU) ist eine markierte Attributdefinition und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
+Ein **Business-Schlüssel** (z. B. SKU) dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle. **Autoritativ ist die Zuordnung pro Objekttyp** (`object_type.key_attributes`); das `is_key`-Flag an der Attributdefinition ist eine zusätzliche Markierung/Validierung.
 
 **Regeln (verbindlich, Konvention gemäß Abschnitt 4 des Hauptdokuments):**
 
-1. **Markierung:** Ein Attribut wird durch `is_key: true` in der `attribute_definition` zum Business-Schlüssel.
+1. **Zuordnung pro Typ:** Welches Attribut Schlüssel ist, legt der **Objekttyp** fest (`object_type.key_attributes`). Ein Typ kann **ohne** Schlüssel existieren (dann ist nichts schlüssel-pflichtig). Deklariert er einen Schlüssel, zählt das Attribut für diesen Typ als **Pflicht**.
 2. **Eindeutigkeit pro Typ:** Der Kern erzwingt Eindeutigkeit pro Objekttyp **beim Schreiben anwendungsseitig** (Abfrage `(type, attributes.<name>)`, exakt/case-sensitiv, getrimmt) – ein statischer kompositer Unique-Index ist wegen der dynamischen Attributnamen im flexiblen `attributes`-Objekt nicht möglich. Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
-3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
-4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
+3. **Mehrere erlaubt:** Ein Typ kann mehrere Schlüssel führen (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
+4. **Optional auf Typ-Ebene:** Ein Objekttyp muss keinen Schlüssel haben; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
 5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive), beim Speichern wird getrimmt.
-6. **Keine Vererbung:** Schlüssel sind nie vererbbar – `is_key: true` erzwingt `inheritable: false` (eine Vererbung würde Identitäten duplizieren).
+6. **Keine Vererbung:** Schlüssel sind nie vererbbar – ein Schlüssel-Attribut erzwingt `inheritable: false` (eine Vererbung würde Identitäten duplizieren).
 7. **Änderbar:** Schlüsselwerte sind änderbar; bei jeder Änderung prüft der Kern die Eindeutigkeit neu und protokolliert die Änderung im Audit-Log.
 8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert) – Details in [api-design.md](api-design.md) und [integration-eventsystem.md](integration-eventsystem.md).
 

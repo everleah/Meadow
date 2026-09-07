@@ -1839,3 +1839,84 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def list_object_types(self, token: str, *, limit: int = 1000) -> list[dict]:
+        """Lists the managed object types (``GET /object-types``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/object-types",
+                params={"limit": str(limit)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_object_type(
+        self,
+        token: str,
+        *,
+        name: str,
+        label: dict | None = None,
+        description: str | None = None,
+        key_attributes: list[str] | None = None,
+        label_attribute: str | None = None,
+    ) -> dict:
+        """Creates an object type (``POST /object-types``, admin)."""
+        payload: dict[str, object] = {"name": name}
+        if label:
+            payload["label"] = label
+        if description:
+            payload["description"] = description
+        if key_attributes:
+            payload["key_attributes"] = key_attributes
+        if label_attribute:
+            payload["label_attribute"] = label_attribute
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/object-types",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_object_type(
+        self,
+        token: str,
+        name: str,
+        *,
+        label: dict | None = None,
+        description: str | None = None,
+        key_attributes: list[str] | None = None,
+        label_attribute: str | None | object = None,
+    ) -> dict:
+        """Partially updates an object type (``PATCH /object-types/{name}``, admin)."""
+        payload: dict[str, object] = {}
+        if label is not None:
+            payload["label"] = label
+        if description is not None:
+            payload["description"] = description
+        if key_attributes is not None:
+            payload["key_attributes"] = key_attributes
+        if label_attribute is not None:
+            payload["label_attribute"] = label_attribute
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/object-types/{name}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_object_type(self, token: str, name: str) -> None:
+        """Deletes an object type (``DELETE /object-types/{name}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/object-types/{name}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)

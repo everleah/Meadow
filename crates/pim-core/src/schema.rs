@@ -64,6 +64,23 @@ DEFINE FIELD IF NOT EXISTS applicable_types ON TABLE attribute_group TYPE array;
 DEFINE INDEX IF NOT EXISTS idx_attr_group_name ON TABLE attribute_group FIELDS name UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_attr_group_position ON TABLE attribute_group FIELDS position;
 
+-- Object types: the managed registry of business object types (STIBO STEP /
+-- Akeneo family model). Every object belongs to exactly one type; a type may
+-- declare `key_attributes` (the unique + mandatory business-key attribute names
+-- for that type; empty = no key) and an optional `label_attribute` (the
+-- attribute used as the display name). Attribute definitions associate with
+-- types via their `applicable_types`/`required_types` arrays.
+DEFINE TABLE IF NOT EXISTS object_type;
+DEFINE FIELD IF NOT EXISTS name ON TABLE object_type TYPE string;
+DEFINE FIELD IF NOT EXISTS label ON TABLE object_type TYPE object;
+DEFINE FIELD IF NOT EXISTS description ON TABLE object_type TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS key_attributes ON TABLE object_type TYPE array;
+DEFINE FIELD IF NOT EXISTS label_attribute ON TABLE object_type TYPE option<string>;
+DEFINE FIELD OVERWRITE created_at ON TABLE object_type TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE object_type TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE object_type TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_object_type_name ON TABLE object_type FIELDS name UNIQUE;
+
 -- References: graph edges between objects (native SurrealDB RELATION table).
 -- `in` = source object (plan: `from`), `out` = target object (plan: `to`).
 DEFINE TABLE IF NOT EXISTS reference TYPE RELATION;

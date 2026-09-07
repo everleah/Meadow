@@ -10,6 +10,7 @@ pub mod imports;
 pub mod jobs;
 pub mod keys;
 pub mod languages;
+pub mod object_types;
 pub mod objects;
 pub mod references;
 pub mod rules;
@@ -45,6 +46,11 @@ use utoipa::OpenApi;
         imports::create_import,
         imports::get_import_document,
         imports::complete_import,
+        object_types::list_object_types,
+        object_types::get_object_type,
+        object_types::create_object_type,
+        object_types::update_object_type,
+        object_types::delete_object_type,
         objects::create_object,
         objects::get_object,
         objects::list_objects,
@@ -141,6 +147,9 @@ use utoipa::OpenApi;
         objects::ListObjects,
         objects::GetObjectQuery,
         objects::ObjectStatsQuery,
+        object_types::ListObjectTypes,
+        object_types::CreateObjectType,
+        object_types::UpdateObjectType,
         objects::WriteObjectQuery,
         keys::ByKeyParams,
         objects::BySourceParams,

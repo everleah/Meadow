@@ -37,7 +37,9 @@ fn key_of(record_id: &str) -> &str {
         .unwrap_or(record_id)
 }
 
-/// Attribute names required for the given object type (from `required_types`).
+/// Attribute names required for the given object type. This is `required_types`
+/// on `attribute_definition` **plus** the type's `key_attributes` (a key that a
+/// type declares counts as mandatory for that type, per the object-type model).
 pub(crate) async fn required_names(db: &Db, object_type: &str) -> Result<Vec<String>, ApiError> {
     let sql = "SELECT VALUE name FROM attribute_definition WHERE $type IN required_types";
     let mut response = db
@@ -46,7 +48,13 @@ pub(crate) async fn required_names(db: &Db, object_type: &str) -> Result<Vec<Str
         .bind(("type", object_type.to_owned()))
         .await?
         .check()?;
-    let names: Vec<String> = response.take(0)?;
+    let mut names: Vec<String> = response.take(0)?;
+    let keys = crate::api::object_types::key_attributes_for(db, object_type).await?;
+    for key in keys {
+        if !names.contains(&key) {
+            names.push(key);
+        }
+    }
     Ok(names)
 }
 

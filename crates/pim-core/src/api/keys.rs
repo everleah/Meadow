@@ -24,14 +24,6 @@ fn key_of(record_id: &str) -> &str {
         .unwrap_or(record_id)
 }
 
-/// Returns the names of all attribute definitions marked as business keys.
-pub async fn key_attribute_names(db: &Db) -> Result<Vec<String>, ApiError> {
-    let sql = "SELECT VALUE name FROM attribute_definition WHERE is_key = true";
-    let mut response = db.inner().query(sql).await?.check()?;
-    let names: Vec<String> = response.take(0)?;
-    Ok(names)
-}
-
 /// Validates the definition-level constraints for a business key.
 ///
 /// `is_key: true` requires `type == "text"` and forbids `multilingual`
@@ -66,7 +58,8 @@ async fn key_value_exists(
     exclude_key: Option<&str>,
 ) -> Result<bool, ApiError> {
     let sql = "
-        SELECT id FROM object WHERE type = $type AND attributes[$key] = $value;
+        SELECT id FROM object WHERE type = $type AND attributes[$key] = $value
+        AND deleted_at IS NONE;
     ";
     let mut response = db
         .inner()
@@ -96,13 +89,17 @@ async fn key_value_exists(
 /// Trims all business-key values in `attributes` and enforces uniqueness per
 /// object type. Empty values are allowed and never collide. `exclude_key`
 /// excludes the object being updated from the uniqueness check.
+///
+/// The key attributes come from the **object type registry** (`object_type
+/// .key_attributes`) for the given type — not from a global `is_key` flag. A
+/// type without keys (or an unregistered type) enforces nothing.
 pub async fn normalize_key_attributes(
     db: &Db,
     object_type: &str,
     attributes: &mut Map<String, Value>,
     exclude_key: Option<&str>,
 ) -> Result<(), ApiError> {
-    let names = key_attribute_names(db).await?;
+    let names = crate::api::object_types::key_attributes_for(db, object_type).await?;
     for name in names {
         let Some(value) = attributes.get(&name) else {
             continue;

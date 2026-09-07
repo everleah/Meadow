@@ -213,14 +213,16 @@ Alle fachlichen Entitäten (Produkte, Kategorien, Assets, gespeicherte Suchen, C
 
 > **Details:** [business-rules.md](detail/business-rules.md) — Regeln, Sandbox, Ausführung, Lebenszyklus & Rule Lab; [datenmodell.md](detail/datenmodell.md) — Tabellen; [api-design.md](detail/api-design.md) — API; [jobs-scheduler.md](detail/jobs-scheduler.md) — Recompute-Jobs.
 
+**Objekttypen (flach, verwaltete Registry):** Objekttypen sind verwaltete Geschäftstypen (`object_type`-Tabelle, STIBO STEP / Akeneo Familien-Modell, **keine Typvererbung**). Jedes Objekt gehört zu genau einem Typ. Gemeinsame Basis-Eigenschaften entstehen über Attributdefinitionen mit `applicable_types: []` (leer = alle Typen); typspezifische Fähigkeiten (z. B. Asset-URLs/Binärdaten) über Attributdefinitionen, die nur auf den Typ beschränkt sind. Verwaltung über `GET/POST /object-types` + `GET/PATCH/DELETE /object-types/{name}` (Read editor+, Write admin) und die Admin-Seite `/object-types`. Die **Wert-Vererbung** entlang `depends_on` ist davon zu unterscheiden (objekt-ebene Vererbung von Werten, kein Typ-Konzept).
+
 **Schlüssel-Konvention (verbindlich): Business-Schlüssel (z. B. SKU):**
 
-1. **Definition:** Ein Business-Schlüssel ist eine markierte Attributdefinition (`is_key: true`) und dient dem Anwender als fachliche Kennung – für ihn äquivalent zum technischen Primärschlüssel (`id`). Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
+1. **Zuordnung pro Typ:** Welches Attribut Schlüssel ist, legt der **Objekttyp** fest (`object_type.key_attributes`). Ein Typ kann **ohne** Schlüssel existieren; deklariert er einen Schlüssel, zählt das Attribut für diesen Typ als **Pflicht** (Completeness/Formular). Autoritativ ist die Typ-Zuordnung; das `is_key`-Flag an der Attributdefinition ist eine zusätzliche Markierung/Validierung. Der Wert liegt normal im `attributes`-Feld; es gibt kein separates Feld und keine eigene Tabelle.
 2. **Eindeutigkeit:** Gilt pro Objekttyp. Da Attributnamen dynamisch im flexiblen `attributes`-Objekt liegen, lässt sich die Eindeutigkeit nicht als statischer kompositer Schema-Index abbilden – der Kern erzwingt sie **beim Schreiben anwendungsseitig** (Abfrage `(type, attributes.<name>)`, exakt/case-sensitiv, getrimmt). Leere/fehlende Werte kollidieren nicht (mehrere Objekte dürfen keinen Schlüssel haben).
-3. **Mehrere erlaubt:** Pro Objekt können mehrere Schlüssel definiert sein (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
-4. **Optional:** Schlüssel sind optional; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
+3. **Mehrere erlaubt:** Ein Typ kann mehrere Schlüssel führen (z. B. `sku`, `ean`), jeweils mit eigener Eindeutigkeit pro Typ.
+4. **Optional auf Typ-Ebene:** Ein Objekttyp muss keinen Schlüssel haben; Objekte dürfen ohne Schlüssel existieren (Migration und Erstbefüllung ungehindert).
 5. **Datentyp & Form:** Nur `text`, nicht lokalisiert (kein `multilingual`); Vergleich exakt (case-sensitive) mit Trim.
-6. **Keine Vererbung:** Schlüssel sind nie vererbbar (`is_key: true` erzwingt `inheritable: false`).
+6. **Keine Vererbung:** Schlüssel sind nie vererbbar (`inheritable: false`).
 7. **Änderbar:** Schlüsselwerte sind änderbar; der Kern prüft die Eindeutigkeit bei jeder Änderung und protokolliert sie im Audit-Log.
 8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert).
 

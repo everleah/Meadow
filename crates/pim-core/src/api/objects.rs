@@ -172,6 +172,9 @@ pub async fn create_object(
     let Value::Object(mut attributes) = attributes else {
         return Err(ApiError::bad_request("`attributes` must be an object"));
     };
+    // Keep the object-type registry complete: an object of a not-yet-registered
+    // type auto-registers it (label defaults to the type code).
+    crate::api::object_types::ensure_registered(&state.db, &object_type).await?;
     keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
 
     // Resolved view for rule evaluation. A new object has no inherited values

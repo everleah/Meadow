@@ -65,12 +65,17 @@ async def attribute_definitions_page() -> None:
             groups = await client.list_attribute_groups(token)
         except Exception:  # noqa: BLE001 - degrade to no groups
             groups = []
+        # Object types come from the managed registry (`/object-types`), so the
+        # `applicable_types`/`required_types` dropdowns show all known types,
+        # not just the types of existing objects.
         try:
-            objects = await client.list_objects(token, limit=1000, locale=locale)
+            object_type_rows = await client.list_object_types(token, limit=1000)
         except Exception:  # noqa: BLE001 - degrade to the default types
-            objects = []
+            object_type_rows = []
 
-        object_types: list[str] = sorted({str(o.get("type")) for o in objects if o.get("type")})
+        object_types: list[str] = sorted(
+            {str(r.get("name")) for r in object_type_rows if r.get("name")}
+        )
         if not object_types:
             object_types = ["product", "category"]
 

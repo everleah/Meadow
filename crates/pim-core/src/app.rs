@@ -60,6 +60,16 @@ pub fn router(state: AppState) -> Router {
         .route("/objects/bulk", post(api::objects::bulk_objects))
         .route("/objects/tree", get(api::references::get_object_tree))
         .route(
+            "/object-types",
+            get(api::object_types::list_object_types).post(api::object_types::create_object_type),
+        )
+        .route(
+            "/object-types/{name}",
+            get(api::object_types::get_object_type)
+                .patch(api::object_types::update_object_type)
+                .delete(api::object_types::delete_object_type),
+        )
+        .route(
             "/objects/{id}",
             get(api::objects::get_object)
                 .patch(api::objects::update_object)
