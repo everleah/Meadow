@@ -13,6 +13,7 @@ pub mod languages;
 pub mod objects;
 pub mod references;
 pub mod rules;
+pub mod saved_searches;
 pub mod search;
 pub mod system;
 pub mod units;
@@ -69,6 +70,19 @@ use utoipa::OpenApi;
         rules::dry_run_rule,
         rules::test_batch_rule,
         rules::recompute_rule,
+        saved_searches::list_saved_searches,
+        saved_searches::get_saved_search,
+        saved_searches::create_saved_search,
+        saved_searches::update_saved_search,
+        saved_searches::delete_saved_search,
+        saved_searches::execute_saved_search,
+        saved_searches::list_collections,
+        saved_searches::get_collection,
+        saved_searches::create_collection,
+        saved_searches::update_collection,
+        saved_searches::delete_collection,
+        saved_searches::refresh_collection,
+        saved_searches::list_collection_members,
         attribute_definitions::create_attribute_definition,
         attribute_definitions::get_attribute_definition,
         attribute_definitions::list_attribute_definitions,
@@ -139,6 +153,16 @@ use utoipa::OpenApi;
         rules::DryRunObject,
         rules::TestBatch,
         rules::RecomputeRule,
+        saved_searches::SavedSearchQuery,
+        saved_searches::QueryFilter,
+        saved_searches::QueryFulltext,
+        saved_searches::QueryReference,
+        saved_searches::QuerySort,
+        saved_searches::CreateSavedSearch,
+        saved_searches::UpdateSavedSearch,
+        saved_searches::CreateCollection,
+        saved_searches::UpdateCollection,
+        saved_searches::ListParams,
         attribute_definitions::CreateAttributeDefinition,
         attribute_definitions::UpdateAttributeDefinition,
         attribute_definitions::ListAttributeDefinitions,

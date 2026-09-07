@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections))
 - **Relevante Phasen:** Phase 9
-- **Stand:** Entwurf
+- **Stand:** Umgesetzt (Phase 9, Punkt 1). `saved_search`- und `collection`-Objekte werden als generische Objekte (`object`-Tabelle) gespeichert; die Query-DSL (`filters`/`fulltext`/`references`/`sort`/`limit`) wird im Rust-Kern ausgeführt (Endpoint `POST /saved-searches/{id}/execute`, liefert `{count, ids}`). CRUD-Endpunkte für Suchen (`GET/POST /saved-searches`, `GET/PATCH/DELETE /saved-searches/{id}`) und Collections (`GET/POST /collections`, `GET/PATCH/DELETE /collections/{id}`) sowie `POST /collections/{id}/refresh` (Sync-Refresh der `collection_member`-Relationen mit `rank`/`added_at`) und `GET /collections/{id}/members`. Ein nicht-leeres `refresh_interval` der Collection synchronisiert automatisch eine `collection_refresh`-Jobdefinition (Scheduler/Worker). Die Frontend-Verwaltungsseite `/saved-searches` (Tabs „Gespeicherte Suchen“/„Collections“, admin-only) ist umgesetzt.
 
 Meadow PIM sieht die Möglichkeit vor, komplexe Suchanfragen zu speichern und deren Ergebnisse als refreshbare Collections zu materialisieren. Dies ist nicht Teil der ersten Version, wird aber von Anfang an im Datenmodell und in der Architektur berücksichtigt.
 

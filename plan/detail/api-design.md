@@ -62,6 +62,19 @@ Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAP
 | POST    | `/imports/{document_id}/complete`                    | `import.completed`-Summary-Event in die Outbox schreiben (Worker, `emit_events: false`)                                                                |
 | GET     | `/jobs/runs?ids=…`                                   | Job-Run(s) nach ID abrufen (Status, Fortschritt, Report) – für UI-Polling                                                                                |
 | POST    | `/search`                                            | Volltextsuche über Objekte                                                                                                                               |
+| GET     | `/saved-searches`                                    | Gespeicherte Suchen auflisten (generische Objekte `type: saved_search`)                                                                                   |
+| POST    | `/saved-searches`                                    | Gespeicherte Suche anlegen (admin)                                                                                                                       |
+| GET     | `/saved-searches/{id}`                               | Gespeicherte Suche laden                                                                                                                                |
+| PATCH   | `/saved-searches/{id}`                               | Gespeicherte Suche ändern (admin)                                                                                                                       |
+| DELETE  | `/saved-searches/{id}`                               | Gespeicherte Suche löschen (admin; 409, wenn von einer Collection referenziert)                                                                          |
+| POST    | `/saved-searches/{id}/execute`                       | Suche ausführen (Query-DSL), Antwort `{count, ids}`                                                                                                     |
+| GET     | `/collections`                                       | Materialisierte Collections auflisten (inkl. `member_count`)                                                                                           |
+| POST    | `/collections`                                       | Collection anlegen (admin; `saved_search_id`, optionales `refresh_interval`)                                                                            |
+| GET     | `/collections/{id}`                                  | Collection laden                                                                                                                                    |
+| PATCH   | `/collections/{id}`                                  | Collection ändern (admin)                                                                                                                          |
+| DELETE  | `/collections/{id}`                                  | Collection löschen (admin; entfernt `collection_member`-Edge + Refresh-Job)                                                                          |
+| POST    | `/collections/{id}/refresh`                          | Collection synchron neu berechnen (editor+ oder `X-Api-Key`; atomarer Member-Tausch)                                                                  |
+| GET     | `/collections/{id}/members`                          | Collection-Mitglieder (mit `rank`, Typ, Status, Label)                                                                                                |
 | GET     | `/auth/me`                                           | Rollen, Berechtigungen & Scope des Nutzers                                                                                                               |
 | POST    | `/auth/impersonate/{user_id}`                        | „Login als Benutzer“ (nur `superadmin`): mints ein JWT für den Zielbenutzer mit dessen Rollen + `impersonator`-Claim; auditiert. Siehe [benutzer-gruppen-rechte.md](benutzer-gruppen-rechte.md#impersonation-login-als-benutzer-xy-superadmin) |
 | POST    | `/users`                                             | Benutzer anlegen                                                                                                                                         |
@@ -115,6 +128,12 @@ Ein **Business-Schlüssel** (z. B. SKU) ist ein Attribut, dessen Definition mit 
 - **Regeln:** Nur `text`, nicht lokalisiert, nicht vererbbar; optional (Objekte dürfen ohne Schlüssel existieren); Werte sind änderbar (Eindeutigkeitsprüfung + Audit).
 - **Key-Lookup:** `GET /objects/by-key?type=<typ>&key=<attribut>&value=<wert>` lädt genau ein Objekt über einen Business-Schlüssel (z. B. die SKU). Existiert kein Objekt, wird 404 geliefert.
 - **Suche/Filterung:** Schlüsselattribute sind über die normale Suche/Filterung abfragbar.
+
+## Gespeicherte Suchen & Collections in der API
+
+- **Gespeicherte Suchen** (`type: saved_search`, generisches Objekt): `attributes.query` enthält die Query-DSL `{filters, fulltext, references, sort, start, limit}`. `POST /saved-searches/{id}/execute` führt sie aus und liefert `{count, ids}`. Zugriff: Read `editor`+, Write `admin`.
+- **Query-DSL:** `filters` = `{field, operator, value}` mit `field` `type`/`status`/`attributes.<name>[.<lang>]` und Operatoren `eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`not_in`/`contains`/`not_contains`/`not_empty`/`is_null`/`starts_with`/`ends_with`; `fulltext = {fields?, query, language?}` (Index über das ganze `attributes`-Objekte; `fields`/`language` werden angenommen, die Suche nutzt `attributes @@ $q`); `references = {type, out, direction?}` (`incoming` = Objekt ist `in`-Seite der `rel_<type>`-Kante zum Container `out`, `outgoing` = Objekt ist `out`-Seite); `sort = {field, order}`; `limit`/`start`.
+- **Materialisierte Collections** (`type: collection`): `attributes = {name, saved_search_id, refresh_interval?, last_refreshed_at?, last_result_count?}`. `POST /collections/{id}/refresh` führt die Suche erneut aus und ersetzt die `collection_member`-Relationen atomar (Kanten `in`=Mitglied, `out`=Collection, `attributes={rank, added_at}`); `GET /collections/{id}/members` liefert die Mitglieder. Ein nicht-leeres `refresh_interval` synchronisiert automatisch eine `collection_refresh`-Jobdefinition (Scheduler) – der Worker ruft `POST /collections/{id}/refresh` per `X-Api-Key` auf. Siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md).
 
 ## Volltextsuche in der API
 

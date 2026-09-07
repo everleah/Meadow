@@ -206,6 +206,39 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/units/convert", get(api::units::convert))
         .route(
+            "/saved-searches",
+            get(api::saved_searches::list_saved_searches)
+                .post(api::saved_searches::create_saved_search),
+        )
+        .route(
+            "/saved-searches/{id}",
+            get(api::saved_searches::get_saved_search)
+                .patch(api::saved_searches::update_saved_search)
+                .delete(api::saved_searches::delete_saved_search),
+        )
+        .route(
+            "/saved-searches/{id}/execute",
+            post(api::saved_searches::execute_saved_search),
+        )
+        .route(
+            "/collections",
+            get(api::saved_searches::list_collections).post(api::saved_searches::create_collection),
+        )
+        .route(
+            "/collections/{id}",
+            get(api::saved_searches::get_collection)
+                .patch(api::saved_searches::update_collection)
+                .delete(api::saved_searches::delete_collection),
+        )
+        .route(
+            "/collections/{id}/refresh",
+            post(api::saved_searches::refresh_collection),
+        )
+        .route(
+            "/collections/{id}/members",
+            get(api::saved_searches::list_collection_members),
+        )
+        .route(
             "/languages",
             get(api::languages::list_languages).post(api::languages::create_language),
         )

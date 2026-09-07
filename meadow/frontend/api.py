@@ -1644,3 +1644,198 @@ class CoreClient:
             return response.json().get("error") or response.text
         except Exception:  # noqa: BLE001 - body may not be JSON
             return response.text
+
+    async def list_saved_searches(
+        self,
+        token: str,
+        *,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists saved searches (``GET /saved-searches``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/saved-searches",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_saved_search(
+        self,
+        token: str,
+        *,
+        name: str,
+        query: dict,
+        refresh_interval: str | None = None,
+    ) -> dict:
+        """Creates a saved search (``POST /saved-searches``, admin)."""
+        payload: dict[str, object] = {"name": name, "query": query}
+        if refresh_interval:
+            payload["refresh_interval"] = refresh_interval
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/saved-searches",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_saved_search(
+        self,
+        token: str,
+        search_id: str,
+        *,
+        name: str | None = None,
+        query: dict | None = None,
+        refresh_interval: str | None | object = None,
+    ) -> dict:
+        """Partially updates a saved search (``PATCH /saved-searches/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if name is not None:
+            payload["name"] = name
+        if query is not None:
+            payload["query"] = query
+        if refresh_interval is not None:
+            payload["refresh_interval"] = refresh_interval
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/saved-searches/{search_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_saved_search(self, token: str, search_id: str) -> None:
+        """Deletes a saved search (``DELETE /saved-searches/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/saved-searches/{search_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def execute_saved_search(self, token: str, search_id: str) -> dict:
+        """Executes a saved search (``POST /saved-searches/{id}/execute``)."""
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/saved-searches/{search_id}/execute",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def list_collections(
+        self,
+        token: str,
+        *,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists collections (``GET /collections``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/collections",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_collection(
+        self,
+        token: str,
+        *,
+        name: str,
+        saved_search_id: str,
+        refresh_interval: str | None = None,
+    ) -> dict:
+        """Creates a collection (``POST /collections``, admin)."""
+        payload: dict[str, object] = {
+            "name": name,
+            "saved_search_id": saved_search_id,
+        }
+        if refresh_interval:
+            payload["refresh_interval"] = refresh_interval
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/collections",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_collection(
+        self,
+        token: str,
+        collection_id: str,
+        *,
+        name: str | None = None,
+        saved_search_id: str | None = None,
+        refresh_interval: str | None | object = None,
+    ) -> dict:
+        """Partially updates a collection (``PATCH /collections/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if name is not None:
+            payload["name"] = name
+        if saved_search_id is not None:
+            payload["saved_search_id"] = saved_search_id
+        if refresh_interval is not None:
+            payload["refresh_interval"] = refresh_interval
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/collections/{collection_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_collection(self, token: str, collection_id: str) -> None:
+        """Deletes a collection (``DELETE /collections/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/collections/{collection_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def refresh_collection(self, token: str, collection_id: str) -> dict:
+        """Refreshes a collection (``POST /collections/{id}/refresh``)."""
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/collections/{collection_id}/refresh",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def list_collection_members(
+        self,
+        token: str,
+        collection_id: str,
+        *,
+        limit: int = 1000,
+        start: int = 0,
+    ) -> list[dict]:
+        """Lists the members of a collection (``GET /collections/{id}/members``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/collections/{collection_id}/members",
+                params={"limit": str(limit), "start": str(start)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
