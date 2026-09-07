@@ -41,6 +41,20 @@ async def languages_page() -> None:
             return
 
         selected: dict = {"code": None, "lang": None}
+        edit_state: dict[str, object] = {
+            "code": None,
+            "label": {},
+            "active": True,
+            "is_ui": False,
+            "parent": "",
+        }
+        name_input_ref: dict[str, ui.element | None] = {"el": None}
+        # Active data languages (not root) for the multilingual label editor.
+        name_langs = [
+            lang for lang in langs if str(lang.get("code")) != "root" and lang.get("active", True)
+        ]
+        if not any(str(lang.get("code")) == locale for lang in name_langs):
+            name_langs = [{"code": locale, "label": {locale: locale}}] + name_langs
 
         def build_tree_nodes() -> list[dict]:
             """Turns the flat language list into nested `ui.tree` nodes."""
@@ -75,100 +89,133 @@ async def languages_page() -> None:
                 lang = next((lang for lang in langs if str(lang.get("code")) == code), None)
                 selected.update({"code": code, "lang": lang})
             detail_host.clear()
-            render_detail()
+            await render_detail()
 
-        form_dialog = ui.dialog()
-        with form_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
-            title_label = ui.label("").classes("text-h6")
-            with ui.column().classes("w-full mt-2 gap-2"):
-                code_input = ui.input(t("lang_admin.code")).props("filled dense").classes("w-full")
-                parent_select = (
-                    ui.select({}, label=t("lang_admin.parent"), value=None)
-                    .props("filled dense")
-                    .classes("w-full")
-                )
-                with ui.row().classes("w-full gap-2"):
-                    label_en = ui.input("Label (EN)").props("filled dense").classes("grow")
-                    label_de = ui.input("Label (DE)").props("filled dense").classes("grow")
-                with ui.row().classes("w-full gap-6"):
-                    active_check = ui.checkbox(t("lang_admin.active"))
-                    is_ui_check = ui.checkbox(t("lang_admin.is_ui"))
+        # --- multilingual label editing (product-form style) -----------------
+        name_dialog = ui.dialog()
+        with name_dialog, ui.card().classes("w-[34rem] max-w-[90vw]"):
+            ui.label(t("lang_admin.label_edit")).classes("text-h6")
+            name_inputs: dict[str, ui.input] = {}
+            with ui.column().classes("w-full gap-2 mt-2"):
+                for lang in name_langs:
+                    code = str(lang.get("code"))
+                    name_inputs[code] = (
+                        ui.input(resolve_value(lang.get("label"), locale) or code)
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
-                ui.button(t("grid.close"), on_click=form_dialog.close).props("flat")
-                ui.button(t("lang_admin.save"), icon="save", on_click=lambda: save_lang()).props(
-                    "flat"
-                )
+                ui.button(t("grid.close"), on_click=name_dialog.close).props("flat")
+                ui.button(t("grid.save"), icon="save", on_click=lambda: save_name()).props("flat")
 
-        def fill_parent_options(include_self: str | None = None) -> None:
+        def open_name() -> None:
+            label = dict(edit_state["label"] or {})
+            for code, inp in name_inputs.items():
+                inp.set_value(str(label.get(code) or ""))
+            name_dialog.open()
+
+        def save_name() -> None:
+            label: dict[str, str] = {}
+            for code, inp in name_inputs.items():
+                if inp.value:
+                    label[code] = inp.value
+            edit_state["label"] = label
+            el = name_input_ref.get("el")
+            if el is not None:
+                el.set_value(str(label.get(locale) or ""))
+            name_dialog.close()
+
+        def _set_label_locale(value: str) -> None:
+            label = dict(edit_state["label"] or {})
+            if value:
+                label[locale] = value
+            else:
+                label.pop(locale, None)
+            edit_state["label"] = label
+
+        def fill_parent_options(select: ui.select, include_self: str | None = None) -> None:
             options = {"": t("lang_admin.root")}
             for lang in langs:
                 code = str(lang.get("code"))
                 if include_self and code == include_self:
                     continue
                 options[f"lang_{code}"] = resolve_value(lang.get("label"), locale) or code
-            parent_select.options = options
-            parent_select.update()
+            select.options = options
+            select.update()
 
-        editing_code: dict = {"value": None}
+        # --- create dialog (multilingual label, product-form style) ----------
+        create_dialog = ui.dialog()
+        with create_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
+            title_label = ui.label("").classes("text-h6")
+            with ui.column().classes("w-full mt-2 gap-2"):
+                create_code_input = (
+                    ui.input(t("lang_admin.code")).props("filled dense").classes("w-full")
+                )
+                with ui.row().classes("w-full items-center gap-2"):
+                    create_label_input = (
+                        ui.input(t("lang_admin.label") + f" ({locale.upper()})")
+                        .props("filled dense")
+                        .classes("grow")
+                    )
+                    ui.button(icon="translate").props("flat round dense").on_click(
+                        open_name
+                    ).tooltip(t("form.languages_edit"))
+                create_parent_select = (
+                    ui.select({}, label=t("lang_admin.parent"), value=None)
+                    .props("filled dense")
+                    .classes("w-full")
+                )
+                with ui.row().classes("w-full gap-6"):
+                    create_active_check = ui.checkbox(t("lang_admin.active"))
+                    create_is_ui_check = ui.checkbox(t("lang_admin.is_ui"))
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=create_dialog.close).props("flat")
+                ui.button(t("lang_admin.save"), icon="save", on_click=lambda: save_create()).props(
+                    "flat"
+                )
 
-        def open_editor(lang: dict | None, *, parent: str | None = None) -> None:
-            editing_code["value"] = lang.get("code") if lang else None
-            title_label.set_text(t("lang_admin.edit") if lang else t("lang_admin.new"))
-            code_input.set_value(str(lang.get("code")) if lang else "")
-            code_input.enable() if not lang else code_input.disable()
-            fill_parent_options(editing_code["value"])
-            if lang:
-                lbl = lang.get("label") or {}
-                label_en.set_value(str(lbl.get("en") or ""))
-                label_de.set_value(str(lbl.get("de") or ""))
-                parent_select.set_value(str(lang.get("parent") or ""))
-                active_check.set_value(bool(lang.get("active", True)))
-                is_ui_check.set_value(bool(lang.get("is_ui", False)))
-            else:
-                label_en.set_value("")
-                label_de.set_value("")
-                parent_select.set_value(parent or "")
-                active_check.set_value(True)
-                is_ui_check.set_value(False)
-            form_dialog.open()
+        def open_create(parent: str | None = None) -> None:
+            edit_state["code"] = None
+            edit_state["label"] = {}
+            edit_state["active"] = True
+            edit_state["is_ui"] = False
+            edit_state["parent"] = parent or ""
+            title_label.set_text(t("lang_admin.new_child") if parent else t("lang_admin.new"))
+            create_code_input.set_value("")
+            create_label_input.set_value("")
+            create_label_input.on_value_change(lambda e: _set_label_locale(str(e.value)))
+            name_input_ref["el"] = create_label_input
+            fill_parent_options(create_parent_select)
+            create_parent_select.set_value(str(edit_state["parent"] or ""))
+            create_active_check.set_value(True)
+            create_is_ui_check.set_value(False)
+            create_dialog.open()
 
-        async def save_lang() -> None:
-            code = (code_input.value or "").strip()
-            label: dict[str, str] = {}
-            if label_en.value:
-                label["en"] = label_en.value
-            if label_de.value:
-                label["de"] = label_de.value
-            active = bool(active_check.value)
-            is_ui = bool(is_ui_check.value)
-            parent = parent_select.value or ""
-            editing = editing_code["value"]
+        async def save_create() -> None:
+            code = (create_code_input.value or "").strip()
+            label = {k: v for k, v in (edit_state.get("label") or {}).items() if v}
+            if not code:
+                ui.notify(t("lang_admin.code_required"), color="warning")
+                return
+            if not label:
+                ui.notify(t("lang_admin.label_required"), color="warning")
+                return
+            parent = str(edit_state.get("parent") or "")
+            active = bool(edit_state.get("active", True))
+            is_ui = bool(edit_state.get("is_ui", False))
             try:
-                if editing:
-                    await client.update_language(
-                        token,
-                        editing,
-                        label=label or None,
-                        parent=parent,
-                        active=active,
-                        is_ui=is_ui,
-                    )
-                else:
-                    if not code:
-                        ui.notify(t("lang_admin.code_required"), color="warning")
-                        return
-                    await client.create_language(
-                        token,
-                        code=code,
-                        parent=parent or None,
-                        label=label,
-                        active=active,
-                        is_ui=is_ui,
-                    )
+                await client.create_language(
+                    token,
+                    code=code,
+                    parent=parent or None,
+                    label=label,
+                    active=active,
+                    is_ui=is_ui,
+                )
             except CoreError as exc:
                 ui.notify(f"{t('lang_admin.save_failed')}: {exc}", color="negative")
                 return
-            form_dialog.close()
+            create_dialog.close()
             await reload()
             ui.notify(t("lang_admin.saved"), color="positive")
 
@@ -198,19 +245,24 @@ async def languages_page() -> None:
 
         detail_host = ui.column()
 
-        def render_detail() -> None:
+        async def render_detail() -> None:
             detail_host.clear()
             lang = selected["lang"]
             if not lang:
                 with detail_host, ui.card().classes("w-full h-[60vh]"):
                     ui.label(t("lang_admin.select_hint")).classes("text-subtitle1 text-gray-500")
                 return
-            with detail_host, ui.card().classes("w-full"):
+            code = str(lang.get("code"))
+            raw_label = lang.get("label") or {}
+            edit_state["code"] = code
+            edit_state["label"] = dict(raw_label) if isinstance(raw_label, dict) else {}
+            edit_state["active"] = bool(lang.get("active", True))
+            edit_state["is_ui"] = bool(lang.get("is_ui", False))
+            edit_state["parent"] = str(lang.get("parent") or "")
+            with detail_host, ui.column().classes("w-full gap-3"):
                 with ui.row().classes("items-center gap-2 w-full"):
-                    ui.label(resolve_value(lang.get("label"), locale) or lang.get("code")).classes(
-                        "text-h6 grow"
-                    )
-                    ui.label(str(lang.get("code"))).classes("text-caption text-gray-500")
+                    ui.label(resolve_value(raw_label, locale) or code).classes("text-h6 grow")
+                    ui.label(code).classes("text-caption text-gray-500")
                 ui.label(str(lang.get("fallback_order"))).classes("text-caption text-gray-500")
                 active_cls = (
                     "bg-positive text-white" if lang.get("active", True) else "bg-grey text-white"
@@ -229,19 +281,81 @@ async def languages_page() -> None:
                     ).classes("shrink-0")
                 with ui.row().classes("w-full mt-2 gap-2"):
                     ui.button(
-                        t("lang_admin.edit"), icon="edit", on_click=lambda: open_editor(lang)
-                    ).props("flat")
-                    ui.button(
                         t("lang_admin.new_child"),
                         icon="add",
-                        on_click=lambda: open_editor(None, parent=f"lang_{lang.get('code')}"),
+                        on_click=lambda: open_create(f"lang_{code}"),
                     ).props("flat")
-                    if str(lang.get("code")) != "root":
+                    if code != "root":
                         ui.button(
                             t("lang_admin.delete"),
                             icon="delete",
                             on_click=lambda: delete_dialog.open(),
                         ).props("flat color=negative")
+                # Inline edit form (label in the current UI language + multilingual).
+                with ui.column().classes("w-full mt-2 gap-2"):
+                    ui.label(t("lang_admin.edit")).classes("text-subtitle2")
+                    with ui.row().classes("w-full items-center gap-2 mt-1"):
+                        label_input = (
+                            ui.input(t("lang_admin.label") + f" ({locale.upper()})")
+                            .props("filled dense")
+                            .classes("grow")
+                        )
+                        label_input.set_value(str((edit_state["label"] or {}).get(locale) or ""))
+                        label_input.on_value_change(lambda e: _set_label_locale(str(e.value)))
+                        name_input_ref["el"] = label_input
+                        ui.button(icon="translate").props("flat round dense").on_click(
+                            open_name
+                        ).tooltip(t("form.languages_edit"))
+                    parent_select = (
+                        ui.select({}, label=t("lang_admin.parent"), value=None)
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    fill_parent_options(parent_select, include_self=code)
+                    parent_select.set_value(str(edit_state["parent"] or ""))
+                    parent_select.on_value_change(
+                        lambda e: edit_state.__setitem__("parent", str(e.value or ""))
+                    )
+                    active_check = ui.checkbox(
+                        t("lang_admin.active"), value=bool(edit_state["active"])
+                    )
+                    active_check.on_value_change(
+                        lambda e: edit_state.__setitem__("active", bool(e.value))
+                    )
+                    is_ui_check = ui.checkbox(
+                        t("lang_admin.is_ui"), value=bool(edit_state["is_ui"])
+                    )
+                    is_ui_check.on_value_change(
+                        lambda e: edit_state.__setitem__("is_ui", bool(e.value))
+                    )
+                    with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                        ui.button(
+                            t("lang_admin.save"), icon="save", on_click=lambda: save_inline()
+                        ).props("flat")
+
+        async def save_inline() -> None:
+            code = str(edit_state.get("code") or "")
+            label = {k: v for k, v in (edit_state.get("label") or {}).items() if v}
+            if not label:
+                ui.notify(t("lang_admin.label_required"), color="warning")
+                return
+            parent = str(edit_state.get("parent") or "")
+            active = bool(edit_state.get("active", True))
+            is_ui = bool(edit_state.get("is_ui", False))
+            try:
+                await client.update_language(
+                    token,
+                    code,
+                    label=label or None,
+                    parent=parent,
+                    active=active,
+                    is_ui=is_ui,
+                )
+            except CoreError as exc:
+                ui.notify(f"{t('lang_admin.save_failed')}: {exc}", color="negative")
+                return
+            await reload()
+            ui.notify(t("lang_admin.saved"), color="positive")
 
         current_tree: dict = {"tree": None, "nodes": []}
 
@@ -264,8 +378,13 @@ async def languages_page() -> None:
                 langs = await client.list_languages(token)
             except Exception:  # noqa: BLE001 - keep the cached list on failure
                 langs = langs
+            if selected["code"]:
+                selected["lang"] = next(
+                    (lang for lang in langs if str(lang.get("code")) == selected["code"]),
+                    selected["lang"],
+                )
             render_tree()
-            render_detail()
+            await render_detail()
 
         with ui.splitter(value=28, limits=(0, 60)).classes(
             "w-full h-[calc(100vh-210px)]"
@@ -274,11 +393,11 @@ async def languages_page() -> None:
                 with ui.row().classes("items-center gap-2 w-full p-2"):
                     ui.button(
                         icon="add",
-                        on_click=lambda: open_editor(None),
+                        on_click=lambda: open_create(None),
                     ).props("flat dense").tooltip(t("lang_admin.new"))
                     ui.label(t("lang_admin.tree_title")).classes("text-caption text-gray-500")
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
                 render_tree()
-            with splitter.after, ui.column().classes("w-full h-full"):
+            with splitter.after, ui.column().classes("w-full h-full pl-3"):
                 detail_host = ui.column().classes("w-full h-full")
-                render_detail()
+                await render_detail()
