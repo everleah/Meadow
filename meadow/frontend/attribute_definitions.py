@@ -55,9 +55,24 @@ async def attribute_definitions_page() -> None:
             for g in groups
         }
 
+        # --- Filter state & predicate (name / group / type) ------------------
+        filters: dict[str, str] = {"name": "", "group": "", "type": ""}
+
+        def _matches(d: dict) -> bool:
+            if filters["name"]:
+                q = filters["name"].lower()
+                hay = f"{d.get('name', '')} {resolve_value(d.get('label'), locale)}".lower()
+                if q not in hay:
+                    return False
+            if filters["type"] and str(d.get("type")) != filters["type"]:
+                return False
+            return not (filters["group"] and filters["group"] not in (d.get("group_ids") or []))
+
         def _rows() -> list[dict]:
             rows: list[dict] = []
             for d in definitions:
+                if not _matches(d):
+                    continue
                 rows.append(
                     {
                         "id": d.get("id"),
@@ -75,6 +90,29 @@ async def attribute_definitions_page() -> None:
                     }
                 )
             return rows
+
+        # Filter bar (free-text name / group / type).
+        with ui.row().classes("w-full items-center gap-2 mt-2"):
+            (
+                ui.input(t("attr_def.filter_name"))
+                .props("filled dense")
+                .classes("w-48")
+                .on_value_change(lambda e: _set_filter("name", str(e.value)))
+            )
+            ui.select(
+                {str(gid): lbl for gid, lbl in groups_by_id.items()},
+                label=t("attr_def.filter_group"),
+                value=None,
+            ).props("filled dense").classes("w-48").on_value_change(
+                lambda e: _set_filter("group", str(e.value))
+            )
+            ui.select(
+                {typ: typ for typ in ATTR_TYPES},
+                label=t("attr_def.filter_type"),
+                value=None,
+            ).props("filled dense").classes("w-40").on_value_change(
+                lambda e: _set_filter("type", str(e.value))
+            )
 
         state: dict = {"definitions": definitions}
 
@@ -106,13 +144,25 @@ async def attribute_definitions_page() -> None:
                 "rowData": _rows(),
             }
         ).classes("w-full grow")
+
+        def _apply_filters() -> None:
+            grid.run_grid_method("setGridOption", "rowData", _rows())
+
+        def _set_filter(key: str, value: str) -> None:
+            filters[key] = value
+            _apply_filters()
+
         with ui.row().classes("w-full justify-end mt-2 gap-2"):
             ui.button(t("attr_def.create"), icon="add", on_click=lambda: open_editor(None)).props(
                 "flat"
             )
 
         # --- Group management ------------------------------------------------
-        with ui.expansion(t("attr_def.groups_title"), icon="folder").classes("w-full mt-4"):
+        with (
+            ui.expansion(t("attr_def.groups_title"), icon="folder")
+            .classes("w-full mt-4")
+            .props("header-class=bg-green-2 text-green-9")
+        ):
 
             def _group_rows() -> list[dict]:
                 return [
