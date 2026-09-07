@@ -7,10 +7,11 @@
 //! `plan/detail/business-rules.md`.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::app::AppState;
 use crate::config::Config;
@@ -84,37 +85,69 @@ impl std::fmt::Display for EvaluateError {
 }
 
 /// Stateless NATS client for the synchronous rule-evaluation call.
+///
+/// Connection details come from `Config` (startup); the operational knobs
+/// (`timeout`, `degrade`, `breaker_threshold`) are read at runtime from the
+/// shared settings snapshot, so they can be tuned on the system-settings page
+/// without a restart.
 #[derive(Debug, Clone)]
 pub struct RulesClient {
     nats_url: String,
     subject: String,
     compile_subject: String,
-    timeout: Duration,
-    degrade: bool,
-    breaker_threshold: u64,
+    settings: Arc<RwLock<Map<String, Value>>>,
 }
 
 impl RulesClient {
-    /// Builds the client from runtime configuration.
-    pub fn from_config(config: &Config) -> Self {
+    /// Builds the client from runtime configuration + the shared settings snapshot.
+    pub fn from_config(config: &Config, settings: Arc<RwLock<Map<String, Value>>>) -> Self {
         Self {
             nats_url: config.rules_nats_url.clone(),
             subject: config.rules_subject.clone(),
             compile_subject: config.rules_compile_subject.clone(),
-            timeout: Duration::from_millis(config.rules_timeout_ms),
-            degrade: config.rules_degrade,
-            breaker_threshold: config.rules_breaker_threshold,
+            settings,
         }
+    }
+
+    /// The evaluation request timeout (ms), read at runtime.
+    fn timeout(&self) -> Duration {
+        let ms = self
+            .settings
+            .read()
+            .map(|guard| {
+                guard
+                    .get("rules_timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(2000)
+            })
+            .unwrap_or(2000);
+        Duration::from_millis(ms)
     }
 
     /// Whether a transport failure should degrade to "skip rules".
     pub fn degrade(&self) -> bool {
-        self.degrade
+        self.settings
+            .read()
+            .map(|guard| {
+                guard
+                    .get("rules_degrade")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
     }
 
     /// Consecutive rule failures before the circuit breaker disables a rule.
     pub fn breaker_threshold(&self) -> u64 {
-        self.breaker_threshold
+        self.settings
+            .read()
+            .map(|guard| {
+                guard
+                    .get("rules_breaker_threshold")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(3)
+            })
+            .unwrap_or(3)
     }
 
     /// Evaluates the given rules against the candidate object view.
@@ -141,7 +174,7 @@ impl RulesClient {
             .map_err(|error| EvaluateError::Transport(error.to_string()))?;
         let request = async_nats::Request::new()
             .payload(bytes.into())
-            .timeout(Some(self.timeout));
+            .timeout(Some(self.timeout()));
         let reply = client
             .send_request(self.subject.clone(), request)
             .await
@@ -164,7 +197,7 @@ impl RulesClient {
             .map_err(|error| EvaluateError::Transport(error.to_string()))?;
         let request = async_nats::Request::new()
             .payload(bytes.into())
-            .timeout(Some(self.timeout));
+            .timeout(Some(self.timeout()));
         let reply = client
             .send_request(self.compile_subject.clone(), request)
             .await

@@ -45,12 +45,21 @@ pub async fn run() {
         .expect("failed to bind TCP listener");
     tracing::info!("pim-core listening on {}", config.bind_addr);
 
+    let settings = std::sync::Arc::new(std::sync::RwLock::new(
+        crate::api::system::initial_settings(),
+    ));
     let state = app::AppState {
         db,
         cache: std::sync::Arc::new(cache::MetaCache::default()),
-        rules: rules::RulesClient::from_config(&config),
+        rules: rules::RulesClient::from_config(&config, settings.clone()),
         config,
+        settings,
     };
+    // Load DB overrides into the settings snapshot so runtime consumers (the
+    // rule client) honour persisted settings immediately.
+    if let Err(error) = crate::api::system::refresh_settings_snapshot(&state).await {
+        tracing::warn!(?error, "failed to load runtime settings snapshot");
+    }
 
     // Start the background scheduler (cron jobs from scheduled definitions).
     tokio::spawn(scheduler::run(state.db.clone(), state.config.clone()));

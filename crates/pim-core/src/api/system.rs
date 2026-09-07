@@ -91,6 +91,22 @@ fn default_settings() -> Map<String, Value> {
     settings.insert("log_persist_categories".to_owned(), json!(["app"]));
     settings.insert("log_retention_days".to_owned(), json!(30));
     settings.insert("log_rate_limit".to_owned(), json!(1000));
+    settings.insert("rules_degrade".to_owned(), json!(false));
+    settings.insert("rules_breaker_threshold".to_owned(), json!(3));
+    settings.insert("rules_timeout_ms".to_owned(), json!(2000));
+    settings
+}
+
+/// Returns the default + environment settings (no DB overrides). Used to seed
+/// the runtime settings snapshot at startup.
+pub fn initial_settings() -> Map<String, Value> {
+    let mut settings = default_settings();
+    let keys: Vec<String> = settings.keys().cloned().collect();
+    for key in keys {
+        if let Some(env_value) = env_setting(&key) {
+            settings.insert(key, env_value);
+        }
+    }
     settings
 }
 
@@ -111,6 +127,20 @@ fn env_setting(key: &str) -> Option<Value> {
             .and_then(|value| value.parse::<i64>().ok())
             .map(|value| json!(value)),
         "log_rate_limit" => std::env::var("LOG_RATE_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| json!(value)),
+        "rules_degrade" => std::env::var("RULES_DEGRADE").ok().map(|value| {
+            json!(matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES"
+            ))
+        }),
+        "rules_breaker_threshold" => std::env::var("RULES_BREAKER_THRESHOLD")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| json!(value)),
+        "rules_timeout_ms" => std::env::var("RULES_TIMEOUT_MS")
             .ok()
             .and_then(|value| value.parse::<i64>().ok())
             .map(|value| json!(value)),
@@ -154,6 +184,22 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), ApiError> {
             Some(rate) if rate > 0 => Ok(()),
             _ => Err(ApiError::bad_request(
                 "`log_rate_limit` must be a positive integer",
+            )),
+        },
+        "rules_degrade" => match value.as_bool() {
+            Some(_) => Ok(()),
+            None => Err(ApiError::bad_request("`rules_degrade` must be a boolean")),
+        },
+        "rules_breaker_threshold" => match value.as_i64() {
+            Some(threshold) if threshold > 0 => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`rules_breaker_threshold` must be a positive integer",
+            )),
+        },
+        "rules_timeout_ms" => match value.as_i64() {
+            Some(ms) if (100..=60_000).contains(&ms) => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`rules_timeout_ms` must be between 100 and 60000",
             )),
         },
         _ => Err(ApiError::bad_request(format!("unknown setting `{key}`"))),
@@ -449,6 +495,7 @@ pub async fn put_setting(
     )
     .await;
 
+    refresh_settings_snapshot(&state).await?;
     Ok(Json(setting))
 }
 
@@ -501,6 +548,7 @@ pub async fn delete_setting(
     )
     .await;
 
+    refresh_settings_snapshot(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -530,6 +578,21 @@ async fn resolve_settings(db: &Db) -> Result<Value, ApiError> {
     }
 
     Ok(Value::Object(resolved))
+}
+
+/// Refreshes the in-memory runtime settings snapshot from the database.
+/// Called after a settings write/reset so runtime consumers (e.g. the rule
+/// client) see the new value immediately.
+pub async fn refresh_settings_snapshot(state: &AppState) -> Result<(), ApiError> {
+    let resolved = resolve_settings(&state.db).await?;
+    if let Value::Object(map) = resolved {
+        let mut guard = state
+            .settings
+            .write()
+            .map_err(|_| ApiError::internal("settings snapshot lock poisoned"))?;
+        *guard = map;
+    }
+    Ok(())
 }
 
 /// Resolves all settings as `{ key: { value, source } }` (source: default|env|db).

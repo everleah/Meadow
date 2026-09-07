@@ -132,7 +132,7 @@ Ein **Business-Schlüssel** (z. B. SKU) ist ein Attribut, dessen Definition mit 
 
 - **`GET /system/settings`:** Liefert alle Einstellungen inkl. **aufgelöstem** Wert (Code-Default < ENV < DB) und Quelle. Nur `admin`/`superadmin`.
 - **`PUT /system/settings/{key}`:** Setzt/persistiert eine Runtime-Einstellung (z. B. `log_retention_days`); validiert gegen erlaubte Schlüssel/Werte; schreibt einen Audit-Eintrag. „Auf Default zurücksetzen“ = `DELETE /system/settings/{key}` (löscht den DB-Eintrag, dann gilt ENV/Default).
-- **MVP-Umfang:** nur Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); das Schema ist generisch erweiterbar.
+- **Umfang:** Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`) **und Regel-Einstellungen** (`rules_degrade`, `rules_breaker_threshold`, `rules_timeout_ms`); das Schema ist generisch weiter erweiterbar. Die Regel-Einstellungen wirken zur Laufzeit (der `RulesClient` liest sie aus dem Settings-Snapshot), die übrigen sind größtenteils Startup-/Worker-seitig.
 
 ## Datums- & Zeitwerte in der API
 

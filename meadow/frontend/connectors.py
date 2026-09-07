@@ -95,6 +95,17 @@ async def connectors_page() -> None:
         ui.label(t("connectors.title")).classes("text-h4")
         ui.label(t("connectors.subtitle")).classes("text-subtitle1")
 
+        filters: dict[str, str] = {"name": "", "type": "", "enabled": ""}
+
+        def _matches(c: dict) -> bool:
+            if filters["name"]:
+                q = filters["name"].lower()
+                if q not in str(c.get("name") or "").lower():
+                    return False
+            if filters["type"] and str(c.get("type") or "") != filters["type"]:
+                return False
+            return not (filters["enabled"] and str(c.get("enabled")) != filters["enabled"])
+
         def _rows() -> list[dict]:
             return [
                 {
@@ -106,24 +117,60 @@ async def connectors_page() -> None:
                     "updated_by": str(c.get("updated_by") or "").split(":")[-1],
                 }
                 for c in connectors
+                if _matches(c)
             ]
 
+        # Filter bar (free-text name / type / enabled).
+        with ui.row().classes("w-full items-center gap-2 mt-2"):
+            (
+                ui.input(t("connectors.filter_name"))
+                .props("filled dense")
+                .classes("w-48")
+                .on_value_change(lambda e: _set_filter("name", str(e.value)))
+            )
+            ui.select(
+                {typ: _type_label(typ) for typ in CONNECTOR_TYPES},
+                label=t("connectors.filter_type"),
+                value=None,
+            ).props("filled dense").classes("w-44").on_value_change(
+                lambda e: _set_filter("type", str(e.value))
+            )
+            ui.select(
+                {
+                    "True": t("connectors.state_enabled"),
+                    "False": t("connectors.state_disabled"),
+                },
+                label=t("connectors.filter_enabled"),
+                value=None,
+            ).props("filled dense").classes("w-44").on_value_change(
+                lambda e: _set_filter("enabled", str(e.value))
+            )
+
+        def _apply_filters() -> None:
+            grid.run_grid_method("setGridOption", "rowData", _rows())
+
+        def _set_filter(key: str, value: str) -> None:
+            filters[key] = value
+            _apply_filters()
+
+        column_defs = [
+            {"headerName": t("connectors.col_name"), "field": "name", "width": 220},
+            {"headerName": t("connectors.col_type"), "field": "type", "width": 150},
+            {"headerName": t("connectors.col_enabled"), "field": "enabled", "width": 120},
+            {"headerName": t("connectors.col_updated"), "field": "updated", "width": 190},
+            {
+                "headerName": t("connectors.col_updated_by"),
+                "field": "updated_by",
+                "width": 120,
+            },
+        ]
         grid = ui.aggrid(
             {
-                "columnDefs": [
-                    {"headerName": t("connectors.col_name"), "field": "name", "width": 220},
-                    {"headerName": t("connectors.col_type"), "field": "type", "width": 150},
-                    {"headerName": t("connectors.col_enabled"), "field": "enabled", "width": 120},
-                    {"headerName": t("connectors.col_updated"), "field": "updated", "width": 190},
-                    {
-                        "headerName": t("connectors.col_updated_by"),
-                        "field": "updated_by",
-                        "width": 120,
-                    },
-                ],
+                "columnDefs": column_defs,
                 "rowData": _rows(),
                 "rowSelection": {"mode": "singleRow"},
-            }
+            },
+            html_columns=[i for i, col in enumerate(column_defs) if col["field"] == "enabled"],
         ).classes("w-full")
 
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
@@ -132,6 +179,9 @@ async def connectors_page() -> None:
                     t("connectors.new"),
                     icon="add",
                     on_click=lambda: open_editor(None),
+                ).props("flat")
+                ui.button(
+                    t("connectors.edit"), icon="edit", on_click=lambda: edit_selected()
                 ).props("flat")
                 ui.button(
                     t("connectors.field_enabled"),
@@ -249,6 +299,13 @@ async def connectors_page() -> None:
                 return next((c for c in connectors if str(c.get("id")) == str(row.get("id"))), row)
             return row if isinstance(row, dict) else None
 
+        async def edit_selected() -> None:
+            connector = await get_selected()
+            if not connector:
+                ui.notify(t("connectors.no_selection"), color="warning")
+                return
+            open_editor(connector)
+
         async def toggle_enabled() -> None:
             connector = await get_selected()
             if not connector:
@@ -291,3 +348,15 @@ async def connectors_page() -> None:
                 return
             await reload_rows()
             ui.notify(t("connectors.deleted"), color="positive")
+
+        def _connector_for(data: object) -> dict | None:
+            """Resolves a double-click payload to a connector row."""
+            if isinstance(data, dict):
+                return data
+            return next((c for c in connectors if str(c.get("id")) == str(data)), None)
+
+        grid.on(
+            "cellDoubleClicked",
+            lambda e: open_editor(_connector_for(e.args.get("data"))),
+            ["data"],
+        )

@@ -47,7 +47,7 @@ Zwei technische Tabellen ergänzen das Kernmodell für Betrieb und Administratio
 | `updated_by` | string         | Auslöser (`user_id` oder Systemkennung)      |
 
 - **Auflösung:** Code-Default < ENV < DB (Runtime). Ein fehlender Eintrag bedeutet „Default/ENV gilt“.
-- **Verwendung (MVP):** Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`); das Schema ist generisch und für weitere Laufzeit-Einstellungen erweiterbar.
+- **Verwendung (MVP):** Logging-Einstellungen (`log_persist_level`, `log_persist_categories`, `log_retention_days`, `log_rate_limit`) und Regel-Einstellungen (`rules_degrade`, `rules_breaker_threshold`, `rules_timeout_ms`); das Schema ist generisch und für weitere Laufzeit-Einstellungen erweiterbar.
 - **Zugriff:** `GET/PUT /system/settings` (nur `admin`/`superadmin`); Änderungen im Audit-Log.
 
 ## Datumswerte

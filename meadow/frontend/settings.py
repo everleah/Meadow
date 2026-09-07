@@ -51,13 +51,35 @@ async def settings_page() -> None:
 
         #: Each entry is a small card with an editor + Save/Reset.
         editors: dict[str, ui.element] = {}
+        #: Settings grouped into coloured expansions (default closed).
+        GROUPS = (
+            (
+                "settings.group_logging",
+                "green",
+                (
+                    "log_persist_level",
+                    "log_persist_categories",
+                    "log_retention_days",
+                    "log_rate_limit",
+                ),
+            ),
+            (
+                "settings.group_rules",
+                "blue",
+                (
+                    "rules_degrade",
+                    "rules_breaker_threshold",
+                    "rules_timeout_ms",
+                ),
+            ),
+        )
 
         def _make_card(key: str, entry: dict) -> None:
             value = entry.get("value")
             source = entry.get("source") or "default"
-            with ui.card().classes("w-full mt-3"):
+            with ui.card().classes("w-full mt-2"):
                 with ui.row().classes("w-full items-center gap-2"):
-                    ui.label(key).classes("text-subtitle1 font-medium")
+                    ui.label(t(f"settings.{key}")).classes("text-subtitle1 font-medium")
                     ui.html(_source_badge(str(source))).classes("ml-1")
                 with ui.row().classes("w-full items-center gap-2 mt-1"):
                     if key == "log_persist_level":
@@ -78,9 +100,26 @@ async def settings_page() -> None:
                             .props("filled dense multiple")
                             .classes("grow max-w-[24rem]")
                         )
+                    elif key == "rules_degrade":
+                        editor = ui.switch(
+                            t("settings.rules_degrade"),
+                            value=bool(value) if isinstance(value, bool) else False,
+                        )
                     elif key == "log_retention_days":
                         editor = (
                             ui.number(value=int(value) if isinstance(value, (int, float)) else 30)
+                            .props("filled dense")
+                            .classes("w-32")
+                        )
+                    elif key == "rules_breaker_threshold":
+                        editor = (
+                            ui.number(value=int(value) if isinstance(value, (int, float)) else 3)
+                            .props("filled dense")
+                            .classes("w-32")
+                        )
+                    elif key == "rules_timeout_ms":
+                        editor = (
+                            ui.number(value=int(value) if isinstance(value, (int, float)) else 2000)
                             .props("filled dense")
                             .classes("w-32")
                         )
@@ -101,13 +140,14 @@ async def settings_page() -> None:
                         on_click=lambda k=key: reset_setting(k),
                     ).props("flat color=negative")
 
-        for key in (
-            "log_persist_level",
-            "log_persist_categories",
-            "log_retention_days",
-            "log_rate_limit",
-        ):
-            _make_card(key, settings.get(key, {"value": None, "source": "default"}))
+        for group_title, color, keys in GROUPS:
+            with (
+                ui.expansion(t(group_title), icon="tune")
+                .classes("w-full mt-3")
+                .props(f"header-class=bg-{color}-2 text-{color}-9")
+            ):
+                for key in keys:
+                    _make_card(key, settings.get(key, {"value": None, "source": "default"}))
 
         async def reload() -> None:
             nonlocal settings
@@ -121,7 +161,14 @@ async def settings_page() -> None:
                 value = entry.get("value")
                 if key == "log_persist_categories":
                     editor.set_value(list(value) if isinstance(value, list) else [])
-                elif key in ("log_retention_days", "log_rate_limit"):
+                elif key == "rules_degrade":
+                    editor.set_value(bool(value) if isinstance(value, bool) else False)
+                elif key in (
+                    "log_retention_days",
+                    "log_rate_limit",
+                    "rules_breaker_threshold",
+                    "rules_timeout_ms",
+                ):
                     editor.set_value(int(value) if isinstance(value, (int, float)) else 0)
                 else:
                     editor.set_value(value if isinstance(value, str) else "")
@@ -135,7 +182,14 @@ async def settings_page() -> None:
                 value: object
                 if key == "log_persist_categories":
                     value = list(editor.value or [])
-                elif key in ("log_retention_days", "log_rate_limit"):
+                elif key == "rules_degrade":
+                    value = bool(editor.value)
+                elif key in (
+                    "log_retention_days",
+                    "log_rate_limit",
+                    "rules_breaker_threshold",
+                    "rules_timeout_ms",
+                ):
                     value = int(editor.value or 0)
                 else:
                     value = editor.value or "WARN"

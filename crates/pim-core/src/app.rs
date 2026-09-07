@@ -17,12 +17,16 @@ use crate::{api, config::Config, db::Db};
 pub struct AppState {
     /// Handle to the SurrealDB instance.
     pub db: Db,
-    /// Runtime configuration.
+    /// Runtime configuration (environment-derived, startup-bound).
     pub config: Config,
     /// In-memory cache for slow-changing metadata.
     pub cache: std::sync::Arc<MetaCache>,
     /// Synchronous rule-evaluation client (NATS request/reply).
     pub rules: RulesClient,
+    /// Resolved runtime settings snapshot (default < env < db). Refreshed on
+    /// settings writes so consumers (e.g. the rule client) see updates at
+    /// runtime without a restart.
+    pub settings: std::sync::Arc<std::sync::RwLock<serde_json::Map<String, serde_json::Value>>>,
 }
 
 /// Builds the application router with the given state.
