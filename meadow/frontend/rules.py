@@ -116,6 +116,17 @@ async def rules_page() -> None:
         ui.label(t("rules.title")).classes("text-h4")
         ui.label(t("rules.subtitle")).classes("text-subtitle1")
 
+        filters: dict[str, str] = {"name": "", "type": "", "state": ""}
+
+        def _matches(r: dict) -> bool:
+            if filters["name"]:
+                q = filters["name"].lower()
+                if q not in str(r.get("name") or "").lower():
+                    return False
+            if filters["type"] and str(r.get("type") or "") != filters["type"]:
+                return False
+            return not (filters["state"] and str(r.get("state") or "draft") != filters["state"])
+
         def _rows() -> list[dict]:
             return [
                 {
@@ -129,7 +140,42 @@ async def rules_page() -> None:
                     "updated_by": str(r.get("updated_by") or "").split(":")[-1],
                 }
                 for r in rules
+                if _matches(r)
             ]
+
+        # Filter bar (free-text name / type / state).
+        with ui.row().classes("w-full items-center gap-2 mt-2"):
+            (
+                ui.input(t("rules.filter_name"))
+                .props("filled dense")
+                .classes("w-48")
+                .on_value_change(lambda e: _set_filter("name", str(e.value)))
+            )
+            ui.select(
+                {typ: _type_label(typ) for typ in RULE_TYPES},
+                label=t("rules.filter_type"),
+                value=None,
+            ).props("filled dense").classes("w-44").on_value_change(
+                lambda e: _set_filter("type", str(e.value))
+            )
+            ui.select(
+                {
+                    "draft": t("rules.state_draft"),
+                    "active": t("rules.state_active"),
+                    "disabled": t("rules.state_disabled"),
+                },
+                label=t("rules.filter_state"),
+                value=None,
+            ).props("filled dense").classes("w-44").on_value_change(
+                lambda e: _set_filter("state", str(e.value))
+            )
+
+        def _apply_filters() -> None:
+            grid.run_grid_method("setGridOption", "rowData", _rows())
+
+        def _set_filter(key: str, value: str) -> None:
+            filters[key] = value
+            _apply_filters()
 
         grid = ui.aggrid(
             {
