@@ -245,9 +245,15 @@ async def products_page(request: Request) -> None:
     type_filter = request.query_params.get("type")
     ancestor_filter = request.query_params.get("ancestor") or None
     category_filter = request.query_params.get("category") or None
+    collection_filter = request.query_params.get("collection") or None
     uncategorized_only = request.query_params.get("uncategorized") == "1"
     has_filter = bool(
-        incomplete_only or type_filter or ancestor_filter or category_filter or uncategorized_only
+        incomplete_only
+        or type_filter
+        or ancestor_filter
+        or category_filter
+        or collection_filter
+        or uncategorized_only
     )
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.products")).classes("text-h4")
@@ -267,6 +273,10 @@ async def products_page(request: Request) -> None:
             if category_filter:
                 return await client.list_objects(
                     token, category=category_filter, limit=1000, locale=locale
+                )
+            if collection_filter:
+                return await client.list_objects(
+                    token, collection=collection_filter, limit=1000, locale=locale
                 )
             if uncategorized_only:
                 return await client.list_objects(
@@ -358,6 +368,8 @@ async def products_page(request: Request) -> None:
                 parts.append(f"ancestor={params['ancestor']}")
             if params.get("category"):
                 parts.append(f"category={params['category']}")
+            if params.get("collection"):
+                parts.append(f"collection={params['collection']}")
             if params.get("uncategorized"):
                 parts.append("uncategorized=1")
             query = "&".join(parts)
@@ -433,6 +445,44 @@ async def products_page(request: Request) -> None:
             else:
                 selected_objects = [] if not has_filter else objects
                 params = {"category": None, "uncategorized": False, "ancestor": None}
+            await apply_rows(selected_objects)
+            sync_url_query(params)
+
+        # Materialized collections (flat, no tree): a collection view filters the
+        # grid via `?collection=<id>` (collection_member aggregation).
+        collections: list[dict] = []
+        try:
+            collections = await client.list_collections(token, limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to an empty collection list
+            collections = []
+
+        def _collection_label(c: dict) -> str:
+            return (
+                resolve_value((c.get("attributes") or {}).get("name"), locale)
+                or str(c.get("name") or "")
+                or str(c.get("id") or "")
+            )
+
+        async def handle_collection_select(e) -> None:
+            selected = e.value if hasattr(e, "value") else None
+            if selected:
+                selected_objects = await client.list_objects(
+                    token, collection=selected, limit=1000, locale=locale
+                )
+                params = {
+                    "collection": selected,
+                    "category": None,
+                    "uncategorized": False,
+                    "ancestor": None,
+                }
+            else:
+                selected_objects = [] if not has_filter else objects
+                params = {
+                    "collection": None,
+                    "category": None,
+                    "uncategorized": False,
+                    "ancestor": None,
+                }
             await apply_rows(selected_objects)
             sync_url_query(params)
 
@@ -1012,7 +1062,22 @@ async def products_page(request: Request) -> None:
             if host is None:
                 return
             host.clear()
-            if view == "category" and category_roots:
+            if view == "collection" and collections:
+                async def _no_children(_node_id: str) -> list[dict]:
+                    return []
+
+                nodes = [
+                    {
+                        "id": str(c.get("id")),
+                        "label": _collection_label(c),
+                        "type": "collection",
+                        "count": int(c.get("member_count") or 0),
+                    }
+                    for c in collections
+                ]
+                loader = _no_children
+                on_select = handle_collection_select
+            elif view == "category" and category_roots:
                 selected_id = selected_tree["id"]
                 if selected_id:
                     nodes = [r for r in category_roots if r["id"] == selected_id]
@@ -1065,6 +1130,7 @@ async def products_page(request: Request) -> None:
                 def set_view(view: str) -> None:
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
+                    style_view_button(collection_btn, view == "collection")
                     tree_select.set_visibility(view == "category")
                     render_tree(view)
 
@@ -1072,8 +1138,12 @@ async def products_page(request: Request) -> None:
                     with ui.button_group().props("dense"):
                         structure_btn = ui.button(icon="account_tree").tooltip(t("grid.structure"))
                         category_btn = ui.button(icon="category").tooltip(t("grid.category"))
+                        collection_btn = ui.button(icon="collections_bookmark").tooltip(
+                            t("grid.collection")
+                        )
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
+                    collection_btn.on_click(lambda: set_view("collection"))
                     tree_select = (
                         ui.select(
                             {

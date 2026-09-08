@@ -98,6 +98,10 @@ pub struct ListObjects {
     /// any of its composition descendants (category tree in the grid).
     #[serde(default)]
     pub category: Option<String>,
+    /// Filter to objects that are members of this materialized collection
+    /// (via `collection_member`; flat, no hierarchy).
+    #[serde(default)]
+    pub collection: Option<String>,
     /// Only return objects that are NOT assigned to any category (no
     /// `category_member` reference as member); the "Nicht kategorisiert" entry.
     #[serde(default)]
@@ -593,6 +597,11 @@ pub async fn list_objects(
             "id IN array::map($category_member_ids, |$k| type::record('object', $k))".to_owned(),
         );
     }
+    if params.collection.is_some() {
+        conditions.push(
+            "id IN array::map($collection_member_ids, |$k| type::record('object', $k))".to_owned(),
+        );
+    }
     if params.uncategorized {
         conditions.push(
             "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = 'rel_category_member') AND type NOT IN ['category', 'root']"
@@ -619,6 +628,10 @@ pub async fn list_objects(
     if let Some(category) = &params.category {
         let keys = crate::api::references::category_member_keys(&state.db, category).await?;
         query = query.bind(("category_member_ids", keys));
+    }
+    if let Some(collection) = &params.collection {
+        let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;
+        query = query.bind(("collection_member_ids", keys));
     }
     let mut response = query
         .bind(("limit", limit))

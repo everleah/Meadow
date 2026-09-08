@@ -112,6 +112,12 @@ async def rules_page() -> None:
         ui.label(t("rules.load_failed")).classes("text-subtitle1 text-negative")
         return
 
+    try:
+        object_types = await client.list_object_types(token, limit=1000)
+    except Exception:  # noqa: BLE001 - degrade to default types
+        object_types = []
+    type_names = sorted({str(ot.get("name")) for ot in object_types if ot.get("name")})
+
     with ui.column().classes("w-full p-6"):
         ui.label(t("rules.title")).classes("text-h4")
         ui.label(t("rules.subtitle")).classes("text-subtitle1")
@@ -243,8 +249,15 @@ async def rules_page() -> None:
                 description_input = (
                     ui.input(t("rules.field_description")).props("filled dense").classes("w-full")
                 )
-                applies_input = (
-                    ui.input(t("rules.field_applies")).props("filled dense").classes("w-full")
+                applies_select = (
+                    ui.select(
+                        {typ: typ for typ in type_names},
+                        label=t("rules.field_applies"),
+                        value=[],
+                        multiple=True,
+                    )
+                    .props("filled dense")
+                    .classes("w-full")
                 )
                 ui.label(t("rules.field_script")).classes("text-subtitle2")
                 script_editor = ui.codemirror("", language="Python").classes(
@@ -262,8 +275,17 @@ async def rules_page() -> None:
             current_type = str(rule.get("type") or "validation") if editing else "validation"
             type_select.set_value(current_type)
             description_input.set_value(str(rule.get("description") or "") if editing else "")
-            applies = rule.get("applies_to") if editing else []
-            applies_input.set_value(", ".join(str(v) for v in applies) if applies else "")
+            applies = [str(v) for v in (rule.get("applies_to") or [])] if editing else []
+            # Keep any type that is not (yet) in the registry selectable so an
+            # existing value is never silently dropped on save.
+            missing = [v for v in applies if v not in type_names]
+            if missing:
+                applies_select.options = {
+                    **{typ: typ for typ in type_names},
+                    **{v: v for v in missing},
+                }
+                applies_select.update()
+            applies_select.set_value(applies or [])
             script_editor.set_value(str(rule.get("script") or "") if editing else "")
 
         def open_editor(rule: dict | None) -> None:
@@ -278,9 +300,7 @@ async def rules_page() -> None:
                 return
             rule_type = type_select.value or "validation"
             description = (description_input.value or "").strip() or None
-            applies_values = [
-                v.strip() for v in (applies_input.value or "").split(",") if v.strip()
-            ]
+            applies_values = [str(v) for v in (applies_select.value or [])]
             script = script_editor.value or ""
             try:
                 if editing_id:
@@ -362,10 +382,11 @@ async def rules_page() -> None:
             confirm.open()
 
         def _rule_for(data: object) -> dict | None:
-            """Resolves a double-click payload to a rule row."""
-            if isinstance(data, dict):
-                return data
-            return next((r for r in rules if str(r.get("id")) == str(data)), None)
+            """Resolves a double-click payload to the full rule record."""
+            rid = str(data.get("id") or "") if isinstance(data, dict) else str(data or "")
+            if not rid:
+                return None
+            return next((r for r in rules if str(r.get("id")) == rid), None)
 
         async def change_state(action: str) -> None:
             rule = await get_selected()

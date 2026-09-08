@@ -1167,6 +1167,33 @@ pub async fn category_member_keys(db: &Db, category_id: &str) -> Result<Vec<Stri
     Ok(result)
 }
 
+/// Returns the bare object keys that are members of a materialized collection
+/// (`collection_member` relation, `out` = the collection; flat, no hierarchy).
+pub async fn collection_member_keys(db: &Db, collection_id: &str) -> Result<Vec<String>, ApiError> {
+    let sql = "
+        SELECT in AS member FROM reference
+        WHERE definition_id = 'rel_collection_member' AND out = type::record('object', $col);
+    ";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("col", key_of(collection_id).to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut result: Vec<String> = Vec::new();
+    for row in &rows {
+        if let Some(member) = row.get("member").and_then(Value::as_str) {
+            let key = key_of(member).to_owned();
+            if seen.insert(key.clone()) {
+                result.push(key);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Changes an object's composition parent (re-parenting with cycle protection).
 #[utoipa::path(
     patch,

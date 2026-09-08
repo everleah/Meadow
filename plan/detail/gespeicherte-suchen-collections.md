@@ -98,6 +98,7 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 - Als **vorgefilterte Arbeitslisten** in der Oberfläche, z. B. „Preisfehler“, „Neuheiten“, „Unvollständige Produkte“.
 - Als **Basis für Outbound-Exporte**, ohne bei jedem Export die Suche neu ausführen zu müssen.
 - Als **Kategorien für die Middleware** – die Middleware erhält nur noch die Objekt-IDs der Collection und kann gezielt abgleichen.
+- **Collections im Grid (umgesetzt, Phase 9):** Im Produkt-Grid (`/products`) gibt es neben „Struktur“ und „Kategorien“ eine **„Collections“-Ansicht** (flach, kein Baum): eine Liste der Collections (mit Mitgliederzahl); Auswahl filtert das Grid über `GET /objects?collection=<id>` (Backend-Filter über `collection_member`, analog zu `?category=` über `category_member`). Die Materialisierung bleibt die Quelle der Mitglieder; die Grid-Ansicht ist eine reine Anzeige-/Filterhilfe.
 
 **Abgrenzung zu normalen Kategorien:**
 

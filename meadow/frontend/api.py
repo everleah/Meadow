@@ -126,18 +126,20 @@ class CoreClient:
         object_type: str | None = None,
         ancestor: str | None = None,
         category: str | None = None,
+        collection: str | None = None,
         uncategorized: bool = False,
         locale: str | None = None,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
-        """Lists objects, optionally filtered by type, composition ancestor or category.
+        """Lists objects, optionally filtered by type, ancestor, category or collection.
 
         With ``ancestor`` the result is limited to that composition subtree; with
         ``category`` to objects assigned (via ``category_member``) to that category
-        or its descendants; with ``uncategorized`` to objects with no category
-        assignment. With ``locale``, each object carries a ``completeness`` value
-        for that language (computed in the core).
+        or its descendants; with ``collection`` to objects that are members of the
+        materialized collection (flat, no hierarchy); with ``uncategorized`` to
+        objects with no category assignment. With ``locale``, each object carries
+        a ``completeness`` value for that language (computed in the core).
         """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
@@ -146,6 +148,8 @@ class CoreClient:
             params["ancestor"] = ancestor
         if category:
             params["category"] = category
+        if collection:
+            params["collection"] = collection
         if uncategorized:
             params["uncategorized"] = "true"
         if locale:
