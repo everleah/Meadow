@@ -294,6 +294,11 @@ async def languages_page() -> None:
                 # Inline edit form (label in the current UI language + multilingual).
                 with ui.column().classes("w-full mt-2 gap-2"):
                     ui.label(t("lang_admin.edit")).classes("text-subtitle2")
+                    # The code is the language id and cannot be changed after
+                    # creation; show it read-only so it is always visible.
+                    ui.input(t("lang_admin.code"), value=code).props(
+                        "filled dense readonly"
+                    ).classes("w-full")
                     with ui.row().classes("w-full items-center gap-2 mt-1"):
                         label_input = (
                             ui.input(t("lang_admin.label") + f" ({locale.upper()})")
