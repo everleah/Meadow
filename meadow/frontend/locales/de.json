@@ -557,6 +557,7 @@
   "grid.structure": "Struktur",
   "grid.category": "Kategorien",
   "grid.collection": "Collections",
+  "grid.collection_reload": "Ausgewählte Collection aktualisieren",
   "grid.all_trees": "Alle Bäume",
   "grid.uncategorized": "Nicht kategorisiert",
   "grid.references": "Referenzen",

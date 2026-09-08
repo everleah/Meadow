@@ -557,6 +557,7 @@
   "grid.structure": "Structure",
   "grid.category": "Catégories",
   "grid.collection": "Collections",
+  "grid.collection_reload": "Recharger la collection sélectionnée",
   "grid.all_trees": "Tous les arbres",
   "grid.uncategorized": "Non catégorisé",
   "grid.references": "Références",

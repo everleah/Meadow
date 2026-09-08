@@ -463,6 +463,14 @@ async def products_page(request: Request) -> None:
                 or str(c.get("id") or "")
             )
 
+        def _collection_node(c: dict) -> dict:
+            return {
+                "id": str(c.get("id")),
+                "label": _collection_label(c),
+                "type": "collection",
+                "count": int(c.get("member_count") or 0),
+            }
+
         # Tracks the currently selected collection so leaving the collection view
         # can clear the `?collection=` filter and URL.
         active_collection: dict = {"id": None}
@@ -1046,6 +1054,9 @@ async def products_page(request: Request) -> None:
             report_dialog.open()
 
         current_tree: dict = {"tree": None, "nodes": []}
+        # Tracks the active left-panel view so the action button (collapse vs.
+        # collection reload) and the `?collection=` reset are correct.
+        active_view: dict = {"value": "structure"}
 
         def collapse_all() -> None:
             if current_tree["tree"] is not None:
@@ -1073,15 +1084,7 @@ async def products_page(request: Request) -> None:
                 async def _no_children(_node_id: str) -> list[dict]:
                     return []
 
-                nodes = [
-                    {
-                        "id": str(c.get("id")),
-                        "label": _collection_label(c),
-                        "type": "collection",
-                        "count": int(c.get("member_count") or 0),
-                    }
-                    for c in collections
-                ]
+                nodes = [_collection_node(c) for c in collections]
                 loader = _no_children
                 on_select = handle_collection_select
             elif view == "category" and category_roots:
@@ -1122,6 +1125,33 @@ async def products_page(request: Request) -> None:
                 )
             current_tree = {"tree": tree, "nodes": nodes}
 
+        async def reload_collection() -> None:
+            """Reloads the selected collection: re-materializes its members
+            (``POST /collections/{id}/refresh``), refreshes the collection list
+            (member counts) and re-fetches the grid for the selected collection.
+            The tree is left untouched while a collection is selected — re-sending
+            the node list would corrupt the selection (the node toggles off on the
+            next click). Without a selection the tree is re-rendered to update the
+            member counts only."""
+            nonlocal collections
+            col_id = active_collection["id"]
+            try:
+                if col_id:
+                    await client.refresh_collection(token, col_id)
+                collections = await client.list_collections(token, limit=1000)
+            except Exception:  # noqa: BLE001 - keep current data on failure
+                pass
+            if active_view["value"] == "collection" and not col_id:
+                render_tree("collection")
+            if col_id:
+                try:
+                    selected_objects = await client.list_objects(
+                        token, collection=col_id, limit=1000, locale=locale
+                    )
+                    await apply_rows(selected_objects)
+                except Exception:  # noqa: BLE001 - grid stays as-is on failure
+                    pass
+
         with ui.splitter(value=25, limits=(0, 60)).classes(
             "w-full h-[calc(100vh-210px)]"
         ) as splitter:
@@ -1135,11 +1165,16 @@ async def products_page(request: Request) -> None:
                         btn.props("flat", remove="color text-white")
 
                 def set_view(view: str) -> None:
-                    nonlocal collection_filter
+                    nonlocal active_view, collection_filter
+                    active_view["value"] = view
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
                     tree_select.set_visibility(view == "category")
+                    collapse_btn.set_visibility(
+                        view != "collection" and bool(tree_nodes or category_roots)
+                    )
+                    reload_btn.set_visibility(view == "collection")
                     if view != "collection" and active_collection["id"]:
                         collection_filter = None
                         active_collection["id"] = None
@@ -1173,13 +1208,20 @@ async def products_page(request: Request) -> None:
                         render_tree("category")
 
                     tree_select.on_value_change(lambda e: on_tree_select(e.value))
-                # Line 2: filter + collapse buttons.
+                # Line 2: filter + action button (collapse for structure/category,
+                # collection reload for the flat Collections view).
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
-                    if tree_nodes or category_roots:
-                        ui.button(icon="unfold_less", on_click=collapse_all).props(
-                            "flat dense shrink-0"
-                        ).tooltip(t("grid.collapse_all"))
+                    collapse_btn = (
+                        ui.button(icon="unfold_less", on_click=collapse_all)
+                        .props("flat dense shrink-0")
+                        .tooltip(t("grid.collapse_all"))
+                    )
+                    reload_btn = (
+                        ui.button(icon="refresh", on_click=reload_collection)
+                        .props("flat dense shrink-0")
+                        .tooltip(t("grid.collection_reload"))
+                    )
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
                 set_view("structure")
                 filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
