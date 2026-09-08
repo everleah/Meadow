@@ -68,6 +68,7 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
     "source_types": [],              // optional: erlaubte Quell-Objekttypen (leer = alle)
     "target_types": [],              // optional: erlaubte Ziel-Objekttypen (leer = alle)
     "label": { "de": "Abhängig von", "en": "Depends on" },
+    "attributes": [],                // Edge-Attribut-Namen (referenzieren attribute_definition)
     "system": true,                  // eingebaut (true) oder benutzerdefiniert (false)
     "created_at": "2026-08-17T08:00:00Z",
     "updated_at": "2026-08-17T08:00:00Z"
@@ -76,8 +77,9 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 
 - `kind` bestimmt die Semantik (siehe oben). Es darf **genau eine** Definition mit `kind: "composition"` geben.
 - `source_types` / `target_types` schränken die erlaubten Objekttypen ein; **leer = alle Typen erlaubt**. Die Prüfung erfolgt **beim Anlegen jeder Relation** (Phase 1–2), nicht nur deklarativ.
+- `attributes` (Phase 9) ist die Liste der **Edge-Attribute** eines Relationstyps (Namen, die auf `attribute_definition` verweisen). Die zugehörigen Werte liegen auf der Kante in `reference.attributes[name]`; das Produkt-Formular rendert dafür typspezifische Eingabefelder.
 - `system: true` kennzeichnet eingebaute Typen (Seed in Phase 1–2): `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation).
-- Benutzerdefinierte Relationstypen (`system: false`, Phase 9) werden über die API angelegt und sind immer Aggregationen.
+- Benutzerdefinierte Relationstypen (`system: false`, Phase 9) werden über die API angelegt (`POST /relation-definitions`) und sind immer Aggregationen; `PATCH /relation-definitions/{id}` ändert Label/Restriktionen/Attribute, `DELETE /relation-definitions/{id}` entfernt einen ungenutzten benutzerdefinierten Typ (400 für `system`-Typen, 409 solange Referenzen ihn nutzen).
 
 ## Altlasten-Mapping (entfernt)
 

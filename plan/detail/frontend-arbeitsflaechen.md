@@ -121,7 +121,7 @@ Beschreibt die **typisierten Relationen** zwischen Objekten (`reference`-RELATIO
 
 **Später (Phase 9):**
 - **Baum-Auswahl für Zielobjekte** (Zielobjekt über Kompositions-/Kategorien-Baum wählen, nicht erlaubte Zieltypen **ausgegraut**/gefiltert) – nutzt `GET /objects/tree`/`/objects/{id}/children` bzw. den Kategorien-Baum; Alternativ ein erweitertes Grid im Picker (Stil Akeneo/Pimcore).
-- **Vereinfachtes Relations-Formular / Kanten-Detailbearbeitung** (Metadaten `position`/`context`, Mengen) und **Kanten-Metadaten-Editor**.
+- **Kanten-Metadaten-Editor (umgesetzt, Phase 9):** Liefert ein Relationstyp `attributes` (siehe `relationen.md`), öffnet „Hinzufügen“ bzw. ein **Bearbeiten**-Stift je Aggregations-Kante einen **typspezifischen Dialog** (`open_edge_editor` in `form.py`, `rel_def_by_key`/`rel_attr_defs`): pro deklariertem `attribute_definition` ein Feld passenden Typs (Text/Eingabe, Zahl, Schalter, Enum-Select; ein vorhandener Enum-Wert wird in die Optionen aufgenommen, damit er nicht verloren geht). Werte werden in `reference.attributes[name]` gespeichert (`create_reference(attributes=…)` bzw. `PATCH /references/{id}` → `client.update_reference`); die Zeile zeigt die Kanten-Werte als Kurzfassung (`key=value, …`). Eine Relationstyp-Admin-Seite `/relation-definitions` pflegt die Typen (inkl. `attributes`/Restriktionen).
 
 ## 3. Massendatenpflege
 

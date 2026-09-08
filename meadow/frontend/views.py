@@ -16,6 +16,7 @@ from meadow.frontend import (
     languages,  # noqa: F401  (registers the /languages page)
     logs,  # noqa: F401  (registers the /system-logs page)
     object_types,  # noqa: F401  (registers the /object-types page)
+    relation_definitions,  # noqa: F401  (registers the /relation-definitions page)
     rules,  # noqa: F401  (registers the /rules page)
     saved_searches,  # noqa: F401  (registers the /saved-searches page)
     settings,  # noqa: F401  (registers the /system-settings page)
@@ -44,6 +45,7 @@ _IMPLEMENTED_ROUTES = {
     "/units",
     "/saved-searches",
     "/object-types",
+    "/relation-definitions",
 }
 
 

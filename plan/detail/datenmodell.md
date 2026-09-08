@@ -302,13 +302,15 @@ Definiert die Relationstypen des Systems (Details in [relationen.md](relationen.
     "source_types": [],              // optional: erlaubte Quell-Objekttypen (leer = alle)
     "target_types": [],              // optional: erlaubte Ziel-Objekttypen (leer = alle)
     "label": { "de": "Abhängig von", "en": "Depends on" },
+    "attributes": [],                // Edge-Attribut-Namen (Phase 9)
     "system": true                   // eingebaut (true) oder benutzerdefiniert (false)
 }
 ```
 
 - `kind` bestimmt die Semantik: `composition` (1:n inkl. 1:1, genau eine Kante pro Objekt, Vererbung & Kaskade) oder `aggregation` (n:m, lose Verknüpfung).
 - `source_types`/`target_types` schränken die erlaubten Objekttypen ein (leer = alle Typen erlaubt); die Prüfung erfolgt beim Anlegen jeder Relation.
-- Eingebaute Typen (`system: true`) werden in Phase 1–2 geseedet: `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation). Benutzerdefinierte Typen (Phase 9) sind immer Aggregationen.
+- `attributes` (Phase 9) ist die Liste der Edge-Attribut-Namen (referenzieren `attribute_definition`); die Werte liegen auf der Kante in `reference.attributes[name]` und werden im Produkt-Formular typspezifisch gepflegt.
+- Eingebaute Typen (`system: true`) werden in Phase 1–2 geseedet: `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation). Benutzerdefinierte Typen (Phase 9) sind immer Aggregationen und werden über `POST /relation-definitions` angelegt (`PATCH`/`DELETE /relation-definitions/{id}` verwalten/entfernen sie).
 
 ### Tabelle `language_tree`
 

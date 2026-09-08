@@ -463,7 +463,7 @@ Meadow PIM setzt auf eine **schlanke Versionierung** (`version`, `created_at`, `
 ### Phase 9 – Spätere Ausbaustufen (nicht im MVP)
 
 - **Gespeicherte Suchen (`saved_search`) und Materialisierte Collections (`collection_member`) vollständig umsetzen** *(implementiert, Phase 9: Query-DSL-Executor, CRUD + `POST /saved-searches/{id}/execute`, Collections-CRUD + `POST /collections/{id}/refresh` (atomarer Member-Tausch) + `GET /collections/{id}/members`, `refresh_interval`-Auto-Sync einer `collection_refresh`-Jobdefinition, Frontend-Seite `/saved-searches`)*
-- **Benutzerdefinierte Relationstypen (immer Aggregationen) über die API anlegen und Typrestriktionen verwalten**
+- **Benutzerdefinierte Relationstypen (immer Aggregationen) über die API anlegen und Typrestriktionen verwalten** *(implementiert, Phase 9: `relation_definition.attributes` (Edge-Attribute, referenzieren `attribute_definition`), `POST`/`PATCH`/`DELETE /relation-definitions` (admin; benutzerdefinierte Typen immer `kind: aggregation`, `system: false`; 400 für Systemtypen, 409 wenn in Benutzung), `PATCH /references/{id}` (Edge-`attributes` pflegen, Validierung gegen die Typ-`attributes`), Admin-Seite `/relation-definitions` und Kanten-Metadaten-Editor im Produkt-Formular)*
 - **Kanalspezifische Freigaben (`release`-Tabelle)**
 - **Unterstützung für externe Klassifizierungsstandards (z. B. ETIM)**
 - **Datentypwechsel für Attributdefinitionen inkl. Migration vorhandener Werte (Kompatibilitätsmatrix, verlustfreie vs. verlustbehaftete Übergänge)**

@@ -33,10 +33,10 @@ struct LangSeed {
 
 /// System relation types: exactly one composition, the rest aggregations.
 const RELATION_DEFINITIONS: &str = r#"
-UPSERT relation_definition:rel_depends_on CONTENT { name: 'depends_on', kind: 'composition', source_types: [], target_types: [], label: { de: 'Abhängig von', en: 'Depends on' }, system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_category_member CONTENT { name: 'category_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Kategorie-Zuordnung', en: 'Category membership' }, system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_collection_member CONTENT { name: 'collection_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Collection-Zuordnung', en: 'Collection membership' }, system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_related CONTENT { name: 'related', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Verknüpft mit', en: 'Related to' }, system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT relation_definition:rel_depends_on CONTENT { name: 'depends_on', kind: 'composition', source_types: [], target_types: [], label: { de: 'Abhängig von', en: 'Depends on' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT relation_definition:rel_category_member CONTENT { name: 'category_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Kategorie-Zuordnung', en: 'Category membership' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT relation_definition:rel_collection_member CONTENT { name: 'collection_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Collection-Zuordnung', en: 'Collection membership' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
+UPSERT relation_definition:rel_related CONTENT { name: 'related', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Verknüpft mit', en: 'Related to' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
 "#;
 
 /// The universal root: the composition tree's root, structurally immutable.

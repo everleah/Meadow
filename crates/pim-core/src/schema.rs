@@ -101,6 +101,7 @@ DEFINE FIELD IF NOT EXISTS kind ON TABLE relation_definition TYPE string;
 DEFINE FIELD IF NOT EXISTS source_types ON TABLE relation_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS target_types ON TABLE relation_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS label ON TABLE relation_definition TYPE object;
+DEFINE FIELD IF NOT EXISTS attributes ON TABLE relation_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS system ON TABLE relation_definition TYPE bool;
 DEFINE FIELD OVERWRITE created_at ON TABLE relation_definition TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON TABLE relation_definition TYPE datetime DEFAULT time::now();

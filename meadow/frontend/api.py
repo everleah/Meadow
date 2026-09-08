@@ -725,15 +725,25 @@ class CoreClient:
         source: str,
         target: str,
         definition_id: str,
+        *,
+        attributes: dict | None = None,
     ) -> dict:
         """Creates a reference between two objects."""
+        payload: dict[str, object] = {
+            "source": source,
+            "target": target,
+            "definition_id": definition_id,
+        }
+        if attributes:
+            payload["attributes"] = attributes
         async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/references",
-                json={"source": source, "target": target, "definition_id": definition_id},
+                json=payload,
                 headers={"Authorization": f"Bearer {token}"},
             )
-            response.raise_for_status()
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def delete_reference(self, token: str, reference_id: str) -> None:
@@ -764,6 +774,88 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             response.raise_for_status()
+            return response.json()
+
+    async def create_relation_definition(
+        self,
+        token: str,
+        *,
+        name: str,
+        label: dict | None = None,
+        source_types: list[str] | None = None,
+        target_types: list[str] | None = None,
+        attributes: list[str] | None = None,
+    ) -> dict:
+        """Creates a custom relation type (always an aggregation, admin)."""
+        payload: dict[str, object] = {"name": name}
+        if label:
+            payload["label"] = label
+        if source_types:
+            payload["source_types"] = source_types
+        if target_types:
+            payload["target_types"] = target_types
+        if attributes:
+            payload["attributes"] = attributes
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/relation-definitions",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_relation_definition(
+        self,
+        token: str,
+        id: str,
+        *,
+        label: dict | None = None,
+        source_types: list[str] | None = None,
+        target_types: list[str] | None = None,
+        attributes: list[str] | None = None,
+    ) -> dict:
+        """Partially updates a relation type (admin)."""
+        payload: dict[str, object] = {}
+        if label is not None:
+            payload["label"] = label
+        if source_types is not None:
+            payload["source_types"] = source_types
+        if target_types is not None:
+            payload["target_types"] = target_types
+        if attributes is not None:
+            payload["attributes"] = attributes
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/relation-definitions/{id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_relation_definition(self, token: str, id: str) -> None:
+        """Deletes a custom relation type (admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/relation-definitions/{id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def update_reference(self, token: str, reference_id: str, attributes: dict) -> dict:
+        """Updates a reference's edge metadata (``attributes``)."""
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/references/{reference_id}",
+                json={"attributes": attributes},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def list_system_logs(

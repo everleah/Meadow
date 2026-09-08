@@ -82,11 +82,18 @@ pub fn router(state: AppState) -> Router {
         .route("/references", post(api::references::create_reference))
         .route(
             "/references/{id}",
-            axum::routing::delete(api::references::delete_reference),
+            axum::routing::patch(api::references::update_reference)
+                .delete(api::references::delete_reference),
         )
         .route(
             "/relation-definitions",
-            get(api::references::list_relation_definitions),
+            get(api::references::list_relation_definitions)
+                .post(api::references::create_relation_definition),
+        )
+        .route(
+            "/relation-definitions/{id}",
+            axum::routing::patch(api::references::update_relation_definition)
+                .delete(api::references::delete_relation_definition),
         )
         .route("/search", post(api::search::search))
         .route(

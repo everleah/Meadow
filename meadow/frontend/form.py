@@ -87,6 +87,23 @@ def _raw_value(raw_attributes: dict, name: str, lang: str) -> object | None:
     return value
 
 
+def _num_or_none(value: object) -> float | None:
+    """Coerces an edge-attribute value to a number (or None)."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except TypeError, ValueError:
+        return None
+
+
+def _str_or(value: object) -> str:
+    """Stringifies an edge-attribute value (empty string for None)."""
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _coerce(atype: str, raw: object) -> object:
     """Coerces a dialog string to the attribute's native type."""
     if raw in (None, ""):
@@ -502,6 +519,8 @@ async def product_form(object_id: str) -> None:
                         "type": other.get("type") or "",
                         "other_id": other.get("id") or "",
                         "role": role,
+                        "definition_id": dk,
+                        "attributes": ref.get("attributes") or {},
                     }
                 )
             return grouped
@@ -547,15 +566,53 @@ async def product_form(object_id: str) -> None:
             dialog.open()
 
         async def on_add_ref(defn: dict, hit: dict) -> None:
-            """Creates an aggregation reference from the current object to a hit."""
+            """Creates an aggregation reference from the current object to a hit.
+
+            When the relation type declares edge attributes, a typed editor is
+            shown first; the collected values are stored on the edge.
+            """
             dk = str(defn.get("id", "")).split(":", 1)[-1]
-            try:
-                await client.create_reference(token, object_id, hit["id"], dk)
-            except Exception:  # noqa: BLE001 - show a friendly message
-                ui.notify(t("grid.ref_add_failed"), color="negative")
-                return
-            ui.notify(t("form.relation_added"), color="positive")
-            await reload_relations()
+
+            async def submit(values: dict) -> None:
+                try:
+                    await client.create_reference(
+                        token, object_id, hit["id"], dk, attributes=values or None
+                    )
+                except Exception:  # noqa: BLE001 - show a friendly message
+                    ui.notify(t("grid.ref_add_failed"), color="negative")
+                    return
+                ui.notify(t("form.relation_added"), color="positive")
+                await reload_relations()
+
+            attr_names = [str(a) for a in (defn.get("attributes") or [])]
+            if attr_names:
+                open_edge_editor(
+                    defn,
+                    {},
+                    f"{rel_label(dk)}: {_label(hit, 'name', locale) or hit.get('type') or ''}",
+                    submit,
+                )
+            else:
+                await submit({})
+
+        def on_edit_ref(reference_id: str, defn: dict, current: dict) -> None:
+            """Opens the edge-attribute editor for an existing aggregation reference."""
+
+            async def submit(values: dict) -> None:
+                try:
+                    await client.update_reference(token, reference_id, values or {})
+                except Exception:  # noqa: BLE001 - show a friendly message
+                    ui.notify(t("grid.ref_edit_failed"), color="negative")
+                    return
+                ui.notify(t("form.relation_updated"), color="positive")
+                await reload_relations()
+
+            open_edge_editor(
+                defn,
+                current,
+                rel_label(str(defn.get("id", "")).split(":", 1)[-1]),
+                submit,
+            )
 
         async def on_remove_ref(reference_id: str) -> None:
             """Deletes an aggregation reference."""
@@ -565,6 +622,86 @@ async def product_form(object_id: str) -> None:
                 ui.notify(t("grid.ref_remove_failed"), color="negative")
                 return
             await reload_relations()
+
+        def open_edge_editor(defn: dict, current: dict, title: str, on_save) -> None:
+            """Renders a typed dialog for the edge attributes of a relation type.
+
+            Each attribute referenced by the relation definition is rendered with
+            an input matching its attribute-definition type (text/number/boolean/
+            enum). The collected values are passed to ``on_save`` as a ``dict``.
+            """
+            attr_names = [str(a) for a in (defn.get("attributes") or [])]
+            if not attr_names:
+                return
+            widget_by_name: dict[str, tuple[object, str]] = {}
+            dialog = ui.dialog()
+
+            async def do_save() -> None:
+                values: dict = {}
+                for name, (widget, atype) in widget_by_name.items():
+                    value = widget.value
+                    if atype == "number":
+                        value = _num_or_none(value)
+                    elif atype == "boolean":
+                        value = bool(value)
+                    values[name] = value
+                dialog.close()
+                result = on_save(values)
+                if inspect.isawaitable(result):
+                    await result
+
+            with dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
+                ui.label(title).classes("text-subtitle1")
+                with ui.column().classes("w-full gap-2 mt-2"):
+                    for name in attr_names:
+                        adef = rel_attr_defs.get(name)
+                        label = _label(adef, name, locale) if adef else name
+                        atype = str(adef.get("type") or "text") if adef else "text"
+                        current_val = (current or {}).get(name)
+                        if atype == "number":
+                            widget = (
+                                ui.number(label, value=_num_or_none(current_val))
+                                .props("filled dense")
+                                .classes("w-full")
+                            )
+                        elif atype == "boolean":
+                            widget = ui.switch(label, value=bool(current_val)).props("dense")
+                        elif atype == "enum":
+                            options = (adef or {}).get("constraints") or {}
+                            values = [str(o) for o in (options.get("enum_values") or [])]
+                            cur = "" if current_val in (None, "") else str(current_val)
+                            if cur and cur not in values:
+                                # Preserve an existing value that is not (yet) an
+                                # enum option so the editor does not lose it.
+                                values.append(cur)
+                            if values:
+                                widget = (
+                                    ui.select(
+                                        {o: o for o in values},
+                                        label=label,
+                                        value=cur or None,
+                                    )
+                                    .props("filled dense")
+                                    .classes("w-full")
+                                )
+                            else:
+                                widget = (
+                                    ui.input(label, value=cur)
+                                    .props("filled dense")
+                                    .classes("w-full")
+                                )
+                        else:
+                            widget = (
+                                ui.input(label, value=_str_or(current_val))
+                                .props("filled dense")
+                                .classes("w-full")
+                            )
+                        widget_by_name[name] = (widget, atype)
+                with ui.row().classes("w-full justify-between mt-2 gap-2"):
+                    ui.button(t("grid.close"), on_click=dialog.close).props("flat")
+                    ui.button(t("grid.save"), icon="save", on_click=do_save).props("flat")
+
+            dialog.open()
 
         async def on_reparent(hit: dict) -> None:
             """Re-parents the object to a new composition parent."""
@@ -605,6 +742,7 @@ async def product_form(object_id: str) -> None:
                     defn = rel_def_by_key[dk]
                     kind = rel_kind(dk)
                     rows = rows_by_dk.get(dk, [])
+                    attr_names = [str(a) for a in (defn.get("attributes") or [])]
                     target_types = (defn.get("target_types") or []) or None
                     bg = "bg-orange-1" if kind == "composition" else "bg-blue-1"
                     head_bg = "bg-orange-2" if kind == "composition" else "bg-blue-2"
@@ -646,6 +784,12 @@ async def product_form(object_id: str) -> None:
                                         ui.label(f"{row['label']} · {row['type']}").classes(
                                             "flex-1 text-caption"
                                         )
+                                        edge_attrs = row.get("attributes") or {}
+                                        if isinstance(edge_attrs, dict) and edge_attrs:
+                                            summary = ", ".join(
+                                                f"{k}={v}" for k, v in edge_attrs.items()
+                                            )
+                                            ui.label(summary).classes("text-caption text-gray-400")
                                         ui.button(
                                             icon="open_in_new",
                                             on_click=lambda oid=row["other_id"]: open_object(oid),
@@ -664,6 +808,15 @@ async def product_form(object_id: str) -> None:
                                                 t("form.relation_reparent")
                                             )
                                         elif kind == "aggregation":
+                                            if attr_names:
+                                                ui.button(
+                                                    icon="edit",
+                                                    on_click=lambda rid=row["id"], dn=defn, ca=row["attributes"]: (
+                                                        on_edit_ref(rid, dn, ca)
+                                                    ),
+                                                ).props("flat dense round").tooltip(
+                                                    t("form.relation_edit")
+                                                )
                                             ui.button(
                                                 icon="close",
                                                 on_click=lambda rid=row["id"]: on_remove_ref(rid),
@@ -730,6 +883,10 @@ async def product_form(object_id: str) -> None:
         all_references: list[dict] = list(references)
         rel_def_by_key: dict[str, dict] = {
             str(d.get("id", "")).split(":", 1)[-1]: d for d in rel_defs
+        }
+        # Attribute definitions by name (used to render typed edge-attribute inputs).
+        rel_attr_defs: dict[str, dict] = {
+            str(d.get("name")): d for d in definitions if d.get("name")
         }
 
         # --- Categories (product-centric assignment, vgl. Akeneo) -----------

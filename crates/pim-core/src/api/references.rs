@@ -10,7 +10,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
@@ -49,6 +49,45 @@ pub struct ReferenceWriteQuery {
 pub struct ReparentObject {
     /// New composition parent id (`object:<ulid>`).
     pub parent: String,
+}
+
+/// Payload for creating a custom relation definition (always an aggregation).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateRelationDefinition {
+    /// Relation-type code (e.g. `supplier_link`), used to derive the record key.
+    pub name: String,
+    /// Multilingual label.
+    #[serde(default)]
+    pub label: Option<Value>,
+    /// Optional list of object types allowed as source (empty = all).
+    #[serde(default)]
+    pub source_types: Option<Vec<String>>,
+    /// Optional list of object types allowed as target (empty = all).
+    #[serde(default)]
+    pub target_types: Option<Vec<String>>,
+    /// Attribute names (referencing `attribute_definition`) available on the edge.
+    #[serde(default)]
+    pub attributes: Option<Vec<String>>,
+}
+
+/// Payload for partially updating a relation definition.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateRelationDefinition {
+    #[serde(default)]
+    pub label: Option<Value>,
+    #[serde(default)]
+    pub source_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub target_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub attributes: Option<Vec<String>>,
+}
+
+/// Payload for updating an edge's metadata (attributes) on a reference.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateReferenceBody {
+    /// Edge metadata, e.g. `{"quantity": 3, "position": 1}`.
+    pub attributes: Value,
 }
 
 fn default_object() -> Value {
@@ -155,6 +194,91 @@ fn check_type_restriction(
     Ok(())
 }
 
+/// Validates the edge-metadata keys against the relation definition's declared
+/// `attributes` template. When the template is empty, arbitrary metadata is
+/// allowed (built-in types / auto-managed edges). When it is non-empty, every
+/// provided key must be declared (a value may be omitted).
+async fn validate_edge_attributes(
+    db: &Db,
+    definition_key: &str,
+    attributes: &Value,
+) -> Result<(), ApiError> {
+    if !attributes.is_object() && !attributes.is_null() {
+        return Err(ApiError::bad_request("`attributes` must be an object"));
+    }
+    let definition = fetch_relation_definition(db, definition_key).await?;
+    let Some(definition) = definition else {
+        return Ok(());
+    };
+    let template = definition
+        .get("attributes")
+        .and_then(Value::as_array)
+        .map(|array| array.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if template.is_empty() {
+        return Ok(());
+    }
+    if let Some(map) = attributes.as_object() {
+        for key in map.keys() {
+            if !template.contains(&key.as_str()) {
+                return Err(ApiError::bad_request(format!(
+                    "attribute `{key}` is not declared for this relation type"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates a list of relation-type attribute names. Unknown attribute names
+/// are allowed as forward references (the attribute becomes available once the
+/// `attribute_definition` is created).
+async fn validate_relation_attributes(db: &Db, attributes: &[String]) -> Result<(), ApiError> {
+    for name in attributes {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(ApiError::bad_request(
+                "relation-type attribute names must not be empty",
+            ));
+        }
+        let rows: Vec<Value> = db
+            .inner()
+            .query("SELECT name FROM attribute_definition WHERE name = $name LIMIT 1;")
+            .bind(("name", trimmed.to_owned()))
+            .await?
+            .check()?
+            .take(0)?;
+        if rows.is_empty() {
+            // Forward reference: allowed so the type can be created before the
+            // attribute definition exists.
+            continue;
+        }
+    }
+    Ok(())
+}
+
+/// Renders a set of type names as a SurrealDB JSON array value.
+fn type_names_array(values: &[String]) -> Value {
+    Value::Array(
+        values
+            .iter()
+            .map(|v| Value::String(v.trim().to_owned()))
+            .filter(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+            .collect(),
+    )
+}
+
+/// Renders a set of attribute names as a SurrealDB JSON array value.
+fn attr_names_array(values: &[String]) -> Value {
+    Value::Array(
+        values
+            .iter()
+            .map(|v| Value::String(v.trim().to_owned()))
+            .filter(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+            .collect(),
+    )
+}
+
 /// Creates a reference (graph edge) between two objects.
 #[utoipa::path(
     post,
@@ -210,6 +334,7 @@ pub async fn create_reference(
         .to_owned();
 
     check_type_restriction(&definition, source_type, target_type)?;
+    validate_edge_attributes(&state.db, &body.definition_id, &body.attributes).await?;
 
     if kind == "composition" {
         if parent_key(&state.db, source_key).await?.is_some() {
@@ -316,6 +441,329 @@ pub async fn list_relation_definitions(
     let mut response = state.db.inner().query(sql).await?.check()?;
     let definitions: Vec<Value> = response.take(0)?;
     Ok(Json(definitions))
+}
+
+/// Creates a custom relation definition (Phase 9). Custom types are **always**
+/// aggregations and `system: false`; the single `depends_on` composition stays
+/// the only composition definition.
+#[utoipa::path(
+    post,
+    path = "/relation-definitions",
+    request_body = CreateRelationDefinition,
+    responses(
+        (status = 201, description = "Created", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn create_relation_definition(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateRelationDefinition>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let name = body.name.trim().to_owned();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("`name` must not be empty"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ApiError::bad_request(
+            "`name` may only contain letters, digits, `_` and `-`",
+        ));
+    }
+    let existing: Vec<Value> = state
+        .db
+        .inner()
+        .query("SELECT id FROM relation_definition WHERE name = $name LIMIT 1")
+        .bind(("name", name.clone()))
+        .await?
+        .check()?
+        .take(0)?;
+    if !existing.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "relation type `{name}` already exists"
+        )));
+    }
+
+    let source_types = type_names_array(&body.source_types.unwrap_or_default());
+    let target_types = type_names_array(&body.target_types.unwrap_or_default());
+    let attributes_list = body.attributes.unwrap_or_default();
+    let attributes = attr_names_array(&attributes_list);
+    validate_relation_attributes(&state.db, &attributes_list).await?;
+
+    let key = format!("rel_{name}");
+    let mut content = Map::new();
+    content.insert("name".to_owned(), Value::String(name.clone()));
+    content.insert("kind".to_owned(), Value::String("aggregation".to_owned()));
+    if let Some(label) = body.label.clone() {
+        content.insert("label".to_owned(), label);
+    } else {
+        content.insert("label".to_owned(), json!({ "en": name }));
+    }
+    content.insert("source_types".to_owned(), source_types);
+    content.insert("target_types".to_owned(), target_types);
+    content.insert("attributes".to_owned(), attributes);
+    content.insert("system".to_owned(), Value::Bool(false));
+
+    state
+        .db
+        .inner()
+        .query("LET $t = type::record('relation_definition', $key); CREATE $t CONTENT $content;")
+        .bind(("key", key.clone()))
+        .bind(("content", Value::Object(content)))
+        .await?
+        .check()?;
+
+    let record = fetch_relation_definition(&state.db, &key)
+        .await?
+        .ok_or_else(|| ApiError::internal("created relation definition was not returned"))?;
+    let record_id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "relation_definition_created",
+            object_id: Some(&record_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "name": name })),
+        },
+    )
+    .await;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+/// Partially updates a relation definition (label, type restrictions, attributes).
+#[utoipa::path(
+    patch,
+    path = "/relation-definitions/{id}",
+    request_body = UpdateRelationDefinition,
+    responses(
+        (status = 200, description = "Updated", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn update_relation_definition(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateRelationDefinition>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = key_of(&id);
+    let current = fetch_relation_definition(&state.db, &key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("relation type `{key}` not found")))?;
+    let record_id = current
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let mut content = Map::new();
+    if let Some(label) = body.label {
+        content.insert("label".to_owned(), label);
+    }
+    if let Some(source_types) = body.source_types {
+        content.insert("source_types".to_owned(), type_names_array(&source_types));
+    }
+    if let Some(target_types) = body.target_types {
+        content.insert("target_types".to_owned(), type_names_array(&target_types));
+    }
+    if let Some(attributes) = body.attributes {
+        validate_relation_attributes(&state.db, &attributes).await?;
+        content.insert("attributes".to_owned(), attr_names_array(&attributes));
+    }
+
+    let mut response = state
+        .db
+        .inner()
+        .query(
+            "LET $t = type::record('relation_definition', $key); UPDATE $t MERGE $content; UPDATE $t SET updated_at = time::now(), updated_by = $user; SELECT * FROM $t;",
+        )
+        .bind(("key", key.clone()))
+        .bind(("content", Value::Object(content)))
+        .bind(("user", claims.sub.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(3)?;
+    let record = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("relation type `{key}` not found")))?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "relation_definition_updated",
+            object_id: Some(&record_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "name": key })),
+        },
+    )
+    .await;
+    Ok(Json(record))
+}
+
+/// Deletes a custom relation definition. `system` types are protected; a type
+/// still used by references is rejected with 409.
+#[utoipa::path(
+    delete,
+    path = "/relation-definitions/{id}",
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 400, description = "System type or invalid id", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Not found", body = Value),
+        (status = 409, description = "Still used by references", body = Value)
+    )
+)]
+pub async fn delete_relation_definition(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = key_of(&id);
+    let current = fetch_relation_definition(&state.db, &key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("relation type `{key}` not found")))?;
+    let record_id = current
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if current
+        .get("system")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::bad_request(format!(
+            "relation type `{key}` is a system type and cannot be deleted"
+        )));
+    }
+    let used: Vec<Value> = state
+        .db
+        .inner()
+        .query("SELECT id FROM reference WHERE definition_id = $key LIMIT 1;")
+        .bind(("key", key.clone()))
+        .await?
+        .check()?
+        .take(0)?;
+    if !used.is_empty() {
+        return Err(ApiError::conflict(format!(
+            "relation type `{key}` is still used by references"
+        )));
+    }
+    state
+        .db
+        .inner()
+        .query("DELETE type::record('relation_definition', $key);")
+        .bind(("key", key.clone()))
+        .await?
+        .check()?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "relation_definition_deleted",
+            object_id: Some(&record_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "name": key })),
+        },
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Updates a reference's edge metadata (``attributes``). Used by the relations
+/// editor to maintain per-edge attribute values.
+#[utoipa::path(
+    patch,
+    path = "/references/{id}",
+    request_body = UpdateReferenceBody,
+    responses(
+        (status = 200, description = "Updated reference", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Reference not found", body = Value)
+    )
+)]
+pub async fn update_reference(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateReferenceBody>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let (table, key) = id
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request(format!("invalid reference id `{id}`")))?;
+    if table != "reference" {
+        return Err(ApiError::bad_request(format!(
+            "id `{id}` does not reference table `reference`"
+        )));
+    }
+    let reference = fetch_record(&state.db, "reference", key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("reference `{id}` not found")))?;
+    let definition_key = reference
+        .get("definition_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    validate_edge_attributes(&state.db, &definition_key, &body.attributes).await?;
+
+    // Update the edge metadata (a RELATION table; a trailing `SELECT * FROM $r`
+    // in the same statement returns no rows — so re-fetch in a separate query).
+    state
+        .db
+        .inner()
+        .query("LET $r = type::record('reference', $key); UPDATE $r SET attributes = $attributes;")
+        .bind(("key", key.to_owned()))
+        .bind(("attributes", body.attributes))
+        .await?
+        .check()?;
+    let record = fetch_record(&state.db, "reference", key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("reference `{id}` not found")))?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "reference_updated",
+            object_id: reference
+                .get("in")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .as_deref(),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "reference_id": id })),
+        },
+    )
+    .await;
+    Ok(Json(record))
 }
 
 /// Query parameters for `GET /objects/{id}/references`.
