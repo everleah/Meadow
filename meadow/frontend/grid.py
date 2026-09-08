@@ -463,8 +463,13 @@ async def products_page(request: Request) -> None:
                 or str(c.get("id") or "")
             )
 
+        # Tracks the currently selected collection so leaving the collection view
+        # can clear the `?collection=` filter and URL.
+        active_collection: dict = {"id": None}
+
         async def handle_collection_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
+            active_collection["id"] = selected or None
             if selected:
                 selected_objects = await client.list_objects(
                     token, collection=selected, limit=1000, locale=locale
@@ -483,6 +488,7 @@ async def products_page(request: Request) -> None:
                     "uncategorized": False,
                     "ancestor": None,
                 }
+                active_collection["id"] = None
             await apply_rows(selected_objects)
             sync_url_query(params)
 
@@ -1063,6 +1069,7 @@ async def products_page(request: Request) -> None:
                 return
             host.clear()
             if view == "collection" and collections:
+
                 async def _no_children(_node_id: str) -> list[dict]:
                     return []
 
@@ -1128,10 +1135,15 @@ async def products_page(request: Request) -> None:
                         btn.props("flat", remove="color text-white")
 
                 def set_view(view: str) -> None:
+                    nonlocal collection_filter
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
                     tree_select.set_visibility(view == "category")
+                    if view != "collection" and active_collection["id"]:
+                        collection_filter = None
+                        active_collection["id"] = None
+                        sync_url_query({"collection": None})
                     render_tree(view)
 
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
