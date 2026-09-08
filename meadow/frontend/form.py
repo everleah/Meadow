@@ -125,7 +125,9 @@ async def product_form(object_id: str) -> None:
     """Opens a single object for deep editing."""
     await build_shell(active="/products")
     locale = current_locale()
-    edit_lang = app.storage.user.get("edit_lang") or _base_lang(locale)
+    # The current UI language is the single "main edit language" for
+    # multilingual attributes (no separate selector) — consistent everywhere.
+    edit_lang = _base_lang(locale)
 
     with ui.column().classes("w-full p-6"):
         ui.button(
@@ -161,15 +163,8 @@ async def product_form(object_id: str) -> None:
         missing = resolved.get("missing_required") or []
         completeness = (resolved.get("completeness") or {}).get(locale, 0)
 
-        # Data languages (base languages for the selector, all for the dialog);
-        # only `active` languages are offered for data maintenance.
-        base_langs = [
-            lang
-            for lang in languages
-            if lang.get("parent") == "lang_root"
-            and lang.get("code") != "root"
-            and lang.get("active", True)
-        ]
+        # Data languages (base languages for the per-attribute language dialog;
+        # only `active` languages are offered for data maintenance).
         all_langs = [
             lang for lang in languages if lang.get("code") != "root" and lang.get("active", True)
         ]
@@ -177,10 +172,8 @@ async def product_form(object_id: str) -> None:
         if edit_lang not in data_lang_codes:
             edit_lang = _base_lang(locale)
 
-        # --- Header: main-edit-language selector, name, type, badges. --------
-        lang_options = {
-            str(lang.get("code")): resolve_value(lang.get("label"), locale) for lang in base_langs
-        }
+        # --- Header: name, type, status, completeness. The current UI language
+        # is the main edit language (no separate language selector). ----------
         with ui.row().classes("items-center gap-3 w-full mt-2"):
             ui.label(name).classes("text-h5")
             ui.label(object_type).classes("text-caption text-gray-500")
@@ -188,12 +181,6 @@ async def product_form(object_id: str) -> None:
             ui.html(completeness_badge(int(completeness))).classes("text-sm").tooltip(
                 t("form.missing_required").format(count=len(missing))
             )
-            ui.space()
-            ui.select(
-                lang_options,
-                value=edit_lang,
-                on_change=lambda e: on_lang_change(e.value),
-            ).props("filled dense").classes("w-40").tooltip(t("form.edit_language"))
 
         # Working copy of the raw (own) attribute values. Multilingual values
         # are kept as ``{lang: value}`` dicts.
@@ -221,11 +208,6 @@ async def product_form(object_id: str) -> None:
                     edited.pop(attr_name, None)
                 else:
                     edited[attr_name] = value
-
-        def on_lang_change(new_value: str) -> None:
-            if new_value:
-                app.storage.user["edit_lang"] = new_value
-            ui.navigate.reload()
 
         def build_reference_widget(
             attr_name: str, defn: dict | None, value: object, *, multilingual: bool
