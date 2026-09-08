@@ -190,7 +190,8 @@ async def rules_page() -> None:
                 ],
                 "rowData": _rows(),
                 "rowSelection": {"mode": "singleRow"},
-            }
+            },
+            html_columns=[2],
         ).classes("w-full")
 
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
