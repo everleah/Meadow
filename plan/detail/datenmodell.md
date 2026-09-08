@@ -209,6 +209,43 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 - Weitere optionale Felder: `multilingual`, `default_value`, `unit_id`, `display_unit_id`, `description`; die geschlossene Werteliste `enum_values` liegt optional in `constraints` (siehe Beispiel). Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 - **Löschen:** `DELETE /attribute-definitions/{id}` entfernt die Definition und ihre `attribute_group_member`-Links. Sind bereits Objekt-Attributwerte vorhanden, wird die Löschung mit HTTP 409 verweigert; `?force=true` entfernt die Werte asynchron als Hintergrundjob (Massenoperation, [jobs-scheduler.md](jobs-scheduler.md)).
 
+### Enum-Sets (Reference Data, geplant)
+
+> **Stand:** Die aktuelle String-Liste `constraints.enum_values` ist eine **MVP/Übergangs-Repräsentation** (einsprachig). Ziel (Phase 9, geplant) ist die **Entkopplung** von der Attributdefinition zu wiederverwendbaren, **mehrsprachigen** Enum-Entitäten im Akeneo-„Reference-Data“-Stil:
+
+```json
+// enum_set
+{
+    "id": "enum_set:01M0…",
+    "name": "color",                     // eindeutig, wiederverwendbar
+    "label": { "de": "Farbe", "en": "Color" },
+    "options": ["enum_option:01M0…", "enum_option:01M1…"],
+    "position": 0
+}
+
+// enum_option
+{
+    "id": "enum_option:01M0…",
+    "code": "red",                       // stabil, sprachunabhängig, eindeutig im Set
+    "labels": { "de": "Rot", "en": "Red", "fr": "Rouge" },
+    "position": 0,
+    "active": true
+}
+
+// attribute_definition (enum-Attribut)
+{
+    "type": "enum",
+    "enum_set_id": "enum_set:01M0…",     // statt constraints.enum_values
+    "constraints": {}                     // ggf. andere Restriktionen
+}
+```
+
+- **`attribute_definition.enum_set_id`** referenziert ein `enum_set` (statt einer String-Liste). `constraints.enum_values` entfällt für neue Definitionen.
+- **Objekte speichern weiterhin den `code`** (`attributes.color = "red"`) — sprachunabhängig, stabil; keine Datenspeicher-Migration der Werte.
+- **Anzeige/Auswahl** löst das Label über die Sprach-Fallback-Kette der `language_tree` auf (`language::resolve_label`/`resolve_value`); Formular-Selakte und Farbige Tags zeigen das lokalisierte Label.
+- **Verwaltung:** eigene CRUD-Endpunkte für `enum_set`/`enum_option` (inkl. Nutzungs-/Referenz-Check: Option nur entfernen, wenn weder Attribut noch Objekt sie nutzt bzw. mit Remap). Wiederverwendung: mehrere Attribute können dasselbe Set nutzen.
+- **Migration:** vorhandene `constraints.enum_values`-Strings → `enum_option`-Datensätze (Code = Wert, `labels` vorerst = Wert) + `enum_set` erzeugen; `attribute_definition.enum_set_id` setzen.
+
 ### Tabelle `business_rule`
 
 Definiert Business Rules (Python-Skripte). Details zu Script-Kontrakt, Sandbox, Ausführung, Lebenszyklus und Rule Lab in [business-rules.md](business-rules.md) (Abschnitt 8).
