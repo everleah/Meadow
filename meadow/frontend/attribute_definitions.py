@@ -61,6 +61,19 @@ async def attribute_definitions_page() -> None:
                 return v
             return unit_key_by_symbol.get(v)
 
+        # Reusable enum sets drive the `enum_set_id` selector for `enum` types.
+        try:
+            enum_sets = await client.list_enum_sets(token)
+        except Exception:  # noqa: BLE001 - degrade to no enum sets
+            enum_sets = []
+        enum_set_options: dict[str, str] = {
+            str(s.get("id")): (
+                resolve_value(s.get("label"), locale) or str(s.get("name")) or str(s.get("id"))
+            )
+            for s in enum_sets
+            if s.get("id")
+        }
+
         try:
             groups = await client.list_attribute_groups(token)
         except Exception:  # noqa: BLE001 - degrade to no groups
@@ -505,101 +518,21 @@ async def attribute_definitions_page() -> None:
                         .props("filled dense")
                         .classes("grow")
                     )
-                # --- Enum options editor (Phase 9) ---
-                enum_state: dict = {"options": [], "remap": {}}
-
-                @ui.refreshable
-                def enum_list_container() -> None:
-                    for opt in enum_state["options"]:
-                        with ui.row().classes("w-full items-center gap-2"):
-                            ui.label(opt).classes("flex-1 text-caption")
-                            ui.button(
-                                icon="close",
-                                on_click=lambda o=opt: remove_enum_option(o),
-                            ).props("flat dense round").tooltip(t("attr_def.enum_remove"))
-
-                def add_enum_option() -> None:
-                    val = (enum_add_input.value or "").strip()
-                    if not val:
-                        return
-                    if val in enum_state["options"]:
-                        ui.notify(t("attr_def.option_exists"), color="warning")
-                        return
-                    enum_state["options"].append(val)
-                    enum_add_input.set_value("")
-                    enum_list_container.refresh()
-
-                async def remove_enum_option(option: str) -> None:
-                    defn_id = getattr(save, "editing_id", None)
-                    if not defn_id:
-                        # Creating a new definition: no objects use it yet.
-                        enum_state["options"].remove(option)
-                        enum_list_container.refresh()
-                        return
-                    try:
-                        usage = await client.enum_usage(token, defn_id, option)
-                    except Exception:  # noqa: BLE001 - show a friendly message
-                        ui.notify(t("attr_def.usage_check_failed"), color="negative")
-                        return
-                    count = int(usage.get("count") or 0)
-                    if count == 0:
-                        enum_state["options"].remove(option)
-                        enum_list_container.refresh()
-                        return
-                    open_remap_dialog(option, count)
-
-                def open_remap_dialog(option: str, count: int) -> None:
-                    remaining = [o for o in enum_state["options"] if o != option]
-                    with ui.dialog() as dlg, ui.card().classes("w-[32rem] max-w-[90vw]"):
-                        ui.label(
-                            t("attr_def.enum_in_use").format(value=option, count=count)
-                        ).classes("text-subtitle1")
-                        target_select = (
-                            ui.select(
-                                {o: o for o in remaining},
-                                label=t("attr_def.enum_remap_to"),
-                                value=None,
-                            )
-                            .props("filled dense")
-                            .classes("w-full")
-                        )
-                        new_input = (
-                            ui.input(t("attr_def.enum_new_value"))
-                            .props("filled dense")
-                            .classes("w-full")
-                        )
-                        with ui.row().classes("w-full justify-end mt-2 gap-2"):
-                            ui.button(t("grid.close"), on_click=dlg.close).props("flat")
-
-                            def confirm() -> None:
-                                target = (target_select.value or new_input.value or "").strip()
-                                dlg.close()
-                                if not target or target == option:
-                                    ui.notify(t("attr_def.enum_remap_required"), color="warning")
-                                    return
-                                enum_state["remap"][option] = target
-                                enum_state["options"].remove(option)
-                                if target not in enum_state["options"]:
-                                    enum_state["options"].append(target)
-                                enum_list_container.refresh()
-
-                            ui.button(t("attr_def.enum_remap"), on_click=confirm).props(
-                                "color=warning"
-                            )
-                    dlg.open()
-
-                with ui.column().classes("w-full gap-1"):
-                    ui.label(t("attr_def.field_enum_values")).classes("text-caption text-gray-600")
-                    enum_list_container()
-                    with ui.row().classes("w-full gap-2 items-center"):
-                        enum_add_input = (
-                            ui.input(placeholder=t("attr_def.field_enum_values"))
-                            .props("filled dense")
-                            .classes("grow")
-                        )
-                        ui.button(
-                            t("attr_def.add_option"), icon="add", on_click=add_enum_option
-                        ).props("flat")
+                # --- Enum set selector (Phase 9, Reference Data) ---
+                enum_set_select = (
+                    ui.select(
+                        enum_set_options,
+                        label=t("attr_def.field_enum_set"),
+                        value=None,
+                    )
+                    .props("filled dense")
+                    .classes("w-full")
+                )
+                ui.button(
+                    t("attr_def.manage_enum_sets"),
+                    icon="list",
+                    on_click=lambda: ui.navigate.to("/enum-sets"),
+                ).props("flat dense").classes("w-full")
 
                 description_area = (
                     ui.textarea(t("attr_def.field_description"))
@@ -642,7 +575,7 @@ async def attribute_definitions_page() -> None:
                 "required": required_select,
                 "unit": unit_input,
                 "display_unit": display_input,
-                "enum": enum_list_container,
+                "enum_set": enum_set_select,
                 "description": description_area,
                 "computed_rule": computed_rule_input,
                 "dependencies": dependencies_input,
@@ -681,13 +614,10 @@ async def attribute_definitions_page() -> None:
             display_input.set_value(
                 _resolve_unit_key(definition.get("display_unit_id")) if editing else None
             )
-            enum_state["remap"] = {}
-            enum_state["options"] = (
-                list((definition.get("constraints") or {}).get("enum_values") or [])
-                if editing
-                else []
+            enum_set_value = definition.get("enum_set_id") if editing else None
+            enum_set_select.set_value(
+                str(enum_set_value) if enum_set_value in enum_set_options else None
             )
-            enum_list_container.refresh()
             description_area.set_value(str(definition.get("description") or "") if editing else "")
             computed_rule_input.set_value(
                 str(definition.get("computed_rule") or "") if editing else ""
@@ -722,9 +652,9 @@ async def attribute_definitions_page() -> None:
             required = list(required_select.value or [])
             inherited = bool(computed_inherited_check.value)
 
-            constraints: dict | None = None
+            enum_set_id: str | None = None
             if type_select.value == "enum":
-                constraints = {"enum_values": list(enum_state["options"])}
+                enum_set_id = enum_set_select.value or None
 
             common = {
                 "label": label,
@@ -740,7 +670,7 @@ async def attribute_definitions_page() -> None:
                 "multilingual": bool(multilingual_check.value),
                 "unit_id": unit_input.value or None,
                 "display_unit_id": display_input.value or None,
-                "constraints": constraints,
+                "enum_set_id": enum_set_id,
                 "description": description_area.value or None,
             }
 
@@ -749,7 +679,6 @@ async def attribute_definitions_page() -> None:
                     await client.update_attribute_definition(
                         token,
                         editing_id,
-                        enum_remap=enum_state["remap"] or None,
                         **common,
                     )
                 else:

@@ -209,9 +209,9 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 - Weitere optionale Felder: `multilingual`, `default_value`, `unit_id`, `display_unit_id`, `description`; die geschlossene Werteliste `enum_values` liegt optional in `constraints` (siehe Beispiel). Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
 - **Löschen:** `DELETE /attribute-definitions/{id}` entfernt die Definition und ihre `attribute_group_member`-Links. Sind bereits Objekt-Attributwerte vorhanden, wird die Löschung mit HTTP 409 verweigert; `?force=true` entfernt die Werte asynchron als Hintergrundjob (Massenoperation, [jobs-scheduler.md](jobs-scheduler.md)).
 
-### Enum-Sets (Reference Data, geplant)
+### Enum-Sets (Reference Data)
 
-> **Stand:** Die aktuelle String-Liste `constraints.enum_values` ist eine **MVP/Übergangs-Repräsentation** (einsprachig). Ziel (Phase 9, geplant) ist die **Entkopplung** von der Attributdefinition zu wiederverwendbaren, **mehrsprachigen** Enum-Entitäten im Akeneo-„Reference-Data“-Stil:
+> **Stand:** Die ursprüngliche String-Liste `constraints.enum_values` war eine **MVP/Übergangs-Repräsentation** (einsprachig). **Implementiert (Phase 9)** ist die Entkopplung von der Attributdefinition zu wiederverwendbaren, **mehrsprachigen** Enum-Entitäten im Akeneo-„Reference-Data“-Stil:
 
 ```json
 // enum_set

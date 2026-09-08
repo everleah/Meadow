@@ -9,6 +9,7 @@ from meadow.frontend import (
     categories,  # noqa: F401  (registers the /categories page)
     config,
     connectors,  # noqa: F401  (registers the /connectors page)
+    enum_sets,  # noqa: F401  (registers the /enum-sets page)
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
@@ -46,6 +47,7 @@ _IMPLEMENTED_ROUTES = {
     "/saved-searches",
     "/object-types",
     "/relation-definitions",
+    "/enum-sets",
 }
 
 

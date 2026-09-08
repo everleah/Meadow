@@ -13,6 +13,10 @@ from pydantic import BaseModel
 _shared_client: httpx.AsyncClient | None = None
 _SHARED_CLIENT_TIMEOUT = 30.0
 
+#: Sentinel distinguishing "field not provided at all" from an explicit
+#: ``None`` (e.g. clearing an ``enum_set_id`` on an attribute definition).
+_UNSET = object()
+
 
 @contextlib.asynccontextmanager
 async def _api_client() -> httpx.AsyncClient:
@@ -203,6 +207,7 @@ class CoreClient:
         *,
         constraints: dict | None = None,
         enum_remap: dict[str, str] | None = None,
+        enum_set_id: str | None | object = _UNSET,
         **fields: object,
     ) -> dict:
         """Updates an attribute definition (partial PATCH).
@@ -211,13 +216,16 @@ class CoreClient:
         adds enum options); additional fields (``label``, ``group_ids``,
         ``applicable_types``, ``required_types``, ...) are merged in.
         ``enum_remap`` (``{old: new}``) re-assigns objects when an enum option
-        is removed while still in use.
+        is removed while still in use. ``enum_set_id`` references a reusable
+        enum set; pass an explicit ``None`` to clear it.
         """
         payload: dict[str, object] = {k: v for k, v in fields.items() if v is not None}
         if constraints is not None:
             payload["constraints"] = constraints
         if enum_remap:
             payload["enum_remap"] = enum_remap
+        if enum_set_id is not _UNSET:
+            payload["enum_set_id"] = enum_set_id
         async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/attribute-definitions/{definition_id}",
@@ -275,6 +283,7 @@ class CoreClient:
         unit_id: str | None = None,
         display_unit_id: str | None = None,
         constraints: dict | None = None,
+        enum_set_id: str | None = None,
         default_value: object | None = None,
         description: str | None = None,
     ) -> dict:
@@ -298,6 +307,7 @@ class CoreClient:
             "unit_id": unit_id,
             "display_unit_id": display_unit_id,
             "constraints": constraints,
+            "enum_set_id": enum_set_id,
             "default_value": default_value,
             "description": description,
         }
@@ -1756,6 +1766,161 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def list_enum_sets(self, token: str) -> list[dict]:
+        """Lists enum sets with their options resolved (``GET /enum-sets``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/enum-sets",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def create_enum_set(
+        self,
+        token: str,
+        *,
+        name: str,
+        label: dict | None = None,
+        options: list[str] | None = None,
+        position: int = 0,
+    ) -> dict:
+        """Creates an enum set (``POST /enum-sets``, admin)."""
+        payload: dict[str, object] = {"name": name, "position": position}
+        if label:
+            payload["label"] = label
+        if options:
+            payload["options"] = options
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/enum-sets",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_enum_set(
+        self,
+        token: str,
+        set_id: str,
+        *,
+        label: dict | None = None,
+        options: list[str] | None = None,
+        position: int | None = None,
+        option_remap: dict[str, str] | None = None,
+    ) -> dict:
+        """Partially updates an enum set (``PATCH /enum-sets/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if label is not None:
+            payload["label"] = label
+        if options is not None:
+            payload["options"] = options
+        if position is not None:
+            payload["position"] = position
+        if option_remap:
+            payload["option_remap"] = option_remap
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/enum-sets/{set_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_enum_set(self, token: str, set_id: str) -> None:
+        """Deletes an enum set (``DELETE /enum-sets/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/enum-sets/{set_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def list_enum_options(self, token: str, *, set_id: str | None = None) -> list[dict]:
+        """Lists enum options (``GET /enum-options``), optionally by set."""
+        params: dict[str, str] = {}
+        if set_id:
+            params["set_id"] = set_id
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/enum-options",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def create_enum_option(
+        self,
+        token: str,
+        *,
+        code: str,
+        labels: dict | None = None,
+        position: int = 0,
+        active: bool = True,
+    ) -> dict:
+        """Creates an enum option (``POST /enum-options``, admin)."""
+        payload: dict[str, object] = {
+            "code": code,
+            "position": position,
+            "active": active,
+        }
+        if labels:
+            payload["labels"] = labels
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/enum-options",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_enum_option(
+        self,
+        token: str,
+        option_id: str,
+        *,
+        labels: dict | None = None,
+        position: int | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        """Partially updates an enum option (``PATCH /enum-options/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if labels is not None:
+            payload["labels"] = labels
+        if position is not None:
+            payload["position"] = position
+        if active is not None:
+            payload["active"] = active
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/enum-options/{option_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_enum_option(self, token: str, option_id: str) -> None:
+        """Deletes an enum option (``DELETE /enum-options/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/enum-options/{option_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     def _error_detail(self, response: httpx.Response) -> str:
         """Extracts the core's ``error`` field (or the response text)."""

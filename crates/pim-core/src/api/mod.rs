@@ -4,6 +4,7 @@ pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
 pub mod connectors;
+pub mod enum_sets;
 pub mod groups;
 pub mod health;
 pub mod imports;

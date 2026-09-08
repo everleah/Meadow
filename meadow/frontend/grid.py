@@ -63,12 +63,35 @@ def _is_incomplete(obj: dict, locale: str) -> bool:
     return percent is None or int(percent) < 100
 
 
-def row_data(object_: dict, locale: str, attribute_names: list[str] | None = None) -> dict:
+def _display_value(
+    value: object,
+    locale: str,
+    resolver: dict[str, str] | None,
+) -> str:
+    """Resolves a cell value to a display string, applying an enum resolver."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        code = str(value.get(locale) or next(iter(value.values()), "") or "")
+        return resolver.get(code, code) if resolver is not None else resolve_value(value, locale)
+    if resolver is not None:
+        return resolver.get(str(value), str(value))
+    return resolve_value(value, locale)
+
+
+def row_data(
+    object_: dict,
+    locale: str,
+    attribute_names: list[str] | None = None,
+    enum_resolvers: dict[str, dict[str, str]] | None = None,
+) -> dict:
     """Maps a core object to an AG Grid row.
 
     With ``attribute_names``, one ``attr_<name>`` field per attribute is added
-    (resolved to a display string for the working locale). The ``_completeness``
-    field mirrors the core's ``completeness`` value for the working locale.
+    (resolved to a display string for the working locale). ``enum_resolvers``
+    maps each enum attribute name to a ``{code: label}`` map so stored codes are
+    shown as their localized labels. The ``_completeness`` field mirrors the
+    core's ``completeness`` value for the working locale.
     """
     attributes = object_.get("attributes") or {}
     row = {
@@ -84,7 +107,8 @@ def row_data(object_: dict, locale: str, attribute_names: list[str] | None = Non
     else:
         row["_completeness"] = ""
     for name in attribute_names or []:
-        row[f"attr_{name}"] = resolve_value(attributes.get(name), locale)
+        value = attributes.get(name)
+        row[f"attr_{name}"] = _display_value(value, locale, (enum_resolvers or {}).get(name))
     # Action cell: open the reference picker for this row.
     row["_refs"] = "🔗"
     return row
@@ -279,6 +303,23 @@ async def products_page(request: Request) -> None:
         attribute_names = [
             str(definition.get("name")) for definition in definitions if definition.get("name")
         ]
+
+        # Resolve enum attribute values to localized labels via their enum sets.
+        enum_resolvers: dict[str, dict[str, str]] = {}
+        enum_defs = [d for d in definitions if d.get("type") == "enum"]
+        if enum_defs:
+            try:
+                enum_sets = await client.list_enum_sets(token)
+            except Exception:  # noqa: BLE001 - degrade to raw codes on failure
+                enum_sets = []
+            from meadow.frontend.enums import enum_code_label_map
+
+            for defn in enum_defs:
+                name = str(defn.get("name"))
+                mapping = enum_code_label_map(enum_sets, defn, locale)
+                if mapping:
+                    enum_resolvers[name] = mapping
+
         column_defs = [
             {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
             {"headerName": t("grid.name"), "field": "_name", "editable": True},
@@ -302,7 +343,9 @@ async def products_page(request: Request) -> None:
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
 
-        all_rows = [row_data(object_, locale, attribute_names) for object_ in objects]
+        all_rows = [
+            row_data(object_, locale, attribute_names, enum_resolvers) for object_ in objects
+        ]
 
         def sync_url_query(params: dict) -> None:
             """Keeps the URL in sync with the active filter so save/reload keeps it."""
@@ -325,7 +368,9 @@ async def products_page(request: Request) -> None:
         async def apply_rows(selected_objects: list[dict]) -> None:
             nonlocal original_by_id, all_rows
             original_by_id = {str(o.get("id")): o for o in selected_objects}
-            all_rows = [row_data(o, locale, attribute_names) for o in selected_objects]
+            all_rows = [
+                row_data(o, locale, attribute_names, enum_resolvers) for o in selected_objects
+            ]
             grid.run_grid_method("setGridOption", "rowData", all_rows)
             selection_hint.set_visibility(len(selected_objects) == 0)
 

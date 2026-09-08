@@ -24,11 +24,13 @@ instead of only showing a generic failure message.
 from __future__ import annotations
 
 import inspect
+from functools import partial
 
 from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
+from meadow.frontend.enums import enum_options
 from meadow.frontend.grid import completeness_badge, resolve_value, status_badge
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -144,6 +146,10 @@ async def product_form(object_id: str) -> None:
             languages = await client.list_languages(token)
             relation_definitions = await client.list_relation_definitions(token)
             references = await client.list_object_references(token, object_id, locale=locale)
+            try:
+                enum_sets = await client.list_enum_sets(token)
+            except Exception:  # noqa: BLE001 - degrade to raw enum codes
+                enum_sets = []
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -220,46 +226,6 @@ async def product_form(object_id: str) -> None:
             if new_value:
                 app.storage.user["edit_lang"] = new_value
             ui.navigate.reload()
-
-        def open_enum_creation(attr_name: str, defn: dict | None, field: ui.element) -> None:
-            """Adds a new enum option to the attribute definition (MVP)."""
-            multilingual = bool(defn is not None and (defn or {}).get("multilingual"))
-
-            with ui.dialog() as dialog, ui.card().classes("w-[24rem] max-w-[90vw]"):
-                ui.label(t("form.add_option")).classes("text-subtitle1")
-                inp = ui.input(label=t("form.new_option")).props("filled dense").classes("w-full")
-
-                async def create() -> None:
-                    value = (inp.value or "").strip()
-                    if not value:
-                        return
-                    constraints = dict((defn or {}).get("constraints") or {})
-                    current = constraints.get("enum_values") or []
-                    if value in current:
-                        ui.notify(t("form.option_exists"), color="info")
-                        dialog.close()
-                        return
-                    new_values = list(current) + [value]
-                    constraints["enum_values"] = new_values
-                    try:
-                        await client.update_attribute_definition(
-                            token, defn["id"], constraints=constraints
-                        )
-                    except CoreError as error:
-                        ui.notify(
-                            t("form.save_failed_reason").format(reason=error), color="negative"
-                        )
-                        dialog.close()
-                        return
-                    field.set_options(new_values, value=value)
-                    set_value(attr_name, edit_lang, value, multilingual=multilingual)
-                    ui.notify(t("form.option_added"), color="positive")
-                    dialog.close()
-
-                with ui.row().classes("justify-end w-full mt-2 gap-2"):
-                    ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
-                    ui.button(t("form.add"), on_click=create).props("flat")
-            dialog.open()
 
         def build_reference_widget(
             attr_name: str, defn: dict | None, value: object, *, multilingual: bool
@@ -341,15 +307,23 @@ async def product_form(object_id: str) -> None:
                 build_reference_widget(attr_name, defn, value, multilingual=multilingual)
                 return
             elif atype == "enum":
-                options = ((defn or {}).get("constraints") or {}).get("enum_values") or []
+                opts = enum_options(enum_sets, defn, edit_lang)
+                labels = {o["code"]: o["label"] for o in opts}
+                cur = "" if value is None else str(value)
+                if cur and cur not in labels:
+                    # Keep any stored value that is not (yet) an option so the
+                    # editor does not lose it (e.g. a code removed from the set).
+                    labels[cur] = cur
                 field = (
-                    ui.select(options, value=value).props("filled dense").on_value_change(on_change)
+                    ui.select({c: labels[c] for c in labels}, value=cur or None)
+                    .props("filled dense")
+                    .on_value_change(on_change)
                 )
                 field.classes("flex-1")
                 main_widgets[attr_name] = field
                 ui.button(icon="add").props("dense flat round").on_click(
-                    lambda: open_enum_creation(attr_name, defn, field)
-                ).tooltip(t("form.add_option"))
+                    lambda: ui.navigate.to("/enum-sets")
+                ).tooltip(t("form.manage_enum_sets"))
                 return
             elif atype == "date":
                 field = (
@@ -667,17 +641,17 @@ async def product_form(object_id: str) -> None:
                         elif atype == "boolean":
                             widget = ui.switch(label, value=bool(current_val)).props("dense")
                         elif atype == "enum":
-                            options = (adef or {}).get("constraints") or {}
-                            values = [str(o) for o in (options.get("enum_values") or [])]
+                            opts = enum_options(enum_sets, adef, locale)
+                            labels = {o["code"]: o["label"] for o in opts}
                             cur = "" if current_val in (None, "") else str(current_val)
-                            if cur and cur not in values:
+                            if cur and cur not in labels:
                                 # Preserve an existing value that is not (yet) an
                                 # enum option so the editor does not lose it.
-                                values.append(cur)
-                            if values:
+                                labels[cur] = cur
+                            if labels:
                                 widget = (
                                     ui.select(
-                                        {o: o for o in values},
+                                        {c: labels[c] for c in labels},
                                         label=label,
                                         value=cur or None,
                                     )
@@ -811,8 +785,11 @@ async def product_form(object_id: str) -> None:
                                             if attr_names:
                                                 ui.button(
                                                     icon="edit",
-                                                    on_click=lambda rid=row["id"], dn=defn, ca=row["attributes"]: (
-                                                        on_edit_ref(rid, dn, ca)
+                                                    on_click=partial(
+                                                        on_edit_ref,
+                                                        row["id"],
+                                                        defn,
+                                                        row["attributes"],
                                                     ),
                                                 ).props("flat dense round").tooltip(
                                                     t("form.relation_edit")

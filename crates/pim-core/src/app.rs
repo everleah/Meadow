@@ -139,6 +139,25 @@ pub fn router(state: AppState) -> Router {
             get(api::attribute_definitions::enum_value_usage),
         )
         .route(
+            "/enum-sets",
+            get(api::enum_sets::list_enum_sets).post(api::enum_sets::create_enum_set),
+        )
+        .route(
+            "/enum-sets/{id}",
+            get(api::enum_sets::get_enum_set)
+                .patch(api::enum_sets::update_enum_set)
+                .delete(api::enum_sets::delete_enum_set),
+        )
+        .route(
+            "/enum-options",
+            get(api::enum_sets::list_enum_options).post(api::enum_sets::create_enum_option),
+        )
+        .route(
+            "/enum-options/{id}",
+            axum::routing::patch(api::enum_sets::update_enum_option)
+                .delete(api::enum_sets::delete_enum_option),
+        )
+        .route(
             "/attribute-groups",
             get(api::attribute_groups::list_attribute_groups)
                 .post(api::attribute_groups::create_attribute_group),

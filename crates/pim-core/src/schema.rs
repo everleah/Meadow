@@ -46,6 +46,9 @@ DEFINE FIELD IF NOT EXISTS multilingual ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS unit_id ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS display_unit_id ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS constraints ON TABLE attribute_definition TYPE option<object>;
+-- Reference to a reusable enum_set (`enum_set:<key>`); replaces
+-- `constraints.enum_values` for enum attributes (Phase 9, planned).
+DEFINE FIELD IF NOT EXISTS enum_set_id ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS default_value ON TABLE attribute_definition;
 DEFINE FIELD IF NOT EXISTS description ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS version ON TABLE attribute_definition TYPE int;
@@ -54,6 +57,26 @@ DEFINE FIELD OVERWRITE updated_at ON TABLE attribute_definition TYPE datetime DE
 DEFINE FIELD IF NOT EXISTS updated_by ON TABLE attribute_definition TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_attr_def_name ON TABLE attribute_definition FIELDS name UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_attr_def_group ON TABLE attribute_definition FIELDS group_ids;
+
+-- Enum sets: reusable, multilingual option lists (Reference-Data style).
+DEFINE TABLE IF NOT EXISTS enum_set;
+DEFINE FIELD IF NOT EXISTS name ON TABLE enum_set TYPE string;
+DEFINE FIELD IF NOT EXISTS label ON TABLE enum_set TYPE object;
+DEFINE FIELD IF NOT EXISTS options ON TABLE enum_set TYPE array;
+DEFINE FIELD IF NOT EXISTS position ON TABLE enum_set TYPE int;
+DEFINE FIELD OVERWRITE created_at ON TABLE enum_set TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE enum_set TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_enum_set_name ON TABLE enum_set FIELDS name UNIQUE;
+
+-- Enum options: a stable code + multilingual labels, referenced by enum sets.
+DEFINE TABLE IF NOT EXISTS enum_option;
+DEFINE FIELD IF NOT EXISTS code ON TABLE enum_option TYPE string;
+DEFINE FIELD IF NOT EXISTS labels ON TABLE enum_option TYPE object;
+DEFINE FIELD IF NOT EXISTS position ON TABLE enum_option TYPE int;
+DEFINE FIELD IF NOT EXISTS active ON TABLE enum_option TYPE bool;
+DEFINE FIELD OVERWRITE created_at ON TABLE enum_option TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE enum_option TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_enum_option_code ON TABLE enum_option FIELDS code UNIQUE;
 
 -- Attribute groups: UI grouping for attribute definitions.
 DEFINE TABLE IF NOT EXISTS attribute_group;

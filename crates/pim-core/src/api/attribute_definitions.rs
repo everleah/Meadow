@@ -65,6 +65,9 @@ pub struct CreateAttributeDefinition {
     /// Validation constraints (e.g. `{ "min": 0, "max": 10, "enum_values": [...] }`).
     #[serde(default)]
     pub constraints: Option<Value>,
+    /// Reference to a reusable `enum_set:<key>` for `enum` attributes (Phase 9).
+    #[serde(default)]
+    pub enum_set_id: Option<String>,
     /// Default value.
     #[serde(default)]
     pub default_value: Option<Value>,
@@ -107,6 +110,9 @@ pub struct UpdateAttributeDefinition {
     pub display_unit_id: Option<String>,
     #[serde(default)]
     pub constraints: Option<Value>,
+    /// Reference to a reusable `enum_set:<key>` for `enum` attributes.
+    #[serde(default)]
+    pub enum_set_id: Option<Option<String>>,
     #[serde(default)]
     pub default_value: Option<Value>,
     #[serde(default)]
@@ -198,6 +204,7 @@ pub async fn create_attribute_definition(
         unit_id,
         display_unit_id,
         constraints,
+        enum_set_id,
         default_value,
         description,
     } = body;
@@ -261,6 +268,10 @@ pub async fn create_attribute_definition(
     }
     if let Some(constraints) = constraints {
         content.insert("constraints".to_owned(), constraints);
+    }
+    if let Some(set_id) = enum_set_id {
+        let set_ref = validate_enum_set(&state.db, &set_id).await?;
+        content.insert("enum_set_id".to_owned(), Value::String(set_ref));
     }
     if let Some(default_value) = default_value {
         content.insert("default_value".to_owned(), default_value);
@@ -507,6 +518,22 @@ pub async fn update_attribute_definition(
     if let Some(constraints_value) = new_constraints.as_ref() {
         changes.insert("constraints".to_owned(), constraints_value.clone());
     }
+    let mut clear_enum_set = false;
+    if let Some(enum_set_id) = body.enum_set_id {
+        match enum_set_id
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            Some(set_id) => {
+                let set_ref = validate_enum_set(&state.db, set_id).await?;
+                changes.insert("enum_set_id".to_owned(), Value::String(set_ref));
+            }
+            None => {
+                clear_enum_set = true;
+            }
+        }
+    }
     if let Some(default_value) = body.default_value {
         changes.insert("default_value".to_owned(), default_value);
     }
@@ -614,17 +641,30 @@ pub async fn update_attribute_definition(
     });
     let changes = Value::Object(changes);
 
-    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
+    // Clear an enum-set reference with `SET ... = NONE` because `MERGE` cannot
+    // carry the distinct `NONE` value (JSON `null` would be rejected by the
+    // `option<string>` field). Statement indices below shift when present.
+    let clear_sql = if clear_enum_set {
+        "UPDATE $obj SET enum_set_id = NONE;"
+    } else {
+        ""
+    };
+    let select_index = if clear_enum_set { 6 } else { 5 };
+
+    // Statements (no clear): BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
     // CREATE outbox(4), SELECT(5), COMMIT(6).
-    let sql = "
+    let sql = format!(
+        "
         BEGIN TRANSACTION;
         LET $obj = type::record('attribute_definition', $key);
         UPDATE $obj MERGE $changes;
+        {clear_sql}
         UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
         CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
-    ";
+        "
+    );
     let mut response = state
         .db
         .inner()
@@ -635,7 +675,7 @@ pub async fn update_attribute_definition(
         .bind(("outbox", outbox))
         .await?
         .check()?;
-    let definitions: Vec<Value> = response.take(5)?;
+    let definitions: Vec<Value> = response.take(select_index)?;
     let definition = definitions
         .into_iter()
         .next()
@@ -713,6 +753,34 @@ async fn count_enum_usage(
         .and_then(|row| row.get("count"))
         .and_then(Value::as_i64)
         .unwrap_or(0))
+}
+
+/// Normalizes a raw enum-set identifier to a full `enum_set:<key>` record id
+/// and verifies the set exists. Returns the normalized record-id string to
+/// store on `attribute_definition.enum_set_id`.
+async fn validate_enum_set(db: &crate::db::Db, raw: &str) -> Result<String, ApiError> {
+    let key = raw
+        .trim()
+        .split_once(':')
+        .map(|(_, k)| k.to_owned())
+        .unwrap_or_else(|| raw.trim().to_owned());
+    if key.is_empty() {
+        return Err(ApiError::bad_request("`enum_set_id` must not be empty"));
+    }
+    let set_ref = format!("enum_set:{key}");
+    let mut response = db
+        .inner()
+        .query("SELECT id FROM enum_set WHERE id = type::record('enum_set', $key) LIMIT 1;")
+        .bind(("key", key.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    if rows.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "enum set `{set_ref}` does not exist"
+        )));
+    }
+    Ok(set_ref)
 }
 
 /// Query parameters for `GET /attribute-definitions/{id}/enum-usage`.
