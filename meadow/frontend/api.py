@@ -202,6 +202,7 @@ class CoreClient:
         definition_id: str,
         *,
         constraints: dict | None = None,
+        enum_remap: dict[str, str] | None = None,
         **fields: object,
     ) -> dict:
         """Updates an attribute definition (partial PATCH).
@@ -209,10 +210,14 @@ class CoreClient:
         ``constraints`` is kept for backward compatibility (the product form
         adds enum options); additional fields (``label``, ``group_ids``,
         ``applicable_types``, ``required_types``, ...) are merged in.
+        ``enum_remap`` (``{old: new}``) re-assigns objects when an enum option
+        is removed while still in use.
         """
         payload: dict[str, object] = {k: v for k, v in fields.items() if v is not None}
         if constraints is not None:
             payload["constraints"] = constraints
+        if enum_remap:
+            payload["enum_remap"] = enum_remap
         async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/attribute-definitions/{definition_id}",
@@ -226,6 +231,28 @@ class CoreClient:
                 except Exception:  # noqa: BLE001 - body may not be JSON
                     detail = None
                 raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
+    async def enum_usage(
+        self,
+        token: str,
+        definition_id: str,
+        value: str,
+        *,
+        limit: int = 50,
+    ) -> dict:
+        """Reports how many objects use a given enum value (Phase 9).
+
+        Returns ``{value, count, items:[{id, type}]}``.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/attribute-definitions/{definition_id}/enum-usage",
+                params={"value": value, "limit": str(limit)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def create_attribute_definition(

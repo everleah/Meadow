@@ -135,6 +135,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(api::attribute_definitions::delete_attribute_definition),
         )
         .route(
+            "/attribute-definitions/{id}/enum-usage",
+            get(api::attribute_definitions::enum_value_usage),
+        )
+        .route(
             "/attribute-groups",
             get(api::attribute_groups::list_attribute_groups)
                 .post(api::attribute_groups::create_attribute_group),

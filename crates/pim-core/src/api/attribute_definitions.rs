@@ -111,6 +111,10 @@ pub struct UpdateAttributeDefinition {
     pub default_value: Option<Value>,
     #[serde(default)]
     pub description: Option<String>,
+    /// When removing an enum value that is still in use, a migration map
+    /// `{ old_value: new_value }` re-assigns the objects before the removal.
+    #[serde(default)]
+    pub enum_remap: Option<serde_json::Map<String, Value>>,
 }
 
 /// Query parameters for listing attribute definitions.
@@ -499,8 +503,9 @@ pub async fn update_attribute_definition(
     if let Some(display_unit_id) = body.display_unit_id {
         changes.insert("display_unit_id".to_owned(), Value::String(display_unit_id));
     }
-    if let Some(constraints) = body.constraints {
-        changes.insert("constraints".to_owned(), constraints);
+    let new_constraints: Option<Value> = body.constraints;
+    if let Some(constraints_value) = new_constraints.as_ref() {
+        changes.insert("constraints".to_owned(), constraints_value.clone());
     }
     if let Some(default_value) = body.default_value {
         changes.insert("default_value".to_owned(), default_value);
@@ -520,6 +525,84 @@ pub async fn update_attribute_definition(
 
     if changes.is_empty() {
         return Ok(Json(existing));
+    }
+
+    // --- Enum value management (Phase 9) ------------------------------------
+    // Removing an enum option is only allowed when no object uses it; otherwise
+    // an explicit re-map (`enum_remap`) migrates those objects first, else the
+    // update is blocked with 409.
+    if new_constraints.is_some() && existing_type == "enum" {
+        let name = existing
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let old_values: Vec<String> = existing
+            .get("constraints")
+            .and_then(|c| c.get("enum_values"))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let new_values: Vec<String> = new_constraints
+            .as_ref()
+            .and_then(|c| c.get("enum_values"))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let new_set: std::collections::HashSet<String> = new_values.iter().cloned().collect();
+        for old in &old_values {
+            if new_set.contains(old) {
+                continue;
+            }
+            let used = count_enum_usage(&state.db, &name, old, existing_multilingual).await?;
+            if used <= 0 {
+                continue;
+            }
+            let target = body
+                .enum_remap
+                .as_ref()
+                .and_then(|m| m.get(old))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            match target {
+                Some(target) => {
+                    if existing_multilingual {
+                        return Err(ApiError::bad_request(
+                            "re-mapping multilingual enum values is not supported yet",
+                        ));
+                    }
+                    state
+                        .db
+                        .inner()
+                        .query(
+                            "UPDATE object SET attributes[$name] = $target \
+                             WHERE deleted_at IS NONE AND attributes[$name] = $old;",
+                        )
+                        .bind(("name", name.clone()))
+                        .bind(("old", old.clone()))
+                        .bind(("target", target))
+                        .await?
+                        .check()?;
+                }
+                None => {
+                    return Err(ApiError::conflict(format!(
+                        "enum value `{old}` is still used by {used} object(s); re-map it or keep it"
+                    )));
+                }
+            }
+        }
     }
 
     let outbox = crate::event::content(&crate::event::OutboxEvent {
@@ -573,6 +656,142 @@ pub async fn update_attribute_definition(
     state.cache.invalidate_attribute_definitions().await;
 
     Ok(Json(definition))
+}
+
+/// Returns the objects that currently carry a given enum value for an attribute.
+async fn find_enum_usage(
+    db: &crate::db::Db,
+    attr_name: &str,
+    value: &str,
+    multilingual: bool,
+    limit: i64,
+) -> Result<Vec<Value>, ApiError> {
+    let sql = if multilingual {
+        "SELECT id, type FROM object WHERE deleted_at IS NONE \
+         AND array::contains(object::values(attributes[$name] ?? {}), $value) \
+         LIMIT $limit;"
+    } else {
+        "SELECT id, type FROM object WHERE deleted_at IS NONE \
+         AND attributes[$name] = $value LIMIT $limit;"
+    };
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("name", attr_name.to_owned()))
+        .bind(("value", value.to_owned()))
+        .bind(("limit", limit))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows)
+}
+
+/// Counts the objects that carry a given enum value for an attribute.
+async fn count_enum_usage(
+    db: &crate::db::Db,
+    attr_name: &str,
+    value: &str,
+    multilingual: bool,
+) -> Result<i64, ApiError> {
+    let sql = if multilingual {
+        "SELECT count() AS count FROM object WHERE deleted_at IS NONE \
+         AND array::contains(object::values(attributes[$name] ?? {}), $value) GROUP ALL;"
+    } else {
+        "SELECT count() AS count FROM object WHERE deleted_at IS NONE \
+         AND attributes[$name] = $value GROUP ALL;"
+    };
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("name", attr_name.to_owned()))
+        .bind(("value", value.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("count"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0))
+}
+
+/// Query parameters for `GET /attribute-definitions/{id}/enum-usage`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct EnumUsageParams {
+    /// The enum value to look up.
+    pub value: String,
+    /// Maximum number of usage rows to return.
+    #[serde(default = "default_usage_limit")]
+    pub limit: u32,
+}
+
+fn default_usage_limit() -> u32 {
+    50
+}
+
+/// Reports how many objects use a given enum value for an attribute (Phase 9).
+/// Used by the enum-option management to decide whether a value can be removed
+/// or must be re-mapped first.
+#[utoipa::path(
+    get,
+    path = "/attribute-definitions/{id}/enum-usage",
+    params(EnumUsageParams),
+    responses(
+        (status = 200, description = "Usage for an enum value", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn enum_value_usage(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<EnumUsageParams>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let definition = fetch_definition(&state.db, key).await?;
+    let Some(definition) = definition else {
+        return Err(ApiError::not_found(format!(
+            "attribute definition `{id}` not found"
+        )));
+    };
+    let name = definition
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("attribute name is empty"));
+    }
+    let multilingual = definition
+        .get("multilingual")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let limit = params.limit.clamp(1, 1000) as i64;
+    let items = find_enum_usage(&state.db, &name, &params.value, multilingual, limit).await?;
+    let count = count_enum_usage(&state.db, &name, &params.value, multilingual).await?;
+    Ok(Json(json!({
+        "value": params.value,
+        "count": count,
+        "items": items,
+    })))
+}
+
+/// Loads a single `attribute_definition` record by key.
+async fn fetch_definition(db: &crate::db::Db, key: &str) -> Result<Option<Value>, ApiError> {
+    let sql = "LET $obj = type::record('attribute_definition', $key); SELECT * FROM $obj;";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    Ok(rows.into_iter().next())
 }
 
 /// Query parameters for deleting an attribute definition.
