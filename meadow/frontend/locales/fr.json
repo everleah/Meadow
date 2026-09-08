@@ -264,6 +264,7 @@
   "enum_set.options_title": "Options — {name}",
   "enum_set.add_option": "Ajouter une option",
   "enum_set.option_code": "Code",
+  "enum_set.option_label": "Libellé",
   "enum_set.option_label_en": "Libellé (EN)",
   "enum_set.option_label_de": "Libellé (DE)",
   "enum_set.option_active": "Actif",

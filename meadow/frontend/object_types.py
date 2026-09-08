@@ -22,6 +22,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
 def _label(value: object, locale: str) -> str:
@@ -69,6 +70,12 @@ async def object_types_page() -> None:
     except Exception:  # noqa: BLE001 - show a friendly message on failure
         ui.label(t("object_types.load_failed")).classes("text-subtitle1 text-negative")
         return
+
+    try:
+        languages = await client.list_languages(token)
+    except Exception:  # noqa: BLE001 - degrade to the UI language only
+        languages = []
+
     # Eligible attributes for `key_attributes`/`label_attribute` (text, not
     # multilingual). Attribute definitions may be unavailable; degrade gracefully.
     try:
@@ -164,17 +171,15 @@ async def object_types_page() -> None:
                 name_input = (
                     ui.input(t("object_types.field_name")).props("filled dense").classes("w-full")
                 )
-                with ui.row().classes("w-full gap-2"):
-                    label_en_input = (
-                        ui.input(t("object_types.field_label_en"))
-                        .props("filled dense")
-                        .classes("grow")
-                    )
-                    label_de_input = (
-                        ui.input(t("object_types.field_label_de"))
-                        .props("filled dense")
-                        .classes("grow")
-                    )
+                type_label_store: dict[str, object] = {"label": {}}
+                type_label_field = multilingual_value_editor(
+                    field_label=t("object_types.col_label"),
+                    locale=locale,
+                    languages=languages,
+                    value=None,
+                    store=type_label_store,
+                    key="label",
+                )
                 description_area = (
                     ui.textarea(t("object_types.field_description"))
                     .props("filled dense")
@@ -219,8 +224,8 @@ async def object_types_page() -> None:
             name_input.set_value(str(record.get("name") or "") if editing else "")
             name_input.disable() if editing else name_input.enable()
             label = (record.get("label") if editing else {}) or {}
-            label_en_input.set_value(str(label.get("en") or "") if editing else "")
-            label_de_input.set_value(str(label.get("de") or "") if editing else "")
+            type_label_store["label"] = dict(label)
+            type_label_field.set_value(str(type_label_store["label"].get(base_lang(locale)) or ""))
             description_area.set_value(str(record.get("description") or "") if editing else "")
             key_select.set_value(list(record.get("key_attributes") or []) if editing else [])
             label_attr_select.set_value(str(record.get("label_attribute")) if editing else None)
@@ -234,11 +239,7 @@ async def object_types_page() -> None:
             if not name:
                 ui.notify(t("object_types.name_required"), color="warning")
                 return
-            label: dict[str, str] = {}
-            if label_en_input.value:
-                label["en"] = label_en_input.value
-            if label_de_input.value:
-                label["de"] = label_de_input.value
+            label = dict(type_label_store["label"] or {})
             description = (description_area.value or "").strip() or None
             keys = list(key_select.value or [])
             label_attr = (label_attr_select.value or "").strip() or None

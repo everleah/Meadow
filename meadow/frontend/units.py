@@ -16,6 +16,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
 def _label(value: object, locale: str) -> str:
@@ -40,6 +41,11 @@ async def units_page() -> None:
     except Exception:  # noqa: BLE001 - show a friendly message on failure
         ui.label(t("units.load_failed")).classes("text-subtitle1 text-negative")
         return
+
+    try:
+        languages = await client.list_languages(token)
+    except Exception:  # noqa: BLE001 - degrade to the UI language only
+        languages = []
 
     dimensions = sorted({str(u.get("dimension") or "") for u in units if u.get("dimension")})
     by_id: dict[str, dict] = {}
@@ -158,13 +164,15 @@ async def units_page() -> None:
                         .props("filled dense")
                         .classes("grow")
                     )
-                with ui.row().classes("w-full gap-2"):
-                    label_de_input = (
-                        ui.input(t("units.field_label_de")).props("filled dense").classes("grow")
-                    )
-                    label_en_input = (
-                        ui.input(t("units.field_label_en")).props("filled dense").classes("grow")
-                    )
+                unit_label_store: dict[str, object] = {"label": {}}
+                unit_label_field = multilingual_value_editor(
+                    field_label=t("units.col_label"),
+                    locale=locale,
+                    languages=languages,
+                    value=None,
+                    store=unit_label_store,
+                    key="label",
+                )
                 with ui.row().classes("w-full gap-2"):
                     factor_input = (
                         ui.number(t("units.field_factor"), value=1.0)
@@ -204,8 +212,8 @@ async def units_page() -> None:
             label = (unit.get("label") if editing else {}) or {}
             if not isinstance(label, dict):
                 label = {}
-            label_de_input.set_value(str(label.get("de") or "") if editing else "")
-            label_en_input.set_value(str(label.get("en") or "") if editing else "")
+            unit_label_store["label"] = dict(label)
+            unit_label_field.set_value(str(unit_label_store["label"].get(base_lang(locale)) or ""))
             factor_input.set_value(float(unit.get("factor") or 1.0) if editing else 1.0)
             offset_input.set_value(float(unit.get("offset") or 0.0) if editing else 0.0)
 
@@ -231,11 +239,7 @@ async def units_page() -> None:
             if not base:
                 ui.notify(t("units.base_required"), color="warning")
                 return
-            label: dict[str, str] = {}
-            if label_de_input.value:
-                label["de"] = label_de_input.value
-            if label_en_input.value:
-                label["en"] = label_en_input.value
+            label = dict(unit_label_store["label"] or {})
             try:
                 if editing_id:
                     await client.update_unit(

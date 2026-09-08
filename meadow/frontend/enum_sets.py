@@ -16,6 +16,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
 def _label(value: object, locale: str) -> str:
@@ -40,6 +41,11 @@ async def enum_sets_page() -> None:
     except Exception:  # noqa: BLE001 - show a friendly message on failure
         ui.label(t("enum_set.load_failed")).classes("text-subtitle1 text-negative")
         return
+
+    try:
+        languages = await client.list_languages(token)
+    except Exception:  # noqa: BLE001 - degrade to the UI language only
+        languages = []
 
     filters: dict[str, str] = {"name": ""}
 
@@ -119,13 +125,15 @@ async def enum_sets_page() -> None:
                         .props("filled dense")
                         .classes("w-32")
                     )
-                with ui.row().classes("w-full gap-2"):
-                    label_de_input = (
-                        ui.input(t("enum_set.field_label_de")).props("filled dense").classes("grow")
-                    )
-                    label_en_input = (
-                        ui.input(t("enum_set.field_label_en")).props("filled dense").classes("grow")
-                    )
+                set_label_store: dict[str, object] = {"label": {}}
+                set_label_field = multilingual_value_editor(
+                    field_label=t("enum_set.col_label"),
+                    locale=locale,
+                    languages=languages,
+                    value=None,
+                    store=set_label_store,
+                    key="label",
+                )
                 ui.button(
                     t("enum_set.manage_options"),
                     icon="list",
@@ -158,8 +166,8 @@ async def enum_sets_page() -> None:
             label = (s.get("label") if editing else {}) or {}
             if not isinstance(label, dict):
                 label = {}
-            label_de_input.set_value(str(label.get("de") or "") if editing else "")
-            label_en_input.set_value(str(label.get("en") or "") if editing else "")
+            set_label_store["label"] = dict(label)
+            set_label_field.set_value(str(set_label_store["label"].get(base_lang(locale)) or ""))
 
         def open_editor(s: dict | None) -> None:
             _fill_editor(s)
@@ -176,11 +184,7 @@ async def enum_sets_page() -> None:
         async def do_save() -> None:
             editing_id = set_state.get("editing_id")
             name = (name_input.value or "").strip()
-            label: dict[str, str] = {}
-            if label_de_input.value:
-                label["de"] = label_de_input.value
-            if label_en_input.value:
-                label["en"] = label_en_input.value
+            label = dict(set_label_store["label"] or {})
             try:
                 if editing_id:
                     await client.update_enum_set(
@@ -258,21 +262,14 @@ async def enum_sets_page() -> None:
                         .props("filled dense")
                         .classes("w-28")
                     )
-                    en_input = (
-                        ui.input(
-                            placeholder=t("enum_set.option_label_en"),
-                            value=str(row["en"] or ""),
-                        )
-                        .props("filled dense")
-                        .classes("flex-1")
-                    )
-                    de_input = (
-                        ui.input(
-                            placeholder=t("enum_set.option_label_de"),
-                            value=str(row["de"] or ""),
-                        )
-                        .props("filled dense")
-                        .classes("flex-1")
+                    multilingual_value_editor(
+                        field_label=t("enum_set.option_label"),
+                        locale=locale,
+                        languages=languages,
+                        value=row.get("labels"),
+                        store=row,
+                        key="labels",
+                        in_row=False,
                     )
                     active_check = (
                         ui.checkbox(value=bool(row["active"]))
@@ -284,13 +281,10 @@ async def enum_sets_page() -> None:
                         on_click=lambda r=row: remove_option(r),
                     ).props("flat dense round").tooltip(t("enum_set.option_remove"))
 
-                    def bind(r: dict, code_in, en_in, de_in, active_el) -> None:
-                        code_in.on_value_change(lambda e: r.__setitem__("code", str(e.value)))
-                        en_in.on_value_change(lambda e: r.__setitem__("en", str(e.value)))
-                        de_in.on_value_change(lambda e: r.__setitem__("de", str(e.value)))
-                        active_el.on_value_change(lambda e: r.__setitem__("active", bool(e.value)))
-
-                    bind(row, code_input, en_input, de_input, active_check)
+                    code_input.on_value_change(lambda e, r=row: r.__setitem__("code", str(e.value)))
+                    active_check.on_value_change(
+                        lambda e, r=row: r.__setitem__("active", bool(e.value))
+                    )
 
         def open_options_for_id(set_id: object) -> None:
             s = next((x for x in sets if str(x.get("id")) == str(set_id)), None)
@@ -311,8 +305,7 @@ async def enum_sets_page() -> None:
                         "key": _next_row_key(),
                         "id": o.get("id"),
                         "code": str(o.get("code") or ""),
-                        "en": str(labels.get("en") or ""),
-                        "de": str(labels.get("de") or ""),
+                        "labels": dict(labels),
                         "active": bool(o.get("active", True)),
                     }
                 )
@@ -326,8 +319,7 @@ async def enum_sets_page() -> None:
                     "key": _next_row_key(),
                     "id": None,
                     "code": "",
-                    "en": "",
-                    "de": "",
+                    "labels": {},
                     "active": True,
                 }
             )
@@ -387,11 +379,7 @@ async def enum_sets_page() -> None:
             try:
                 for row in opt_state["rows"]:
                     code = str(row.get("code") or "").strip()
-                    labels: dict[str, str] = {}
-                    if row.get("de"):
-                        labels["de"] = row["de"]
-                    if row.get("en"):
-                        labels["en"] = row["en"]
+                    labels = dict(row.get("labels") or {})
                     if row.get("id"):
                         await client.update_enum_option(
                             token,

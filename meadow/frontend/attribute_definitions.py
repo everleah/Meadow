@@ -14,6 +14,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 #: Supported attribute data types (extensible; existing types are never renamed).
 ATTR_TYPES = ("text", "number", "boolean", "date", "enum", "reference")
@@ -60,6 +61,12 @@ async def attribute_definitions_page() -> None:
             if v in unit_options:
                 return v
             return unit_key_by_symbol.get(v)
+
+        # Active data languages drive the multilingual label editor (hybrid).
+        try:
+            languages = await client.list_languages(token)
+        except Exception:  # noqa: BLE001 - degrade to the UI language only
+            languages = []
 
         # Reusable enum sets drive the `enum_set_id` selector for `enum` types.
         try:
@@ -292,13 +299,15 @@ async def attribute_definitions_page() -> None:
                             .props("filled dense")
                             .classes("w-32")
                         )
-                    with ui.row().classes("w-full gap-2"):
-                        group_label_en = (
-                            ui.input("Label (EN)").props("filled dense").classes("grow")
-                        )
-                        group_label_de = (
-                            ui.input("Label (DE)").props("filled dense").classes("grow")
-                        )
+                    group_store: dict[str, object] = {"label": {}}
+                    group_label_field = multilingual_value_editor(
+                        field_label=t("attr_def.groups_label"),
+                        locale=locale,
+                        languages=languages,
+                        value=None,
+                        store=group_store,
+                        key="label",
+                    )
                     group_applicable = (
                         ui.select(
                             {typ: typ for typ in object_types},
@@ -324,9 +333,8 @@ async def attribute_definitions_page() -> None:
                 )
                 group_name.set_value(str(group.get("name") or "") if editing else "")
                 group_position.set_value(int(group.get("position") or 0) if editing else 0)
-                glabel = (group.get("label") if editing else {}) or {}
-                group_label_en.set_value(str(glabel.get("en") or ""))
-                group_label_de.set_value(str(glabel.get("de") or ""))
+                group_store["label"] = dict((group.get("label") if editing else {}) or {})
+                group_label_field.set_value(str(group_store["label"].get(base_lang(locale)) or ""))
                 group_applicable.set_value(
                     list(group.get("applicable_types") or []) if editing else []
                 )
@@ -335,11 +343,7 @@ async def attribute_definitions_page() -> None:
 
             async def save_group() -> None:
                 editing_id = getattr(save_group, "editing_id", None)
-                glabel = {}
-                if group_label_en.value:
-                    glabel["en"] = group_label_en.value
-                if group_label_de.value:
-                    glabel["de"] = group_label_de.value
+                glabel = dict(group_store["label"] or {})
                 name = group_name.value or ""
                 if not name:
                     ui.notify(t("attr_def.groups_name_required"), color="warning")
@@ -461,9 +465,15 @@ async def attribute_definitions_page() -> None:
                         .props("filled dense")
                         .classes("w-40")
                     )
-                with ui.row().classes("w-full gap-2"):
-                    label_en = ui.input("Label (EN)").props("filled dense").classes("grow")
-                    label_de = ui.input("Label (DE)").props("filled dense").classes("grow")
+                def_store: dict[str, object] = {"label": {}}
+                label_field = multilingual_value_editor(
+                    field_label=t("attr_def.col_label"),
+                    locale=locale,
+                    languages=languages,
+                    value=None,
+                    store=def_store,
+                    key="label",
+                )
                 group_select = (
                     ui.select(
                         {gid: lbl for gid, lbl in groups_by_id.items()},
@@ -564,8 +574,7 @@ async def attribute_definitions_page() -> None:
             {
                 "name": name_input,
                 "type": type_select,
-                "label_en": label_en,
-                "label_de": label_de,
+                "label": label_field,
                 "group": group_select,
                 "inheritable": inheritable_check,
                 "key": is_key_check,
@@ -597,8 +606,8 @@ async def attribute_definitions_page() -> None:
             else:
                 type_select.enable()
             label = (definition["label"] if editing else {}) or {}
-            label_en.set_value(str(label.get("en") or ""))
-            label_de.set_value(str(label.get("de") or ""))
+            def_store["label"] = dict(label)
+            label_field.set_value(str(def_store["label"].get(base_lang(locale)) or ""))
             group_select.set_value(list(definition.get("group_ids") or []) if editing else [])
             inheritable_check.set_value(bool(definition.get("inheritable")) if editing else False)
             is_key_check.set_value(bool(definition.get("is_key")) if editing else False)
@@ -642,11 +651,7 @@ async def attribute_definitions_page() -> None:
             editing_id = getattr(save, "editing_id", None)
             name = name_input.value or ""
             definition_type = type_select.value or "text"
-            label = {}
-            if label_en.value:
-                label["en"] = label_en.value
-            if label_de.value:
-                label["de"] = label_de.value
+            label = dict(def_store["label"] or {})
             group_ids = list(group_select.value or [])
             applicable = list(applicable_select.value or [])
             required = list(required_select.value or [])

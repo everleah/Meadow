@@ -25,6 +25,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
 def _label(value: object, locale: str) -> str:
@@ -84,6 +85,10 @@ async def relation_definitions_page() -> None:
     except Exception:  # noqa: BLE001 - show a friendly message on failure
         ui.label(t("relation_definitions.load_failed")).classes("text-subtitle1 text-negative")
         return
+    try:
+        languages = await client.list_languages(token)
+    except Exception:  # noqa: BLE001 - degrade to the UI language only
+        languages = []
     try:
         object_types = await client.list_object_types(token, limit=1000)
     except Exception:  # noqa: BLE001
@@ -199,17 +204,15 @@ async def relation_definitions_page() -> None:
                     .props("filled dense")
                     .classes("w-full")
                 )
-                with ui.row().classes("w-full gap-2"):
-                    label_en_input = (
-                        ui.input(t("relation_definitions.field_label_en"))
-                        .props("filled dense")
-                        .classes("grow")
-                    )
-                    label_de_input = (
-                        ui.input(t("relation_definitions.field_label_de"))
-                        .props("filled dense")
-                        .classes("grow")
-                    )
+                rel_label_store: dict[str, object] = {"label": {}}
+                rel_label_field = multilingual_value_editor(
+                    field_label=t("relation_definitions.col_label"),
+                    locale=locale,
+                    languages=languages,
+                    value=None,
+                    store=rel_label_store,
+                    key="label",
+                )
                 kind_select = (
                     ui.select(
                         {
@@ -274,8 +277,8 @@ async def relation_definitions_page() -> None:
             name_input.set_value(str(record.get("name") or "") if editing else "")
             name_input.disable() if editing else name_input.enable()
             label = (record.get("label") if editing else {}) or {}
-            label_en_input.set_value(str(label.get("en") or "") if editing else "")
-            label_de_input.set_value(str(label.get("de") or "") if editing else "")
+            rel_label_store["label"] = dict(label)
+            rel_label_field.set_value(str(rel_label_store["label"].get(base_lang(locale)) or ""))
             kind_select.set_value(
                 str(record.get("kind") or "aggregation") if editing else "aggregation"
             )
@@ -293,11 +296,7 @@ async def relation_definitions_page() -> None:
             if not name:
                 ui.notify(t("relation_definitions.name_required"), color="warning")
                 return
-            label: dict[str, str] = {}
-            if label_en_input.value:
-                label["en"] = label_en_input.value
-            if label_de_input.value:
-                label["de"] = label_de_input.value
+            label = dict(rel_label_store["label"] or {})
             source = list(source_select.value or [])
             target = list(target_select.value or [])
             attrs = list(attr_select.value or [])
