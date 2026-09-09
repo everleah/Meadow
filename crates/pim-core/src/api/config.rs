@@ -502,6 +502,1161 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     (year, month as u32, day as u32)
 }
 
+// ---------------------------------------------------------------------------
+// Import (`POST /config/import`)
+// ---------------------------------------------------------------------------
+
+/// Query parameters for `POST /config/import`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ConfigImportQuery {
+    /// `dry_run` (preview, default when using `?dry_run=true`), `merge` (default) or `replace`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Alias for `mode=dry_run`.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// The configured import mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    DryRun,
+    Merge,
+    Replace,
+}
+
+impl Mode {
+    fn label(&self) -> &'static str {
+        match self {
+            Mode::DryRun => "dry_run",
+            Mode::Merge => "merge",
+            Mode::Replace => "replace",
+        }
+    }
+}
+
+fn parse_mode(query: &ConfigImportQuery) -> Result<Mode, ApiError> {
+    if query.dry_run {
+        return Ok(Mode::DryRun);
+    }
+    let mode = query.mode.as_deref().unwrap_or("merge");
+    match mode {
+        "dry_run" => Ok(Mode::DryRun),
+        "merge" => Ok(Mode::Merge),
+        "replace" => Ok(Mode::Replace),
+        _ => Err(ApiError::bad_request(format!(
+            "unsupported mode `{mode}` (expected dry_run | merge | replace)"
+        ))),
+    }
+}
+
+/// Summary counters for the import report.
+#[derive(Debug, Default, serde::Serialize)]
+struct Summary {
+    created: usize,
+    updated: usize,
+    skipped: usize,
+    errors: usize,
+    warnings: usize,
+}
+
+/// Per-section detail for the import report.
+#[derive(Debug, Default, serde::Serialize)]
+struct SectionReport {
+    created: Vec<String>,
+    updated: Vec<String>,
+    skipped: Vec<String>,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ReportItem {
+    section: String,
+    key: String,
+    message: String,
+}
+
+/// The import report structure.
+#[derive(Debug, serde::Serialize)]
+struct ConfigReport {
+    mode: String,
+    summary: Summary,
+    sections: std::collections::BTreeMap<String, SectionReport>,
+    errors: Vec<ReportItem>,
+    warnings: Vec<ReportItem>,
+}
+
+impl ConfigReport {
+    fn new(mode: Mode) -> Self {
+        ConfigReport {
+            mode: mode.label().to_owned(),
+            summary: Summary::default(),
+            sections: std::collections::BTreeMap::new(),
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn section(&mut self, name: &str) -> &mut SectionReport {
+        self.sections.entry(name.to_owned()).or_default()
+    }
+
+    fn created(&mut self, section: &str, key: impl Into<String>) {
+        self.section(section).created.push(key.into());
+        self.summary.created += 1;
+    }
+
+    fn updated(&mut self, section: &str, key: impl Into<String>) {
+        self.section(section).updated.push(key.into());
+        self.summary.updated += 1;
+    }
+
+    fn skipped(&mut self, section: &str, key: impl Into<String>) {
+        self.section(section).skipped.push(key.into());
+        self.summary.skipped += 1;
+    }
+
+    fn error(&mut self, section: &str, key: impl Into<String>, message: impl Into<String>) {
+        let key = key.into();
+        self.section(section).errors.push(key.clone());
+        self.errors.push(ReportItem {
+            section: section.to_owned(),
+            key,
+            message: message.into(),
+        });
+        self.summary.errors += 1;
+    }
+
+    fn warn(&mut self, section: &str, key: impl Into<String>, message: impl Into<String>) {
+        self.warnings.push(ReportItem {
+            section: section.to_owned(),
+            key: key.into(),
+            message: message.into(),
+        });
+        self.summary.warnings += 1;
+    }
+}
+
+/// Tracks stable-key → target record-key resolution as entities are applied.
+#[derive(Default)]
+struct Resolve {
+    /// language code -> `lang_<code>`
+    language: HashMap<String, String>,
+    /// unit symbol -> bare unit record key
+    unit: HashMap<String, String>,
+    /// group name -> bare attribute_group record key
+    group: HashMap<String, String>,
+    /// enum set name -> bare enum_set record key
+    enum_set: HashMap<String, String>,
+}
+
+/// Extracts the bare record key (`table:key` → `key`) from a record `id`.
+fn id_of(record: &Value, table: &str) -> String {
+    record
+        .get("id")
+        .and_then(Value::as_str)
+        .map(|id| bare(id, table).unwrap_or(id).to_owned())
+        .unwrap_or_default()
+}
+
+/// Runs a `WHERE <field> = $key` lookup and returns the matching record.
+async fn fetch_by_field(
+    db: &crate::db::Db,
+    table: &str,
+    field: &str,
+    key: &str,
+) -> Result<Option<Value>, ApiError> {
+    let sql = format!("SELECT * FROM {table} WHERE {field} = $key LIMIT 1;");
+    let mut response = db
+        .inner()
+        .query(&sql)
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Creates a record keyed by `key` (`table:<key>`) and returns the created record.
+async fn create_keyed(
+    db: &crate::db::Db,
+    table: &str,
+    key: &str,
+    content: Value,
+) -> Result<Value, ApiError> {
+    let sql = format!(
+        "LET $r = type::record('{table}', $key); CREATE $r CONTENT $content; SELECT * FROM $r;"
+    );
+    let mut response = db
+        .inner()
+        .query(&sql)
+        .bind(("key", key.to_owned()))
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    rows.into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal(format!("created `{table}` record was not returned")))
+}
+
+/// Creates a record with a generated ULID key and returns the created record.
+async fn create_ulid(db: &crate::db::Db, table: &str, content: Value) -> Result<Value, ApiError> {
+    let sql = format!(
+        "LET $r = type::record('{table}', rand::ulid()); CREATE $r CONTENT $content; SELECT * FROM $r;"
+    );
+    let mut response = db
+        .inner()
+        .query(&sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    rows.into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal(format!("created `{table}` record was not returned")))
+}
+
+/// Merges a partial update into a record keyed by `key` (`table:<key>`).
+///
+/// Note: SurrealDB returns no rows for a trailing `SELECT * FROM $r` in the same
+/// statement as an `UPDATE`, so we only run the UPDATE here (callers already
+/// hold the record key).
+async fn update_keyed(
+    db: &crate::db::Db,
+    table: &str,
+    key: &str,
+    content: Value,
+) -> Result<(), ApiError> {
+    let sql = format!("LET $r = type::record('{table}', $key); UPDATE $r MERGE $content;");
+    let _ = db
+        .inner()
+        .query(&sql)
+        .bind(("key", key.to_owned()))
+        .bind(("content", content))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+/// Loads the stable-key → record-key maps from the target environment so
+/// references resolve to existing records (pre-populated before new entities
+/// are created during the import).
+async fn preload_resolve(db: &crate::db::Db) -> Result<Resolve, ApiError> {
+    let mut resolve = Resolve::default();
+
+    let languages = query_rows(db, "SELECT id, code FROM language_tree;").await?;
+    for lang in languages {
+        if let Some(code) = as_str(&lang, "code") {
+            resolve
+                .language
+                .insert(code.to_owned(), id_of(&lang, "language_tree"));
+        }
+    }
+
+    let units = query_rows(db, "SELECT id, symbol FROM unit;").await?;
+    for unit in units {
+        if let Some(symbol) = as_str(&unit, "symbol") {
+            resolve.unit.insert(symbol.to_owned(), id_of(&unit, "unit"));
+        }
+    }
+
+    let groups = query_rows(db, "SELECT id, name FROM attribute_group;").await?;
+    for group in groups {
+        if let Some(name) = as_str(&group, "name") {
+            resolve
+                .group
+                .insert(name.to_owned(), id_of(&group, "attribute_group"));
+        }
+    }
+
+    let sets = query_rows(db, "SELECT id, name FROM enum_set;").await?;
+    for set in sets {
+        if let Some(name) = as_str(&set, "name") {
+            resolve
+                .enum_set
+                .insert(name.to_owned(), id_of(&set, "enum_set"));
+        }
+    }
+
+    Ok(resolve)
+}
+
+/// Returns the full record id for a group name.
+fn group_ref(resolve: &Resolve, name: &str) -> String {
+    resolve
+        .group
+        .get(name)
+        .map(|key| format!("attribute_group:{key}"))
+        .unwrap_or_else(|| name.to_owned())
+}
+
+/// Returns the full record id for an enum set name.
+fn enum_set_ref(resolve: &Resolve, name: &str) -> String {
+    resolve
+        .enum_set
+        .get(name)
+        .map(|key| format!("enum_set:{key}"))
+        .unwrap_or_else(|| name.to_owned())
+}
+
+/// Returns the bare unit record key for a symbol (falling back to the input).
+fn unit_ref(resolve: &Resolve, symbol: &str) -> String {
+    resolve
+        .unit
+        .get(symbol)
+        .cloned()
+        .unwrap_or_else(|| symbol.to_owned())
+}
+
+fn string_array(values: Option<&Value>) -> Vec<String> {
+    values
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_string_array(values: &[String]) -> Value {
+    Value::Array(values.iter().map(|s| Value::String(s.clone())).collect())
+}
+
+/// Returns `true` when writing `content` (a partial `MERGE` map) to `existing`
+/// would change any non-volatile field, so a re-import of an unchanged document
+/// can be reported as `skipped` instead of `updated` (idempotent report).
+fn would_change(existing: &Value, content: &Value, ignore: &[&str]) -> bool {
+    let Some(obj) = content.as_object() else {
+        return true;
+    };
+    for (key, value) in obj {
+        if ignore.contains(&key.as_str()) {
+            continue;
+        }
+        if value.is_null() {
+            continue;
+        }
+        match existing.get(key) {
+            Some(existing_value) if existing_value == value => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+/// Volatile fields that are not compared for change detection.
+const VOLATILE: &[&str] = &[
+    "version",
+    "updated_by",
+    "updated_at",
+    "created_at",
+    "failure_count",
+];
+
+// -- language ----------------------------------------------------------------
+
+async fn apply_languages(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    resolve: &mut Resolve,
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    // Build a parent map from the document so `fallback_order` can be derived
+    // as `[parent] + parent.fallback_order` (parents are exported before children).
+    let parent_of: HashMap<&str, Option<&str>> = entries
+        .iter()
+        .map(|e| (as_str(e, "code").unwrap_or(""), as_str(e, "parent")))
+        .collect();
+
+    fn chain<'a>(
+        code: &'a str,
+        parent_of: &HashMap<&'a str, Option<&'a str>>,
+        seen: &mut std::collections::HashSet<&'a str>,
+    ) -> Vec<String> {
+        if !seen.insert(code) {
+            return Vec::new();
+        }
+        match parent_of.get(code).copied().flatten() {
+            Some(parent) => {
+                let mut result = vec![parent.to_owned()];
+                result.extend(chain(parent, parent_of, seen));
+                result
+            }
+            None => Vec::new(),
+        }
+    }
+
+    for entry in entries {
+        let Some(code) = as_str(entry, "code") else {
+            report.error("languages", "", "entry without `code`");
+            continue;
+        };
+        let code = code.to_owned();
+        let parent_code = as_str(entry, "parent");
+        let parent_ref = parent_code.map(|p| format!("lang_{p}"));
+        let fallback = chain(&code, &parent_of, &mut std::collections::HashSet::new());
+        // SurrealDB `option<string>` fields reject JSON `null`, so `parent` is
+        // only included when set (omitting it → `NONE`).
+        let mut content = Map::new();
+        content.insert("code".to_owned(), Value::String(code.clone()));
+        content.insert("fallback_order".to_owned(), json_string_array(&fallback));
+        content.insert(
+            "label".to_owned(),
+            entry.get("label").cloned().unwrap_or_else(|| json!({})),
+        );
+        content.insert("active".to_owned(), Value::Bool(as_bool(entry, "active")));
+        content.insert("is_ui".to_owned(), Value::Bool(as_bool(entry, "is_ui")));
+        if let Some(parent_ref) = parent_ref {
+            content.insert("parent".to_owned(), Value::String(parent_ref));
+        }
+        let content = Value::Object(content);
+
+        match fetch_by_field(db, "language_tree", "code", &code).await? {
+            Some(existing) => {
+                let key = id_of(&existing, "language_tree");
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("languages", &code);
+                    } else {
+                        update_keyed(db, "language_tree", &key, content).await?;
+                        report.updated("languages", &code);
+                    }
+                } else {
+                    report.skipped("languages", &code);
+                }
+                resolve.language.insert(code.clone(), key);
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("languages", &code);
+                } else {
+                    let rec =
+                        create_keyed(db, "language_tree", &format!("lang_{code}"), content).await?;
+                    let key = id_of(&rec, "language_tree");
+                    resolve.language.insert(code.clone(), key);
+                    report.created("languages", &code);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- units -------------------------------------------------------------------
+
+async fn apply_units(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    resolve: &mut Resolve,
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(symbol) = as_str(entry, "symbol") else {
+            report.error("units", "", "entry without `symbol`");
+            continue;
+        };
+        let symbol = symbol.to_owned();
+        let system = as_str(entry, "system").unwrap_or("custom");
+        let canonical_ref = as_str(entry, "canonical_unit").map(|c| unit_ref(resolve, c));
+        // Omit `canonical_unit_id` for the canonical unit itself (NULL is
+        // rejected by the `option<string>` field).
+        let mut content = Map::new();
+        content.insert("symbol".to_owned(), Value::String(symbol.clone()));
+        content.insert(
+            "dimension".to_owned(),
+            Value::String(as_str(entry, "dimension").unwrap_or_default().to_owned()),
+        );
+        content.insert(
+            "factor".to_owned(),
+            entry.get("factor").cloned().unwrap_or(json!(1.0)),
+        );
+        content.insert(
+            "offset".to_owned(),
+            entry.get("offset").cloned().unwrap_or(json!(0.0)),
+        );
+        content.insert(
+            "label".to_owned(),
+            entry.get("label").cloned().unwrap_or_else(|| json!({})),
+        );
+        content.insert("system".to_owned(), Value::String(system.to_owned()));
+        content.insert("readonly".to_owned(), Value::Bool(system == "default"));
+        if let Some(canonical_ref) = canonical_ref {
+            content.insert("canonical_unit_id".to_owned(), Value::String(canonical_ref));
+        }
+        let content = Value::Object(content);
+
+        if system == "default" {
+            // Seeded/system units must already exist with the same conversion.
+            match fetch_by_field(db, "unit", "symbol", &symbol).await? {
+                Some(_) => {
+                    report.skipped("units", &symbol);
+                }
+                None => {
+                    report.warn(
+                        "units",
+                        &symbol,
+                        "`system=default` unit missing in target; skipped",
+                    );
+                    report.skipped("units", &symbol);
+                }
+            }
+            continue;
+        }
+
+        match fetch_by_field(db, "unit", "symbol", &symbol).await? {
+            Some(existing) => {
+                let key = id_of(&existing, "unit");
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("units", &symbol);
+                    } else {
+                        update_keyed(db, "unit", &key, content).await?;
+                        report.updated("units", &symbol);
+                    }
+                } else {
+                    report.skipped("units", &symbol);
+                }
+                resolve.unit.insert(symbol.clone(), key);
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("units", &symbol);
+                } else {
+                    let rec = create_ulid(db, "unit", content).await?;
+                    let key = id_of(&rec, "unit");
+                    resolve.unit.insert(symbol.clone(), key);
+                    report.created("units", &symbol);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- attribute groups --------------------------------------------------------
+
+async fn apply_attribute_groups(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    resolve: &mut Resolve,
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("attribute_groups", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let content = json!({
+            "name": name,
+            "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
+            "position": entry.get("position").cloned().unwrap_or(json!(0)),
+            "applicable_types": entry.get("applicable_types").cloned().unwrap_or_else(|| json!([])),
+        });
+
+        match fetch_by_field(db, "attribute_group", "name", &name).await? {
+            Some(existing) => {
+                let key = id_of(&existing, "attribute_group");
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("attribute_groups", &name);
+                    } else {
+                        update_keyed(db, "attribute_group", &key, content).await?;
+                        report.updated("attribute_groups", &name);
+                    }
+                } else {
+                    report.skipped("attribute_groups", &name);
+                }
+                resolve.group.insert(name.clone(), key);
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("attribute_groups", &name);
+                } else {
+                    let rec = create_ulid(db, "attribute_group", content).await?;
+                    let key = id_of(&rec, "attribute_group");
+                    resolve.group.insert(name.clone(), key);
+                    report.created("attribute_groups", &name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- enum sets ---------------------------------------------------------------
+
+async fn apply_enum_sets(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    resolve: &mut Resolve,
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("enum_sets", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let options = entry
+            .get("options")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create/update the set itself first, then reconcile options by code.
+        let set_content = json!({
+            "name": name,
+            "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
+            "position": entry.get("position").cloned().unwrap_or(json!(0)),
+            "options": json!([]),
+        });
+
+        let existing = fetch_by_field(db, "enum_set", "name", &name).await?;
+        let set_key = match &existing {
+            Some(rec) => id_of(rec, "enum_set"),
+            None => {
+                if mode == Mode::DryRun {
+                    // For dry-run we need a key to reference the set; use the name.
+                    name.clone()
+                } else {
+                    let rec = create_ulid(db, "enum_set", set_content).await?;
+                    let key = id_of(&rec, "enum_set");
+                    report.created("enum_sets", &name);
+                    key
+                }
+            }
+        };
+        if let Some(existing) = &existing {
+            let set_update = json!({
+                "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
+                "position": entry.get("position").cloned().unwrap_or(json!(0)),
+            });
+            if would_change(existing, &set_update, VOLATILE) {
+                if mode == Mode::DryRun {
+                    report.updated("enum_sets", &name);
+                } else {
+                    update_keyed(db, "enum_set", &set_key, set_update).await?;
+                    report.updated("enum_sets", &name);
+                }
+            } else {
+                report.skipped("enum_sets", &name);
+            }
+        }
+        resolve.enum_set.insert(name.clone(), set_key.clone());
+
+        for option in &options {
+            let Some(code) = as_str(option, "code") else {
+                report.error("enum_sets", &name, "option without `code`");
+                continue;
+            };
+            let option_content = json!({
+                "code": code,
+                "labels": option.get("labels").cloned().unwrap_or_else(|| json!({})),
+                "position": option.get("position").cloned().unwrap_or(json!(0)),
+                "active": as_bool(option, "active"),
+            });
+            let option_key = find_enum_option(db, mode, code).await?;
+            match option_key {
+                Some(option) => {
+                    let key = id_of(&option, "enum_option");
+                    if would_change(&option, &option_content, VOLATILE) {
+                        if mode == Mode::DryRun {
+                            report.updated("enum_sets", format!("{name}/{code}"));
+                        } else {
+                            update_keyed(db, "enum_option", &key, option_content).await?;
+                            // ensure the option is linked into this set (options can be shared)
+                            link_enum_option(db, &set_key, &key).await?;
+                            report.updated("enum_sets", format!("{name}/{code}"));
+                        }
+                    } else {
+                        report.skipped("enum_sets", format!("{name}/{code}"));
+                    }
+                }
+                None => {
+                    if mode == Mode::DryRun {
+                        report.created("enum_sets", format!("{name}/{code}"));
+                    } else {
+                        let rec = create_ulid(db, "enum_option", option_content).await?;
+                        let key = id_of(&rec, "enum_option");
+                        link_enum_option(db, &set_key, &key).await?;
+                        report.created("enum_sets", format!("{name}/{code}"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Finds an enum option by its (globally unique) code; returns its record.
+async fn find_enum_option(
+    db: &crate::db::Db,
+    mode: Mode,
+    code: &str,
+) -> Result<Option<Value>, ApiError> {
+    if mode == Mode::DryRun {
+        return Ok(None);
+    }
+    let sql = "SELECT * FROM enum_option WHERE code = $code LIMIT 1;";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("code", code.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Links an option (by bare key) into a set's `options` array (if not present).
+/// Enum options may be shared across sets, so an existing option found by code
+/// is re-linked to the importing set too.
+async fn link_enum_option(
+    db: &crate::db::Db,
+    set_key: &str,
+    option_key: &str,
+) -> Result<(), ApiError> {
+    let option_id = format!("enum_option:{option_key}");
+    // `array::contains` is not a valid function in this SurrealDB build, so
+    // deduplicate after appending with `array::distinct`.
+    let sql = "UPDATE type::record('enum_set', $key) SET options = array::distinct(array::append(options ?? [], $o));";
+    let _ = db
+        .inner()
+        .query(sql)
+        .bind(("key", set_key.to_owned()))
+        .bind(("o", option_id))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+// -- object types ------------------------------------------------------------
+
+async fn apply_object_types(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("object_types", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let system = as_bool(entry, "system");
+        // Omit nullable option fields (`description`, `label_attribute`) when
+        // absent, so `option<string>` fields stay `NONE` instead of `NULL`.
+        let mut content = Map::new();
+        content.insert("name".to_owned(), Value::String(name.clone()));
+        content.insert(
+            "label".to_owned(),
+            entry.get("label").cloned().unwrap_or_else(|| json!({})),
+        );
+        content.insert(
+            "key_attributes".to_owned(),
+            entry
+                .get("key_attributes")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        content.insert("system".to_owned(), Value::Bool(system));
+        if let Some(description) = entry.get("description")
+            && !description.is_null()
+        {
+            content.insert("description".to_owned(), description.clone());
+        }
+        if let Some(label_attribute) = entry.get("label_attribute")
+            && !label_attribute.is_null()
+        {
+            content.insert("label_attribute".to_owned(), label_attribute.clone());
+        }
+        let content = Value::Object(content);
+
+        match fetch_by_field(db, "object_type", "name", &name).await? {
+            Some(existing) => {
+                if system {
+                    report.skipped("object_types", &name);
+                    continue;
+                }
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("object_types", &name);
+                    } else {
+                        update_keyed(db, "object_type", &name, content).await?;
+                        report.updated("object_types", &name);
+                    }
+                } else {
+                    report.skipped("object_types", &name);
+                }
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("object_types", &name);
+                } else {
+                    create_keyed(db, "object_type", &name, content).await?;
+                    report.created("object_types", &name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- attribute definitions ---------------------------------------------------
+
+async fn apply_attribute_definitions(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    resolve: &Resolve,
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("attribute_definitions", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let type_value = as_str(entry, "type").unwrap_or("text");
+
+        let group_ids = string_array(entry.get("group_ids"))
+            .iter()
+            .map(|g| group_ref(resolve, g))
+            .collect::<Vec<_>>();
+        let unit = as_str(entry, "unit").map(|u| unit_ref(resolve, u));
+        let display_unit = as_str(entry, "display_unit").map(|u| unit_ref(resolve, u));
+        let enum_set = as_str(entry, "enum_set").map(|s| enum_set_ref(resolve, s));
+
+        let mut content = Map::new();
+        content.insert("name".to_owned(), Value::String(name.clone()));
+        content.insert(
+            "label".to_owned(),
+            entry.get("label").cloned().unwrap_or_else(|| json!({})),
+        );
+        content.insert("type".to_owned(), Value::String(type_value.to_owned()));
+        content.insert("group_ids".to_owned(), json_string_array(&group_ids));
+        content.insert(
+            "inheritable".to_owned(),
+            Value::Bool(as_bool(entry, "inheritable")),
+        );
+        content.insert("is_key".to_owned(), Value::Bool(as_bool(entry, "is_key")));
+        content.insert(
+            "multilingual".to_owned(),
+            Value::Bool(as_bool(entry, "multilingual")),
+        );
+        content.insert(
+            "applicable_types".to_owned(),
+            entry
+                .get("applicable_types")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        content.insert(
+            "required_types".to_owned(),
+            entry
+                .get("required_types")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        content.insert(
+            "computed".to_owned(),
+            Value::Bool(as_bool(entry, "computed")),
+        );
+        if let Some(rule) = as_str(entry, "computed_rule") {
+            content.insert("computed_rule".to_owned(), Value::String(rule.to_owned()));
+        }
+        content.insert(
+            "dependencies".to_owned(),
+            entry
+                .get("dependencies")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+        content.insert(
+            "computed_reads_inherited".to_owned(),
+            Value::Bool(as_bool(entry, "computed_reads_inherited")),
+        );
+        if let Some(u) = unit {
+            content.insert("unit_id".to_owned(), Value::String(u));
+        }
+        if let Some(u) = display_unit {
+            content.insert("display_unit_id".to_owned(), Value::String(u));
+        }
+        if let Some(s) = enum_set {
+            content.insert("enum_set_id".to_owned(), Value::String(s));
+        }
+        if let Some(constraints) = entry.get("constraints")
+            && !constraints.is_null()
+        {
+            content.insert("constraints".to_owned(), constraints.clone());
+        }
+        if let Some(default) = entry.get("default_value")
+            && !default.is_null()
+        {
+            content.insert("default_value".to_owned(), default.clone());
+        }
+        if let Some(description) = as_str(entry, "description") {
+            content.insert(
+                "description".to_owned(),
+                Value::String(description.to_owned()),
+            );
+        }
+        content.insert("version".to_owned(), json!(1));
+        let content = Value::Object(content);
+
+        match fetch_by_field(db, "attribute_definition", "name", &name).await? {
+            Some(existing) => {
+                // Block incompatible type changes (per the datentypwechsel matrix).
+                let existing_type = as_str(&existing, "type").unwrap_or_default();
+                if !existing_type.is_empty() && existing_type != type_value {
+                    report.error(
+                        "attribute_definitions",
+                        &name,
+                        format!(
+                            "type mismatch: target is `{existing_type}`, source `{type_value}` (blocked per datentypwechsel)"
+                        ),
+                    );
+                    continue;
+                }
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("attribute_definitions", &name);
+                    } else {
+                        let key = id_of(&existing, "attribute_definition");
+                        update_keyed(db, "attribute_definition", &key, content).await?;
+                        report.updated("attribute_definitions", &name);
+                    }
+                } else {
+                    report.skipped("attribute_definitions", &name);
+                }
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("attribute_definitions", &name);
+                } else {
+                    create_ulid(db, "attribute_definition", content).await?;
+                    report.created("attribute_definitions", &name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- relation definitions ----------------------------------------------------
+
+async fn apply_relation_definitions(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("relation_definitions", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let system = as_bool(entry, "system");
+        let content = json!({
+            "name": name,
+            "kind": as_str(entry, "kind").unwrap_or("aggregation"),
+            "source_types": entry.get("source_types").cloned().unwrap_or_else(|| json!([])),
+            "target_types": entry.get("target_types").cloned().unwrap_or_else(|| json!([])),
+            "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
+            "attributes": entry.get("attributes").cloned().unwrap_or_else(|| json!([])),
+            "system": system,
+        });
+
+        let key = format!("rel_{name}");
+        match fetch_by_field(db, "relation_definition", "name", &name).await? {
+            Some(existing) => {
+                if system {
+                    report.skipped("relation_definitions", &name);
+                    continue;
+                }
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("relation_definitions", &name);
+                    } else {
+                        let key = id_of(&existing, "relation_definition");
+                        update_keyed(db, "relation_definition", &key, content).await?;
+                        report.updated("relation_definitions", &name);
+                    }
+                } else {
+                    report.skipped("relation_definitions", &name);
+                }
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("relation_definitions", &name);
+                } else {
+                    create_keyed(db, "relation_definition", &key, content).await?;
+                    report.created("relation_definitions", &name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- business rules ----------------------------------------------------------
+
+async fn apply_business_rules(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(name) = as_str(entry, "name") else {
+            report.error("business_rules", "", "entry without `name`");
+            continue;
+        };
+        let name = name.to_owned();
+        let content = json!({
+            "name": name,
+            "type": as_str(entry, "type").unwrap_or("validation"),
+            "applies_to": entry.get("applies_to").cloned().unwrap_or_else(|| json!([])),
+            "script": entry.get("script").cloned().unwrap_or_else(|| json!("")),
+            "state": "disabled", // imported rules start disabled (review before activation)
+            "failure_count": 0,
+            "version": 1,
+            "updated_by": "system:config-import",
+        });
+
+        match fetch_by_field(db, "business_rule", "name", &name).await? {
+            Some(existing) => {
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("business_rules", &name);
+                    } else {
+                        let key = id_of(&existing, "business_rule");
+                        update_keyed(db, "business_rule", &key, content).await?;
+                        report.updated("business_rules", &name);
+                    }
+                } else {
+                    report.skipped("business_rules", &name);
+                }
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("business_rules", &name);
+                } else {
+                    create_ulid(db, "business_rule", content).await?;
+                    report.created("business_rules", &name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Applies a parsed MCF document against the target environment.
+async fn apply_document(
+    db: &crate::db::Db,
+    doc: &Value,
+    mode: Mode,
+) -> Result<ConfigReport, ApiError> {
+    let mut report = ConfigReport::new(mode);
+    let mut resolve = preload_resolve(db).await?;
+    let sections = doc
+        .get("sections")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    if mode == Mode::Replace {
+        report.warn(
+            "config",
+            "*",
+            "`replace` is currently treated as `merge` (no deletion of target-only entities); \
+             remove before using as a destructive sync",
+        );
+    }
+
+    for section in SECTIONS {
+        let entries = sections
+            .get(*section)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        match *section {
+            "languages" => apply_languages(db, mode, &entries, &mut resolve, &mut report).await?,
+            "units" => apply_units(db, mode, &entries, &mut resolve, &mut report).await?,
+            "attribute_groups" => {
+                apply_attribute_groups(db, mode, &entries, &mut resolve, &mut report).await?
+            }
+            "enum_sets" => apply_enum_sets(db, mode, &entries, &mut resolve, &mut report).await?,
+            "object_types" => apply_object_types(db, mode, &entries, &mut report).await?,
+            "attribute_definitions" => {
+                apply_attribute_definitions(db, mode, &entries, &resolve, &mut report).await?
+            }
+            "relation_definitions" => {
+                apply_relation_definitions(db, mode, &entries, &mut report).await?
+            }
+            "business_rules" => apply_business_rules(db, mode, &entries, &mut report).await?,
+            _ => {}
+        }
+    }
+
+    Ok(report)
+}
+
+/// Imports an MCF configuration document (admin/superadmin).
+#[utoipa::path(
+    post,
+    path = "/config/import",
+    params(ConfigImportQuery),
+    request_body = Value,
+    responses(
+        (status = 200, description = "Import report", body = Value),
+        (status = 400, description = "Invalid document", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn import_config(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<ConfigImportQuery>,
+    Json(doc): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let mode = parse_mode(&params)?;
+
+    // Validate the document envelope.
+    let format_version = doc
+        .get("format_version")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !format_version.is_empty() && format_version != "1.0" {
+        return Err(ApiError::bad_request(format!(
+            "unsupported `format_version` `{format_version}` (expected 1.0)"
+        )));
+    }
+    if doc.get("sections").and_then(Value::as_object).is_none() {
+        return Err(ApiError::bad_request(
+            "document is missing a `sections` object",
+        ));
+    }
+
+    let report = apply_document(&state.db, &doc, mode).await?;
+    Ok(Json(serde_json::to_value(report).unwrap_or(Value::Null)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) – Erweiterung des Daten-Export/Imports (MEF) um die Übertragung des Datenmodells / der Referenzdaten.
 - **Relevante Phasen:** Phase 9 (spätere Ausbaustufen), ergänzend zum MVP-Import/Export
-- **Stand:** Umsetzungsreif (Implementierungsvorschlag)
+- **Stand:** Umsetzungsreif (Implementierungsvorschlag). **Umsetzungsstatus:** `GET /config/export` und `POST /config/import?mode=dry_run|merge` sind implementiert und E2E-verifiziert (`crates/pim-core/src/api/config.rs`); `replace`-Modus, `?async=true` (Jobtyp `config_import`) und die Zweiphasen-Auflösung für alle Forward-Referenzen sind noch **Ausbaustufe**.
 
 ## 1. Zielsetzung
 
