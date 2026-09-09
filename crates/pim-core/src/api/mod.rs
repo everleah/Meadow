@@ -3,6 +3,7 @@
 pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
+pub mod config;
 pub mod connectors;
 pub mod enum_sets;
 pub mod groups;
@@ -39,6 +40,7 @@ use utoipa::OpenApi;
         jobs::list_job_runs,
         jobs::update_job_run,
         jobs::run_job,
+        config::export_config,
         connectors::create_connector,
         connectors::get_connector,
         connectors::list_connectors,
@@ -130,6 +132,7 @@ use utoipa::OpenApi;
         auth::LoginResponse,
         auth::MeResponse,
         crate::auth::Impersonator,
+        config::ConfigExportQuery,
         connectors::CreateConnector,
         connectors::UpdateConnector,
         connectors::ListConnectors,

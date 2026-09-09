@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/auth/login", post(api::auth::login))
         .route("/auth/me", get(api::auth::me))
+        .route("/config/export", get(api::config::export_config))
         .route(
             "/auth/impersonate/{user_id}",
             post(api::auth::impersonate_user),
