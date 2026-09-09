@@ -8,6 +8,7 @@ rust-version.workspace = true
 argon2 = "0.5.3"
 async-nats = "0.50.0"
 axum = "0.8.9"
+base64 = "0.22"
 bytes = "1"
 futures-util = "0.3"
 jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }

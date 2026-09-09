@@ -43,6 +43,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/me", get(api::auth::me))
         .route("/config/export", get(api::config::export_config))
         .route("/config/import", post(api::config::import_config))
+        .route("/exports", post(api::exports::create_export))
+        .route("/exports/{run_id}/file", get(api::exports::get_export_file))
         .route(
             "/auth/impersonate/{user_id}",
             post(api::auth::impersonate_user),

@@ -8,13 +8,13 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 
 use crate::app::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ROLE_VIEWER, api_key_or_role};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -179,9 +179,10 @@ async fn subtree_codes(db: &Db, code: &str) -> Result<Vec<String>, ApiError> {
     )
 )]
 pub async fn list_languages(
-    AuthUser(_claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    api_key_or_role(&headers, &state.config, ROLE_VIEWER)?;
     let mut response = state
         .db
         .inner()

@@ -102,6 +102,10 @@ pub struct ListObjects {
     /// (via `collection_member`; flat, no hierarchy).
     #[serde(default)]
     pub collection: Option<String>,
+    /// Comma-separated object ids (bare keys or full `object:<key>`) to
+    /// return; used for grid selections and saved-search results.
+    #[serde(default)]
+    pub ids: Option<String>,
     /// Only return objects that are NOT assigned to any category (no
     /// `category_member` reference as member); the "Nicht kategorisiert" entry.
     #[serde(default)]
@@ -608,6 +612,23 @@ pub async fn list_objects(
                 .to_owned(),
         );
     }
+    let mut object_ids: Vec<String> = Vec::new();
+    if let Some(ids) = &params.ids {
+        object_ids = ids
+            .split(',')
+            .filter_map(|key| {
+                let key = key.trim();
+                if key.is_empty() {
+                    return None;
+                }
+                Some(key.strip_prefix("object:").unwrap_or(key).to_owned())
+            })
+            .collect();
+        if !object_ids.is_empty() {
+            conditions
+                .push("id IN array::map($object_ids, |$k| type::record('object', $k))".to_owned());
+        }
+    }
     let where_clause = if conditions.is_empty() {
         String::new()
     } else {
@@ -632,6 +653,9 @@ pub async fn list_objects(
     if let Some(collection) = &params.collection {
         let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;
         query = query.bind(("collection_member_ids", keys));
+    }
+    if !object_ids.is_empty() {
+        query = query.bind(("object_ids", object_ids));
     }
     let mut response = query
         .bind(("limit", limit))

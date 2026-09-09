@@ -2716,6 +2716,7 @@ dependencies = [
  "argon2",
  "async-nats",
  "axum",
+ "base64",
  "bytes",
  "futures-util",
  "jsonwebtoken 11.0.0",

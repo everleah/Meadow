@@ -2190,6 +2190,65 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def create_export(
+        self,
+        token: str,
+        *,
+        source: dict,
+        fields: list[str] | None = None,
+        format: str = "csv",
+        locales: list[str] | None = None,
+        options: dict | None = None,
+    ) -> dict:
+        """Queues a structured export (``POST /exports``, editor+).
+
+        Returns ``{"job_run_id": ...}``. The worker resolves the ``source`` and
+        stores the serializer-ready output in ``job_run.result``; the file is
+        fetched later via :meth:`get_export_file`.
+        """
+        payload: dict[str, object] = {"source": source, "format": format}
+        if fields:
+            payload["fields"] = fields
+        if locales:
+            payload["locales"] = locales
+        if options:
+            payload["options"] = options
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/exports",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def get_export_file(
+        self,
+        token: str,
+        run_id: str,
+        *,
+        format: str = "csv",
+    ) -> tuple[bytes, str]:
+        """Downloads an export file (``GET /exports/{run_id}/file``, editor+).
+
+        Returns ``(content, filename)``. The core reads ``job_run.result`` and
+        serialises the file on the fly, so no binary blob is persisted.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/exports/{run_id}/file",
+                params={"format": format},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            filename = "meadow-export"
+            disposition = response.headers.get("content-disposition", "")
+            if "filename=" in disposition:
+                filename = disposition.split("filename=")[-1].rstrip('"').split('"')[0]
+            return response.content, filename
+
     async def create_object_type(
         self,
         token: str,

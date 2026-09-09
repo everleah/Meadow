@@ -48,6 +48,12 @@ def is_admin() -> bool:
     return "admin" in current_roles or "superadmin" in current_roles
 
 
+def is_editor() -> bool:
+    """Whether the current user may edit data (editor, admin or superadmin)."""
+    current_roles = roles()
+    return any(role in current_roles for role in ("editor", "admin", "superadmin"))
+
+
 def is_superadmin() -> bool:
     """Whether the current user has superadmin privileges (impersonation)."""
     return "superadmin" in roles()

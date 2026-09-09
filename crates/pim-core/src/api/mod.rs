@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod connectors;
 pub mod enum_sets;
+pub mod exports;
 pub mod groups;
 pub mod health;
 pub mod imports;
@@ -47,6 +48,8 @@ use utoipa::OpenApi;
         connectors::list_connectors,
         connectors::update_connector,
         connectors::delete_connector,
+        exports::create_export,
+        exports::get_export_file,
         imports::create_import,
         imports::get_import_document,
         imports::complete_import,
@@ -135,6 +138,10 @@ use utoipa::OpenApi;
         crate::auth::Impersonator,
         config::ConfigExportQuery,
         config::ConfigImportQuery,
+        exports::ExportRequest,
+        exports::ExportSource,
+        exports::ExportOptions,
+        exports::ExportFileQuery,
         connectors::CreateConnector,
         connectors::UpdateConnector,
         connectors::ListConnectors,

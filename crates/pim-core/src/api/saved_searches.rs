@@ -23,7 +23,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -617,13 +617,11 @@ pub async fn delete_saved_search(
     responses((status = 200, description = "Matching object ids", body = Value))
 )]
 pub async fn execute_saved_search(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
     let key = parse_key(&id, "object")?;
     let object = fetch_object(&state.db, key)
         .await?
@@ -1132,14 +1130,12 @@ pub async fn refresh_collection(
     responses((status = 200, description = "Members", body = Vec<Value>))
 )]
 pub async fn list_collection_members(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
     let key = parse_key(&id, "object")?;
     let collection = fetch_object(&state.db, key)
         .await?
