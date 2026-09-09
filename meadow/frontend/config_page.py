@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import tempfile
 
 from nicegui import app, ui
 
@@ -84,15 +87,11 @@ async def config_page() -> None:
             checks: dict[str, ui.element] = {}
             with ui.row().classes("flex-wrap gap-4 mt-2"):
                 for section in SECTIONS:
-                    checks[section] = ui.checkbox(section, value=True).props(
-                        "dense"
-                    )
+                    checks[section] = ui.checkbox(section, value=True).props("dense")
             include_system = ui.switch(t("config.include_system"))
 
             async def on_export() -> None:
-                selected = [
-                    name for name, box in checks.items() if box.value
-                ]
+                selected = [name for name, box in checks.items() if box.value]
                 try:
                     doc = await client.export_config(
                         token,
@@ -106,7 +105,18 @@ async def config_page() -> None:
                     ui.notify(t("config.export_failed").format(err=exc), type="negative")
                     return
                 filename = "meadow-config.json"
-                ui.download(json.dumps(doc, indent=2), filename, "application/json")
+                # NiceGUI treats a `str` `src` as a URL and a `bytes` `src` as a
+                # Blob that is revoked immediately (both unreliable). Writing to
+                # a temp file and downloading the path serves it over HTTP, which
+                # the browser saves reliably.
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".json", delete=False, encoding="utf-8"
+                ) as f:
+                    json.dump(doc, f, indent=2)
+                    tmp_path = f.name
+                ui.download(tmp_path, filename, "application/json")
+                # Remove the temp file after the browser has fetched it.
+                asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
                 ui.notify(t("config.export_ok"), type="positive")
 
             with ui.row().classes("mt-3"):
@@ -118,21 +128,23 @@ async def config_page() -> None:
             ui.label(t("config.import_hint")).classes("text-caption text-gray-500")
 
             # The JSON body lives in the textarea; the upload fills it.
-            body_box = ui.textarea(t("config.body")).props(
-                "outlined monospace"
-            ).classes("w-full h-40")
+            body_box = (
+                ui.textarea(t("config.body")).props("outlined monospace").classes("w-full h-40")
+            )
 
-            def on_upload(event: ui.upload) -> None:
-                body_box.value = event.content.read().decode("utf-8", errors="replace")
+            async def on_upload(event) -> None:
+                body_box.value = await event.file.text("utf-8")
                 body_box.update()
 
             ui.upload(on_upload=on_upload, auto_upload=True).props(
                 "multiple=false accept=.json,application/json"
             ).classes("mt-2")
 
-            mode_select = ui.select(
-                {m: m for m in MODES}, value="merge"
-            ).props("filled dense").classes("mt-2 w-48")
+            mode_select = (
+                ui.select({m: m for m in MODES}, value="merge")
+                .props("filled dense")
+                .classes("mt-2 w-48")
+            )
 
             def _parse_body() -> dict:
                 raw = (body_box.value or "").strip()
