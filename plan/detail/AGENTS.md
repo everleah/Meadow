@@ -17,6 +17,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `api-design.md` — REST API design (section 5)
   - `jobs-scheduler.md` — background jobs & scheduler (section 6)
   - `integration-eventsystem.md` — integration & event system (section 7)
+  - `konfiguration-export-import.md` — configuration export & import (MCF, extension of the data export/import, section 7)
   - `workflow-freigaben.md` — workflow & releases (section 8)
   - `business-rules.md` — Business Rules: Python scripting, sandbox, execution & lifecycle (section 8)
   - `benutzer-gruppen-rechte.md` — users, groups & permissions (section 9)
