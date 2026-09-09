@@ -298,6 +298,9 @@ DEFINE TABLE IF NOT EXISTS import_document;
 DEFINE FIELD IF NOT EXISTS document ON TABLE import_document TYPE object;
 DEFINE FIELD IF NOT EXISTS format_version ON TABLE import_document TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS source ON TABLE import_document TYPE option<string>;
+-- Document kind: `mef` (Meadow Exchange Format, default) or `mcf`
+-- (Meadow Configuration Format). The worker dispatches on it.
+DEFINE FIELD IF NOT EXISTS kind ON TABLE import_document TYPE option<string> DEFAULT "mef";
 DEFINE FIELD OVERWRITE created_at ON TABLE import_document TYPE datetime DEFAULT time::now();
 DEFINE FIELD IF NOT EXISTS created_by ON TABLE import_document TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_import_document_created ON TABLE import_document FIELDS created_at;

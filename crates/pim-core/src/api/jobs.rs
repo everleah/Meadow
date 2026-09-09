@@ -21,12 +21,13 @@ use crate::error::ApiError;
 
 const TABLE: &str = "job_definition";
 const RUN_TABLE: &str = "job_run";
-const VALID_JOB_TYPES: [&str; 5] = [
+const VALID_JOB_TYPES: [&str; 6] = [
     "outbound_export",
     "inbound_import",
     "business_rule",
     "bulk_operation",
     "collection_refresh",
+    "config_import",
 ];
 const VALID_RUN_STATUSES: [&str; 5] = ["pending", "running", "success", "failed", "retry"];
 

@@ -10,6 +10,7 @@ import os
 from meadow.worker.bulk import build_bulk_handler
 from meadow.worker.business_rules import build_business_rule_handler
 from meadow.worker.collections import build_collection_refresh_handler
+from meadow.worker.config_import import build_config_import_handler
 from meadow.worker.connectors import load_webhook_configs
 from meadow.worker.exports import build_export_handler
 from meadow.worker.http import loopback_host
@@ -68,6 +69,7 @@ async def main() -> None:
                 "outbound_export": build_export_handler(core_url, api_key=api_key),
                 "bulk_operation": build_bulk_handler(core_url, api_key=api_key),
                 "collection_refresh": build_collection_refresh_handler(core_url, api_key=api_key),
+                "config_import": build_config_import_handler(core_url, api_key=api_key),
             },
             log_sender=log_sender,
         )

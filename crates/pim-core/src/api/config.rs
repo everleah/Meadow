@@ -11,12 +11,14 @@ use std::collections::HashMap;
 
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::api::jobs::queue_run;
 use crate::app::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ROLE_ADMIN, api_key_or_role};
 use crate::error::ApiError;
 
 /// Query parameters for `GET /config/export`.
@@ -516,6 +518,10 @@ pub struct ConfigImportQuery {
     /// Alias for `mode=dry_run`.
     #[serde(default)]
     pub dry_run: bool,
+    /// When `true`, store the document and queue a `config_import` job instead
+    /// of applying synchronously (202 + `job_run_id`).
+    #[serde(default, rename = "async")]
+    pub async_: bool,
 }
 
 /// The configured import mode.
@@ -1854,28 +1860,71 @@ async fn apply_document(
     Ok(report)
 }
 
-/// Imports an MCF configuration document (admin/superadmin).
+/// Persists an MCF document in `import_document` (`kind = "mcf"`) and returns
+/// its record id (used by the `config_import` job).
+async fn store_mcf_document(
+    state: &AppState,
+    doc: &Value,
+    format_version: &str,
+    user_id: &str,
+) -> Result<String, ApiError> {
+    let mut content = serde_json::Map::new();
+    content.insert("document".to_owned(), doc.clone());
+    if !format_version.is_empty() {
+        content.insert(
+            "format_version".to_owned(),
+            Value::String(format_version.to_owned()),
+        );
+    }
+    content.insert("kind".to_owned(), Value::String("mcf".to_owned()));
+    content.insert("created_by".to_owned(), Value::String(user_id.to_owned()));
+    let sql = "
+        LET $d = type::record('import_document', rand::ulid());
+        CREATE $d CONTENT $content;
+        SELECT * FROM $d;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("content", Value::Object(content)))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    let record = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("created import document was not returned"))?;
+    Ok(record
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned())
+}
+
+/// Imports an MCF configuration document (admin/superadmin, or the worker via
+/// `X-Api-Key`). With `?async=true` the document is stored and a `config_import`
+/// job is queued (202 + `job_run_id`); otherwise it is applied synchronously.
 #[utoipa::path(
     post,
     path = "/config/import",
     params(ConfigImportQuery),
     request_body = Value,
     responses(
-        (status = 200, description = "Import report", body = Value),
+        (status = 200, description = "Import report (sync)", body = Value),
+        (status = 202, description = "Import job queued (async)", body = Value),
         (status = 400, description = "Invalid document", body = Value),
         (status = 401, description = "Unauthorized", body = Value),
         (status = 403, description = "Forbidden", body = Value)
     )
 )]
 pub async fn import_config(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ConfigImportQuery>,
     Json(doc): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let user_id = api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
     let mode = parse_mode(&params)?;
 
     // Validate the document envelope.
@@ -1894,8 +1943,33 @@ pub async fn import_config(
         ));
     }
 
+    // Async path: persist the document and queue a `config_import` job.
+    if params.async_ {
+        let document_id = store_mcf_document(&state, &doc, format_version, &user_id).await?;
+        let parameters = json!({ "document_id": document_id, "mode": mode.label() });
+        let (_, run) = queue_run(
+            &state.db,
+            &state.config,
+            None,
+            "config_import",
+            parameters,
+            "manual",
+            &user_id,
+        )
+        .await?;
+        let run_id = run
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        return Ok((StatusCode::ACCEPTED, Json(json!({ "job_run_id": run_id }))));
+    }
+
     let report = apply_document(&state.db, &doc, mode).await?;
-    Ok(Json(serde_json::to_value(report).unwrap_or(Value::Null)))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::to_value(report).unwrap_or(Value::Null)),
+    ))
 }
 
 #[cfg(test)]
@@ -1970,6 +2044,7 @@ mod tests {
         let replace = ConfigImportQuery {
             mode: Some("replace".to_owned()),
             dry_run: false,
+            async_: false,
         };
         assert_eq!(parse_mode(&replace).expect("replace"), Mode::Replace);
         assert_eq!(parse_mode(&replace).expect("replace").label(), "replace");
@@ -1977,20 +2052,33 @@ mod tests {
         let merge = ConfigImportQuery {
             mode: Some("merge".to_owned()),
             dry_run: false,
+            async_: false,
         };
         assert_eq!(parse_mode(&merge).expect("merge"), Mode::Merge);
 
         let dry = ConfigImportQuery {
             mode: None,
             dry_run: true,
+            async_: false,
         };
         assert_eq!(parse_mode(&dry).expect("dry_run"), Mode::DryRun);
 
         let bad = ConfigImportQuery {
             mode: Some("nope".to_owned()),
             dry_run: false,
+            async_: false,
         };
         assert!(parse_mode(&bad).is_err(), "unknown mode must fail");
+
+        let async_q = ConfigImportQuery {
+            mode: Some("merge".to_owned()),
+            dry_run: false,
+            async_: true,
+        };
+        assert!(
+            async_q.async_,
+            "async_ must round-trip the `async` query flag"
+        );
     }
 
     #[test]
