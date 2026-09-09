@@ -519,7 +519,7 @@ pub struct ConfigImportQuery {
 }
 
 /// The configured import mode.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mode {
     DryRun,
     Merge,
@@ -557,6 +557,7 @@ struct Summary {
     created: usize,
     updated: usize,
     skipped: usize,
+    deleted: usize,
     errors: usize,
     warnings: usize,
 }
@@ -567,6 +568,7 @@ struct SectionReport {
     created: Vec<String>,
     updated: Vec<String>,
     skipped: Vec<String>,
+    deleted: Vec<String>,
     errors: Vec<String>,
 }
 
@@ -615,6 +617,11 @@ impl ConfigReport {
     fn skipped(&mut self, section: &str, key: impl Into<String>) {
         self.section(section).skipped.push(key.into());
         self.summary.skipped += 1;
+    }
+
+    fn deleted(&mut self, section: &str, key: impl Into<String>) {
+        self.section(section).deleted.push(key.into());
+        self.summary.deleted += 1;
     }
 
     fn error(&mut self, section: &str, key: impl Into<String>, message: impl Into<String>) {
@@ -856,6 +863,235 @@ const VOLATILE: &[&str] = &[
     "created_at",
     "failure_count",
 ];
+
+// -- replace (target-only cleanup) ------------------------------------------
+
+/// The stable-key field per section. `languages` uses `code`, `units` uses
+/// `symbol`, everything else uses `name`.
+fn key_field(section: &str) -> &'static str {
+    match section {
+        "languages" => "code",
+        "units" => "symbol",
+        _ => "name",
+    }
+}
+
+/// Runs a `SELECT count() ...` and returns the count.
+async fn count_rows(
+    db: &crate::db::Db,
+    sql: &str,
+    binds: &[(&str, String)],
+) -> Result<usize, ApiError> {
+    let mut query = db.inner().query(sql);
+    for (name, value) in binds {
+        query = query.bind((name.to_owned(), value.clone()));
+    }
+    let mut response = query.await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    // `SELECT count()` yields `[{ "count": N }]`, so read the field, not the row.
+    Ok(rows
+        .first()
+        .and_then(|r| r.get("count"))
+        .and_then(Value::as_i64)
+        .map(|n| n.max(0) as usize)
+        .unwrap_or(0))
+}
+
+/// Binds a single named string and runs the count query.
+macro_rules! count_where {
+    ($db:expr, $sql:expr, $name:expr, $value:expr) => {
+        count_rows($db, $sql, &[($name, ($value).to_owned())]).await
+    };
+}
+
+/// Returns `true` when a target-only record is referenced by other records
+/// (or by objects) so it must not be deleted by a `replace`.
+async fn record_in_use(db: &crate::db::Db, section: &str, row: &Value) -> Result<bool, ApiError> {
+    match section {
+        "languages" => {
+            // Block `root` (handled by the caller) and any node with children or
+            // referenced as a parent.
+            let code = as_str(row, "code").unwrap_or_default();
+            let key = format!("lang_{code}");
+            let children = count_where!(
+                db,
+                "SELECT count() FROM language_tree WHERE parent = $key;",
+                "key",
+                key
+            )?;
+            Ok(children > 0)
+        }
+        "units" => {
+            // `unit_id`/`display_unit_id` store the bare record key (e.g. `unit_m`).
+            let key = id_of(row, "unit");
+            let n = count_rows(
+                db,
+                "SELECT count() FROM attribute_definition WHERE \
+                 unit_id = $key OR display_unit_id = $key;",
+                &[("key", key)],
+            )
+            .await?;
+            Ok(n > 0)
+        }
+        "attribute_groups" => {
+            // `group_ids` stores full record ids (e.g. `attribute_group:<ulid>`).
+            let full = format!("attribute_group:{}", id_of(row, "attribute_group"));
+            let n = count_rows(
+                db,
+                "SELECT count() FROM attribute_definition WHERE $full IN group_ids;",
+                &[("full", full)],
+            )
+            .await?;
+            Ok(n > 0)
+        }
+        "enum_sets" => {
+            // `enum_set_id` stores the full record id (e.g. `enum_set:<ulid>`).
+            let full = format!("enum_set:{}", id_of(row, "enum_set"));
+            let n = count_rows(
+                db,
+                "SELECT count() FROM attribute_definition WHERE enum_set_id = $full;",
+                &[("full", full)],
+            )
+            .await?;
+            Ok(n > 0)
+        }
+        "object_types" => {
+            let name = as_str(row, "name").unwrap_or_default();
+            let obj = count_where!(
+                db,
+                "SELECT count() FROM object WHERE type = $name;",
+                "name",
+                name
+            )?;
+            let referenced = count_where!(
+                db,
+                "SELECT count() FROM attribute_definition WHERE \
+                 $name IN applicable_types OR $name IN required_types;",
+                "name",
+                name
+            )?;
+            let group_ref = count_where!(
+                db,
+                "SELECT count() FROM attribute_group WHERE $name IN applicable_types;",
+                "name",
+                name
+            )?;
+            let rel_ref = count_where!(
+                db,
+                "SELECT count() FROM relation_definition WHERE \
+                 $name IN source_types OR $name IN target_types;",
+                "name",
+                name
+            )?;
+            let rule_ref = count_where!(
+                db,
+                "SELECT count() FROM business_rule WHERE $name IN applies_to;",
+                "name",
+                name
+            )?;
+            Ok(obj + referenced + group_ref + rel_ref + rule_ref > 0)
+        }
+        "attribute_definitions" => {
+            let name = as_str(row, "name").unwrap_or_default();
+            let ot_ref = count_where!(
+                db,
+                "SELECT count() FROM object_type WHERE \
+                 $name IN key_attributes OR label_attribute = $name;",
+                "name",
+                name
+            )?;
+            let value_use = count_where!(
+                db,
+                "SELECT count() FROM object WHERE $name IN object::keys(attributes ?? {});",
+                "name",
+                name
+            )?;
+            Ok(ot_ref + value_use > 0)
+        }
+        "relation_definitions" => {
+            let key = format!("rel_{}", as_str(row, "name").unwrap_or_default());
+            let n = count_where!(
+                db,
+                "SELECT count() FROM reference WHERE definition_id = $key;",
+                "key",
+                key
+            )?;
+            Ok(n > 0)
+        }
+        "business_rules" => {
+            // Business rules are not referenced in a blocking way by objects.
+            Ok(false)
+        }
+        _ => Ok(true),
+    }
+}
+
+/// Deletes target-only (non-system) records of a section whose stable key is
+/// not present in the imported document. Records that are still in use are
+/// reported as errors and left in place (never deleted). Only invoked for
+/// `Mode::Replace`.
+async fn replace_target_only(
+    db: &crate::db::Db,
+    section: &str,
+    entries: &[Value],
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    let (table, system_filter) = match section {
+        "languages" => ("language_tree", None),
+        "units" => ("unit", Some("system != 'default'")),
+        "attribute_groups" => ("attribute_group", None),
+        "enum_sets" => ("enum_set", None),
+        "object_types" => ("object_type", Some("system != true")),
+        "attribute_definitions" => ("attribute_definition", None),
+        "relation_definitions" => ("relation_definition", Some("system != true")),
+        "business_rules" => ("business_rule", None),
+        _ => return Ok(()),
+    };
+    let field = key_field(section);
+    let keep: std::collections::HashSet<String> = entries
+        .iter()
+        .filter_map(|e| as_str(e, field).map(str::to_owned))
+        .collect();
+    let keep_json = Value::Array(keep.iter().map(|s| Value::String(s.clone())).collect());
+
+    let mut sql = format!("SELECT id, {field} FROM {table} WHERE {field} NOT IN $keep");
+    if let Some(filter) = system_filter {
+        sql.push_str(&format!(" AND {filter}"));
+    }
+    if section == "languages" {
+        sql.push_str(" AND code != 'root'");
+    }
+    let mut response = db
+        .inner()
+        .query(&sql)
+        .bind(("keep", keep_json))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+
+    for row in rows {
+        let key = as_str(&row, field).unwrap_or_default().to_owned();
+        if key.is_empty() {
+            continue;
+        }
+        if record_in_use(db, section, &row).await? {
+            report.error(section, &key, "in use; replace left it in place");
+            continue;
+        }
+        let rec_key = id_of(&row, table);
+        if rec_key.is_empty() {
+            continue;
+        }
+        let del = format!("DELETE FROM {table} WHERE id = type::record('{table}', $key);");
+        db.inner()
+            .query(&del)
+            .bind(("key", rec_key))
+            .await?
+            .check()?;
+        report.deleted(section, &key);
+    }
+    Ok(())
+}
 
 // -- language ----------------------------------------------------------------
 
@@ -1577,12 +1813,17 @@ async fn apply_document(
         .unwrap_or_default();
 
     if mode == Mode::Replace {
-        report.warn(
-            "config",
-            "*",
-            "`replace` is currently treated as `merge` (no deletion of target-only entities); \
-             remove before using as a destructive sync",
-        );
+        // Delete target-only (non-system) records first, in reverse dependency
+        // order (dependents before their dependencies), so the applied section
+        // matches the document exactly. In-use records are kept (reported as
+        // errors) — never deleted. Only sections the document includes are
+        // replaced; absent sections are left untouched.
+        for section in SECTIONS.iter().rev() {
+            let Some(entries) = sections.get(*section).and_then(Value::as_array).cloned() else {
+                continue;
+            };
+            replace_target_only(db, section, &entries, &mut report).await?;
+        }
     }
 
     for section in SECTIONS {
@@ -1722,5 +1963,42 @@ mod tests {
         assert!(now.ends_with('Z'), "must be UTC with Z suffix");
         assert!(now.len() >= 20);
         assert!(now.contains('T'));
+    }
+
+    #[test]
+    fn parse_mode_supports_replace() {
+        let replace = ConfigImportQuery {
+            mode: Some("replace".to_owned()),
+            dry_run: false,
+        };
+        assert_eq!(parse_mode(&replace).expect("replace"), Mode::Replace);
+        assert_eq!(parse_mode(&replace).expect("replace").label(), "replace");
+
+        let merge = ConfigImportQuery {
+            mode: Some("merge".to_owned()),
+            dry_run: false,
+        };
+        assert_eq!(parse_mode(&merge).expect("merge"), Mode::Merge);
+
+        let dry = ConfigImportQuery {
+            mode: None,
+            dry_run: true,
+        };
+        assert_eq!(parse_mode(&dry).expect("dry_run"), Mode::DryRun);
+
+        let bad = ConfigImportQuery {
+            mode: Some("nope".to_owned()),
+            dry_run: false,
+        };
+        assert!(parse_mode(&bad).is_err(), "unknown mode must fail");
+    }
+
+    #[test]
+    fn key_field_per_section() {
+        assert_eq!(key_field("languages"), "code");
+        assert_eq!(key_field("units"), "symbol");
+        assert_eq!(key_field("object_types"), "name");
+        assert_eq!(key_field("attribute_definitions"), "name");
+        assert_eq!(key_field("business_rules"), "name");
     }
 }
