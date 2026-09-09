@@ -332,6 +332,8 @@ Das **Default-Branding (CI)** startet mit einer Farbskala passend zum Leitbild �
 
 > **Details:** [detail/frontend.md](detail/frontend.md) – Architektur, Mehrsprachigkeit & Modulübersicht; [detail/frontend-arbeitsflaechen.md](detail/frontend-arbeitsflaechen.md) – Grid, Formular, Massendatenpflege, Vollständigkeit & Dashboard.
 
+**Geplant (Phase 9):** Neben dem technischen MEF-Export/Import (`json_export`-Connector, `/connectors`) erhält Meadow PIM einen **UI-geführten Daten-Export/-Import** für normale Anwender: ein Export-Wizard (Quelle: Objekttyp/Kategorie/**Collection**/gespeicherte Suche/Grid-Auswahl → Feld-/Spaltenauswahl → Format CSV/JSON → Sprache/Optionen → Vorschau/Download bzw. Hintergrundjob), plus Import (CSV/MEF) inkl. **Collection-Mitglieder-Bulk-Add**. Details: [detail/datenexport-import-ui.md](detail/datenexport-import-ui.md).
+
 ---
 
 ## 12. Betrieb & Deployment

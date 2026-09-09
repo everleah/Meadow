@@ -116,3 +116,5 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 - Für sehr große Ergebnismengen kann der Refresh der Collection in Batches erfolgen, um die Datenbanklast zu begrenzen.
 - Indizes auf `collection_member.in` und `collection_member.out` sorgen für schnelle Abfragen.
 - Optional werden die Collection-Relationen in einem separaten Index gehalten, um die Suche nicht durch unnötige Relationen zu belasten.
+
+**Ausbau (Phase 9):** Die Collection-Mitglieder sollen sich **UI-geführt exportieren** (Quelle „Collection“ im geplanten Export-Wizard, Schnell-Button „Als CSV/JSON exportieren“) und **bulk-importieren** lassen (Mitglieder aus Grid-Auswahl/Import-Datei als `collection_member`-Relationen, idempotent). Details: [datenexport-import-ui.md](datenexport-import-ui.md).
