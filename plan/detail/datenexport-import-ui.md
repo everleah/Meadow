@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zum bestehenden MEF-Export/Import (Phase 6)
-- **Stand:** Umsetzungsreif — Core-API & Worker-Export (CSV/XLSX/JSON, Locale-Auflösung) implementiert & E2E-verifiziert; `/export`-Wizard (`editor+`) implementiert & im Browser verifiziert (Vorschau + Export + Download). Collection-Bulk-Add (`POST /collections/{id}/members`), Grid-/Collections-Schnellaktionen und geplante Exporte stehen noch aus.
+- **Stand:** Umsetzungsreif — Core-API & Worker-Export (CSV/XLSX/JSON, Locale-Auflösung) implementiert & E2E-verifiziert; `/export`-Wizard (`editor+`) implementiert & im Browser verifiziert (Vorschau + Export + Download). **Collection-Bulk-Add** (`POST /collections/{id}/members`, idempotent) implementiert & verifiziert; die Collections-Seite bietet einen **„Add members"-Dialog** und einen **„Export"-Button** (führt mit vorausgewählter Collection (`?collection=<id>`) in den Wizard). Ausstehend: Grid-Auswahl-/Filter-Export, geplante Exporte, E-Mail/Objektstorage, CSV-Import-Mapping.
 
 **Getroffene Entscheidungen:**
 

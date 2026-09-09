@@ -1122,6 +1122,126 @@ pub async fn refresh_collection(
     ))
 }
 
+/// Request to bulk-add members to a collection.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CollectionMembersRequest {
+    /// Object ids (full `object:` ids or bare keys) to add as members.
+    pub object_ids: Vec<String>,
+}
+
+/// Bulk-adds object ids as members of a collection (idempotent).
+///
+/// Existing members are skipped; new ones are appended with increasing
+/// `attributes.rank` (continuing after the current members) and `added_at`.
+#[utoipa::path(
+    post,
+    path = "/collections/{id}/members",
+    request_body = CollectionMembersRequest,
+    responses((status = 200, description = "Add summary", body = Value))
+)]
+pub async fn add_collection_members(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<CollectionMembersRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let user_id = api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let key = parse_key(&id, "object")?;
+    let collection = fetch_object(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("collection `{id}` not found")))?;
+    if collection.get("type").and_then(Value::as_str) != Some(COLLECTION_TYPE) {
+        return Err(ApiError::bad_request("object is not a collection"));
+    }
+    let collection_id = collection
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    // Deduplicate and normalise the requested object keys.
+    let mut new_keys: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for raw in &req.object_ids {
+        let obj_key = raw.rsplit(':').next().unwrap_or(raw).to_owned();
+        if seen.insert(obj_key.clone()) {
+            new_keys.push(obj_key);
+        }
+    }
+
+    // Existing member keys for this collection (bare keys).
+    let mut response = state
+        .db
+        .inner()
+        .query(
+            "SELECT in FROM reference WHERE out = type::record('object', $key) AND definition_id = $def;",
+        )
+        .bind(("key", key))
+        .bind(("def", COLLECTION_MEMBER_DEF))
+        .await?
+        .check()?;
+    let existing: Vec<Value> = response.take(0)?;
+    let existing_keys: std::collections::HashSet<String> = existing
+        .iter()
+        .filter_map(|e| {
+            e.get("in")
+                .and_then(Value::as_str)
+                .map(|s| s.rsplit(':').next().unwrap_or(s).to_owned())
+        })
+        .collect();
+
+    let to_add: Vec<String> = new_keys
+        .into_iter()
+        .filter(|k| !existing_keys.contains(k))
+        .collect();
+
+    if !to_add.is_empty() {
+        let start_rank = existing.len() as i64 + 1;
+        let members: Vec<Value> = to_add
+            .iter()
+            .enumerate()
+            .map(|(i, obj_key)| json!({ "key": obj_key, "rank": start_rank + i as i64 }))
+            .collect();
+        let sql = "BEGIN TRANSACTION; LET $c = type::record('object', $key); \
+             FOR $item IN $members { LET $m = type::record('object', $item.key); \
+             RELATE $m->reference->$c SET definition_id = $def, type = 'collection_member', \
+             attributes = { rank: $item.rank, added_at: time::now() }; }; \
+             UPDATE $c SET attributes.last_members_added_at = time::now(), updated_at = time::now(); \
+             COMMIT TRANSACTION;";
+        state
+            .db
+            .inner()
+            .query(sql)
+            .bind(("key", key))
+            .bind(("def", COLLECTION_MEMBER_DEF))
+            .bind(("members", members))
+            .await?
+            .check()?;
+    }
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "collection_members_added",
+            object_id: Some(&collection_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({
+                "added": to_add.len(),
+                "skipped": req.object_ids.len().saturating_sub(to_add.len()),
+                "total_members": existing.len() + to_add.len(),
+            })),
+        },
+    )
+    .await;
+
+    Ok(Json(json!({
+        "added": to_add.len(),
+        "skipped": req.object_ids.len().saturating_sub(to_add.len()),
+    })))
+}
+
 /// Lists the members of a collection (with `rank` and the resolved object).
 #[utoipa::path(
     get,

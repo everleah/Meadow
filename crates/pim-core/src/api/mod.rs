@@ -142,6 +142,7 @@ use utoipa::OpenApi;
         exports::ExportSource,
         exports::ExportOptions,
         exports::ExportFileQuery,
+        saved_searches::CollectionMembersRequest,
         connectors::CreateConnector,
         connectors::UpdateConnector,
         connectors::ListConnectors,

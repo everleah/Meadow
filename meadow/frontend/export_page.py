@@ -19,6 +19,7 @@ import asyncio
 import os
 import tempfile
 
+from fastapi import Request
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -48,7 +49,7 @@ def _split_ids(raw: str) -> list[str]:
 
 
 @ui.page("/export", response_timeout=15)
-async def export_page() -> None:
+async def export_page(request: Request) -> None:
     """The structured export wizard page."""
     await build_shell(active="/export")
     if not auth.is_editor():
@@ -57,6 +58,11 @@ async def export_page() -> None:
     client = CoreClient(CORE_URL)
     token = app.storage.user.get("token", "")
     locale = current_locale()
+    # When opened from the collections page, preselect that collection source.
+    initial_kind = "type"
+    initial_collection = request.query_params.get("collection")
+    if initial_collection:
+        initial_kind = "collection"
 
     async def _safe(coro_type: str) -> list[dict]:
         """Runs a reference-data loader and degrades to an empty list."""
@@ -208,7 +214,7 @@ async def export_page() -> None:
             kind_select = (
                 ui.select(
                     {k: t(f"export.source_{k}") for k in SOURCE_KINDS},
-                    value="type",
+                    value=initial_kind,
                 )
                 .props("filled dense")
                 .classes("mt-2 w-56")
@@ -242,6 +248,9 @@ async def export_page() -> None:
 
             kind_select.on_value_change(lambda event: update_source_editor(event.value))
             update_source_editor(kind_select.value)
+            if initial_kind == "collection" and initial_collection in detail_select.options:
+                detail_select.value = initial_collection
+                detail_select.update()
 
         # --- Fields --------------------------------------------------------
         with ui.card().classes("w-full mt-4"):

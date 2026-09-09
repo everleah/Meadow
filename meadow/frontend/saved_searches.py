@@ -414,6 +414,14 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
                 t("saved_searches.members"), icon="list", on_click=lambda: members_selected()
             ).props("flat")
             ui.button(
+                t("saved_searches.add_members"),
+                icon="person_add",
+                on_click=lambda: add_members_selected(),
+            ).props("flat")
+            ui.button(
+                t("saved_searches.export"), icon="download", on_click=lambda: export_selected()
+            ).props("flat")
+            ui.button(
                 t("saved_searches.delete"), icon="delete", on_click=lambda: delete_selected()
             ).props("flat color=negative")
         ui.button(t("saved_searches.reload"), icon="refresh", on_click=lambda: reload_data()).props(
@@ -569,6 +577,57 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
             ui.notify(f"{t('saved_searches.members_failed')}: {error}", color="negative")
             return
         await _show_members(_name_of(row), members)
+
+    async def add_members_selected() -> None:
+        row = await get_selected()
+        if not row:
+            ui.notify(t("saved_searches.select_first"), color="warning")
+            return
+        collection_id = str(row.get("id"))
+        name = _name_of(row)
+        with ui.dialog() as dlg, ui.card().classes("w-[36rem] max-w-[92vw]"):
+            ui.label(t("saved_searches.add_members_title").format(name=name)).classes("text-h6")
+            ui.label(t("saved_searches.add_members_hint")).classes("text-caption text-gray-500")
+            ids_box = ui.textarea("").props("outlined monospace").classes("w-full h-32")
+
+            async def _do() -> None:
+                raw = ids_box.value or ""
+                object_ids = [
+                    part.strip() for part in raw.replace(",", "\n").splitlines() if part.strip()
+                ]
+                if not object_ids:
+                    ui.notify(t("saved_searches.add_members_empty"), type="warning")
+                    return
+                try:
+                    result = await client.add_collection_members(
+                        token, collection_id, object_ids=object_ids
+                    )
+                except CoreError as error:
+                    ui.notify(
+                        f"{t('saved_searches.add_members_failed')}: {error}", color="negative"
+                    )
+                    return
+                dlg.close()
+                ui.notify(
+                    t("saved_searches.add_members_ok").format(
+                        added=result.get("added", 0), skipped=result.get("skipped", 0)
+                    ),
+                    color="positive",
+                )
+                await reload_data()
+
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=dlg.close).props("flat")
+                ui.button(t("saved_searches.add_members"), on_click=_do).props("color=primary")
+        dlg.open()
+
+    async def export_selected() -> None:
+        row = await get_selected()
+        if not row:
+            ui.notify(t("saved_searches.select_first"), color="warning")
+            return
+        collection_id = str(row.get("id"))
+        ui.navigate.to(f"/export?collection={collection_id}")
 
     async def delete_selected() -> None:
         row = await get_selected()

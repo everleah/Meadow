@@ -280,7 +280,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/collections/{id}/members",
-            get(api::saved_searches::list_collection_members),
+            get(api::saved_searches::list_collection_members)
+                .post(api::saved_searches::add_collection_members),
         )
         .route(
             "/languages",

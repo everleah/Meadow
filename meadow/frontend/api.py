@@ -2179,6 +2179,27 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def add_collection_members(
+        self,
+        token: str,
+        collection_id: str,
+        *,
+        object_ids: list[str],
+    ) -> dict:
+        """Bulk-adds members to a collection (``POST /collections/{id}/members``, editor+).
+
+        Returns ``{"added": N, "skipped": M}``; existing members are skipped.
+        """
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/collections/{collection_id}/members",
+                json={"object_ids": object_ids},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def list_object_types(self, token: str, *, limit: int = 1000) -> list[dict]:
         """Lists the managed object types (``GET /object-types``)."""
         async with _api_client() as client:
