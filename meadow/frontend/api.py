@@ -1363,6 +1363,57 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    # --- Configuration export/import (MCF) --------------------------------
+    async def export_config(
+        self,
+        token: str,
+        *,
+        sections: list[str] | None = None,
+        include_system: bool = False,
+    ) -> dict:
+        """Exports the Meadow Configuration Format document
+        (``GET /config/export``, admin). ``sections`` filters the sections;
+        ``include_system`` includes seeded/system entries."""
+        params: dict[str, str] = {}
+        if sections:
+            params["sections"] = ",".join(sections)
+        if include_system:
+            params["include_system"] = "true"
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/config/export",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def import_config(
+        self,
+        token: str,
+        document: dict,
+        *,
+        mode: str = "merge",
+        async_: bool = False,
+    ) -> dict:
+        """Imports an MCF document (``POST /config/import``, admin). With
+        ``async_`` the document is stored and a ``config_import`` job queued
+        (202 + ``job_run_id``); otherwise the report is returned."""
+        params: dict[str, str] = {"mode": mode}
+        if async_:
+            params["async"] = "true"
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/config/import",
+                params=params,
+                json=document,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     # --- Business rules ---------------------------------------------------
     async def list_rules(
         self,

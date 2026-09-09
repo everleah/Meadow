@@ -8,6 +8,7 @@ from meadow.frontend import (
     attribute_definitions,  # noqa: F401  (registers the /attribute-definitions page)
     categories,  # noqa: F401  (registers the /categories page)
     config,
+    config_page,  # noqa: F401  (registers the /config page)
     connectors,  # noqa: F401  (registers the /connectors page)
     enum_sets,  # noqa: F401  (registers the /enum-sets page)
     form,  # noqa: F401  (registers the product form page)
@@ -48,6 +49,7 @@ _IMPLEMENTED_ROUTES = {
     "/object-types",
     "/relation-definitions",
     "/enum-sets",
+    "/config",
 }
 
 
