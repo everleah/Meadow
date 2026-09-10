@@ -185,4 +185,3 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - **Automatische Retention (30 Tage)** für `job_run` **und** archivierte S3-Objekte — **zurückgestellt**; muss mit dem geplanten **Papierkorb-Konzept** (Soft-Delete/Wiederherstellung) abgestimmt werden. Aktuell nur manuelles Löschen (UI `/export` bzw. Admin `/jobs`).
 - **Dauerhafte Download-Route** ohne Presigned-URL-Ablauf (7 Tage): Core mit eigenem S3-Client (Streaming) statt 302 auf eine ablaufende Signatur.
 - Optionaler synchroner Export kleiner Mengen (Grid-Auswahl).
-- Optional: Anzeige/Verwaltung der Export-Schedules auch im Admin-`/jobs`-UI (Job-Typen-Liste dort veraltet).

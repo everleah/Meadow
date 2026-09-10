@@ -260,6 +260,8 @@
   "jobs.name_required": "Bitte einen Namen eingeben.",
   "jobs.invalid_json": "Parameter müssen gültiges JSON sein",
   "jobs.filter_status": "Status",
+  "jobs.filter_type": "Job-Typ",
+  "jobs.all_types": "Alle",
   "jobs.all_statuses": "Alle",
   "jobs.dead_letter_only": "Nur Dead Letters",
   "jobs.detail_title": "Job-Lauf",

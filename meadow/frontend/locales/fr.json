@@ -260,6 +260,8 @@
   "jobs.name_required": "Veuillez saisir un nom.",
   "jobs.invalid_json": "Les paramètres doivent être un JSON valide",
   "jobs.filter_status": "Statut",
+  "jobs.filter_type": "Type de tâche",
+  "jobs.all_types": "Tous",
   "jobs.all_statuses": "Tous",
   "jobs.dead_letter_only": "Lettres mortes uniquement",
   "jobs.detail_title": "Exécution de tâche",

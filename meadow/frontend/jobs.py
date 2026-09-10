@@ -24,8 +24,15 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
-#: Known job types (matches the core's VALID_JOB_TYPES).
-JOB_TYPES = ("outbound_export", "inbound_import", "business_rule", "bulk_operation")
+#: Known job types (mirrors the core's `VALID_JOB_TYPES`).
+JOB_TYPES = (
+    "outbound_export",
+    "inbound_import",
+    "business_rule",
+    "bulk_operation",
+    "collection_refresh",
+    "config_import",
+)
 #: Known job-run statuses (matches the core's VALID_RUN_STATUSES).
 RUN_STATUSES = ("pending", "running", "success", "failed", "retry")
 
@@ -110,8 +117,14 @@ async def jobs_page() -> None:
         with ui.tab_panels(tabs, value=defs_tab).classes("w-full"):
             # --- Definitions -----------------------------------------------
             with ui.tab_panel(defs_tab):
+                current_type = {"value": ""}
 
                 def _def_rows() -> list[dict]:
+                    def _matches(definition: dict) -> bool:
+                        if not current_type["value"]:
+                            return True
+                        return str(definition.get("type") or "") == current_type["value"]
+
                     return [
                         {
                             "id": str(d.get("id")),
@@ -122,7 +135,25 @@ async def jobs_page() -> None:
                             "updated": _fmt_dt(d.get("updated_at")),
                         }
                         for d in defs
+                        if _matches(d)
                     ]
+
+                with ui.row().classes("w-full gap-2 items-center mb-2"):
+                    def_type_select = (
+                        ui.select(
+                            {"": t("jobs.all_types"), **{typ: typ for typ in JOB_TYPES}},
+                            label=t("jobs.filter_type"),
+                            value="",
+                        )
+                        .props("filled dense")
+                        .classes("w-52")
+                    )
+
+                    def _apply_type_filter() -> None:
+                        current_type["value"] = str(def_type_select.value or "")
+                        def_grid.run_grid_method("setGridOption", "rowData", _def_rows())
+
+                    def_type_select.on_value_change(lambda _: _apply_type_filter())
 
                 def_grid = ui.aggrid(
                     {
