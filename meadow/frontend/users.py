@@ -175,8 +175,13 @@ async def users_page() -> None:
                     .classes("w-full")
                 )
                 roles_select = (
-                    ui.select({r: r for r in ROLES}, label=t("users.field_roles"), value=[])
-                    .props("filled dense multiple")
+                    ui.select(
+                        {r: r for r in ROLES},
+                        label=t("users.field_roles"),
+                        value=[],
+                        multiple=True,
+                    )
+                    .props("filled dense")
                     .classes("w-full")
                 )
                 with ui.row().classes("w-full gap-2"):
@@ -224,7 +229,9 @@ async def users_page() -> None:
                 username_input.enable()
             email_input.set_value(str(record.get("email") or ""))
             password_input.set_value("")
-            roles_select.set_value(list(record.get("roles") or []))
+            # Only accept a real list: a display row carries a joined string.
+            roles = record.get("roles")
+            roles_select.set_value([str(role) for role in roles] if isinstance(roles, list) else [])
             status_select.set_value(str(record.get("status") or "active"))
             locale_select.set_value(str(record.get("locale") or "en"))
             # Absent counts as "must change" (mirrors the core).
@@ -334,10 +341,14 @@ async def users_page() -> None:
             ui.navigate.to("/")
 
         def _user_for(data: object) -> dict | None:
-            """Resolves a double-click payload to a user row."""
-            if isinstance(data, dict):
-                return data
-            return next((u for u in users if str(u.get("id")) == str(data)), None)
+            """Resolves a grid row/double-click payload to the **full** user record.
+
+            The grid rows carry display strings (e.g. `roles` joined with
+            commas), so the raw record must be resolved by id before editing —
+            otherwise saving would send the display string as the role list.
+            """
+            user_id = data.get("id") if isinstance(data, dict) else data
+            return next((u for u in users if str(u.get("id")) == str(user_id)), None)
 
         users_grid.on(
             "cellDoubleClicked",

@@ -96,8 +96,9 @@ async def settings_page() -> None:
                             ui.select(
                                 {c: c for c in CATEGORIES},
                                 value=list(value) if isinstance(value, list) else [],
+                                multiple=True,
                             )
-                            .props("filled dense multiple")
+                            .props("filled dense")
                             .classes("grow max-w-[24rem]")
                         )
                     elif key == "rules_degrade":
