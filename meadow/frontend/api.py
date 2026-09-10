@@ -2278,17 +2278,20 @@ class CoreClient:
         document: dict,
         *,
         match_by_key: str | None = None,
+        match_by_id: bool = False,
         source: str | None = None,
         emit_events: bool = True,
     ) -> dict:
         """Submits a MEF document (``POST /imports``, editor+) and queues an import.
 
         Returns ``{"job_run_id": ...}``; the ``inbound_import`` worker upserts the
-        objects (by business key or source reference).
+        objects (by business key, object id or source reference).
         """
         params: dict[str, str] = {}
         if match_by_key:
             params["match_by_key"] = match_by_key
+        if match_by_id:
+            params["match_by_id"] = "true"
         if source:
             params["source"] = source
         if not emit_events:

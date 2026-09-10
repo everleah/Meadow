@@ -7,6 +7,8 @@ references:
 - Objects are upserted by business key (`match_by_key`, e.g. `sku`): an
   existing object with the same type + key value is updated, otherwise a new
   object is created.
+- With `match_by_id` a MEF `id` that is an existing core record id
+  (`object:<ulid>`, as written by Meadow's own MEF export) updates that object.
 - Objects without a key match are deduplicated by **source reference** (the
   MEF object `id` + the document `source`), via `GET /objects/by-source`.
 - References are created between the imported objects, mapping the MEF `id`
@@ -155,11 +157,13 @@ async def _upsert_object(
     source_id: str | None,
     source: str | None,
     emit_events: bool,
+    match_by_id: bool = False,
 ) -> tuple[str, str]:
     """Creates or updates one MEF object; returns `(record_id, action)`.
 
-    The object is matched by business key first, then by source reference
-    (`source` + `source_id`), so keyless objects are idempotent too.
+    The object is matched by business key first, then (with `match_by_id`) by an
+    existing core record id, then by source reference (`source` + `source_id`),
+    so keyless objects are idempotent too.
     """
     existing_id: str | None = None
     if match_by_key:
@@ -177,6 +181,13 @@ async def _upsert_object(
                 existing_id = str(response.json()["id"])
             elif response.status_code != 404:
                 response.raise_for_status()
+
+    if existing_id is None and match_by_id and source_id and source_id.startswith("object:"):
+        response = await client.get(f"{core_url}/objects/{source_id}")
+        if response.status_code == 200:
+            existing_id = str(response.json()["id"])
+        elif response.status_code != 404:
+            response.raise_for_status()
 
     if existing_id is None and source_id:
         response = await client.get(
@@ -320,6 +331,7 @@ def build_import_handler(
         match_by_key = parameters.get("match_by_key")
         if match_by_key is not None:
             match_by_key = str(match_by_key)
+        match_by_id = bool(parameters.get("match_by_id", False))
         emit_events = bool(parameters.get("emit_events", True))
 
         document = await _fetch_document(active, core_url, str(document_id))
@@ -372,6 +384,7 @@ def build_import_handler(
                     external_id or None,
                     source or None,
                     emit_events,
+                    match_by_id,
                 )
                 if external_id:
                     id_map[external_id] = record_id

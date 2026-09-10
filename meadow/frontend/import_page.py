@@ -1,10 +1,16 @@
-"""UI-guided tabular import page (`/import`, editor+).
+"""UI-guided import page (`/import`, editor+).
 
-Uploads a CSV/XLSX file, lets the user map its columns to object fields
-(`id`/`type`/`status`) or attributes (incl. multilingual `attr|locale` targets),
-shows a preview of the resulting rows, and imports them through the existing
-MEF pipeline (`POST /imports` → `inbound_import` worker, upsert by business key
-or source reference).
+Two modes, detected from the uploaded file:
+
+- **Tabular** (CSV/XLSX): columns are mapped to object fields (`id`/`type`/`status`)
+  or attributes (incl. multilingual `attr|locale` targets) via :mod:`meadow.tabular`.
+- **MEF JSON**: a Meadow Exchange Format document (as written by the export
+  wizard/`json_export` connector) is imported as-is; the page shows a summary and
+  object preview, plus the `source`, `match_by_key` and `match_by_id` options.
+
+Both modes preview the result and import through the existing pipeline
+(`POST /imports` → `inbound_import` worker, upsert by business key, object id or
+source reference).
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ import asyncio
 
 from nicegui import app, ui
 
-from meadow import tabular
+from meadow import mef, tabular
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
@@ -128,7 +134,10 @@ async def import_page() -> None:
     main_lang = current_locale().split("-")[0] or "de"
 
     state: dict = {
+        "mode": "",
         "table": tabular.TableData(),
+        "document": {},
+        "summary": {},
         "filename": "",
         "content": b"",
         "sheets": [],
@@ -146,6 +155,16 @@ async def import_page() -> None:
             parse_status = ui.label("").classes("text-caption text-gray-600")
 
             def _set_parse_status() -> None:
+                if state["mode"] == "mef":
+                    summary = state["summary"]
+                    parse_status.set_text(
+                        t("import.parsed_mef").format(
+                            file=state["filename"],
+                            objects=summary.get("objects", 0),
+                            references=summary.get("references", 0),
+                        )
+                    )
+                    return
                 table = state["table"]
                 parse_status.set_text(
                     t("import.parsed_file").format(
@@ -155,8 +174,36 @@ async def import_page() -> None:
                     )
                 )
 
+            def _fact(label: str, value: str) -> None:
+                with ui.column().classes("gap-0"):
+                    ui.label(label).classes("text-caption text-gray-500")
+                    ui.label(value).classes("text-body1")
+
+            def _types_text(types: dict) -> str:
+                return ", ".join(f"{name or '?'}: {count}" for name, count in sorted(types.items()))
+
+            def _render_mef_summary() -> None:
+                summary = state["summary"]
+                ui.label(t("import.mef_section")).classes("text-subtitle1")
+                ui.label(t("import.mef_hint")).classes("text-caption text-gray-500")
+                with ui.row().classes("flex-wrap gap-6 mt-2"):
+                    _fact(t("import.mef_version"), summary.get("format_version") or "–")
+                    _fact(t("import.mef_source"), summary.get("source") or "–")
+                    _fact(t("import.mef_objects"), str(summary.get("objects", 0)))
+                    _fact(t("import.mef_references"), str(summary.get("references", 0)))
+                    _fact(t("import.mef_with_ids"), str(summary.get("with_ids", 0)))
+                types = summary.get("types") or {}
+                if types:
+                    ui.label(t("import.mef_types").format(types=_types_text(types))).classes(
+                        "text-caption text-gray-600"
+                    )
+
             @ui.refreshable
-            def mapping_area() -> None:
+            def detail_area() -> None:
+                if state["mode"] == "mef":
+                    _render_mef_summary()
+                    return
+
                 column_selects.clear()
                 sheets = state.get("sheets") or []
                 if len(sheets) > 1:
@@ -167,7 +214,7 @@ async def import_page() -> None:
                         state["table"] = tabular.parse_xlsx(state["content"], sheet)
                         preview_box.clear()
                         _set_parse_status()
-                        mapping_area.refresh()
+                        detail_area.refresh()
 
                     ui.select(
                         {name: name for name in sheets},
@@ -197,32 +244,67 @@ async def import_page() -> None:
                         )
                         column_selects[column] = select
 
+            def _apply_mode_visibility() -> None:
+                is_mef = state["mode"] == "mef"
+                default_type_select.set_visibility(not is_mef)
+                match_by_id_switch.set_visibility(is_mef)
+
+            def _set_key_options(names: list[str]) -> None:
+                options = {"": t("import.key_none"), **{name: name for name in names}}
+                key_select.options = options
+                key_select.update()
+
             async def on_upload(event) -> None:
                 name, content = await _read_upload(event)
                 if not content:
                     ui.notify(t("import.empty_file"), type="negative")
                     return
+                lowered = name.lower()
+                is_workbook = lowered.endswith((".xlsx", ".xlsm"))
+                is_json = lowered.endswith((".json", ".mef")) or content.lstrip()[:1] in (
+                    b"{",
+                    b"[",
+                )
                 try:
-                    parsed = tabular.parse_table(name, content)
-                    sheets = (
-                        tabular.sheet_names(content)
-                        if name.lower().endswith((".xlsx", ".xlsm"))
-                        else []
-                    )
+                    if is_json:
+                        document = mef.parse_mef(content)
+                        state["document"] = document
+                        state["summary"] = mef.summarize(document)
+                        state["mode"] = "mef"
+                        # A Meadow export carries `source: "meadow"` and the core record
+                        # ids in `id` → default to matching by object id (update instead
+                        # of duplicating on re-import).
+                        source_input.value = state["summary"].get("source") or ""
+                        match_by_id_switch.value = state["summary"].get("source") == "meadow"
+                        document_names = [
+                            str(attribute)
+                            for entry in document.get("objects") or []
+                            if isinstance(entry, dict) and isinstance(entry.get("attributes"), dict)
+                            for attribute in entry["attributes"]
+                        ]
+                        _set_key_options(sorted({*key_names, *document_names}))
+                    else:
+                        parsed = tabular.parse_table(name, content)
+                        sheets = tabular.sheet_names(content) if is_workbook else []
+                        state["table"] = parsed
+                        state["sheets"] = sheets
+                        state["sheet"] = sheets[0] if sheets else ""
+                        state["mode"] = "tabular"
+                        state["document"] = {}
+                        state["summary"] = {}
+                        _set_key_options(key_names)
                 except Exception as exc:  # noqa: BLE001 - unreadable file
                     ui.notify(t("import.parse_failed").format(err=exc), type="negative")
                     return
-                state["table"] = parsed
                 state["filename"] = name
                 state["content"] = content
-                state["sheets"] = sheets
-                state["sheet"] = sheets[0] if sheets else ""
-                mapping_area.refresh()
+                detail_area.refresh()
+                _apply_mode_visibility()
                 preview_box.clear()
                 _set_parse_status()
 
             upload = ui.upload(on_upload=on_upload, auto_upload=True).props(
-                "accept=.csv,.xlsx,.xlsm flat max-files=1"
+                "accept=.csv,.xlsx,.xlsm,.json flat max-files=1"
             )
             upload.classes("mt-2")
 
@@ -252,9 +334,12 @@ async def import_page() -> None:
                     .classes("w-56")
                 )
                 emit_events_switch = ui.switch(t("import.emit_events"), value=True)
+                match_by_id_switch = ui.switch(t("import.match_by_id"), value=False)
+                match_by_id_switch.tooltip(t("import.match_by_id_hint"))
+                match_by_id_switch.set_visibility(False)
 
         with ui.card().classes("w-full mt-4"):
-            mapping_area()
+            detail_area()
 
         preview_box = ui.column().classes("w-full mt-4")
 
@@ -266,6 +351,8 @@ async def import_page() -> None:
             return mapping
 
         def _build_document() -> dict:
+            if state["mode"] == "mef":
+                return state["document"]
             default_type = str(default_type_select.value or "") or next(
                 iter(type_options), "product"
             )
@@ -283,13 +370,49 @@ async def import_page() -> None:
                 counts[key] = counts.get(key, 0) + 1
             return ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
 
+        def _preview_table(columns: list[dict], rows: list[dict]) -> None:
+            ui.table(columns=columns, rows=rows).classes("w-full")
+
         async def on_preview() -> None:
+            if not state["mode"]:
+                ui.notify(t("import.no_file"), type="warning")
+                return
+            preview_box.clear()
+            if state["mode"] == "mef":
+                summary = state["summary"]
+                with preview_box, ui.card().classes("w-full"):
+                    ui.label(t("import.preview_section")).classes("text-subtitle1")
+                    ui.label(
+                        t("import.preview_summary").format(
+                            rows=summary.get("objects", 0),
+                            types=_types_text(summary.get("types") or {}) or "–",
+                        )
+                    ).classes("text-caption text-gray-500")
+                    _preview_table(
+                        [
+                            {"name": "id", "label": "id", "field": "id", "align": "left"},
+                            {"name": "type", "label": "type", "field": "type", "align": "left"},
+                            {
+                                "name": "status",
+                                "label": "status",
+                                "field": "status",
+                                "align": "left",
+                            },
+                            {
+                                "name": "attributes",
+                                "label": t("import.attributes"),
+                                "field": "attributes",
+                                "align": "left",
+                            },
+                        ],
+                        mef.object_rows(state["document"]),
+                    )
+                return
             if not state["table"].columns:
                 ui.notify(t("import.no_file"), type="warning")
                 return
             document = _build_document()
             objects = document["objects"]
-            preview_box.clear()
             with preview_box, ui.card().classes("w-full"):
                 ui.label(t("import.preview_section")).classes("text-subtitle1")
                 ui.label(
@@ -297,8 +420,8 @@ async def import_page() -> None:
                         rows=len(objects), types=_types_summary(objects)
                     )
                 ).classes("text-caption text-gray-500")
-                ui.table(
-                    columns=[
+                _preview_table(
+                    [
                         {"name": "type", "label": "type", "field": "type", "align": "left"},
                         {"name": "status", "label": "status", "field": "status", "align": "left"},
                         {
@@ -308,7 +431,7 @@ async def import_page() -> None:
                             "align": "left",
                         },
                     ],
-                    rows=[
+                    [
                         {
                             "type": obj["type"],
                             "status": obj["status"],
@@ -316,7 +439,7 @@ async def import_page() -> None:
                         }
                         for obj in objects[:20]
                     ],
-                ).classes("w-full")
+                )
 
         def _show_report(result: dict) -> None:
             with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl"):
@@ -345,14 +468,21 @@ async def import_page() -> None:
             dialog.open()
 
         async def on_import() -> None:
-            if not state["table"].columns:
+            if not state["mode"]:
+                ui.notify(t("import.no_file"), type="warning")
+                return
+            is_mef = state["mode"] == "mef"
+            if not is_mef and not state["table"].columns:
                 ui.notify(t("import.no_file"), type="warning")
                 return
             document = _build_document()
-            if not document["objects"]:
+            if not document.get("objects") and not document.get("references"):
                 ui.notify(t("import.no_rows"), type="warning")
                 return
             key = str(key_select.value or "") or None
+            source = str(source_input.value or "") or None
+            if not is_mef and not source:
+                source = "tabular-import"
             import_button.props("loading")
             import_button.enabled = False
             preview_button.enabled = False
@@ -361,7 +491,8 @@ async def import_page() -> None:
                     token,
                     document,
                     match_by_key=key,
-                    source=str(source_input.value or "tabular-import"),
+                    match_by_id=is_mef and bool(match_by_id_switch.value),
+                    source=source,
                     emit_events=bool(emit_events_switch.value),
                 )
                 run_id = str(queued.get("job_run_id") or "")

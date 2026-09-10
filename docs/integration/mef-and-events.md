@@ -53,7 +53,7 @@ MEF is a generic JSON exchange format that maps Meadow PIM core entities (object
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `string` | External identifier. Optional: an upsert/duplicate key; also becomes the **source reference** for idempotent dedup. |
+| `id` | `string` | External identifier. Optional: an upsert/duplicate key; also becomes the **source reference** for idempotent dedup. Meadow's own export writes the core record id (`object:<ulid>`) here — re-importing such a document with `?match_by_id=true` updates those objects instead of creating duplicates. |
 | `type` | `string` | Object type (e.g. `product`, `category`). |
 | `attributes` | `object` | Attribute values keyed by attribute name. |
 | `status` | `string` | Workflow status (`draft` unless specified). |

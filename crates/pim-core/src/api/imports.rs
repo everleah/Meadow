@@ -27,6 +27,11 @@ pub struct ImportParams {
     /// Business-key attribute name used for upsert matching (e.g. `sku`).
     #[serde(default)]
     pub match_by_key: Option<String>,
+    /// Match the MEF object `id` against existing core object ids. Meadow's own
+    /// MEF export writes the core record id (`object:<ulid>`) into `id`; enabling
+    /// this turns a MEF roundtrip into an update instead of a duplicate insert.
+    #[serde(default)]
+    pub match_by_id: Option<bool>,
     /// Source-system label (overrides the document's `source` field).
     #[serde(default)]
     pub source: Option<String>,
@@ -180,6 +185,7 @@ pub async fn create_import(
     let parameters = json!({
         "document_id": document_id,
         "match_by_key": params.match_by_key.as_deref().map(str::trim).filter(|v| !v.is_empty()),
+        "match_by_id": params.match_by_id.unwrap_or(false),
         "source": source,
         "emit_events": params.emit_events.unwrap_or(true),
     });
