@@ -10,6 +10,8 @@ Kategorien toggle and the completeness column follow in later steps.
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 from urllib.parse import quote
 
 from fastapi import Request
@@ -234,6 +236,38 @@ def build_patch(object_id: str, client_name: object, original: dict, locale: str
     else:
         new_name = client_name
     return {"id": object_id, "attributes": {"name": new_name}}
+
+
+async def _wait_export(client: CoreClient, token: str, run_id: str) -> dict:
+    """Polls an export job run until it reaches a terminal state."""
+    for _ in range(120):
+        try:
+            runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+        except Exception:  # noqa: BLE001 - keep polling on a transient error
+            runs = []
+        if runs:
+            status = str(runs[0].get("status") or "")
+            if status in ("success", "failed", "retry"):
+                return runs[0]
+        await asyncio.sleep(1)
+    return {"status": "failed", "error": "timeout"}
+
+
+#: Mime type per export format, used for the browser download.
+_EXPORT_MIME = {
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "json": "application/json",
+}
+
+
+def _save_download(data: bytes, filename: str, format_: str) -> None:
+    """Serves export bytes via a temp file (NiceGUI str/bytes src is unreliable)."""
+    with tempfile.NamedTemporaryFile("wb", suffix="." + format_, delete=False) as handle:
+        handle.write(data)
+        tmp_path = handle.name
+    ui.download(tmp_path, filename, _EXPORT_MIME.get(format_, "application/octet-stream"))
+    asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
 
 @ui.page("/products", response_timeout=10)
@@ -1152,6 +1186,88 @@ async def products_page(request: Request) -> None:
                 except Exception:  # noqa: BLE001 - grid stays as-is on failure
                     pass
 
+        # --- Export (selection / current filter) ---------------------------
+        def _export_fields() -> list[str]:
+            """Maps the currently visible grid columns to export field names."""
+            fields: list[str] = []
+            for column in column_defs:
+                field = str(column.get("field") or "")
+                if field not in visible_fields:
+                    continue
+                if field == "_id":
+                    fields.append("id")
+                elif field == "_type":
+                    fields.append("type")
+                elif field == "_status":
+                    fields.append("status")
+                elif field == "_name":
+                    fields.append("name")
+                elif field.startswith("attr_"):
+                    fields.append(field[len("attr_") :])
+            return fields or ["id", "type", "status"]
+
+        export_dialog = ui.dialog()
+        with export_dialog, ui.card().classes("w-[32rem] max-w-[92vw]"):
+            ui.label(t("grid.export_title")).classes("text-h6")
+            ui.label(t("grid.export_hint")).classes("text-caption text-gray-600")
+            export_scope = (
+                ui.select(
+                    {
+                        "filtered": t("grid.export_scope_filtered").format(count=len(all_rows)),
+                        "selected": t("grid.export_scope_selected"),
+                    },
+                    value="selected" if bulk_selected_ids else "filtered",
+                )
+                .props("filled dense")
+                .classes("w-full")
+            )
+            export_format = (
+                ui.select(
+                    {"csv": "CSV", "xlsx": "XLSX", "json": "JSON"},
+                    value="csv",
+                    label=t("grid.export_format"),
+                )
+                .props("filled dense")
+                .classes("w-full")
+            )
+
+            async def _do_export() -> None:
+                if export_scope.value == "selected":
+                    selected: list = await grid.get_selected_rows()
+                    ids = [oid for oid in (_row_id(row) for row in selected) if oid]
+                else:
+                    ids = [oid for oid in (_row_id(row) for row in all_rows) if oid]
+                if not ids:
+                    ui.notify(t("grid.export_no_objects"), color="warning")
+                    return
+                fmt = str(export_format.value or "csv")
+                try:
+                    queued = await client.create_export(
+                        token,
+                        source={"kind": "selection", "object_ids": ids},
+                        fields=_export_fields(),
+                        format=fmt,
+                        locales=[locale],
+                    )
+                    run_id = str(queued.get("job_run_id") or "")
+                    if not run_id:
+                        raise RuntimeError(t("grid.export_failed").format(err="no job id"))
+                    run = await _wait_export(client, token, run_id)
+                    if run.get("status") != "success":
+                        raise RuntimeError(run.get("error") or run.get("status") or "failed")
+                    data, filename = await client.get_export_file(token, run_id, format=fmt)
+                except Exception as exc:  # noqa: BLE001 - surface a friendly message
+                    ui.notify(t("grid.export_failed").format(err=exc), color="negative")
+                    return
+                exported = (run.get("result") or {}).get("exported", len(ids))
+                export_dialog.close()
+                _save_download(data, filename, fmt)
+                ui.notify(t("grid.export_ok").format(count=exported), color="positive")
+
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=export_dialog.close).props("flat")
+                ui.button(t("grid.export"), icon="download", on_click=_do_export).props("flat")
+
         with ui.splitter(value=25, limits=(0, 60)).classes(
             "w-full h-[calc(100vh-210px)]"
         ) as splitter:
@@ -1248,6 +1364,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="fact_check", on_click=bulk_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.bulk_actions"))
+                    ui.button(icon="download", on_click=export_dialog.open).props(
+                        "outline"
+                    ).tooltip(t("grid.export"))
 
                     def make_toggler(field: str):
                         def toggle(event) -> None:
