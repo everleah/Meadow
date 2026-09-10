@@ -1,9 +1,10 @@
-"""Self-service password change dialog and the "password never changed" banner.
+"""Self-service password change dialog and the "set your own password" banner.
 
 The dialog is rendered from the shared layout header, so it is reachable from
-every authenticated page. The banner warns while the session still uses a
-password the user never chose (`password_changed_at` is unset — the core seeds
-`admin`/`admin`, and admins set initial passwords for new users).
+every authenticated page. The banner is driven by `must_change_password`
+(`GET /auth/me`): it is on for the seeded `admin`/`admin` and for users an admin
+created or reset with "require a new password" checked — and off when the admin
+vouches for the password (e.g. integration accounts) or the user changed it.
 """
 
 from __future__ import annotations
@@ -19,10 +20,10 @@ MIN_PASSWORD_LENGTH = 8
 
 
 def needs_password_change() -> bool:
-    """Whether the session still uses a password the user never chose."""
+    """Whether the session still has to set its own password."""
     if app.storage.user.get("impersonator"):
         return False
-    return not app.storage.user.get("password_changed_at")
+    return bool(app.storage.user.get("must_change_password", True))
 
 
 def open_change_password_dialog() -> None:
@@ -59,8 +60,12 @@ def open_change_password_dialog() -> None:
         finally:
             submit_button.props(remove="loading")
         # The core bumps the token version: keep the session alive with the
-        # freshly issued token and remember that the password is now chosen.
-        app.storage.user.update(token=response.token, password_changed_at="changed")
+        # freshly issued token and clear the "set your own password" hint.
+        app.storage.user.update(
+            token=response.token,
+            must_change_password=False,
+            password_changed_at="changed",
+        )
         ui.notify(t("password.changed"), color="positive")
         dialog.close()
         refresh_banner.refresh()
@@ -95,7 +100,7 @@ def open_change_password_dialog() -> None:
 
 @ui.refreshable
 def refresh_banner() -> None:
-    """Warns while the user's password was never chosen by the user."""
+    """Asks the user to set their own password while `must_change_password` is on."""
     if not needs_password_change():
         return
     with ui.row().classes("w-full items-center gap-3 px-4 py-2 bg-info text-white"):

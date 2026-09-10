@@ -28,6 +28,10 @@ pub struct CreateUser {
     pub locale: String,
     #[serde(default = "default_status")]
     pub status: String,
+    /// Whether the user must set their own password on first login (default
+    /// `true`; uncheck it when the password is final, e.g. integration accounts).
+    #[serde(default = "default_must_change_password")]
+    pub must_change_password: bool,
 }
 
 fn default_locale() -> String {
@@ -36,6 +40,10 @@ fn default_locale() -> String {
 
 fn default_status() -> String {
     "active".to_owned()
+}
+
+fn default_must_change_password() -> bool {
+    true
 }
 
 /// Payload for a partial user update.
@@ -51,6 +59,9 @@ pub struct UpdateUser {
     pub status: Option<String>,
     #[serde(default)]
     pub locale: Option<String>,
+    /// Whether the user must set their own password (see `CreateUser`).
+    #[serde(default)]
+    pub must_change_password: Option<bool>,
 }
 
 /// Query parameters for listing users.
@@ -163,6 +174,7 @@ pub async fn create_user(
         "roles": body.roles,
         "status": body.status,
         "token_version": 1,
+        "must_change_password": body.must_change_password,
         "locale": body.locale,
     });
 
@@ -297,6 +309,12 @@ pub async fn update_user(
             .and_then(Value::as_u64)
             .unwrap_or(0);
         changes.insert("token_version".to_owned(), Value::from(version + 1));
+        // A handed-over password normally has to be replaced by the user; an
+        // explicit `must_change_password` in the request wins.
+        changes.insert(
+            "must_change_password".to_owned(),
+            Value::Bool(body.must_change_password.unwrap_or(true)),
+        );
         true
     } else {
         false
@@ -317,6 +335,11 @@ pub async fn update_user(
     }
     if let Some(locale) = body.locale {
         changes.insert("locale".to_owned(), Value::String(locale));
+    }
+    // Explicit wins over the default set by the password branch above, and works
+    // on its own (clear/re-arm the requirement without touching the password).
+    if let Some(must_change) = body.must_change_password {
+        changes.insert("must_change_password".to_owned(), Value::Bool(must_change));
     }
     let changes = Value::Object(changes);
 

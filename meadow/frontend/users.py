@@ -35,6 +35,18 @@ def _split_join(value: object) -> str:
     return ""
 
 
+def _password_badge(user: dict) -> str:
+    """A coloured badge for the password requirement of a user record.
+
+    Absent `must_change_password` counts as `true` (the user still has to set
+    their own password), mirroring the core and the login hint.
+    """
+    required = bool(user.get("must_change_password", True))
+    if required:
+        return '<span class="px-2 py-0.5 rounded text-xs bg-warning text-white">new</span>'
+    return '<span class="px-2 py-0.5 rounded text-xs bg-positive text-white">ok</span>'
+
+
 @ui.page("/users", response_timeout=15)
 async def users_page() -> None:
     await build_shell(active="/users")
@@ -84,6 +96,7 @@ async def users_page() -> None:
                     "roles": ", ".join(u.get("roles") or []),
                     "status": str(u.get("status") or ""),
                     "locale": str(u.get("locale") or ""),
+                    "password": _password_badge(u),
                     "updated": str(u.get("updated_at") or ""),
                 }
                 for u in users
@@ -112,19 +125,24 @@ async def users_page() -> None:
             user_filters[key] = value
             _apply_user_filters()
 
+        users_column_defs = [
+            {"headerName": t("users.col_username"), "field": "username", "width": 180},
+            {"headerName": t("users.col_email"), "field": "email", "width": 220},
+            {"headerName": t("users.col_roles"), "field": "roles", "width": 180},
+            {"headerName": t("users.col_status"), "field": "status", "width": 120},
+            {"headerName": t("users.col_password"), "field": "password", "width": 130},
+            {"headerName": t("users.col_locale"), "field": "locale", "width": 90},
+            {"headerName": t("jobs.col_updated"), "field": "updated", "width": 190},
+        ]
         users_grid = ui.aggrid(
             {
-                "columnDefs": [
-                    {"headerName": t("users.col_username"), "field": "username", "width": 180},
-                    {"headerName": t("users.col_email"), "field": "email", "width": 220},
-                    {"headerName": t("users.col_roles"), "field": "roles", "width": 180},
-                    {"headerName": t("users.col_status"), "field": "status", "width": 120},
-                    {"headerName": t("users.col_locale"), "field": "locale", "width": 90},
-                    {"headerName": t("jobs.col_updated"), "field": "updated", "width": 190},
-                ],
+                "columnDefs": users_column_defs,
                 "rowData": _user_rows(),
                 "rowSelection": {"mode": "singleRow"},
-            }
+            },
+            html_columns=[
+                i for i, column in enumerate(users_column_defs) if column["field"] == "password"
+            ],
         ).classes("w-full")
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
             with ui.row().classes("gap-2"):
@@ -180,6 +198,8 @@ async def users_page() -> None:
                         .props("filled dense")
                         .classes("w-40")
                     )
+                must_change_switch = ui.switch(t("users.must_change_password"), value=True)
+                ui.label(t("users.must_change_password_hint")).classes("text-caption text-gray-500")
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 user_delete_btn = ui.button(
                     t("attr_def.delete"), icon="delete", on_click=lambda: delete_user_selected()
@@ -192,18 +212,23 @@ async def users_page() -> None:
 
         def _fill_user_form(user: dict | None) -> None:
             editing = user is not None
+            # `None` means "create": fall back to an empty record so every field
+            # is read/written uniformly (and never from `None`).
+            record = user or {}
             user_title.set_text(t("users.edit") if editing else t("users.new"))
             user_delete_btn.visible = editing
-            username_input.set_value(str(user.get("username") or "") if editing else "")
+            username_input.set_value(str(record.get("username") or ""))
             if editing:
                 username_input.disable()
             else:
                 username_input.enable()
-            email_input.set_value(str(user.get("email") or "") if editing else "")
+            email_input.set_value(str(record.get("email") or ""))
             password_input.set_value("")
-            roles_select.set_value(list(user.get("roles") or []) if editing else [])
-            status_select.set_value(str(user.get("status") or "active"))
-            locale_select.set_value(str(user.get("locale") or "en"))
+            roles_select.set_value(list(record.get("roles") or []))
+            status_select.set_value(str(record.get("status") or "active"))
+            locale_select.set_value(str(record.get("locale") or "en"))
+            # Absent counts as "must change" (mirrors the core).
+            must_change_switch.set_value(bool(record.get("must_change_password", True)))
 
         def open_user_editor(user: dict | None) -> None:
             _fill_user_form(user)
@@ -236,6 +261,7 @@ async def users_page() -> None:
                         "roles": roles,
                         "status": status_select.value or "active",
                         "locale": locale_select.value or "en",
+                        "must_change_password": bool(must_change_switch.value),
                     }
                     if password_input.value:
                         payload["password"] = password_input.value
@@ -249,6 +275,7 @@ async def users_page() -> None:
                         roles=roles,
                         locale=locale_select.value or "en",
                         status=status_select.value or "active",
+                        must_change_password=bool(must_change_switch.value),
                     )
             except CoreError as error:
                 ui.notify(f"{t('users.save_failed')}: {error}", color="negative")

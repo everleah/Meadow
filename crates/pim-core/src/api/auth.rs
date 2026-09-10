@@ -38,8 +38,11 @@ pub struct MeResponse {
     pub sub: String,
     pub username: String,
     pub roles: Vec<String>,
+    /// Whether the user still has to set their own password (the UI shows a
+    /// hint/banner then). Absent `must_change_password` counts as `true`.
+    pub must_change_password: bool,
     /// When the user last changed their own password (absent for seeded or
-    /// admin-set passwords — the UI uses this to hint at the default password).
+    /// admin-set passwords).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_changed_at: Option<String>,
     /// Present when the session impersonates another user (superadmin).
@@ -158,12 +161,20 @@ pub async fn me(
         sub: claims.sub,
         username: claims.username,
         roles: claims.roles,
+        must_change_password: must_change_password(&user),
         password_changed_at: user
             .get("password_changed_at")
             .and_then(Value::as_str)
             .map(str::to_owned),
         impersonator: claims.impersonator,
     }))
+}
+
+/// Whether the user still has to set their own password (`NONE` counts as yes).
+pub(crate) fn must_change_password(user: &Value) -> bool {
+    user.get("must_change_password")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// Splits the JWT `sub` claim (`user:<key>`) into the record key.
@@ -241,6 +252,7 @@ pub async fn change_password(
         LET $u = type::record('user', $key);
         UPDATE $u SET password_hash = $hash,
             password_changed_at = time::now(),
+            must_change_password = false,
             token_version = token_version + 1,
             updated_at = time::now();
         SELECT * FROM $u;

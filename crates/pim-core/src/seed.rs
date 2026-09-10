@@ -895,6 +895,7 @@ pub async fn ensure_default_admin(db: &Db) -> Result<(), ApiError> {
             roles: ['superadmin'],
             status: 'active',
             token_version: 1,
+            must_change_password: true,
             locale: 'en'
         };
     ";

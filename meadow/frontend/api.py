@@ -88,8 +88,11 @@ class MeResponse(BaseModel):
     sub: str
     username: str
     roles: list[str]
+    #: Whether the user still has to set their own password (the UI shows a
+    #: hint/banner then). Absent counts as `true`.
+    must_change_password: bool = True
     #: When the user last changed their own password (absent for seeded or
-    #: admin-set passwords — the UI hints at the default password then).
+    #: admin-set passwords).
     password_changed_at: str | None = None
     #: Present when the session impersonates another user (superadmin).
     impersonator: dict | None = None
@@ -1189,6 +1192,7 @@ class CoreClient:
         roles: list[str] | None = None,
         locale: str = "en",
         status: str = "active",
+        must_change_password: bool = True,
     ) -> dict:
         """Creates a user (admin only)."""
         payload: dict[str, object] = {
@@ -1198,6 +1202,7 @@ class CoreClient:
             "roles": roles or [],
             "locale": locale,
             "status": status,
+            "must_change_password": must_change_password,
         }
         async with _api_client() as client:
             response = await client.post(
@@ -1219,6 +1224,7 @@ class CoreClient:
         roles: list[str] | None = None,
         status: str | None = None,
         locale: str | None = None,
+        must_change_password: bool | None = None,
     ) -> dict:
         """Partially updates a user (admin only)."""
         payload: dict[str, object] = {
@@ -1229,6 +1235,7 @@ class CoreClient:
                 "roles": roles,
                 "status": status,
                 "locale": locale,
+                "must_change_password": must_change_password,
             }.items()
             if v is not None
         }
