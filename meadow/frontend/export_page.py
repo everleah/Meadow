@@ -29,6 +29,7 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.object_picker import open_object_picker
 
 #: Base fields always offered (the worker maps these onto each object row).
 BASE_FIELDS = ("id", "type", "status")
@@ -242,17 +243,44 @@ async def export_page(request: Request) -> None:
                 .classes("mt-2 w-96")
             )
 
-            ids_box = (
-                ui.input(t("export.object_ids"), value="").props("outlined").classes("mt-2 w-full")
-            )
+            with ui.row().classes("items-center gap-2 w-full mt-2").style("flex-wrap: nowrap"):
+                ids_box = (
+                    ui.input(t("export.object_ids"), value="").props("outlined").classes("grow")
+                )
+                ids_pick = ui.button(icon="account_tree").props("outline")
+                ids_pick.tooltip(t("form.pick_in_structure"))
+
+            async def pick_selection() -> None:
+                """Picks objects with the shared picker; ids go into the input."""
+
+                async def on_pick(hits: list[dict]) -> None:
+                    merged = _split_ids(str(ids_box.value or ""))
+                    for hit in hits:
+                        oid = str(hit["id"])
+                        if oid not in merged:
+                            merged.append(oid)
+                    ids_box.set_value(", ".join(merged))
+
+                await open_object_picker(
+                    client=client,
+                    token=token,
+                    locale=locale,
+                    title=t("export.object_ids"),
+                    on_pick=on_pick,
+                    multi=True,
+                )
+
+            ids_pick.on_click(lambda: pick_selection())
 
             def update_source_editor(kind: str) -> None:
                 if kind == "selection":
                     detail_select.set_visibility(False)
                     ids_box.set_visibility(True)
+                    ids_pick.set_visibility(True)
                 else:
                     detail_select.set_visibility(True)
                     ids_box.set_visibility(False)
+                    ids_pick.set_visibility(False)
                     detail_select.options = _available_detail_options(kind)
                     if detail_select.value not in detail_select.options:
                         detail_select.value = None

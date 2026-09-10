@@ -820,6 +820,8 @@
   "form.picker_tree_tab": "Structure",
   "form.pick_target": "Choisir l'objet cible",
   "form.pick_in_structure": "Choisir dans l'arbre de structure",
+  "form.picker_selection": "Sélection",
+  "form.picker_none_selected": "Rien de sélectionné",
   "form.tree_picker_hint": "Choisissez la cible dans l'arbre de structure — les types non autorisés apparaissent en gris.",
   "form.loading": "Chargement…",
   "form.relations": "Relations",

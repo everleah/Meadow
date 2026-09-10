@@ -818,6 +818,8 @@
   "form.picker_tree_tab": "Struktur",
   "form.pick_target": "Zielobjekt wählen",
   "form.pick_in_structure": "Im Strukturbaum wählen",
+  "form.picker_selection": "Auswahl",
+  "form.picker_none_selected": "Noch nichts ausgewählt",
   "form.tree_picker_hint": "Ziel über den Strukturbaum wählen – nicht erlaubte Zieltypen sind ausgegraut.",
   "form.loading": "Lädt…",
   "form.relations": "Relationen",

@@ -649,11 +649,7 @@ async def products_page(request: Request) -> None:
                     .props("outline dense")
                     .classes("grow")
                 )
-            ref_search = (
-                ui.input(t("grid.reference_search"))
-                .props("outline dense")
-                .classes("grow")
-            )
+            ref_search = ui.input(t("grid.reference_search")).props("outline dense").classes("grow")
             ui.button(
                 icon="account_tree",
                 on_click=lambda: open_object_picker(
@@ -937,9 +933,7 @@ async def products_page(request: Request) -> None:
                             target_types=target_types,
                         )
 
-                    with ui.row().classes("items-center gap-2 w-full").style(
-                        "flex-wrap: nowrap"
-                    ):
+                    with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                         label = ui.label(t("grid.bulk_nothing_picked")).classes(
                             "grow text-caption text-gray-500"
                         )

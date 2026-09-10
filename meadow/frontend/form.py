@@ -552,9 +552,7 @@ async def product_form(object_id: str) -> None:
                 )
             return grouped
 
-        async def open_relation_picker(
-            title: str, target_types: list[str] | None, on_pick
-        ) -> None:
+        async def open_relation_picker(title: str, target_types: list[str] | None, on_pick) -> None:
             """Picks a target object via the shared picker (search or structure tree).
 
             The shared dialog greys out nodes whose type is not an allowed target

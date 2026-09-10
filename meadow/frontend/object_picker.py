@@ -64,12 +64,17 @@ async def open_object_picker(
     target_types: Iterable[str] | None = None,
     exclude_ids: Iterable[str] = (),
     root_id: str = OBJECT_ROOT_ID,
+    multi: bool = False,
 ) -> None:
     """Opens the Search/Structure picker dialog and calls ``on_pick`` with a hit.
 
     ``target_types`` (empty/``None`` = all types allowed) restricts which nodes can
     be selected and is forwarded to the search; ``exclude_ids`` are never
     selectable (e.g. the current object). A hit is ``{id, label, type}``.
+
+    With ``multi=True`` a pick **toggles** the selection instead of closing the
+    dialog: picks accumulate as chips and ``on_pick`` receives the **list** of hits
+    when the user applies. Single mode passes one hit and closes immediately.
     """
     allowed_types = {str(t) for t in (target_types or []) if t}
     excluded = {str(i) for i in exclude_ids if i}
@@ -98,11 +103,45 @@ async def open_object_picker(
                 tree_host = ui.column().classes("w-full h-80 min-h-0 overflow-y-auto")
                 tree_loaded = {"value": False}
 
+        if multi:
+            ui.label(t("form.picker_selection")).classes("text-caption text-gray-500 pt-2")
+            chosen_box = ui.column().classes("w-full gap-1")
+            with chosen_box:
+                ui.label(t("form.picker_none_selected")).classes("text-caption text-gray-500")
+
+        chosen: dict[str, dict] = {}
+
         async def choose(hit: dict) -> None:
-            dialog.close()
-            result = on_pick(hit)
-            if inspect.isawaitable(result):
-                await result
+            """Handles one pick: closes the dialog or toggles the multi selection."""
+            if not multi:
+                dialog.close()
+                result = on_pick(hit)
+                if inspect.isawaitable(result):
+                    await result
+                return
+            node_id = str(hit.get("id") or "")
+            if not node_id:
+                return
+            if node_id in chosen:
+                chosen.pop(node_id, None)
+            else:
+                chosen[node_id] = hit
+            render_chosen()
+
+        def render_chosen() -> None:
+            chosen_box.clear()
+            with chosen_box:
+                if not chosen:
+                    ui.label(t("form.picker_none_selected")).classes("text-caption text-gray-500")
+                    return
+                for hit in chosen.values():
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.label(f"{hit.get('label')} · {hit.get('type')}").classes(
+                            "bg-neutral px-2 py-0.5 rounded text-xs"
+                        )
+                        ui.button(icon="close", on_click=lambda h=hit: choose(h)).props(
+                            "flat dense size=sm"
+                        ).tooltip(t("grid.ref_remove"))
 
         async def do_search(value: str) -> None:
             query = (value or "").strip()
@@ -182,8 +221,19 @@ async def open_object_picker(
                 return  # greyed out (not an allowed target type)
             await choose(hit)
 
-        with ui.row().classes("justify-end w-full mt-2"):
+        async def apply_multi() -> None:
+            """Hands the accumulated selection to ``on_pick`` and closes."""
+            if not chosen:
+                return
+            dialog.close()
+            result = on_pick(list(chosen.values()))
+            if inspect.isawaitable(result):
+                await result
+
+        with ui.row().classes("w-full justify-end mt-2 gap-2"):
             ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
+            if multi:
+                ui.button(t("form.apply"), on_click=apply_multi).props("flat")
     dialog.open()
     # The tree lives in the second tab; load its top level right away so switching
     # tabs is instant (the search tab is the default view).

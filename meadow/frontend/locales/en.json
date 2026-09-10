@@ -820,6 +820,8 @@
   "form.picker_tree_tab": "Structure",
   "form.pick_target": "Pick target object",
   "form.pick_in_structure": "Pick in the structure tree",
+  "form.picker_selection": "Selection",
+  "form.picker_none_selected": "Nothing selected yet",
   "form.tree_picker_hint": "Pick the target in the structure tree — types that are not allowed appear greyed out.",
   "form.loading": "Loading…",
   "form.relations": "Relations",

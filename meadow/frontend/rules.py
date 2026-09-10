@@ -22,8 +22,9 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
-from meadow.frontend.i18n import t
+from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.object_picker import open_object_picker
 
 #: Known rule types (matches the core's VALID_RULE_TYPES).
 RULE_TYPES = ("validation", "computed", "normalization", "workflow_guard", "bulk")
@@ -452,12 +453,16 @@ async def rules_page() -> None:
                 type_input = (
                     ui.input(t("rules.lab_object_type")).props("filled dense").classes("w-full")
                 )
-                with ui.row().classes("w-full gap-2"):
+                with ui.row().classes("w-full gap-2").style("flex-wrap: nowrap"):
                     object_select = (
                         ui.select({}, label=t("rules.lab_objects"), multiple=True)
                         .props("filled dense outlined")
                         .classes("grow")
                     )
+                    ui.button(
+                        icon="account_tree",
+                        on_click=lambda: pick_objects(),
+                    ).props("flat").tooltip(t("form.pick_in_structure"))
                     ui.button(
                         t("rules.reload"),
                         icon="refresh",
@@ -496,6 +501,26 @@ async def rules_page() -> None:
             except Exception:  # noqa: BLE001 - degrade to no options
                 rows = []
             object_select.set_options({str(r.get("id")): _obj_label(r) for r in rows})
+
+        async def pick_objects() -> None:
+            """Picks test objects with the shared picker (search + structure tree)."""
+            object_type = (type_input.value or "").strip() or None
+
+            async def on_pick(hits: list[dict]) -> None:
+                object_select.set_options(
+                    {str(hit["id"]): f"{hit.get('label')} · {hit.get('type')}" for hit in hits},
+                    value=[str(hit["id"]) for hit in hits],
+                )
+
+            await open_object_picker(
+                client=client,
+                token=token,
+                locale=current_locale(),
+                title=t("rules.lab_objects"),
+                on_pick=on_pick,
+                target_types=[object_type] if object_type else None,
+                multi=True,
+            )
 
         def _edit_lab_state(rule: dict) -> None:
             lab_dialog.editing_rule = rule  # type: ignore[attr-defined]
