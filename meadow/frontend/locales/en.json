@@ -915,5 +915,12 @@
   "lang_admin.saved": "Language saved.",
   "grid.fit_to_view": "Fit columns to the available width",
   "grid.fit_to_content": "Size columns to their content (max. 30 characters)",
-  "grid.bulk_pending_hint": "Still queued – no worker seems to be running. Start the worker (`python -m meadow.worker`) so the job gets processed."
+  "grid.bulk_pending_hint": "Still queued – no worker seems to be running. Start the worker (`python -m meadow.worker`) so the job gets processed.",
+  "seq.start": "Edit the selected objects one after another",
+  "seq.position": "Object {index} of {total}",
+  "seq.save_next": "Save & next",
+  "seq.skip": "Skip",
+  "seq.stop": "End sequential editing",
+  "seq.finished": "Sequential editing finished ({count} objects).",
+  "seq.no_selection": "Select rows in the grid first."
 }

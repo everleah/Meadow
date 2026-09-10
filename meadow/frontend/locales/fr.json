@@ -915,5 +915,12 @@
   "lang_admin.saved": "Langue enregistrée.",
   "grid.fit_to_view": "Adapter les colonnes à la largeur disponible",
   "grid.fit_to_content": "Ajuster les colonnes au contenu (max. 30 caractères)",
-  "grid.bulk_pending_hint": "Toujours en file d'attente – aucun worker ne semble actif. Démarrez le worker (`python -m meadow.worker`) pour traiter la tâche."
+  "grid.bulk_pending_hint": "Toujours en file d'attente – aucun worker ne semble actif. Démarrez le worker (`python -m meadow.worker`) pour traiter la tâche.",
+  "seq.start": "Éditer les objets sélectionnés l'un après l'autre",
+  "seq.position": "Objet {index} sur {total}",
+  "seq.save_next": "Enregistrer & suivant",
+  "seq.skip": "Ignorer",
+  "seq.stop": "Terminer l'édition séquentielle",
+  "seq.finished": "Édition séquentielle terminée ({count} objets).",
+  "seq.no_selection": "Sélectionnez d'abord des lignes dans la grille."
 }

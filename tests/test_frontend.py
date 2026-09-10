@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 
 from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
+from meadow.frontend.edit_queue import next_object_id, position_of
 from meadow.frontend.grid import (
     MAX_CONTENT_CHARS,
     attribute_column_specs,
@@ -319,6 +320,24 @@ def test_restore_columns_filters_unknown_fields() -> None:
     assert restore_columns(["attr_gone"], known) is None
     assert restore_columns(None, known) is None
     assert restore_columns(["_name", 42], known) == {"_name"}
+
+
+def test_position_of_a_sequential_edit_queue() -> None:
+    ids = ["object:1", "object:2", "object:3"]
+    assert position_of(ids, "object:1") == 0
+    assert position_of(ids, "object:3") == 2
+    assert position_of(ids, "object:9") is None
+    assert position_of([], "object:1") is None
+
+
+def test_next_object_id_advances_and_stops_at_the_end() -> None:
+    ids = ["object:1", "object:2", "object:3"]
+    assert next_object_id(ids, "object:1") == "object:2"
+    assert next_object_id(ids, "object:2") == "object:3"
+    # The last entry (and an id outside the queue) ends the sequence.
+    assert next_object_id(ids, "object:3") is None
+    assert next_object_id(ids, "object:9") is None
+    assert next_object_id(["object:1"], "object:1") is None
 
 
 def test_attribute_columns_add_editor_props_for_editable_types() -> None:

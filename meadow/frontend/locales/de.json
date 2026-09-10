@@ -915,5 +915,12 @@
   "lang_admin.saved": "Sprache gespeichert.",
   "grid.fit_to_view": "Spalten an die verfügbare Breite anpassen",
   "grid.fit_to_content": "Spalten an den Inhalt anpassen (max. 30 Zeichen)",
-  "grid.bulk_pending_hint": "Noch in der Warteschlange – es scheint kein Worker zu laufen. Bitte den Worker starten (`python -m meadow.worker`), damit der Job verarbeitet wird."
+  "grid.bulk_pending_hint": "Noch in der Warteschlange – es scheint kein Worker zu laufen. Bitte den Worker starten (`python -m meadow.worker`), damit der Job verarbeitet wird.",
+  "seq.start": "Ausgewählte Objekte nacheinander bearbeiten",
+  "seq.position": "Objekt {index} von {total}",
+  "seq.save_next": "Speichern & weiter",
+  "seq.skip": "Überspringen",
+  "seq.stop": "Sequenzielles Bearbeiten beenden",
+  "seq.finished": "Sequenzielles Bearbeiten beendet ({count} Objekte).",
+  "seq.no_selection": "Bitte zuerst Zeilen im Grid auswählen."
 }

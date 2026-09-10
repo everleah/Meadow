@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import inspect
 from functools import partial
+from urllib.parse import quote
 
 from nicegui import app, ui
 
-from meadow.frontend import config
+from meadow.frontend import config, edit_queue
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.enums import enum_options
@@ -134,11 +135,15 @@ async def product_form(object_id: str) -> None:
     edit_lang = _base_lang(locale)
 
     with ui.column().classes("w-full p-6"):
-        ui.button(
-            t("form.back"),
-            icon="arrow_back",
-            on_click=lambda: ui.navigate.to("/products"),
-        ).props("flat")
+        origin_url = edit_queue.queue_origin()
+        in_sequence = edit_queue.is_active(object_id)
+
+        def go_back() -> None:
+            """Leaves the form; a running sequence ends here as well."""
+            edit_queue.stop_queue()
+            ui.navigate.to(origin_url if in_sequence else "/products")
+
+        ui.button(t("form.back"), icon="arrow_back", on_click=go_back).props("flat")
 
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
@@ -185,6 +190,30 @@ async def product_form(object_id: str) -> None:
             ui.html(completeness_badge(int(completeness))).classes("text-sm").tooltip(
                 t("form.missing_required").format(count=len(missing))
             )
+
+        # --- Sequential editing (queue started in the grid): progress + actions.
+        # The lambdas defer resolving `save_and_next`/`skip_object`/`stop_sequence`
+        # until the click, because the save logic is defined further below.
+        queue_ids = edit_queue.queue_ids() if in_sequence else []
+        queue_position = edit_queue.position_of(queue_ids, object_id)
+        if queue_position is not None:
+            with (
+                ui.column().classes("w-full gap-1 mt-3"),
+                ui.row().classes("items-center gap-3 w-full").style("flex-wrap: nowrap"),
+            ):
+                ui.label(
+                    t("seq.position").format(index=queue_position + 1, total=len(queue_ids))
+                ).classes("text-caption text-gray-600 shrink-0")
+                ui.linear_progress(value=(queue_position + 1) / len(queue_ids)).classes("grow")
+                ui.button(t("seq.save_next"), icon="save", on_click=lambda: save_and_next()).props(
+                    "flat dense"
+                )
+                ui.button(t("seq.skip"), icon="skip_next", on_click=lambda: skip_object()).props(
+                    "flat dense"
+                )
+                ui.button(icon="close", on_click=lambda: stop_sequence()).props(
+                    "flat dense"
+                ).tooltip(t("seq.stop"))
 
         # Working copy of the raw (own) attribute values. Multilingual values
         # are kept as ``{lang: value}`` dicts.
@@ -1223,7 +1252,8 @@ async def product_form(object_id: str) -> None:
             )
 
         # --- Save. -------------------------------------------------------------
-        async def save() -> None:
+        async def save(*, next_object: bool = False) -> None:
+            """Saves the object; ``next_object`` continues the edit queue."""
             new_attrs: dict = {
                 k: (dict(v) if isinstance(v, dict) else v) for k, v in edited.items()
             }
@@ -1231,18 +1261,48 @@ async def product_form(object_id: str) -> None:
             status = status_select.value if status_select.value else None
             if status is not None and status != resolved.get("status"):
                 changed = True
-            if not changed:
+            if changed:
+                try:
+                    await client.update_object(
+                        token, object_id, attributes=new_attrs, status=status, locale=locale
+                    )
+                    ui.notify(t("form.saved"), color="positive")
+                except CoreError as error:
+                    ui.notify(t("form.save_failed_reason").format(reason=error), color="negative")
+                    return  # keep the object open, in particular in a sequence
+                except Exception:  # noqa: BLE001 - show a friendly message
+                    ui.notify(t("form.save_failed"), color="negative")
+                    return
+            elif not next_object:
                 ui.notify(t("grid.no_changes"), color="info")
                 return
-            try:
-                await client.update_object(
-                    token, object_id, attributes=new_attrs, status=status, locale=locale
-                )
-                ui.notify(t("form.saved"), color="positive")
+            if next_object:
+                await advance_queue()
+            else:
                 ui.navigate.reload()
-            except CoreError as error:
-                ui.notify(t("form.save_failed_reason").format(reason=error), color="negative")
-            except Exception:  # noqa: BLE001 - show a friendly message
-                ui.notify(t("form.save_failed"), color="negative")
+
+        async def save_and_next() -> None:
+            """Sequential editing: save and open the next queued object."""
+            await save(next_object=True)
+
+        async def advance_queue() -> None:
+            """Opens the next object of the queue (or finishes the flow)."""
+            ids = edit_queue.queue_ids()
+            following = edit_queue.next_object_id(ids, object_id)
+            if following is None:
+                edit_queue.stop_queue()
+                ui.notify(t("seq.finished").format(count=len(ids)), color="positive")
+                ui.navigate.to(origin_url)
+                return
+            ui.navigate.to(f"/products/{quote(following, safe='')}")
+
+        async def skip_object() -> None:
+            """Sequential editing: continue without saving this object."""
+            await advance_queue()
+
+        def stop_sequence() -> None:
+            """Leaves sequential editing and returns to the grid view."""
+            edit_queue.stop_queue()
+            ui.navigate.to(origin_url)
 
         ui.button(t("grid.save"), icon="save", on_click=save).classes("bg-primary text-white mt-4")

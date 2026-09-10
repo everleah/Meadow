@@ -19,7 +19,7 @@ from urllib.parse import quote
 from fastapi import Request
 from nicegui import app, ui
 
-from meadow.frontend import config
+from meadow.frontend import config, edit_queue
 from meadow.frontend.api import CoreClient, is_session_expired
 from meadow.frontend.auth import clear_session
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
@@ -819,8 +819,8 @@ async def products_page(request: Request) -> None:
         all_rows = make_rows(objects)
         loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
 
-        def sync_url_query() -> None:
-            """Keeps the URL in sync with the active filters (bookmarkable)."""
+        def filters_query() -> str:
+            """Builds the query string of the active filters."""
             parts = []
             if active["incomplete"]:
                 parts.append("incomplete=1")
@@ -836,10 +836,29 @@ async def products_page(request: Request) -> None:
                 parts.append("uncategorized=1")
             if active["q"]:
                 parts.append(f"q={quote(str(active['q']))}")
-            query = "&".join(parts)
-            ui.run_javascript(
-                f"history.replaceState(null, '', '/products{('?' + query) if query else ''}')"
-            )
+            return "&".join(parts)
+
+        def current_url() -> str:
+            """The URL of the current grid view (filters included)."""
+            query = filters_query()
+            return f"/products{'?' + query if query else ''}"
+
+        def sync_url_query() -> None:
+            """Keeps the URL in sync with the active filters (bookmarkable)."""
+            ui.run_javascript(f"history.replaceState(null, '', '{current_url()}')")
+
+        async def start_sequential() -> None:
+            """Opens the selected rows one after another in the product form."""
+            try:
+                selected_rows = await grid.get_selected_rows()
+            except Exception:  # noqa: BLE001 - degrade to "nothing selected"
+                selected_rows = []
+            ids = [oid for oid in (_row_id(row) for row in selected_rows) if oid]
+            if not ids:
+                ui.notify(t("seq.no_selection"), color="warning")
+                return
+            edit_queue.start_queue(ids, current_url())
+            ui.navigate.to(f"/products/{quote(ids[0], safe='')}")
 
         async def apply_rows(selected_objects: list[dict]) -> None:
             nonlocal original_by_id, all_rows, loaded_rows_by_id
@@ -1805,6 +1824,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="fact_check", on_click=bulk_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.bulk_actions"))
+                    ui.button(icon="edit_note", on_click=start_sequential).props("outline").tooltip(
+                        t("seq.start")
+                    )
                     ui.button(icon="download", on_click=export_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.export"))
