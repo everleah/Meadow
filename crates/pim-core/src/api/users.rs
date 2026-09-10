@@ -146,6 +146,7 @@ pub async fn create_user(
             "username, email and password are required",
         ));
     }
+    auth::validate_new_password("", &body.password).map_err(ApiError::bad_request)?;
     for role in &body.roles {
         if !VALID_ROLES.contains(&role.as_str()) {
             return Err(ApiError::bad_request(format!("unknown role `{role}`")));
@@ -279,14 +280,27 @@ pub async fn update_user(
     if let Some(email) = body.email {
         changes.insert("email".to_owned(), Value::String(email));
     }
-    if let Some(password) = body.password {
+    let password_changed = if let Some(password) = body.password {
         if password.is_empty() {
             return Err(ApiError::bad_request("password must not be empty"));
         }
+        auth::validate_new_password("", &password).map_err(ApiError::bad_request)?;
         let hash = auth::hash_password(&password)
             .map_err(|error| ApiError::internal(error.to_string()))?;
         changes.insert("password_hash".to_owned(), Value::String(hash));
-    }
+        // An admin-set password is not the user's own choice: the marker is
+        // cleared below (so the UI keeps hinting at "password never changed")
+        // and the token version is bumped (invalidates older tokens once
+        // enforcement is in place).
+        let version = existing
+            .get("token_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        changes.insert("token_version".to_owned(), Value::from(version + 1));
+        true
+    } else {
+        false
+    };
     if let Some(roles) = body.roles {
         for role in &roles {
             if !VALID_ROLES.contains(&role.as_str()) {
@@ -306,25 +320,54 @@ pub async fn update_user(
     }
     let changes = Value::Object(changes);
 
-    let sql = "
+    // `password_changed_at` is an `option<datetime>`: MERGE cannot write a null
+    // there, so an admin reset unsets the field in an extra statement.
+    let mut sql = String::from(
+        "
         LET $u = type::record('user', $key);
         UPDATE $u MERGE $changes;
+    ",
+    );
+    let mut select_index = 2;
+    if password_changed {
+        sql.push_str("UPDATE $u UNSET password_changed_at;\n");
+        select_index = 3;
+    }
+    sql.push_str(
+        "
         UPDATE $u SET updated_at = time::now();
         SELECT * OMIT password_hash FROM $u;
-    ";
+    ",
+    );
+
     let mut response = state
         .db
         .inner()
-        .query(sql)
+        .query(&sql)
         .bind(("key", key))
         .bind(("changes", changes))
         .await?
         .check()?;
-    let users: Vec<Value> = response.take(3)?;
+    let users: Vec<Value> = response.take(select_index)?;
     let user = users
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("user `{id}` not found")))?;
+
+    if password_changed {
+        crate::audit::record_best_effort(
+            &state.db,
+            crate::audit::AuditEntry {
+                user_id: &claims.sub,
+                action: "user_password_reset",
+                object_id: Some(&id),
+                from: None,
+                to: None,
+                metadata: None,
+            },
+        )
+        .await;
+    }
     Ok(Json(user))
 }
 

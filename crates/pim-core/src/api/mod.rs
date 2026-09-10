@@ -31,6 +31,7 @@ use utoipa::OpenApi;
     paths(
         auth::login,
         auth::me,
+        auth::change_password,
         auth::impersonate_user,
         health::health,
         jobs::create_job_definition,
@@ -134,6 +135,7 @@ use utoipa::OpenApi;
     components(schemas(
         auth::LoginRequest,
         auth::LoginResponse,
+        auth::ChangePasswordRequest,
         auth::MeResponse,
         crate::auth::Impersonator,
         config::ConfigExportQuery,

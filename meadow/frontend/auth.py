@@ -94,6 +94,7 @@ def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
             sub=me.sub,
             username=me.username,
             roles=me.roles,
+            password_changed_at=me.password_changed_at,
             impersonator=None,
             authenticated=True,
         )

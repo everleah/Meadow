@@ -88,6 +88,9 @@ class MeResponse(BaseModel):
     sub: str
     username: str
     roles: list[str]
+    #: When the user last changed their own password (absent for seeded or
+    #: admin-set passwords — the UI hints at the default password then).
+    password_changed_at: str | None = None
     #: Present when the session impersonates another user (superadmin).
     impersonator: dict | None = None
 
@@ -118,6 +121,28 @@ class CoreClient:
             )
             response.raise_for_status()
             return MeResponse.model_validate(response.json())
+
+    async def change_password(
+        self,
+        token: str,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> LoginResponse:
+        """Changes the caller's own password (``POST /auth/password``).
+
+        Returns a fresh token that replaces the current session token (the core
+        bumps the user's token version).
+        """
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/auth/password",
+                json={"current_password": current_password, "new_password": new_password},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return LoginResponse.model_validate(response.json())
 
     async def list_objects(
         self,

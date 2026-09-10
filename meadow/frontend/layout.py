@@ -8,6 +8,7 @@ from meadow.frontend import config
 from meadow.frontend.api import CoreClient
 from meadow.frontend.auth import is_admin, logout
 from meadow.frontend.i18n import current_locale, set_locale, supported_locales, t
+from meadow.frontend.password import open_change_password_dialog, refresh_banner
 from meadow.frontend.theme import MEADOW_LOGO, NAV_GRADIENT_BOTTOM, NAV_GRADIENT_TOP
 
 #: Keep the drawer language selector text readable on the dark gradient.
@@ -75,6 +76,7 @@ async def build_shell(*, active: str) -> None:
                 )
             ).classes("grow text-subtitle2")
             ui.button(t("users.back_to_self"), on_click=logout).props("flat color=white size=sm")
+    refresh_banner()
     with ui.header(elevated=True).classes("items-center justify-between bg-primary"):
         with ui.row().classes("items-center gap-2"):
             ui.button(icon="menu", on_click=lambda: drawer.toggle()).props("flat round color=white")
@@ -82,6 +84,9 @@ async def build_shell(*, active: str) -> None:
             ui.label("Meadow PIM").classes("text-lg font-bold text-white")
         with ui.row().classes("items-center gap-3"):
             ui.label(app.storage.user.get("username", "")).classes("text-white")
+            ui.button(icon="key", on_click=open_change_password_dialog).props(
+                "flat round color=white"
+            ).tooltip(t("password.change"))
             ui.button(icon="logout", on_click=logout).props("flat round color=white")
 
     with (

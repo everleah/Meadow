@@ -76,6 +76,25 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Minimum length of a new password (characters).
+pub const MIN_PASSWORD_LENGTH: usize = 8;
+
+/// Validates a new password: minimum length and difference from `current`.
+///
+/// Used by the self-service change (`POST /auth/password`) and by the admin
+/// paths (`POST /users`, `PATCH /users/{id}` with a new password).
+pub fn validate_new_password(current: &str, new: &str) -> Result<(), String> {
+    if new.chars().count() < MIN_PASSWORD_LENGTH {
+        return Err(format!(
+            "password must be at least {MIN_PASSWORD_LENGTH} characters long"
+        ));
+    }
+    if !current.is_empty() && new == current {
+        return Err("new password must differ from the current one".to_owned());
+    }
+    Ok(())
+}
+
 /// Issues a signed HS256 token.
 pub fn issue(
     secret: &str,

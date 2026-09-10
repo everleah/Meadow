@@ -25,12 +25,23 @@ pub struct LoginResponse {
     pub token_type: String,
 }
 
+/// Self-service password change payload.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
 /// Current-user response.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MeResponse {
     pub sub: String,
     pub username: String,
     pub roles: Vec<String>,
+    /// When the user last changed their own password (absent for seeded or
+    /// admin-set passwords — the UI uses this to hint at the default password).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_changed_at: Option<String>,
     /// Present when the session impersonates another user (superadmin).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub impersonator: Option<Impersonator>,
@@ -134,13 +145,172 @@ pub async fn login(
         (status = 401, description = "Unauthorized", body = Value)
     )
 )]
-pub async fn me(AuthUser(claims): AuthUser) -> Json<MeResponse> {
-    Json(MeResponse {
+pub async fn me(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<MeResponse>, ApiError> {
+    let key = user_key(&claims.sub)?;
+    let user = fetch_user(&state, key)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("invalid session"))?;
+
+    Ok(Json(MeResponse {
         sub: claims.sub,
         username: claims.username,
         roles: claims.roles,
+        password_changed_at: user
+            .get("password_changed_at")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         impersonator: claims.impersonator,
-    })
+    }))
+}
+
+/// Splits the JWT `sub` claim (`user:<key>`) into the record key.
+fn user_key(sub: &str) -> Result<&str, ApiError> {
+    let (table, key) = sub
+        .split_once(':')
+        .ok_or_else(|| ApiError::unauthorized("invalid session subject"))?;
+    if table != "user" || key.is_empty() {
+        return Err(ApiError::unauthorized("invalid session subject"));
+    }
+    Ok(key)
+}
+
+/// Loads a user record (`None` when it does not exist).
+async fn fetch_user(state: &AppState, key: &str) -> Result<Option<Value>, ApiError> {
+    let sql = "
+        LET $u = type::record('user', $key);
+        SELECT * FROM $u;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let users: Vec<Value> = response.take(1)?;
+    Ok(users.into_iter().next())
+}
+
+/// Changes the authenticated user's own password.
+///
+/// Requires the current password, validates the new one, stores a fresh argon2
+/// hash, records `password_changed_at` and bumps `token_version`, and returns a
+/// **new token** so the caller's session continues seamlessly.
+#[utoipa::path(
+    post,
+    path = "/auth/password",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "New JWT token", body = LoginResponse),
+        (status = 400, description = "Invalid current or new password", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Impersonated session", body = Value),
+        (status = 404, description = "User not found", body = Value)
+    )
+)]
+pub async fn change_password(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<LoginResponse>, ApiError> {
+    if claims.impersonator.is_some() {
+        return Err(ApiError::forbidden(
+            "cannot change the password of an impersonated session",
+        ));
+    }
+    let key = user_key(&claims.sub)?;
+    let user = fetch_user(&state, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+
+    let current_hash = user
+        .get("password_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !auth::verify_password(&body.current_password, current_hash) {
+        return Err(ApiError::bad_request("current password is incorrect"));
+    }
+    auth::validate_new_password(&body.current_password, &body.new_password)
+        .map_err(ApiError::bad_request)?;
+    let new_hash = auth::hash_password(&body.new_password)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let sql = "
+        LET $u = type::record('user', $key);
+        UPDATE $u SET password_hash = $hash,
+            password_changed_at = time::now(),
+            token_version = token_version + 1,
+            updated_at = time::now();
+        SELECT * FROM $u;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .bind(("hash", new_hash))
+        .await?
+        .check()?;
+    let users: Vec<Value> = response.take(1)?;
+    let updated = users
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::internal("updated user was not returned"))?;
+
+    let username = updated
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or(&claims.username)
+        .to_owned();
+    let roles = updated
+        .get("roles")
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| claims.roles.clone());
+    let token_version = updated
+        .get("token_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let token = auth::issue(
+        &state.config.jwt_secret,
+        state.config.jwt_ttl_seconds,
+        Claims {
+            sub: claims.sub.clone(),
+            username,
+            roles,
+            token_version,
+            exp: 0,
+            impersonator: None,
+        },
+    )
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "password_changed",
+            object_id: Some(&claims.sub),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(Json(LoginResponse {
+        token,
+        token_type: "bearer".to_owned(),
+    }))
 }
 
 /// "Login as user" for superadmin: issues a JWT for the target user with the
@@ -263,4 +433,29 @@ pub async fn impersonate_user(
         token,
         token_type: "bearer".to_owned(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_change_rejects_short_and_identical_passwords() {
+        assert!(auth::validate_new_password("secret-pass", "another-pass").is_ok());
+        assert!(auth::validate_new_password("secret-pass", "short").is_err());
+        assert!(auth::validate_new_password("secret-pass", "secret-pass").is_err());
+        // Length is counted in characters, not bytes.
+        assert!(auth::validate_new_password("secret-pass", "pässwört").is_ok());
+        // No comparison when the current password is unknown (admin paths).
+        assert!(auth::validate_new_password("", "short").is_err());
+        assert!(auth::validate_new_password("", "long-enough").is_ok());
+    }
+
+    #[test]
+    fn user_key_splits_the_subject() {
+        assert_eq!(user_key("user:abc123").unwrap(), "abc123");
+        assert!(user_key("object:abc123").is_err());
+        assert!(user_key("user:").is_err());
+        assert!(user_key("no-colon").is_err());
+    }
 }

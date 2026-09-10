@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/auth/login", post(api::auth::login))
         .route("/auth/me", get(api::auth::me))
+        .route("/auth/password", post(api::auth::change_password))
         .route("/config/export", get(api::config::export_config))
         .route("/config/import", post(api::config::import_config))
         .route("/exports", post(api::exports::create_export))

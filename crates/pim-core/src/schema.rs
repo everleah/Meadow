@@ -178,6 +178,9 @@ DEFINE TABLE IF NOT EXISTS user;
 DEFINE FIELD IF NOT EXISTS username ON TABLE user TYPE string;
 DEFINE FIELD IF NOT EXISTS email ON TABLE user TYPE string;
 DEFINE FIELD IF NOT EXISTS password_hash ON TABLE user TYPE string;
+-- Set when the user changes their own password; stays empty for seeded/admin-set
+-- passwords so the UI can hint that the password was never chosen by the user.
+DEFINE FIELD IF NOT EXISTS password_changed_at ON TABLE user TYPE option<datetime>;
 DEFINE FIELD IF NOT EXISTS auth_provider ON TABLE user TYPE string;
 DEFINE FIELD IF NOT EXISTS external_sub ON TABLE user TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS roles ON TABLE user TYPE array;

@@ -115,14 +115,22 @@ Der Kern übersetzt diese Regeln beim Lesen in SurrealQL-`WHERE`-Bedingungen (se
 ```
 
 - **Superadmin-Schutz:** Die API verweigert `DELETE` und den Rollenentzug, solange der betroffene Benutzer der letzte aktive `superadmin` ist.
-- Passwörter werden mit **argon2** gehasht; Passwort-Reset ist optional.
+- Passwörter werden mit **argon2** gehasht.
+
+## Passwort-Verwaltung (implementiert, Phase 9)
+
+- **Richtlinie:** `MIN_PASSWORD_LENGTH` = **8 Zeichen** (Zeichen, nicht Bytes) und das neue Passwort muss sich vom aktuellen unterscheiden (`auth::validate_new_password`); gilt für Selbst-Änderung und Admin-Pfade.
+- **Selbst-Änderung — `POST /auth/password`** (jede authentifizierte Rolle): Body `{current_password, new_password}`. Falsches aktuelles Passwort → **400**, Richtlinienverstoß → **400**, in einer **Impersonations-Sitzung** → **403**. Erfolg: neuer Hash, `password_changed_at = time::now()`, `token_version + 1`, Audit `password_changed` und die Antwort enthält ein **frisches JWT** (`200 {token, token_type}`), damit die laufende Sitzung nahtlos weiterläuft.
+- **Admin-Reset — `PATCH /users/{id}` mit `password`** (`admin`/`superadmin`): setzt einen neuen Hash, **entfernt** `password_changed_at` (`UPDATE … UNSET` — ein `MERGE` kann kein `null` in ein `option<datetime>` schreiben → sonst 500) und erhöht `token_version`; Audit `user_password_reset`. `POST /users` validiert das Startpasswort ebenfalls.
+- **UI:** Der Kopfbereich jeder Seite hat einen **Schlüssel-Button** („Passwort ändern“) mit Dialog (aktuelles/neues/wiederholtes Passwort, Client-Validierung: Länge + Gleichheit). Solange `GET /auth/me` **kein** `password_changed_at` liefert (Seed-`admin`/`admin` oder vom Admin gesetztes Startpasswort), zeigt das Layout ein **Hinweis-Banner** „Passwort wurde noch nie geändert“ mit direktem Button; nach der Änderung verschwindet es. In Impersonations-Sitzungen ist der Flow gesperrt (Hinweis statt Dialog).
+- **Noch offen (Härtung):** `token_version` wird beim Request **nicht** geprüft (der `AuthUser`-Extractor verifiziert nur das JWT) — ältere Tokens bleiben also bis zum Ablauf gültig. Eine Durchsetzung bräuchte einen DB-/Cache-Lookup pro Request; bis dahin hilft nur `JWT_TTL_SECONDS` kurz zu halten.
 
 ## JWT & API
 
 - JWT-Claims: `sub`, `username`, `roles[]`, `groups[]`, `perms[]`, `token_version`, `exp`. In Phase 1 trägt das Token `sub` (volle Record-ID, z. B. `user:admin`), `username`, `roles[]`, `token_version`, `exp`; `groups[]`/`perms[]` werden mit der Gruppenmitgliedschaft (Phase 7/9) ergänzt.
-- Kurzlebige Access-Tokens; `token_version` erlaubt sofortiges Sperren/Logout einzelner Benutzer.
+- Kurzlebige Access-Tokens; `token_version` erlaubt sofortiges Sperren/Logout einzelner Benutzer. **Umsetzungsstand:** `token_version` wird beim Passwortwechsel/Reset erhöht, aber noch **nicht** pro Request geprüft (s. Abschnitt „Passwort-Verwaltung“).
 - **Dev-Bootstrap:** Beim ersten Start wird ein Standard-`superadmin` (`admin`/`admin`) angelegt, sofern `user:admin` nicht existiert; JWT-Config über `JWT_SECRET`/`JWT_TTL_SECONDS`.
-- Neue Endpunkte: `GET /auth/me`, `POST|PATCH|DELETE /users`, `POST|PATCH|DELETE /groups`, `POST /groups/{id}/members`, `POST /groups/{id}/children`.
+- Neue Endpunkte: `GET /auth/me`, `POST /auth/password` (Selbst-Änderung, s. o.), `POST|PATCH|DELETE /users`, `POST|PATCH|DELETE /groups`, `POST /groups/{id}/members`, `POST /groups/{id}/children`.
 - **Service-Accounts:** Der Worker greift über API-Keys/Service-Accounts (Machine-to-Machine) auf den Kern zu, nicht über Personen-Logins.
 
 ## Impersonation („Login als Benutzer XY“, `superadmin`)
