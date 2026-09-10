@@ -835,7 +835,10 @@ pub struct ObjectPickerParams {
 /// Searches for objects by label to pick a reference target.
 ///
 /// Returns compact hits (`id`, `type`, `label`, `status`); the label is the
-/// resolved multilingual `name` for `?locale=`. Used by the reference picker.
+/// resolved multilingual `name` for `?locale=`. With `?locale=` each hit also
+/// carries a `completeness` value for that language, so a picker can show
+/// whether the target still misses required attributes. Used by the reference
+/// and relation pickers.
 #[utoipa::path(
     get,
     path = "/objects/picker",
@@ -919,12 +922,28 @@ pub async fn picker(
             attributes.get("name"),
         )
         .unwrap_or_else(|| object_type.clone());
-        hits.push(json!({
-            "id": id,
-            "type": object_type,
+        let mut hit = json!({
+            "id": &id,
+            "type": &object_type,
             "label": label,
-            "status": status,
-        }));
+            "status": &status,
+        });
+        if let Some(locale) = &locale {
+            // Few hits per query (default 20), so the per-object computation is
+            // cheap; `compute_batch` would need the ancestors to be part of the
+            // hit list (see `list_objects`).
+            let result = crate::completeness::compute(
+                &state.cache,
+                &state.db,
+                &id,
+                &object_type,
+                Some(locale),
+                &attributes,
+            )
+            .await?;
+            hit["completeness"] = json!({ (locale): result.percent });
+        }
+        hits.push(hit);
     }
     Ok(Json(hits))
 }

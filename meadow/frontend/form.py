@@ -30,10 +30,11 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
+from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.enums import enum_options
-from meadow.frontend.grid import completeness_badge, resolve_value, status_badge
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.object_picker import open_object_picker, render_picker_hit
 
 #: Workflow statuses offered in the status selector. The core validates the
 #: actual transition via the workflow guard.
@@ -252,11 +253,25 @@ async def product_form(object_id: str) -> None:
 
             container = ui.column().classes("flex-1 gap-1")
             with container:
-                search = (
-                    ui.input(placeholder=t("form.reference_search"))
-                    .props("filled dense")
-                    .classes("w-full")
-                )
+                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
+                    search = (
+                        ui.input(placeholder=t("form.reference_search"))
+                        .props("filled dense")
+                        .classes("grow")
+                    )
+                    # Same picker as the relations (search + structure tree).
+                    ui.button(
+                        icon="account_tree",
+                        on_click=lambda: open_object_picker(
+                            client=client,
+                            token=token,
+                            locale=locale,
+                            title=t("form.pick_target"),
+                            on_pick=on_pick,
+                            target_types=target_types,
+                            exclude_ids=[object_id],
+                        ),
+                    ).props("dense flat round").tooltip(t("form.pick_in_structure"))
                 chip_slot = ui.column().classes("w-full")
                 results = ui.column().classes("w-full gap-1")
 
@@ -294,10 +309,7 @@ async def product_form(object_id: str) -> None:
                     return
                 for hit in hits:
                     with results:
-                        ui.button(
-                            f"{hit.get('label')} · {hit.get('type')}",
-                            on_click=lambda h=hit: on_pick(h),
-                        ).props("outline dense").classes("w-full justify-start")
+                        render_picker_hit(hit, on_pick, locale)
 
             search.on_value_change(lambda e: on_search(e.value))
             render_chip(existing)
@@ -540,45 +552,23 @@ async def product_form(object_id: str) -> None:
                 )
             return grouped
 
-        def open_relation_picker(title: str, target_types: list[str] | None, on_pick) -> None:
-            """Pick a target object by label search (add aggregation / re-parent)."""
-            with ui.dialog() as dialog, ui.card().classes("w-[32rem] max-w-[90vw]"):
-                ui.label(title).classes("text-subtitle1")
-                search = (
-                    ui.input(placeholder=t("form.reference_search"))
-                    .props("filled dense")
-                    .classes("w-full")
-                )
-                hits = ui.column().classes("w-full gap-1")
+        async def open_relation_picker(
+            title: str, target_types: list[str] | None, on_pick
+        ) -> None:
+            """Picks a target object via the shared picker (search or structure tree).
 
-                async def choose(hit: dict) -> None:
-                    dialog.close()
-                    result = on_pick(hit)
-                    if inspect.isawaitable(result):
-                        await result
-
-                async def do_search(value: str) -> None:
-                    q = (value or "").strip()
-                    hits.clear()
-                    if not q:
-                        return
-                    try:
-                        found = await client.picker_search(
-                            token, q, types=target_types, locale=locale, limit=20
-                        )
-                    except Exception:  # noqa: BLE001 - degrade to no hits
-                        return
-                    for hit in found:
-                        with hits:
-                            ui.button(
-                                f"{hit.get('label')} · {hit.get('type')}",
-                                on_click=lambda h=hit: choose(h),
-                            ).props("outline dense").classes("w-full justify-start")
-
-                search.on_value_change(lambda e: do_search(e.value))
-                with ui.row().classes("justify-end w-full mt-2"):
-                    ui.button(t("form.cancel"), on_click=dialog.close).props("flat")
-            dialog.open()
+            The shared dialog greys out nodes whose type is not an allowed target
+            type (and the object itself); see `meadow.frontend.object_picker`.
+            """
+            await open_object_picker(
+                client=client,
+                token=token,
+                locale=locale,
+                title=title,
+                on_pick=on_pick,
+                target_types=target_types,
+                exclude_ids=[object_id],
+            )
 
         async def on_add_ref(defn: dict, hit: dict) -> None:
             """Creates an aggregation reference from the current object to a hit.
@@ -1209,7 +1199,8 @@ async def product_form(object_id: str) -> None:
                 ui.column()
                 .classes("w-80 shrink-0")
                 .style(
-                    "position: sticky; top: 0.5rem; max-height: calc(100vh - 5rem); overflow-y: auto"
+                    "position: sticky; top: 0.5rem; "
+                    "max-height: calc(100vh - 5rem); overflow-y: auto"
                 )
             ):
                 render_pinned()

@@ -785,7 +785,11 @@ class CoreClient:
         locale: str | None = None,
         limit: int = 20,
     ) -> list[dict]:
-        """Searches objects by label for the reference picker."""
+        """Searches objects by label for the reference picker.
+
+        With ``locale`` each hit also carries a ``completeness`` value for that
+        language (the picker badges how complete the target is).
+        """
         params: dict[str, str] = {"q": q, "limit": str(limit)}
         if types:
             params["types"] = ",".join(types)

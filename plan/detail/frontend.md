@@ -118,6 +118,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
    - Eine scrollbare Seite mit einklappbaren Attributgruppen und Sprung-Menü
    - Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX, typspezifische Wertedarstellung
    - **(Umgesetzt:)** **Attribut-Suchleiste** (filtert die Zeilen nach Label/Name, öffnet Treffer, Trefferzähler) und **Pinned Attributes** (`push_pin` pro Zeile → sticky Seitenleiste mit editierbaren Feldern, pro Objekttyp × Benutzer persistiert)
+   - **(Umgesetzt:)** **Vollständigkeits-Badge in den Pickern** (Zielobjekt-Vollständigkeit aus `GET /objects/picker?locale=`) und **Baum-Auswahl im Relations-Picker** (Tabs „Suche“/„Struktur“, lazy Kompositionsbaum, nicht erlaubte Zieltypen ausgegraut und nicht auswählbar)
 
 4. **Massendatenpflege**
    - Bulk-Edit-Wizard (definierter Operationssatz, Ausführung als Hintergrundjob + Report)

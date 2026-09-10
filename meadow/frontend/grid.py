@@ -19,50 +19,17 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, is_session_expired
+from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
+from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 
 # Maximum hits the grid search pulls per query (picker + row load); the search
 # is server-side, so the result set stays bounded regardless of dataset size.
 SEARCH_LIMIT = 100
 # Debounce (ms) for the filter bar's search field: one core request per pause.
 SEARCH_DEBOUNCE_MS = 400
-
-
-def resolve_value(value: object, locale: str) -> str:
-    """Resolves a (possibly multilingual) attribute value to a display string."""
-    if isinstance(value, dict):
-        if locale in value:
-            return str(value[locale])
-        if value:
-            return str(next(iter(value.values())))
-        return ""
-    return "" if value is None else str(value)
-
-
-def status_badge(status: str) -> str:
-    """Returns a coloured badge for a workflow status."""
-    classes = {
-        "published": "bg-primary text-white",
-        "draft": "bg-neutral text-gray-600",
-        "archived": "bg-info text-white",
-    }.get(status, "bg-secondary text-white")
-    return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{status}</span>'
-
-
-def completeness_badge(percent: int) -> str:
-    """Returns a coloured badge for a completeness percentage.
-
-    Grey for 0 % (nothing set), orange for 1-99 %, green for 100 %.
-    """
-    if percent >= 100:
-        classes = "bg-positive text-white"
-    elif percent >= 1:
-        classes = "bg-orange text-white"
-    else:
-        classes = "bg-grey text-white"
-    return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{percent}%</span>'
 
 
 def _display_value(
@@ -402,7 +369,7 @@ async def products_page(request: Request) -> None:
         )
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
-        root_id = "object:object_root"
+        root_id = OBJECT_ROOT_ID
         tree_nodes: list[dict] = []
 
         async def load_children(node_id: str) -> list[dict]:
@@ -683,8 +650,21 @@ async def products_page(request: Request) -> None:
                     .classes("grow")
                 )
             ref_search = (
-                ui.input(t("grid.reference_search")).props("outline dense").classes("w-full")
+                ui.input(t("grid.reference_search"))
+                .props("outline dense")
+                .classes("grow")
             )
+            ui.button(
+                icon="account_tree",
+                on_click=lambda: open_object_picker(
+                    client=client,
+                    token=token,
+                    locale=locale,
+                    title=t("form.pick_target"),
+                    on_pick=add_reference,
+                    exclude_ids=[str(current_ref_object["id"] or "")],
+                ),
+            ).props("outline dense").tooltip(t("form.pick_in_structure"))
             ref_hits = ui.column()
             with ui.row().classes("w-full justify-end"):
                 ui.button(t("grid.close"), on_click=ref_dialog.close).props("flat dense")
@@ -784,11 +764,8 @@ async def products_page(request: Request) -> None:
             except Exception:  # noqa: BLE001 - degrade to no hits
                 return
             for hit in hits:
-                with ref_hits, ui.row().classes("items-center gap-2 w-full"):
-                    ui.button(
-                        f"{hit['label']} · {hit['type']}",
-                        on_click=lambda h=hit: add_reference(h),  # type: ignore
-                    ).props("outline dense").classes("w-full justify-start")
+                with ref_hits:
+                    render_picker_hit(hit, add_reference, locale)
 
         async def open_references(object_id: str) -> None:
             current_ref_object["id"] = object_id
@@ -850,42 +827,9 @@ async def products_page(request: Request) -> None:
             if bulk_scope is not None:
                 bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
 
-        # Load category objects and candidate parents for the wizard pickers.
-        # Bulk-wizard pickers (category / parent options) are loaded lazily on
-        # first use instead of on every /products render, so a large catalog does
-        # not require fetching all objects just to render the page.
-        category_options: dict[str, str] = {}
-        parent_options: dict[str, str] = {}
-
-        async def load_category_options() -> None:
-            nonlocal category_options
-            try:
-                objs = await client.list_objects(token, object_type="category", limit=1000)
-            except Exception:  # noqa: BLE001 - degrade to an empty picker
-                objs = []
-            category_options = {
-                str(c.get("id")): (
-                    resolve_value((c.get("attributes") or {}).get("name"), locale)
-                    or str(c.get("type"))
-                    or str(c.get("id"))
-                )
-                for c in objs
-            }
-
-        async def load_parent_options() -> None:
-            nonlocal parent_options
-            try:
-                objs = await client.list_objects(token, limit=1000)
-            except Exception:  # noqa: BLE001 - degrade to an empty picker
-                objs = []
-            parent_options = {
-                str(o.get("id")): (
-                    resolve_value((o.get("attributes") or {}).get("name"), locale)
-                    or str(o.get("type"))
-                    or str(o.get("id"))
-                )
-                for o in objs
-            }
+        # Bulk-wizard target selection uses the shared object picker (search +
+        # structure tree); the chosen object per field key lives in `bulk_picked`.
+        bulk_picked: dict[str, dict] = {}
 
         bulk_attr_options = {name: name for name in attribute_names}
         bulk_status_options = {
@@ -972,24 +916,36 @@ async def products_page(request: Request) -> None:
                         .classes("w-full")
                     )
                     bulk_fields["status"] = select
-                elif op in ("add_category", "remove_category"):
-                    if not category_options:
-                        await load_category_options()
-                    select = (
-                        ui.select(category_options, value=None, label=t("grid.bulk_category"))
-                        .props("filled dense")
-                        .classes("w-full")
+                elif op in ("add_category", "remove_category", "change_parent"):
+                    field_key = "category" if op != "change_parent" else "parent"
+                    label_key = (
+                        "grid.bulk_parent" if op == "change_parent" else "grid.bulk_category"
                     )
-                    bulk_fields["category"] = select
-                elif op == "change_parent":
-                    if not parent_options:
-                        await load_parent_options()
-                    select = (
-                        ui.select(parent_options, value=None, label=t("grid.bulk_parent"))
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    bulk_fields["parent"] = select
+                    target_types = ["category"] if op != "change_parent" else None
+
+                    async def choose_target(field_key=field_key, target_types=target_types):
+                        async def on_pick(hit: dict) -> None:
+                            bulk_picked[field_key] = hit
+                            label.set_text(f"{hit.get('label')} · {hit.get('type')}")
+
+                        await open_object_picker(
+                            client=client,
+                            token=token,
+                            locale=locale,
+                            title=t("form.pick_target"),
+                            on_pick=on_pick,
+                            target_types=target_types,
+                        )
+
+                    with ui.row().classes("items-center gap-2 w-full").style(
+                        "flex-wrap: nowrap"
+                    ):
+                        label = ui.label(t("grid.bulk_nothing_picked")).classes(
+                            "grow text-caption text-gray-500"
+                        )
+                        ui.button(icon="account_tree", on_click=choose_target).props(
+                            "outline dense"
+                        ).tooltip(t("grid.bulk_pick_label").format(label=t(label_key)))
                 elif op == "delete":
                     ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
 
@@ -1031,11 +987,11 @@ async def products_page(request: Request) -> None:
                 status = bulk_fields.get("status")
                 parameters["status"] = status.value if status else None
             elif op in ("add_category", "remove_category"):
-                category = bulk_fields.get("category")
-                parameters["category"] = category.value if category else None
+                category = bulk_picked.get("category")
+                parameters["category"] = category.get("id") if category else None
             elif op == "change_parent":
-                parent = bulk_fields.get("parent")
-                parameters["parent"] = parent.value if parent else None
+                parent = bulk_picked.get("parent")
+                parameters["parent"] = parent.get("id") if parent else None
 
             missing = [k for k, v in parameters.items() if not v]
             if missing:

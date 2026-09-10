@@ -20,8 +20,9 @@ from meadow.frontend.grid import (
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
+from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
 
-ROOT_ID = "object:object_root"
+ROOT_ID = OBJECT_ROOT_ID
 
 
 async def _category_objects(client: CoreClient, token: str, locale: str) -> dict[str, dict]:
@@ -398,41 +399,53 @@ async def categories_page() -> None:
             ui.notify(t("categories.saved"), color="positive")
 
         # --- move dialog ------------------------------------------------------
+        # The new parent is picked with the shared object picker (search +
+        # structure tree, restricted to `category` and excluding the moved node).
         move_dialog = ui.dialog()
         with move_dialog, ui.card().classes("w-[32rem] max-w-[92vw]"):
             ui.label(t("categories.move_title")).classes("text-h6")
             ui.label(t("categories.move_hint")).classes("text-caption text-gray-600")
-            parent_select = (
-                ui.select({}, label=t("categories.parent"), value=None)
-                .props("filled dense")
-                .classes("w-full")
+            move_target = ui.label(t("grid.bulk_nothing_picked")).classes(
+                "text-caption text-gray-500"
             )
+            picked: dict = {}
+
+            async def pick_parent() -> None:
+                category_id = selected_category["id"]
+
+                async def on_pick(hit: dict) -> None:
+                    picked["id"] = hit["id"]
+                    move_target.set_text(f"{hit.get('label')} · {hit.get('type')}")
+
+                await open_object_picker(
+                    client=client,
+                    token=token,
+                    locale=locale,
+                    title=t("categories.parent"),
+                    on_pick=on_pick,
+                    target_types=["category"],
+                    exclude_ids=[category_id or ""],
+                )
+
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=move_dialog.close).props("flat")
+                ui.button(
+                    t("form.pick_in_structure"), icon="account_tree", on_click=pick_parent
+                ).props("flat")
                 ui.button(
                     t("categories.move"), icon="drive_file_move", on_click=lambda: do_move()
                 ).props("flat")
 
         async def open_move() -> None:
-            category_id = selected_category["id"]
-            if not category_id:
+            if not selected_category["id"]:
                 return
-            options = {ROOT_ID: t("categories.root")}
-            for obj in category_objects.values():
-                oid = str(obj.get("id"))
-                if oid == category_id:
-                    continue
-                options[oid] = (
-                    resolve_value((obj.get("attributes") or {}).get("name"), locale) or oid
-                )
-            parent_select.options = options
-            parent_select.update()
-            parent_select.set_value(None)
+            picked.clear()
+            move_target.set_text(t("grid.bulk_nothing_picked"))
             move_dialog.open()
 
         async def do_move() -> None:
             category_id = selected_category["id"]
-            parent = parent_select.value
+            parent = picked.get("id")
             if not category_id or not parent:
                 ui.notify(t("categories.parent_required"), color="warning")
                 return
