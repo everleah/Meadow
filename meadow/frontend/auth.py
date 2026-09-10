@@ -15,6 +15,20 @@ from meadow.frontend.theme import LOGIN_BG_PNG, LOGIN_BG_WEBP, MEADOW_LOGO
 
 #: Static routes that must be reachable without authentication.
 UNRESTRICTED_ROUTES = {"/login", "/favicon.ico"}
+#: User-storage keys that belong to the **authentication session** only.
+#: `clear_session` removes exactly these, so user preferences (saved grid views,
+#: the visible column set, pinned attributes, locale) survive a logout, an
+#: expired token or a re-login.
+SESSION_KEYS = (
+    "authenticated",
+    "token",
+    "sub",
+    "username",
+    "roles",
+    "must_change_password",
+    "password_changed_at",
+    "impersonator",
+)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -117,9 +131,19 @@ def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
     return None
 
 
+def clear_session() -> None:
+    """Drops the authentication (JWT, roles, impersonation).
+
+    User preferences live in the same user storage but belong to the person
+    rather than to the login, so they are deliberately kept.
+    """
+    for key in SESSION_KEYS:
+        app.storage.user.pop(key, None)
+
+
 def logout() -> None:
-    """Clears the session and returns to the login page."""
-    app.storage.user.clear()
+    """Clears the authentication and returns to the login page."""
+    clear_session()
     ui.navigate.to("/login")
 
 

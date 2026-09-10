@@ -728,7 +728,8 @@
   "grid.ref_add_failed": "Die Referenz konnte nicht angelegt werden.",
   "grid.ref_edit_failed": "Die Referenz konnte nicht aktualisiert werden.",
   "grid.ref_relation_required": "Bitte einen Relationstyp wählen.",
-  "grid.ref_empty": "Noch keine Referenzen.",  "grid.bulk_actions": "Massenaktionen",
+  "grid.ref_empty": "Noch keine Referenzen.",
+  "grid.bulk_actions": "Massenaktionen",
   "grid.bulk_title": "Massenbearbeitung",
   "grid.bulk_selection": "Auswahl",
   "grid.bulk_scope_filtered": "Alle Treffer des Filters ({count})",
@@ -745,7 +746,7 @@
   "grid.op_delete": "Löschen",
   "grid.bulk_attribute": "Attribut",
   "grid.bulk_value": "Wert",
-  "grid.bulk_status": "Status",
+  "grid.bulk_status": "Status: {status}",
   "grid.bulk_category": "Kategorie",
   "grid.bulk_nothing_picked": "Noch kein Ziel gewählt",
   "grid.bulk_pick_label": "{label} wählen",
@@ -758,7 +759,6 @@
   "grid.bulk_start_failed": "Massenoperation konnte nicht gestartet werden.",
   "grid.bulk_started": "Massenoperation gestartet.",
   "grid.bulk_running": "Läuft…",
-  "grid.bulk_status": "Status: {status}",
   "grid.bulk_status_label": "Status",
   "grid.bulk_failed": "Massenoperation fehlgeschlagen.",
   "grid.bulk_report": "Report",
@@ -771,9 +771,9 @@
   "grid.export_format": "Format",
   "grid.export_no_objects": "Keine Objekte zum Exportieren.",
   "grid.export_failed": "Export fehlgeschlagen: {err}",
-  "grid.export_ok": "{count} Objekte exportiert.",  "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
+  "grid.export_ok": "{count} Objekte exportiert.",
+  "grid.tree_load_failed": "Der Strukturbaum konnte nicht geladen werden.",
   "grid.filter": "Filtern",
-
   "grid.toggle_tree": "Struktur ein-/ausblenden",
   "grid.collapse_all": "Alle einklappen",
   "form.back": "Zurück",
@@ -912,5 +912,8 @@
   "lang_admin.code_required": "Bitte geben Sie einen Code ein.",
   "lang_admin.save": "Speichern",
   "lang_admin.save_failed": "Die Sprache konnte nicht gespeichert werden",
-  "lang_admin.saved": "Sprache gespeichert."
+  "lang_admin.saved": "Sprache gespeichert.",
+  "grid.fit_to_view": "Spalten an die verfügbare Breite anpassen",
+  "grid.fit_to_content": "Spalten an den Inhalt anpassen (max. 30 Zeichen)",
+  "grid.bulk_pending_hint": "Noch in der Warteschlange – es scheint kein Worker zu laufen. Bitte den Worker starten (`python -m meadow.worker`), damit der Job verarbeitet wird."
 }

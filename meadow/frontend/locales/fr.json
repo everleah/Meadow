@@ -746,7 +746,7 @@
   "grid.op_delete": "Supprimer",
   "grid.bulk_attribute": "Attribut",
   "grid.bulk_value": "Valeur",
-  "grid.bulk_status": "Statut",
+  "grid.bulk_status": "Statut : {status}",
   "grid.bulk_category": "Catégorie",
   "grid.bulk_nothing_picked": "Aucune cible choisie",
   "grid.bulk_pick_label": "Choisir {label}",
@@ -759,7 +759,6 @@
   "grid.bulk_start_failed": "Impossible de démarrer l'opération groupée.",
   "grid.bulk_started": "Opération groupée démarrée.",
   "grid.bulk_running": "En cours…",
-  "grid.bulk_status": "Statut : {status}",
   "grid.bulk_status_label": "Statut",
   "grid.bulk_failed": "Opération groupée échouée.",
   "grid.bulk_report": "Rapport",
@@ -775,7 +774,6 @@
   "grid.export_ok": "{count} objets exportés.",
   "grid.tree_load_failed": "Impossible de charger l'arbre de structure.",
   "grid.filter": "Filtrer",
-
   "grid.toggle_tree": "Afficher/masquer la structure",
   "grid.collapse_all": "Tout replier",
   "form.back": "Retour",
@@ -914,5 +912,8 @@
   "lang_admin.code_required": "Veuillez saisir un code.",
   "lang_admin.save": "Enregistrer",
   "lang_admin.save_failed": "Impossible d'enregistrer la langue",
-  "lang_admin.saved": "Langue enregistrée."
+  "lang_admin.saved": "Langue enregistrée.",
+  "grid.fit_to_view": "Adapter les colonnes à la largeur disponible",
+  "grid.fit_to_content": "Ajuster les colonnes au contenu (max. 30 caractères)",
+  "grid.bulk_pending_hint": "Toujours en file d'attente – aucun worker ne semble actif. Démarrez le worker (`python -m meadow.worker`) pour traiter la tâche."
 }

@@ -6,11 +6,13 @@ import importlib
 
 from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.grid import (
+    MAX_CONTENT_CHARS,
     attribute_column_specs,
     attribute_columns,
     build_patch,
     collect_subtree,
     completeness_badge,
+    content_widths,
     editable_cell_value,
     editable_cells,
     enrich_tree_nodes,
@@ -21,9 +23,11 @@ from meadow.frontend.grid import (
     language_field,
     name_language_columns,
     resolve_value,
+    restore_columns,
     row_data,
     status_badge,
     storable_cell_value,
+    with_header_tooltips,
 )
 from meadow.frontend.i18n import best_locale, t
 
@@ -266,12 +270,55 @@ def test_is_editable_definition() -> None:
     assert is_editable_definition({"name": "price", "type": "number"})
     assert is_editable_definition({"name": "flag", "type": "boolean"})
     assert is_editable_definition({"name": "color", "type": "enum"})
+    assert is_editable_definition({"name": "due", "type": "date"})
     # Computed values belong to a rule, quantified values need a unit editor,
-    # date/reference attributes need dedicated pickers.
+    # reference/media attributes need dedicated pickers.
     assert not is_editable_definition({"name": "gross", "type": "number", "computed": True})
     assert not is_editable_definition({"name": "height", "type": "number", "unit_id": "unit_m"})
-    assert not is_editable_definition({"name": "due", "type": "date"})
     assert not is_editable_definition({"name": "ref", "type": "reference"})
+
+
+def test_editor_props_for_a_date_column() -> None:
+    columns, _ = attribute_column_specs(
+        [
+            {"name": "due", "type": "date"},
+            {"name": "shipped", "type": "date", "computed": True},
+        ],
+        "de",
+    )
+    assert columns[0]["editable"] is True
+    assert columns[0]["cellEditor"] == "agDateStringCellEditor"
+    assert "editable" not in columns[1]  # computed -> read-only
+
+
+def test_with_header_tooltips_adds_the_header_text() -> None:
+    columns = with_header_tooltips(
+        [{"headerName": "Name", "field": "_name"}, {"headerName": "", "field": "_refs"}]
+    )
+    assert columns[0]["headerTooltip"] == "Name"
+    assert "headerTooltip" not in columns[1]
+
+
+def test_content_widths_grows_with_the_content_and_is_capped() -> None:
+    columns = [{"headerName": "ID", "field": "_id"}, {"headerName": "Long", "field": "_name"}]
+    rows = [{"_id": "object:1", "_name": "x" * (MAX_CONTENT_CHARS + 20)}]
+    widths = content_widths(columns, rows)
+    assert [w["key"] for w in widths] == ["_id", "_name"]
+    assert widths[0]["newWidth"] < widths[1]["newWidth"]
+    # The long value is capped at MAX_CONTENT_CHARS characters.
+    assert widths[1]["newWidth"] == MAX_CONTENT_CHARS * 8 + 26
+    # Empty content keeps a readable minimum width.
+    empty = content_widths([{"headerName": "", "field": "_x"}], [{}])
+    assert empty[0]["newWidth"] == 70
+
+
+def test_restore_columns_filters_unknown_fields() -> None:
+    known = {"_id", "_name", "attr_title"}
+    assert restore_columns(["_id", "attr_title"], known) == {"_id", "attr_title"}
+    # Removed attributes are dropped; nothing usable left -> keep the default.
+    assert restore_columns(["attr_gone"], known) is None
+    assert restore_columns(None, known) is None
+    assert restore_columns(["_name", 42], known) == {"_name"}
 
 
 def test_attribute_columns_add_editor_props_for_editable_types() -> None:

@@ -746,7 +746,7 @@
   "grid.op_delete": "Delete",
   "grid.bulk_attribute": "Attribute",
   "grid.bulk_value": "Value",
-  "grid.bulk_status": "Status",
+  "grid.bulk_status": "Status: {status}",
   "grid.bulk_category": "Category",
   "grid.bulk_nothing_picked": "No target picked yet",
   "grid.bulk_pick_label": "Pick {label}",
@@ -759,7 +759,6 @@
   "grid.bulk_start_failed": "Could not start the bulk operation.",
   "grid.bulk_started": "Bulk operation started.",
   "grid.bulk_running": "Running…",
-  "grid.bulk_status": "Status: {status}",
   "grid.bulk_status_label": "Status",
   "grid.bulk_failed": "Bulk operation failed.",
   "grid.bulk_report": "Report",
@@ -777,7 +776,6 @@
   "grid.filter": "Filter",
   "grid.toggle_tree": "Toggle structure panel",
   "grid.collapse_all": "Collapse all",
-
   "form.back": "Back",
   "form.load_failed": "Could not load the object.",
   "form.missing_required": "Missing required fields: {count}",
@@ -914,5 +912,8 @@
   "lang_admin.code_required": "Please enter a code.",
   "lang_admin.save": "Save",
   "lang_admin.save_failed": "Could not save the language",
-  "lang_admin.saved": "Language saved."
+  "lang_admin.saved": "Language saved.",
+  "grid.fit_to_view": "Fit columns to the available width",
+  "grid.fit_to_content": "Size columns to their content (max. 30 characters)",
+  "grid.bulk_pending_hint": "Still queued – no worker seems to be running. Start the worker (`python -m meadow.worker`) so the job gets processed."
 }

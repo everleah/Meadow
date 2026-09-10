@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import tempfile
 from urllib.parse import quote
 
@@ -20,6 +21,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, is_session_expired
+from meadow.frontend.auth import clear_session
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -36,6 +38,74 @@ SEARCH_DEBOUNCE_MS = 400
 LANG_SEPARATOR = "__"
 # Field prefix of the per-language columns of the convention `name` attribute.
 NAME_FIELD_PREFIX = "_name"
+# Upper bound (characters) for the content-based column width: a long text must
+# not blow up the grid ("Grid auf Inhalt anpassen").
+MAX_CONTENT_CHARS = 30
+# Rough width of one character in the grid font plus cell padding, in pixels.
+CHAR_WIDTH_PX = 8
+CELL_PADDING_PX = 26
+MIN_COLUMN_PX = 70
+# Session key holding the visible column set of the current user.
+COLUMNS_STORAGE_KEY = "grid_columns"
+# Number of 2-second polls a bulk run may stay `pending` before the progress
+# dialog warns that no worker seems to be connected (~20 s).
+PENDING_WARN_POLLS = 10
+
+
+def with_header_tooltips(column_defs: list[dict]) -> list[dict]:
+    """Adds a tooltip with the full header text to every column.
+
+    The grid is often too narrow to show a whole header, so hovering it reveals
+    the complete label.
+    """
+    return [
+        {**column, "headerTooltip": column["headerName"]} if column.get("headerName") else column
+        for column in column_defs
+    ]
+
+
+def content_widths(column_defs: list[dict], rows: list[dict]) -> list[dict]:
+    """Sizes every column to its content (capped at `MAX_CONTENT_CHARS`).
+
+    Returns AG Grid's `setColumnWidths` payload (`[{key, newWidth}]`). The width
+    is approximated from the longest header/cell text, so the result is a good
+    fit instead of a pixel-exact measurement. Markup of HTML cells (status and
+    completeness badges) is stripped first, otherwise the badge would claim the
+    full character cap.
+    """
+    widths: list[dict] = []
+    for column in column_defs:
+        field = str(column.get("field") or "")
+        texts = [_plain_text(column.get("headerName"))]
+        texts.extend(_plain_text(row.get(field)) for row in rows)
+        longest = min(max((len(text) for text in texts), default=0), MAX_CONTENT_CHARS)
+        widths.append(
+            {
+                "key": field,
+                "newWidth": max(MIN_COLUMN_PX, longest * CHAR_WIDTH_PX + CELL_PADDING_PX),
+            }
+        )
+    return widths
+
+
+def _plain_text(value: object) -> str:
+    """Returns the visible text of a cell value (HTML markup removed)."""
+    if value is None:
+        return ""
+    return re.sub(r"<[^>]*>", "", str(value))
+
+
+def restore_columns(stored: object, known_fields: set[str]) -> set[str] | None:
+    """Validates a stored column set against the columns that currently exist.
+
+    Returns ``None`` when nothing usable was stored (then the caller keeps its
+    default), otherwise the stored fields restricted to ``known_fields`` so a
+    removed attribute cannot break the grid.
+    """
+    if not isinstance(stored, list | tuple | set):
+        return None
+    fields = {str(field) for field in stored if str(field) in known_fields}
+    return fields or None
 
 
 def language_field(prefix: str, language: str) -> str:
@@ -121,7 +191,7 @@ def attribute_field(attribute_name: str) -> str:
 
 
 #: Attribute types that can be edited inline in the grid (working language).
-EDITABLE_TYPES = ("text", "number", "boolean", "enum")
+EDITABLE_TYPES = ("text", "number", "boolean", "enum", "date")
 
 
 def is_editable_definition(definition: dict) -> bool:
@@ -129,7 +199,7 @@ def is_editable_definition(definition: dict) -> bool:
 
     Read-only by design: **computed** values belong to a business rule,
     **quantified** values (a `unit_id`) need the unit-aware editor of the
-    product form, and `date`/`reference` attributes need dedicated pickers.
+    product form, and `reference`/media attributes need dedicated pickers.
     """
     return (
         str(definition.get("type") or "text") in EDITABLE_TYPES
@@ -259,6 +329,9 @@ def _editor_props(definition: dict, labels: dict[str, str] | None) -> dict:
         return {"editable": True, "cellDataType": "number"}
     if atype == "boolean":
         return {"editable": True, "cellDataType": "boolean"}
+    if atype == "date":
+        # Values are stored as ISO strings; the date editor writes them back.
+        return {"editable": True, "cellEditor": "agDateStringCellEditor"}
     if atype == "enum":
         # Without resolved options the select editor would be useless.
         if not labels:
@@ -697,7 +770,7 @@ async def products_page(request: Request) -> None:
             definitions, locale, active_languages, enum_resolvers
         )
         language_fields = {**name_language_fields, **attribute_language_fields}
-        column_defs = (
+        column_defs = with_header_tooltips(
             [
                 {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
                 {"headerName": t("grid.name"), "field": "_name", "editable": True},
@@ -938,7 +1011,7 @@ async def products_page(request: Request) -> None:
                 return
             if is_session_expired(results):
                 ui.notify(t("grid.session_expired"), color="warning")
-                app.storage.user.clear()
+                clear_session()
                 ui.navigate.to("/login")
                 return
             ok = sum(1 for result in results if result.get("success"))
@@ -950,7 +1023,13 @@ async def products_page(request: Request) -> None:
 
         # Personal views (step 4b): save/restore the visible column set per user.
         views = app.storage.user.get("views", {})
-        visible_fields: set[str] = {"_id", "_name", "_type", "_status", "_completeness", "_refs"}
+        default_fields = {"_id", "_name", "_type", "_status", "_completeness", "_refs"}
+        # The **current** column set is persisted as well, so it survives a
+        # browser-back from the product form, a reload and a re-login (only the
+        # authentication is cleared on logout, see `auth.clear_session`).
+        known_fields = {str(column.get("field") or "") for column in column_defs}
+        restored = restore_columns(app.storage.user.get(COLUMNS_STORAGE_KEY), known_fields)
+        visible_fields: set[str] = restored or set(default_fields)
         checkbox_refs: dict[str, ui.checkbox] = {}
 
         def apply_visibility(fields: set[str]) -> None:
@@ -958,6 +1037,29 @@ async def products_page(request: Request) -> None:
                 grid.run_grid_method(
                     "setColumnsVisible", [column["field"]], column["field"] in fields
                 )
+
+        def remember_columns() -> None:
+            """Persists the visible column set of the current user."""
+            app.storage.user[COLUMNS_STORAGE_KEY] = sorted(visible_fields)
+
+        def set_visibility(fields: set[str]) -> None:
+            """Applies a column set, syncs the picker checkboxes and persists it."""
+            visible_fields.clear()
+            visible_fields.update(fields)
+            apply_visibility(visible_fields)
+            for column in column_defs:
+                checkbox = checkbox_refs.get(str(column.get("field") or ""))
+                if checkbox is not None:
+                    checkbox.value = column["field"] in visible_fields
+            remember_columns()
+
+        def fit_to_view() -> None:
+            """Fits the columns into the available width."""
+            grid.run_grid_method("sizeColumnsToFit")
+
+        def fit_to_content() -> None:
+            """Sizes every column to its content (capped at `MAX_CONTENT_CHARS`)."""
+            grid.run_grid_method("setColumnWidths", content_widths(column_defs, all_rows))
 
         def save_view() -> None:
             name = None if view_input.value is None else view_input.value.strip()
@@ -971,12 +1073,7 @@ async def products_page(request: Request) -> None:
             ui.notify(t("grid.view_saved").format(name=name))
 
         def load_view(name: str) -> None:
-            fields = set(views.get(name, []))
-            visible_fields.clear()
-            visible_fields.update(fields)
-            apply_visibility(visible_fields)
-            for column in column_defs:
-                checkbox_refs[column["field"]].value = column["field"] in visible_fields
+            set_visibility(set(views.get(name, [])))
             ui.notify(t("grid.view_loaded").format(name=name))
 
         def delete_view(name: str) -> None:
@@ -1397,11 +1494,13 @@ async def products_page(request: Request) -> None:
             with ui.dialog() as progress_dialog, ui.card().classes("w-[32rem]"):
                 ui.label(t("grid.bulk_running")).classes("text-subtitle1")
                 status_label = ui.label("").classes("text-caption")
+                pending_hint = ui.label("").classes("text-caption text-warning")
                 ui.linear_progress(value=0.5).classes("w-full")
                 with ui.row().classes("w-full justify-end"):
                     ui.button(t("grid.close"), on_click=progress_dialog.close).props("flat")
             progress_dialog.open()
             runs: list[dict] = []
+            pending_polls = 0
             for _ in range(120):
                 try:
                     runs = await client.list_job_runs(token, ids=[run_id], limit=1)
@@ -1411,6 +1510,11 @@ async def products_page(request: Request) -> None:
                     break
                 status = str(runs[0].get("status") or "")
                 status_label.set_text(t("grid.bulk_status").format(status=status))
+                # A queued job is only picked up by a running worker; without one
+                # it would stay `pending` forever, so say so explicitly.
+                pending_polls = pending_polls + 1 if status == "pending" else 0
+                if pending_polls == PENDING_WARN_POLLS:
+                    pending_hint.set_text(t("grid.bulk_pending_hint"))
                 if status in ("success", "failed"):
                     break
                 await asyncio.sleep(2)
@@ -1712,6 +1816,7 @@ async def products_page(request: Request) -> None:
                                 visible_fields.add(field)
                             else:
                                 visible_fields.discard(field)
+                            remember_columns()
 
                         return toggle
 
@@ -1723,10 +1828,11 @@ async def products_page(request: Request) -> None:
                         ui.label(t("grid.columns")).classes("text-h6")
                         with ui.column().classes("w-full gap-1 max-h-80 overflow-y-auto"):
                             for column in column_defs:
+                                field = str(column.get("field") or "")
                                 checkbox = ui.checkbox(
-                                    column["headerName"], value=not column.get("hide")
-                                ).on_value_change(make_toggler(column["field"]))
-                                checkbox_refs[column["field"]] = checkbox
+                                    column["headerName"], value=field in visible_fields
+                                ).on_value_change(make_toggler(field))
+                                checkbox_refs[field] = checkbox
                         with ui.row().classes("w-full justify-end gap-2"):
                             ui.button(t("grid.close"), on_click=columns_dialog.close).props("flat")
                     ui.button(icon="view_column").props("outline").tooltip(
@@ -1782,6 +1888,14 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="filter_alt_off", on_click=reset_filters).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.filter_reset"))
+                    # Column sizing: fit the columns into the available width, or
+                    # widen every column so its content fits (capped at 30 chars).
+                    ui.button(icon="fit_screen", on_click=fit_to_view).props(
+                        "flat dense shrink-0"
+                    ).tooltip(t("grid.fit_to_view"))
+                    ui.button(icon="straighten", on_click=fit_to_content).props(
+                        "flat dense shrink-0"
+                    ).tooltip(t("grid.fit_to_content"))
 
                 grid = ui.aggrid(
                     {
@@ -1790,6 +1904,9 @@ async def products_page(request: Request) -> None:
                         "rowSelection": {"mode": "multiRow"},
                         "pagination": True,
                         "paginationPageSize": 50,
+                        # Header tooltips via the native browser tooltip (`title`):
+                        # AG Grid's own tooltip component does not show up here.
+                        "enableBrowserTooltips": True,
                     },
                     html_columns=[
                         i
@@ -1801,3 +1918,6 @@ async def products_page(request: Request) -> None:
                 grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])
                 grid.on("selectionChanged", handle_selection, ["selectedRows"])
+                # Restore the column set the user had before (reload, browser-back
+                # from the form, re-login) — the columns start hidden per definition.
+                apply_visibility(visible_fields)
