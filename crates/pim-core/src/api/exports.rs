@@ -50,6 +50,10 @@ pub struct ExportOptions {
     pub separator: String,
     #[serde(default)]
     pub include_system: bool,
+    /// E-mail recipients; when set (and SMTP is configured) the worker sends
+    /// the finished export as an attachment.
+    #[serde(default)]
+    pub email_to: Option<Vec<String>>,
 }
 
 /// Structured export request for `POST /exports`.

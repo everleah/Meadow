@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from datetime import datetime
 
 from fastapi import Request
 from nicegui import app, ui
@@ -46,6 +47,17 @@ MIME = {
 def _split_ids(raw: str) -> list[str]:
     """Splits a raw object-id input into a list of trimmed non-empty ids."""
     return [part.strip() for part in raw.replace(",", "\n").splitlines() if part.strip()]
+
+
+def _fmt_dt(value: object) -> str:
+    """Formats a SurrealDB ISO timestamp for display (local time, no tz)."""
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+        return str(value)
 
 
 @ui.page("/export", response_timeout=15)
@@ -306,10 +318,18 @@ async def export_page(request: Request) -> None:
                 )
                 include_system_switch = ui.switch(t("export.include_system"))
 
+            email_input = (
+                ui.input(t("export.email_to")).props("outlined dense").classes("w-full mt-3")
+            )
+            ui.label(t("export.email_hint")).classes("text-caption text-gray-500")
+
         # --- Actions -------------------------------------------------------
-        with ui.row().classes("mt-4 gap-2"):
+        with ui.row().classes("mt-4 gap-2 items-center"):
             preview_button = ui.button(t("export.preview")).props("outline")
             export_button = ui.button(t("export.export")).props("unelevated")
+            schedule_button: ui.button | None = None
+            if auth.is_admin():
+                schedule_button = ui.button(t("export.schedule"), icon="schedule").props("flat")
 
         preview_box = ui.column().classes("w-full mt-4")
 
@@ -318,6 +338,10 @@ async def export_page(request: Request) -> None:
 
         def _format() -> str:
             return str(format_select.value or "csv")
+
+        def _email_recipients() -> list[str]:
+            raw = str(email_input.value or "")
+            return [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
 
         async def on_preview() -> None:
             kind = str(kind_select.value)
@@ -360,6 +384,9 @@ async def export_page(request: Request) -> None:
                 "separator": str(separator_select.value or ","),
                 "include_system": bool(include_system_switch.value),
             }
+            recipients = _email_recipients()
+            if recipients:
+                options["email_to"] = recipients
             export_button.props("loading")
             export_button.enabled = False
             preview_button.enabled = False
@@ -396,6 +423,197 @@ async def export_page(request: Request) -> None:
 
         preview_button.on_click(on_preview)
         export_button.on_click(on_export)
+
+        async def _run_now(definition_id: str) -> None:
+            try:
+                await client.run_job(token, definition_id)
+            except CoreError as exc:
+                ui.notify(t("export.schedule_failed").format(err=exc), type="negative")
+                return
+            ui.notify(t("export.schedule_started"), type="positive")
+            # The run needs a moment to finish before it shows a result.
+            await asyncio.sleep(3)
+            await _render_recent()
+
+        async def _delete_schedule(definition_id: str) -> None:
+            try:
+                await client.delete_job_definition(token, definition_id)
+            except CoreError as exc:
+                ui.notify(t("export.schedule_failed").format(err=exc), type="negative")
+                return
+            ui.notify(t("export.schedule_deleted"), type="positive")
+            # Deleting a definition also removes its runs, so refresh both lists.
+            await _render_schedules()
+            await _render_recent()
+
+        async def _toggle_schedule(definition: dict, enabled: bool) -> None:
+            try:
+                await client.update_job_definition(
+                    token,
+                    str(definition.get("id") or ""),
+                    name=str(definition.get("name") or ""),
+                    schedule=definition.get("schedule"),
+                    enabled=enabled,
+                    parameters=definition.get("parameters") or {},
+                )
+            except CoreError as exc:
+                ui.notify(t("export.schedule_failed").format(err=exc), type="negative")
+
+        async def _render_schedules() -> None:
+            schedule_box.clear()
+            if not auth.is_admin():
+                with schedule_box:
+                    ui.label(t("export.schedule_admin_only")).classes("text-caption text-gray-500")
+                return
+            try:
+                definitions = await client.list_job_definitions(
+                    token, job_type="outbound_export", limit=200
+                )
+            except Exception:  # noqa: BLE001 - degrade to an empty list
+                definitions = []
+            structured = [d for d in definitions if (d.get("parameters") or {}).get("source")]
+            with schedule_box:
+                if not structured:
+                    ui.label(t("export.schedule_none")).classes("text-caption text-gray-500")
+                    return
+                for definition in structured:
+                    definition_id = str(definition.get("id") or "")
+                    with ui.row().classes("items-center gap-3 w-full"):
+                        ui.label(str(definition.get("name") or "")).classes("font-medium")
+                        ui.badge(str(definition.get("schedule") or t("jobs.manual_only"))).props(
+                            "outline"
+                        )
+                        ui.switch(
+                            value=bool(definition.get("enabled")),
+                            on_change=lambda e, d=definition: _toggle_schedule(d, e.value),
+                        ).props("dense")
+                        ui.button(
+                            icon="play_arrow",
+                            on_click=lambda d=definition_id: _run_now(d),
+                        ).props("flat dense").tooltip(t("export.schedule_run_now"))
+                        ui.button(
+                            icon="delete",
+                            on_click=lambda d=definition_id: _delete_schedule(d),
+                        ).props("flat dense color=negative").tooltip(t("export.schedule_delete"))
+
+        async def _render_recent() -> None:
+            recent_box.clear()
+            try:
+                runs = await client.list_job_runs(token, limit=100)
+            except Exception:  # noqa: BLE001 - degrade to an empty list
+                runs = []
+            exports = [
+                run for run in runs if str((run.get("result") or {}).get("format") or "") in FORMATS
+            ]
+            with recent_box:
+                if not exports:
+                    ui.label(t("export.recent_none")).classes("text-caption text-gray-500")
+                    return
+                for run in exports[:20]:
+                    result = run.get("result") or {}
+                    fmt = str(result.get("format") or "csv")
+                    run_id = str(run.get("id") or "")
+                    with ui.row().classes("items-center gap-3 w-full"):
+                        ui.label(_fmt_dt(run.get("created_at"))).classes("text-caption w-44")
+                        ui.badge(fmt.upper()).props("outline")
+                        ui.label(
+                            t("export.recent_count").format(count=result.get("exported", 0))
+                        ).classes("text-caption")
+                        ui.label(str(run.get("trigger") or "")).classes(
+                            "text-caption text-gray-500"
+                        )
+                        ui.button(
+                            icon="download",
+                            on_click=lambda rid=run_id, f=fmt: _download(rid, f),
+                        ).props("flat dense ml-auto").tooltip(t("export.download"))
+
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("export.schedule_section")).classes("text-subtitle1")
+            ui.label(t("export.schedule_hint")).classes("text-caption text-gray-500")
+            schedule_box = ui.column().classes("w-full mt-2")
+
+        with ui.card().classes("w-full mt-4"):
+            with ui.row().classes("w-full items-center"):
+                ui.label(t("export.recent_section")).classes("text-subtitle1")
+                ui.button(icon="refresh", on_click=lambda: _render_recent()).props(
+                    "flat dense ml-auto"
+                )
+            recent_box = ui.column().classes("w-full mt-2")
+
+        schedule_dialog = ui.dialog()
+        with schedule_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
+            ui.label(t("export.schedule_title")).classes("text-h6")
+            sched_name = (
+                ui.input(t("export.schedule_name")).props("outlined dense").classes("w-full")
+            )
+            sched_cron = (
+                ui.input(t("export.schedule_cron"), value="0 0 3 * * *")
+                .props("outlined dense")
+                .classes("w-full")
+            )
+            ui.label(t("export.schedule_cron_hint")).classes("text-caption text-gray-500")
+            sched_enabled = ui.switch(t("export.schedule_enabled"), value=True)
+
+            async def _create_schedule() -> None:
+                kind = str(kind_select.value)
+                detail_value = (
+                    str(detail_select.value) if kind != "selection" else str(ids_box.value or "")
+                )
+                if not detail_value:
+                    ui.notify(t("export.source_required"), type="warning")
+                    return
+                fields = _selected_fields()
+                if not fields:
+                    ui.notify(t("export.fields_required"), type="warning")
+                    return
+                name = str(sched_name.value or "").strip()
+                if not name:
+                    ui.notify(t("export.schedule_name_required"), type="warning")
+                    return
+                cron = str(sched_cron.value or "").strip()
+                if not cron:
+                    ui.notify(t("export.schedule_cron_required"), type="warning")
+                    return
+                parameters = {
+                    "source": _source_payload(kind, detail_value),
+                    "fields": fields,
+                    "format": _format(),
+                    "locales": _locale_values(),
+                    "options": {
+                        "header": bool(header_switch.value),
+                        "separator": str(separator_select.value or ","),
+                        "include_system": bool(include_system_switch.value),
+                    },
+                }
+                recipients = _email_recipients()
+                if recipients:
+                    parameters["options"]["email_to"] = recipients
+                try:
+                    await client.create_job_definition(
+                        token,
+                        name=name,
+                        job_type="outbound_export",
+                        schedule=cron,
+                        parameters=parameters,
+                        enabled=bool(sched_enabled.value),
+                    )
+                except CoreError as exc:
+                    ui.notify(t("export.schedule_failed").format(err=exc), type="negative")
+                    return
+                schedule_dialog.close()
+                ui.notify(t("export.schedule_created"), type="positive")
+                await _render_schedules()
+
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("export.close"), on_click=schedule_dialog.close).props("flat")
+                ui.button(
+                    t("export.schedule_create"), icon="schedule", on_click=_create_schedule
+                ).props("unelevated")
+
+        if schedule_button is not None:
+            schedule_button.on_click(schedule_dialog.open)
+        await _render_schedules()
+        await _render_recent()
 
 
 async def _wait_for_run(client: CoreClient, token: str, run_id: str) -> dict:

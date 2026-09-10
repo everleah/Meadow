@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import csv as _csv
 import io
+import json as _json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -23,6 +24,7 @@ from openpyxl import Workbook
 
 from meadow.worker.http import loopback_host
 from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.mail import SmtpConfig, send_with_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -252,8 +254,6 @@ def _serialize_csv(
 def _csv_cell(value: Any) -> str:
     """Converts a cell value to a CSV string (JSON for structured values)."""
     if isinstance(value, (dict, list)):
-        import json as _json
-
         return _json.dumps(value, ensure_ascii=False)
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -271,6 +271,55 @@ def _serialize_xlsx(columns: list[str], rows: list[dict[str, Any]]) -> bytes:
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _attachment_from_result(result: dict[str, Any]) -> tuple[str, bytes, str]:
+    """Returns ``(filename, content, content_type)`` for an export result."""
+    format_ = str(result.get("format") or "csv")
+    if format_ == "xlsx":
+        content = base64.b64decode(result.get("xlsx_base64") or "")
+        return (
+            "meadow-export.xlsx",
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    if format_ == "json":
+        body = _json.dumps(result.get("document") or {}, ensure_ascii=False, indent=2).encode(
+            "utf-8"
+        )
+        return ("meadow-export.json", body, "application/json")
+    return ("meadow-export.csv", str(result.get("csv") or "").encode("utf-8"), "text/csv")
+
+
+async def _maybe_email(result: dict[str, Any], options: dict[str, Any]) -> None:
+    """E-mails the export as an attachment when recipients and SMTP are configured.
+
+    Best-effort: a transport failure (or missing SMTP config) is recorded under
+    ``result["email"]`` but does not fail the export.
+    """
+    recipients = [str(r).strip() for r in (options.get("email_to") or []) if str(r).strip()]
+    if not recipients:
+        return
+    config = SmtpConfig.from_env()
+    if config is None:
+        result["email"] = {"sent": 0, "error": "SMTP is not configured (SMTP_HOST unset)"}
+        logger.warning("export e-mail requested but SMTP is not configured")
+        return
+    filename, content, content_type = _attachment_from_result(result)
+    subject = str(options.get("email_subject") or "Meadow export")
+    body = (
+        f"Your Meadow export is attached ({result.get('exported', 0)} objects, "
+        f"{str(result.get('format') or 'csv').upper()})."
+    )
+    try:
+        await send_with_attachment(
+            config, recipients, subject, body, filename, content, content_type
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort notification
+        result["email"] = {"sent": 0, "error": str(exc)}
+        logger.warning("export e-mail delivery failed: %s", exc)
+        return
+    result["email"] = {"sent": len(recipients)}
 
 
 async def _structured_export(
@@ -318,30 +367,34 @@ async def _structured_export(
             "objects": mef_objects,
             "references": [],
         }
-        return {
+        result: dict[str, Any] = {
             "format": "json",
             "exported": len(mef_objects),
             "columns": fields,
             "document": document,
         }
+    else:
+        columns = _build_columns(fields, locales, multilingual)
+        rows = _build_rows(objects, columns, locales, fallback, multilingual)
+        if format_ == "xlsx":
+            data = _serialize_xlsx(columns, rows)
+            result = {
+                "format": "xlsx",
+                "exported": len(objects),
+                "columns": columns,
+                "xlsx_base64": base64.b64encode(data).decode("ascii"),
+            }
+        else:
+            csv_text = _serialize_csv(columns, rows, separator, header)
+            result = {
+                "format": "csv",
+                "exported": len(objects),
+                "columns": columns,
+                "csv": csv_text,
+            }
 
-    columns = _build_columns(fields, locales, multilingual)
-    rows = _build_rows(objects, columns, locales, fallback, multilingual)
-    if format_ == "xlsx":
-        data = _serialize_xlsx(columns, rows)
-        return {
-            "format": "xlsx",
-            "exported": len(objects),
-            "columns": columns,
-            "xlsx_base64": base64.b64encode(data).decode("ascii"),
-        }
-    csv_text = _serialize_csv(columns, rows, separator, header)
-    return {
-        "format": "csv",
-        "exported": len(objects),
-        "columns": columns,
-        "csv": csv_text,
-    }
+    await _maybe_email(result, options)
+    return result
 
 
 def build_export_handler(
