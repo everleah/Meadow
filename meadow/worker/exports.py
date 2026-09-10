@@ -16,6 +16,7 @@ import csv as _csv
 import io
 import json as _json
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ from openpyxl import Workbook
 from meadow.worker.http import loopback_host
 from meadow.worker.jobs import JobHandler, JobMessage
 from meadow.worker.mail import SmtpConfig, send_with_attachment
+from meadow.worker.storage import S3Config, archive_export
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +293,13 @@ def _attachment_from_result(result: dict[str, Any]) -> tuple[str, bytes, str]:
     return ("meadow-export.csv", str(result.get("csv") or "").encode("utf-8"), "text/csv")
 
 
-async def _maybe_email(result: dict[str, Any], options: dict[str, Any]) -> None:
+async def _maybe_email(
+    result: dict[str, Any],
+    options: dict[str, Any],
+    filename: str,
+    content: bytes,
+    content_type: str,
+) -> None:
     """E-mails the export as an attachment when recipients and SMTP are configured.
 
     Best-effort: a transport failure (or missing SMTP config) is recorded under
@@ -305,7 +313,6 @@ async def _maybe_email(result: dict[str, Any], options: dict[str, Any]) -> None:
         result["email"] = {"sent": 0, "error": "SMTP is not configured (SMTP_HOST unset)"}
         logger.warning("export e-mail requested but SMTP is not configured")
         return
-    filename, content, content_type = _attachment_from_result(result)
     subject = str(options.get("email_subject") or "Meadow export")
     body = (
         f"Your Meadow export is attached ({result.get('exported', 0)} objects, "
@@ -320,6 +327,41 @@ async def _maybe_email(result: dict[str, Any], options: dict[str, Any]) -> None:
         logger.warning("export e-mail delivery failed: %s", exc)
         return
     result["email"] = {"sent": len(recipients)}
+
+
+async def _maybe_archive(
+    result: dict[str, Any], filename: str, content: bytes, content_type: str
+) -> None:
+    """Archives the export in object storage and drops large inline payloads.
+
+    Best-effort: an upload failure is recorded under ``result["archive"]`` and
+    the inline result is kept (the export itself still succeeds).
+    """
+    config = S3Config.from_env()
+    if config is None:
+        return
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    key = f"exports/{stamp}-{filename}"
+    try:
+        result["archive"] = await archive_export(config, key, content, content_type, filename)
+    except Exception as exc:  # noqa: BLE001 - best-effort archive
+        result["archive"] = {"error": str(exc)}
+        logger.warning("export archive upload failed: %s", exc)
+        return
+    # Keep `job_run.result` small: drop the inline copy once it is archived and
+    # exceeds the inline threshold (the download then uses the presigned URL).
+    threshold = int(os.environ.get("EXPORT_INLINE_MAX_BYTES", "1000000"))
+    if len(content) > threshold:
+        for field in ("csv", "xlsx_base64", "document"):
+            result.pop(field, None)
+
+
+async def _finalize(result: dict[str, Any], options: dict[str, Any]) -> None:
+    """Archives and/or e-mails a finished export (both best-effort)."""
+    filename, content, content_type = _attachment_from_result(result)
+    await _maybe_archive(result, filename, content, content_type)
+    # The e-mail must use the pre-archive bytes (inline may have been dropped).
+    await _maybe_email(result, options, filename, content, content_type)
 
 
 async def _structured_export(
@@ -393,7 +435,7 @@ async def _structured_export(
                 "csv": csv_text,
             }
 
-    await _maybe_email(result, options)
+    await _finalize(result, options)
     return result
 
 

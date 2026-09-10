@@ -14,6 +14,7 @@ dependencies = [
     "restrictedpython>=8.5",
     "openpyxl>=3.1.5",
     "aiosmtplib>=5.1.3",
+    "boto3>=1.43.91",
 ]
 
 [dependency-groups]

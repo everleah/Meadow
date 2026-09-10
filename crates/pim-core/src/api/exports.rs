@@ -99,6 +99,16 @@ fn strip_prefix<'a>(id: &'a str, table: &str) -> &'a str {
     id.strip_prefix(&prefix).unwrap_or(id)
 }
 
+/// Whether the requested format's inline payload is present in the result.
+fn inline_present(result: &Value, format: &str) -> bool {
+    match format {
+        "csv" => result.get("csv").and_then(Value::as_str).is_some(),
+        "xlsx" => result.get("xlsx_base64").and_then(Value::as_str).is_some(),
+        "json" => result.get("document").is_some(),
+        _ => false,
+    }
+}
+
 /// Creates and queues an `outbound_export` job from a structured request.
 #[utoipa::path(
     post,
@@ -207,6 +217,7 @@ async fn fetch_run(db: &crate::db::Db, key: &str) -> Result<Option<Value>, ApiEr
     params(ExportFileQuery),
     responses(
         (status = 200, description = "Export file"),
+        (status = 302, description = "Redirect to the object-storage download URL"),
         (status = 400, description = "No result / wrong format"),
         (status = 404, description = "Not found")
     )
@@ -233,6 +244,28 @@ pub async fn get_export_file(
         .and_then(Value::as_str)
         .unwrap_or("json");
     let format = params.format.as_deref().unwrap_or(stored_format);
+    if !matches!(format, "csv" | "xlsx" | "json") {
+        return Err(ApiError::bad_request(format!(
+            "unsupported format `{format}`"
+        )));
+    }
+
+    // Large results are archived in object storage and their inline copy is
+    // dropped: redirect the client to the presigned download URL instead.
+    if !inline_present(result, format) {
+        if let Some(url) = result
+            .get("archive")
+            .and_then(|archive| archive.get("url"))
+            .and_then(Value::as_str)
+        {
+            return Response::builder()
+                .status(StatusCode::FOUND)
+                .header(header::LOCATION, url)
+                .body(Body::empty())
+                .map_err(|e| ApiError::internal(format!("build redirect: {e}")));
+        }
+        return Err(ApiError::bad_request(format!("no {format} result")));
+    }
 
     let (content_type, filename, body): (&str, String, Vec<u8>) = match format {
         "csv" => {

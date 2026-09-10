@@ -2254,17 +2254,19 @@ class CoreClient:
         """Downloads an export file (``GET /exports/{run_id}/file``, editor+).
 
         Returns ``(content, filename)``. The core reads ``job_run.result`` and
-        serialises the file on the fly, so no binary blob is persisted.
+        serialises the file on the fly; for large exports it may ``302`` to a
+        presigned object-storage URL, which this method follows.
         """
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/exports/{run_id}/file",
                 params={"format": format},
                 headers={"Authorization": f"Bearer {token}"},
+                follow_redirects=True,
             )
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
-            filename = "meadow-export"
+            filename = f"meadow-export.{format}"
             disposition = response.headers.get("content-disposition", "")
             if "filename=" in disposition:
                 filename = disposition.split("filename=")[-1].rstrip('"').split('"')[0]
