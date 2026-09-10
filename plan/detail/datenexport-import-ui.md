@@ -108,6 +108,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - `csv` → CSV (UTF-8, `;`/`,` Trenner, Header) via `csv`/`StringIO`.
 - `xlsx` → openpyxl-Workbook (`columns` als Header, `rows`), Bytes in den Response.
 - `json` → MEF-Dokument (`document`) als JSON-Download.
+- **Objektstorage:** Sind die Inline-Daten (nach Archivierung über `EXPORT_INLINE_MAX_BYTES`) entfernt, antwortet der Endpunkt mit **302** auf `result.archive.url` (Presigned-URL des Objektstorage-Objekts); sonst wie oben inline.
 - Antwort mit `Content-Disposition: attachment; filename="meadow-export.<ext>"`.
 
 ### 5.4 CSV/XLSX-Konventionen
@@ -131,12 +132,13 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
   4. **„Vorschau"** (Beispielzeilen für die gewählten Spalten) und **„Exportieren"** → Report (Anzahl, Download via `GET /exports/{run_id}/file`).
 - Im **Product-Grid** (`/products`): „Export-Auswahl / Export-Filter" Aktion.
 - Auf der **Collections-Seite** (`/saved-searches`): „Exportieren"-Button + „Mitglieder hinzufügen"-Import-Dialog.
+- In der Karte **„Recent exports"** (auf `/export`): Download pro Lauf; für Admins zusätzlich **Löschen** pro Zeile und **„Alle löschen"** (`DELETE /jobs/runs/{run_id}`, admin).
 - i18n-Keys (`export.*`, `collection.import_members`) in en/de/fr.
 
 ## 7. Jobs & Scheduler
 
-- Kleine Mengen synchron; größere als `outbound_export`-Job (strukturierte statt JSON-Parameter).
-- **Geplante Exporte** (Ausbau): `job_definition` mit 6-Feld-Cron, Ergebnis-Ablage (Objektstorage) + Download-Link.
+- **Implementiert:** Geplante Exporte als `job_definition` (`type = outbound_export`, Cron im 6-Feld-Format, `parameters = {source, fields, format, locales, options, email_to?}`); der Scheduler führt sie periodisch aus. Ergebnis in `job_run.result`; Download über `GET /exports/{run_id}/file` (bei Objektstorage-Ablage per 302 auf die Presigned-URL).
+- **Ausbau / zurückgestellt — automatische Retention (30 Tage):** `job_run`-Datensätze **und** archivierte S3-Objekte nach **30 Tagen** automatisch löschen. Noch **nicht** umgesetzt, weil zuvor ein **Papierkorb-Konzept** (Soft-Delete/Wiederherstellung) geplant ist, mit dem die Retention abgestimmt werden muss. Bis dahin nur **manuelles** Löschen: „Löschen"/„Alle löschen" in der Karte „Recent exports" bzw. Admin-Seite `/jobs` (Runs-Tab).
 
 ## 8. Datenmodell & Entscheidungen
 
@@ -168,8 +170,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 
 ## 11. Offene Punkte
 
-- Synchroner Export für kleine Mengen (Grid-Auswahl) statt immer Job.
-- Geplante Exporte (cron) + E-Mail-Versand.
-- Objektstorage-Ablage für sehr große Datenmengen.
-- CSV-Spalten-Mapping beim Import (Ausbau).
-- Soll der Export die Grid-Spaltenansicht als Vorgabe wiederverwenden? (Nice-to-have.)
+- **Automatische Retention (30 Tage)** für `job_run` **und** archivierte S3-Objekte — **zurückgestellt**; muss mit dem geplanten **Papierkorb-Konzept** (Soft-Delete/Wiederherstellung) abgestimmt werden. Aktuell nur manuelles Löschen (UI `/export` bzw. Admin `/jobs`).
+- **Dauerhafte Download-Route** ohne Presigned-URL-Ablauf (7 Tage): Core mit eigenem S3-Client (Streaming) statt 302 auf eine ablaufende Signatur.
+- CSV-Spalten-Mapping beim Import (Ausbau); optionaler synchroner Export kleiner Mengen.
+- Optional: Anzeige/Verwaltung der Export-Schedules auch im Admin-`/jobs`-UI (Job-Typen-Liste dort veraltet).

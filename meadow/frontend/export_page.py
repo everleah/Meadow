@@ -496,8 +496,44 @@ async def export_page(request: Request) -> None:
                             on_click=lambda d=definition_id: _delete_schedule(d),
                         ).props("flat dense color=negative").tooltip(t("export.schedule_delete"))
 
+        #: Run ids of the currently rendered "Recent exports" rows (for "delete all").
+        recent_ids: list[str] = []
+
+        async def _delete_run(run_id: str) -> None:
+            try:
+                await client.delete_job_run(token, run_id)
+            except CoreError as exc:
+                ui.notify(t("export.recent_delete_failed").format(err=exc), type="negative")
+                return
+            ui.notify(t("export.recent_deleted"), type="positive")
+            await _render_recent()
+
+        def _confirm_delete_all(run_ids: list[str]) -> None:
+            if not run_ids:
+                return
+            with ui.dialog() as dialog, ui.card().classes("w-96 max-w-[92vw]"):
+                ui.label(t("export.recent_delete_all_confirm").format(count=len(run_ids))).classes(
+                    "text-subtitle1"
+                )
+                ui.label(t("export.recent_delete_all_hint")).classes("text-caption text-gray-500")
+
+                async def _go() -> None:
+                    dialog.close()
+                    for run_id in run_ids:
+                        try:
+                            await client.delete_job_run(token, run_id)
+                        except CoreError:  # noqa: PERF203 - keep deleting the rest
+                            continue
+                    await _render_recent()
+
+                with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                    ui.button(t("export.close"), on_click=dialog.close).props("flat")
+                    ui.button(t("export.recent_delete_all"), on_click=_go).props("color=negative")
+            dialog.open()
+
         async def _render_recent() -> None:
             recent_box.clear()
+            recent_ids.clear()
             try:
                 runs = await client.list_job_runs(token, limit=100)
             except Exception:  # noqa: BLE001 - degrade to an empty list
@@ -513,6 +549,7 @@ async def export_page(request: Request) -> None:
                     result = run.get("result") or {}
                     fmt = str(result.get("format") or "csv")
                     run_id = str(run.get("id") or "")
+                    recent_ids.append(run_id)
                     with ui.row().classes("items-center gap-3 w-full"):
                         ui.label(_fmt_dt(run.get("created_at"))).classes("text-caption w-44")
                         ui.badge(fmt.upper()).props("outline")
@@ -526,6 +563,11 @@ async def export_page(request: Request) -> None:
                             icon="download",
                             on_click=lambda rid=run_id, f=fmt: _download(rid, f),
                         ).props("flat dense ml-auto").tooltip(t("export.download"))
+                        if auth.is_admin():
+                            ui.button(
+                                icon="delete",
+                                on_click=lambda rid=run_id: _delete_run(rid),
+                            ).props("flat dense color=negative").tooltip(t("export.recent_delete"))
 
         with ui.card().classes("w-full mt-4"):
             ui.label(t("export.schedule_section")).classes("text-subtitle1")
@@ -535,9 +577,14 @@ async def export_page(request: Request) -> None:
         with ui.card().classes("w-full mt-4"):
             with ui.row().classes("w-full items-center"):
                 ui.label(t("export.recent_section")).classes("text-subtitle1")
-                ui.button(icon="refresh", on_click=lambda: _render_recent()).props(
-                    "flat dense ml-auto"
-                )
+                with ui.row().classes("ml-auto gap-1"):
+                    if auth.is_admin():
+                        ui.button(
+                            t("export.recent_delete_all"),
+                            icon="delete_sweep",
+                            on_click=lambda: _confirm_delete_all(recent_ids),
+                        ).props("flat dense color=negative")
+                    ui.button(icon="refresh", on_click=lambda: _render_recent()).props("flat dense")
             recent_box = ui.column().classes("w-full mt-2")
 
         schedule_dialog = ui.dialog()
