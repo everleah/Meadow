@@ -11,15 +11,19 @@ from meadow.frontend.grid import (
     build_patch,
     collect_subtree,
     completeness_badge,
+    editable_cell_value,
+    editable_cells,
     enrich_tree_nodes,
     export_fields,
     filter_tree_nodes,
+    is_editable_definition,
     language_cells,
     language_field,
     name_language_columns,
     resolve_value,
     row_data,
     status_badge,
+    storable_cell_value,
 )
 from meadow.frontend.i18n import best_locale, t
 
@@ -170,8 +174,8 @@ def test_is_session_expired_ignores_other_failures() -> None:
 
 def test_attribute_columns_resolves_label_and_hides() -> None:
     definitions = [
-        {"name": "price", "label": {"en": "Price", "de": "Preis"}},
-        {"name": "sku", "label": {}},
+        {"name": "price", "label": {"en": "Price", "de": "Preis"}, "type": "number"},
+        {"name": "sku", "label": {}, "type": "text"},
     ]
     columns = attribute_columns(definitions, "de")
     assert columns[0] == {
@@ -179,6 +183,8 @@ def test_attribute_columns_resolves_label_and_hides() -> None:
         "field": "attr_price",
         "width": 140,
         "hide": True,
+        "editable": True,
+        "cellDataType": "number",
     }
     assert columns[1]["field"] == "attr_sku"
     assert columns[1]["headerName"] == "sku"  # falls back to name when label missing
@@ -253,6 +259,99 @@ def test_language_cells_resolve_enum_labels_per_language() -> None:
 def test_language_cells_ignore_missing_attributes() -> None:
     cells = language_cells({"attributes": {}}, ["en"], {"name": "_name"})
     assert cells == {"_name__en": ""}
+
+
+def test_is_editable_definition() -> None:
+    assert is_editable_definition({"name": "title", "type": "text"})
+    assert is_editable_definition({"name": "price", "type": "number"})
+    assert is_editable_definition({"name": "flag", "type": "boolean"})
+    assert is_editable_definition({"name": "color", "type": "enum"})
+    # Computed values belong to a rule, quantified values need a unit editor,
+    # date/reference attributes need dedicated pickers.
+    assert not is_editable_definition({"name": "gross", "type": "number", "computed": True})
+    assert not is_editable_definition({"name": "height", "type": "number", "unit_id": "unit_m"})
+    assert not is_editable_definition({"name": "due", "type": "date"})
+    assert not is_editable_definition({"name": "ref", "type": "reference"})
+
+
+def test_attribute_columns_add_editor_props_for_editable_types() -> None:
+    definitions = [
+        {"name": "title", "type": "text"},
+        {"name": "price", "type": "number"},
+        {"name": "flag", "type": "boolean"},
+        {"name": "color", "type": "enum"},
+        {"name": "gross", "type": "number", "computed": True},
+    ]
+    columns, _ = attribute_column_specs(
+        definitions, "de", [], {"color": {"red": "Rot", "blue": "Blau"}}
+    )
+    assert columns[0]["editable"] is True
+    assert columns[0].get("cellDataType") is None
+    assert columns[1]["cellDataType"] == "number" and columns[1]["editable"] is True
+    assert columns[2]["cellDataType"] == "boolean" and columns[2]["editable"] is True
+    assert columns[3]["cellEditor"] == "agSelectCellEditor"
+    assert columns[3]["cellEditorParams"] == {"values": ["Rot", "Blau"]}
+    assert "editable" not in columns[4]  # computed -> read-only
+    # An enum column without resolved options stays read-only (no empty select).
+    assert "editable" not in attribute_column_specs([definitions[3]], "de")[0][0]
+    # Per-language columns never become editable.
+    with_languages, _ = attribute_column_specs(
+        [{"name": "title", "type": "text", "multilingual": True}], "de", ["en"]
+    )
+    assert with_languages[0]["editable"] is True
+    assert "editable" not in with_languages[1]
+
+
+def test_editable_cell_value_uses_the_native_type() -> None:
+    number = {"name": "price", "type": "number"}
+    boolean = {"name": "flag", "type": "boolean"}
+    enum = {"name": "color", "type": "enum"}
+    text = {"name": "title", "type": "text"}
+    assert editable_cell_value(number, 12.5, "de") == 12.5
+    assert editable_cell_value(number, "12,5", "de") == 12.5
+    assert editable_cell_value(number, None, "de") is None
+    assert editable_cell_value(boolean, True, "de") is True
+    assert editable_cell_value(boolean, "false", "de") is False
+    assert editable_cell_value(enum, "red", "de", {"red": "Rot"}) == "Rot"
+    assert editable_cell_value(enum, "gone", "de", {"red": "Rot"}) == "gone"
+    assert editable_cell_value(text, {"en": "Mouse", "de": "Maus"}, "en") == "Mouse"
+
+
+def test_editable_cells_skips_unset_working_language_values() -> None:
+    editable = {"title": {"name": "title", "type": "text"}, "price": {"name": "price"}}
+    assert editable_cells({"attributes": {}}, "en", editable) == {
+        "attr_title": None,
+        "attr_price": None,
+    }
+    # A value maintained in another language keeps the resolved display value.
+    assert editable_cells({"attributes": {"title": {"de": "Maus"}}}, "en", editable) == {
+        "attr_price": None
+    }
+    assert editable_cells({"attributes": {"title": {"de": "Maus"}}}, "de", editable) == {
+        "attr_title": "Maus",
+        "attr_price": None,
+    }
+
+
+def test_storable_cell_value_restores_codes_and_merges_languages() -> None:
+    enum = {"name": "color", "type": "enum"}
+    text = {"name": "title", "type": "text"}
+    number = {"name": "price", "type": "number"}
+    boolean = {"name": "flag", "type": "boolean"}
+    assert storable_cell_value(enum, "Rot", "red", "de", {"red": "Rot"}) == "red"
+    assert storable_cell_value(enum, "Neu", "red", "de", {"red": "Rot"}) == "Neu"
+    assert storable_cell_value(number, "12,5", "1", "de") == 12.5
+    assert storable_cell_value(number, "12", "1", "de") == 12
+    assert storable_cell_value(boolean, "true", None, "de") is True
+    assert storable_cell_value(text, "", "x", "de") is None
+    assert storable_cell_value(text, "Mouse", "Maus", "en") == "Mouse"
+    # Multilingual: only the working language changes, the others are preserved.
+    assert storable_cell_value(text, "Mouse", {"de": "Maus"}, "en") == {
+        "de": "Maus",
+        "en": "Mouse",
+    }
+    assert storable_cell_value(text, "Neu", {"de": "Maus"}, "de") == {"de": "Neu"}
+    assert storable_cell_value(text, "", {"de": "Maus"}, "de") == {}
 
 
 def test_export_fields_maps_and_deduplicates_language_columns() -> None:

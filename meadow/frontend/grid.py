@@ -115,8 +115,167 @@ def row_data(
     return row
 
 
+def attribute_field(attribute_name: str) -> str:
+    """Returns the grid field name of an attribute's working-language value."""
+    return f"attr_{attribute_name}"
+
+
+#: Attribute types that can be edited inline in the grid (working language).
+EDITABLE_TYPES = ("text", "number", "boolean", "enum")
+
+
+def is_editable_definition(definition: dict) -> bool:
+    """Whether an attribute may be edited inline in the grid.
+
+    Read-only by design: **computed** values belong to a business rule,
+    **quantified** values (a `unit_id`) need the unit-aware editor of the
+    product form, and `date`/`reference` attributes need dedicated pickers.
+    """
+    return (
+        str(definition.get("type") or "text") in EDITABLE_TYPES
+        and not definition.get("computed")
+        and not definition.get("unit_id")
+    )
+
+
+def _as_number(value: object) -> object:
+    """Parses a cell value to int/float (keeps the value on failure)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return value
+    return int(number) if number.is_integer() and "." not in text else number
+
+
+def _as_bool(value: object) -> object:
+    """Parses a cell value to a boolean (None stays None)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "on", "yes")
+
+
+def _is_multilingual_map(value: object) -> bool:
+    """Whether a value is a `{language: value}` map (rather than quantified)."""
+    return isinstance(value, dict) and "unit" not in value
+
+
+def editable_cell_value(
+    definition: dict, raw: object, locale: str, labels: dict[str, str] | None = None
+) -> object:
+    """Builds the **typed** working-language cell value of an editable attribute.
+
+    The cell carries the native type (number, bool, string) so AG Grid offers the
+    matching editor; enum cells carry the localized `label` (the stored code is
+    restored on save by `storable_cell_value`).
+    """
+    atype = str(definition.get("type") or "text")
+    value = raw.get(locale) if _is_multilingual_map(raw) else raw
+    if value is None:
+        return None
+    if atype == "number":
+        return _as_number(value)
+    if atype == "boolean":
+        return _as_bool(value)
+    text = str(value)
+    if atype == "enum" and labels:
+        return labels.get(text, text)
+    return text
+
+
+def editable_cells(
+    object_: dict,
+    locale: str,
+    editable: dict[str, dict] | None,
+    enum_labels: dict[str, dict[str, str]] | None = None,
+) -> dict:
+    """Builds the typed cells of the editable attributes (`attr_<name>`).
+
+    An attribute that has no value in the working language is **left out**, so the
+    row keeps the resolved display value from `row_data` (a value maintained in
+    another language stays visible; editing it writes the working language).
+    """
+    attributes = object_.get("attributes") or {}
+    cells: dict = {}
+    for name, definition in (editable or {}).items():
+        raw = attributes.get(name)
+        if _is_multilingual_map(raw) and raw.get(locale) is None:
+            continue
+        cells[attribute_field(name)] = editable_cell_value(
+            definition, raw, locale, (enum_labels or {}).get(name)
+        )
+    return cells
+
+
+def storable_cell_value(
+    definition: dict,
+    cell_value: object,
+    original: object,
+    locale: str,
+    labels: dict[str, str] | None = None,
+) -> object:
+    """Turns an edited cell value back into a storable attribute value.
+
+    Enum cells hold a localized label -> the stored code is restored. A
+    multilingual attribute keeps its other languages: the new value is merged
+    into the working-language key of the original map.
+    """
+    atype = str(definition.get("type") or "text")
+    if atype == "enum":
+        text = "" if cell_value is None else str(cell_value)
+        new_value: object = next(
+            (code for code, label in (labels or {}).items() if label == text), text or None
+        )
+    elif atype == "number":
+        new_value = _as_number(cell_value)
+    elif atype == "boolean":
+        new_value = _as_bool(cell_value)
+    else:
+        new_value = None if cell_value in (None, "") else str(cell_value)
+    if _is_multilingual_map(original):
+        merged = dict(original)
+        if new_value is None:
+            merged.pop(locale, None)
+        else:
+            merged[locale] = new_value
+        return merged
+    return new_value
+
+
+def _editor_props(definition: dict, labels: dict[str, str] | None) -> dict:
+    """Returns the AG Grid editing props of a definition (empty when read-only)."""
+    if not is_editable_definition(definition):
+        return {}
+    atype = str(definition.get("type") or "text")
+    if atype == "number":
+        return {"editable": True, "cellDataType": "number"}
+    if atype == "boolean":
+        return {"editable": True, "cellDataType": "boolean"}
+    if atype == "enum":
+        # Without resolved options the select editor would be useless.
+        if not labels:
+            return {}
+        return {
+            "editable": True,
+            "cellEditor": "agSelectCellEditor",
+            "cellEditorParams": {"values": list(labels.values())},
+        }
+    return {"editable": True}
+
+
 def attribute_column_specs(
-    definitions: list[dict], locale: str, languages: list[str] | None = None
+    definitions: list[dict],
+    locale: str,
+    languages: list[str] | None = None,
+    enum_labels: dict[str, dict[str, str]] | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
     """Builds hidden AG Grid columns for attribute definitions.
 
@@ -125,6 +284,10 @@ def attribute_column_specs(
     the user enables them via the column picker. For a **multilingual**
     attribute one extra column per language in ``languages`` is added (header
     `<label> · <LANG>`, field `attr_<name>__<lang>`).
+
+    The **working-language** column of an editable attribute (`text`, `number`,
+    `boolean`, `enum`) is `editable` and carries the matching editor (see
+    `_editor_props`); the per-language columns stay read-only.
 
     Returns ``(columns, language_fields)``, where ``language_fields`` maps a
     per-language field back to its attribute name (used by the export).
@@ -136,7 +299,9 @@ def attribute_column_specs(
         if not name:
             continue
         label = resolve_value(definition.get("label"), locale) or name
-        columns.append({"headerName": label, "field": f"attr_{name}", "width": 140, "hide": True})
+        column = {"headerName": label, "field": attribute_field(name), "width": 140, "hide": True}
+        column.update(_editor_props(definition, (enum_labels or {}).get(name)))
+        columns.append(column)
         if not definition.get("multilingual"):
             continue
         for language in languages or []:
@@ -483,6 +648,17 @@ async def products_page(request: Request) -> None:
             "name": NAME_FIELD_PREFIX,
             **{name: f"attr_{name}" for name in multilingual_names},
         }
+        # Attributes that can be edited inline (working language); computed,
+        # quantified and date/reference attributes stay read-only (see
+        # `is_editable_definition`).
+        editable_defs: dict[str, dict] = {
+            str(definition.get("name")): definition
+            for definition in definitions
+            if definition.get("name") and is_editable_definition(definition)
+        }
+        # Fields the grid edits inline (`_name` is editable as well); a double
+        # click there must open the cell editor instead of the product form.
+        editable_fields = {"_name", *(attribute_field(name) for name in editable_defs)}
 
         # Resolve enum attribute values to localized labels via their enum sets.
         # Enum option labels are multilingual themselves, so every language
@@ -518,7 +694,7 @@ async def products_page(request: Request) -> None:
             t("grid.name"), active_languages
         )
         attribute_column_defs, attribute_language_fields = attribute_column_specs(
-            definitions, locale, active_languages
+            definitions, locale, active_languages, enum_resolvers
         )
         language_fields = {**name_language_fields, **attribute_language_fields}
         column_defs = (
@@ -537,6 +713,9 @@ async def products_page(request: Request) -> None:
         )
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
+        # The rows exactly as they were loaded: staged values are compared against
+        # these, so only real edits end up in the save patch.
+        loaded_rows_by_id: dict[str, dict] = {}
         root_id = OBJECT_ROOT_ID
         tree_nodes: list[dict] = []
 
@@ -551,9 +730,10 @@ async def products_page(request: Request) -> None:
             tree_nodes = []
 
         def make_rows(selected_objects: list[dict]) -> list[dict]:
-            """Builds the grid rows, incl. the per-language cells (Sprach-Spalten)."""
+            """Builds the grid rows: display values, typed editable cells, languages."""
             return [
                 row_data(object_, locale, attribute_names, enum_resolvers)
+                | editable_cells(object_, locale, editable_defs, enum_resolvers)
                 | language_cells(
                     object_,
                     active_languages,
@@ -564,6 +744,7 @@ async def products_page(request: Request) -> None:
             ]
 
         all_rows = make_rows(objects)
+        loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
 
         def sync_url_query() -> None:
             """Keeps the URL in sync with the active filters (bookmarkable)."""
@@ -588,9 +769,10 @@ async def products_page(request: Request) -> None:
             )
 
         async def apply_rows(selected_objects: list[dict]) -> None:
-            nonlocal original_by_id, all_rows
+            nonlocal original_by_id, all_rows, loaded_rows_by_id
             original_by_id = {str(o.get("id")): o for o in selected_objects}
             all_rows = make_rows(selected_objects)
+            loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
             grid.run_grid_method("setGridOption", "rowData", all_rows)
             selection_hint.set_visibility(len(selected_objects) == 0 and not has_filter())
             no_objects_label.set_visibility(len(selected_objects) == 0 and has_filter())
@@ -695,30 +877,57 @@ async def products_page(request: Request) -> None:
             )
             await reload_grid()
 
-        staged_ids: set[str] = set()
+        # Staged edits: object id -> changed grid fields (`_name`, `attr_<name>`).
+        staged_cells: dict[str, set[str]] = {}
+
+        def _staged_count() -> int:
+            return sum(len(fields) for fields in staged_cells.values())
 
         def mark_changed(event) -> None:
-            data = event.args.get("data") if isinstance(event.args, dict) else None
+            args = event.args if isinstance(event.args, dict) else {}
+            data = args.get("data")
+            field = args.get("colId")
             oid = data.get("_id") if isinstance(data, dict) else None
-            if oid:
-                staged_ids.add(oid)
-                staged_label.set_text(t("grid.staged_changes").format(count=len(staged_ids)))
+            if oid and field:
+                staged_cells.setdefault(str(oid), set()).add(str(field))
+                staged_label.set_text(t("grid.staged_changes").format(count=_staged_count()))
 
         async def save() -> None:
+            """Saves the staged cells as one batch update (attrs + name)."""
             client_rows = await grid.get_client_data()
+            rows_by_id = {
+                str(row.get("_id")): row for row in client_rows if row.get("_id") is not None
+            }
             patches = []
-            for row in client_rows:
-                oid = row.get("_id")
-                if oid is None:
-                    continue
+            for oid, fields in staged_cells.items():
                 original = original_by_id.get(oid)
-                if original is None:
+                row = rows_by_id.get(oid)
+                if original is None or row is None:
                     continue
-                original_name = resolve_value(
-                    (original.get("attributes") or {}).get("name"), locale
-                )
-                if row.get("_name") != original_name:
-                    patches.append(build_patch(oid, row.get("_name"), original, locale))
+                loaded = loaded_rows_by_id.get(oid, {})
+                attributes: dict = {}
+                if "_name" in fields and row.get("_name") != loaded.get("_name"):
+                    patch = build_patch(oid, row.get("_name"), original, locale)
+                    attributes.update(patch["attributes"])
+                raw_attributes = original.get("attributes") or {}
+                for field in sorted(fields):
+                    if not str(field).startswith("attr_"):
+                        continue  # `_name` is handled above
+                    name = str(field)[len("attr_") :]
+                    definition = editable_defs.get(name)
+                    if definition is None:
+                        continue  # read-only (language) column
+                    if row.get(field) == loaded.get(field):
+                        continue  # staged but reverted
+                    attributes[name] = storable_cell_value(
+                        definition,
+                        row.get(field),
+                        raw_attributes.get(name),
+                        locale,
+                        enum_resolvers.get(name),
+                    )
+                if attributes:
+                    patches.append({"id": oid, "attributes": attributes})
             if not patches:
                 ui.notify(t("grid.no_changes"))
                 return
@@ -957,9 +1166,14 @@ async def products_page(request: Request) -> None:
                     await open_references(data["_id"])
 
         def handle_open_cell(e) -> None:
-            """Opens the product form on a row double-click."""
+            """Opens the product form on a row double-click.
+
+            Editable cells are the exception: AG Grid starts the inline editor
+            there, so the double-click must not navigate away.
+            """
             args = e.args if isinstance(e.args, dict) else {}
-            if args.get("colId") == "_refs":
+            col_id = str(args.get("colId") or "")
+            if col_id == "_refs" or col_id in editable_fields:
                 return
             data = args.get("data")
             if data and data.get("_id"):
@@ -1583,7 +1797,7 @@ async def products_page(request: Request) -> None:
                         if column["field"] in ("_status", "_completeness")
                     ],
                 ).classes("w-full grow")
-                grid.on("cellValueChanged", mark_changed, ["data"])
+                grid.on("cellValueChanged", mark_changed, ["data", "colId"])
                 grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])
                 grid.on("selectionChanged", handle_selection, ["selectedRows"])
