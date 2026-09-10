@@ -14,6 +14,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
+from meadow.frontend.object_picker import open_structure_picker
 
 
 def _parent_key(parent: object | None) -> str | None:
@@ -133,15 +134,99 @@ async def languages_page() -> None:
                 label.pop(locale, None)
             edit_state["label"] = label
 
-        def fill_parent_options(select: ui.select, include_self: str | None = None) -> None:
-            options = {"": t("lang_admin.root")}
+        # Node id of the synthetic "top level" entry in the parent picker.
+        TOP_ID = "__top__"
+
+        def parent_children() -> dict[str, list[str]]:
+            """Maps a parent code (``""`` = top level) to its child codes."""
+            children: dict[str, list[str]] = {}
             for lang in langs:
                 code = str(lang.get("code"))
-                if include_self and code == include_self:
+                children.setdefault(_parent_key(lang.get("parent")) or "", []).append(code)
+            return children
+
+        def descendant_codes(code: str) -> set[str]:
+            """All codes below ``code`` (guards against parent cycles)."""
+            children = parent_children()
+            out: set[str] = set()
+            stack = list(children.get(code, []))
+            while stack:
+                current = stack.pop()
+                if current in out:
                     continue
-                options[f"lang_{code}"] = resolve_value(lang.get("label"), locale) or code
-            select.options = options
-            select.update()
+                out.add(current)
+                stack.extend(children.get(current, []))
+            return out
+
+        def parent_display() -> str:
+            """Renders the currently chosen parent (empty value = top level)."""
+            parent = str(edit_state.get("parent") or "")
+            if not parent:
+                return t("lang_admin.root")
+            code = _parent_key(parent) or parent
+            lang = next((item for item in langs if str(item.get("code")) == code), None)
+            return resolve_value((lang or {}).get("label"), locale) or code
+
+        async def pick_parent(exclude_code: str | None, label_el: ui.label) -> None:
+            """Picks the parent language with the shared structure-tree dialog."""
+            blocked = descendant_codes(exclude_code) if exclude_code else set()
+            if exclude_code:
+                blocked.add(exclude_code)
+            by_code = {str(item.get("code")): item for item in langs}
+            children = parent_children()
+
+            def lang_node(code: str) -> dict:
+                allowed = code != "root" and code not in blocked
+                return {
+                    "id": f"lang_{code}",
+                    "label": resolve_value(by_code[code].get("label"), locale) or code,
+                    "type": code,
+                    "allowed": allowed,
+                    "selectable": allowed,
+                    "lazy": bool(children.get(code)),
+                }
+
+            async def load_children(node_id: str) -> list[dict]:
+                if node_id == TOP_ID:
+                    top = {
+                        "id": TOP_ID,
+                        "label": t("lang_admin.root"),
+                        "type": "",
+                        "allowed": True,
+                        "selectable": True,
+                        "lazy": False,
+                    }
+                    return [top, *[lang_node(code) for code in sorted(children.get("root", []))]]
+                code = node_id[5:] if node_id.startswith("lang_") else node_id
+                return [lang_node(child) for child in sorted(children.get(code, []))]
+
+            async def on_pick(hit: dict) -> None:
+                node_id = str(hit.get("id") or "")
+                edit_state["parent"] = "" if node_id == TOP_ID else node_id
+                label_el.set_text(parent_display())
+
+            await open_structure_picker(
+                title=t("lang_admin.pick_parent"),
+                on_pick=on_pick,
+                root_id=TOP_ID,
+                load_children=load_children,
+                hint=t("lang_admin.parent_hint"),
+            )
+
+        def parent_row(exclude_code: str | None) -> ui.label:
+            """Parent-language row: current value plus the structure-picker button."""
+            with ui.row().classes("w-full items-center gap-2").style("flex-wrap: nowrap"):
+                with ui.column().classes("grow gap-0"):
+                    ui.label(t("lang_admin.parent")).classes("text-caption text-gray-500")
+                    label = ui.label("").classes("text-body2")
+
+                async def open_pick() -> None:
+                    await pick_parent(exclude_code, label)
+
+                ui.button(icon="account_tree", on_click=open_pick).props("flat dense").tooltip(
+                    t("form.pick_in_structure")
+                )
+            return label
 
         # --- create dialog (multilingual label, product-form style) ----------
         create_dialog = ui.dialog()
@@ -160,11 +245,7 @@ async def languages_page() -> None:
                     ui.button(icon="translate").props("flat round dense").on_click(
                         open_name
                     ).tooltip(t("form.languages_edit"))
-                create_parent_select = (
-                    ui.select({}, label=t("lang_admin.parent"), value=None)
-                    .props("filled dense")
-                    .classes("w-full")
-                )
+                create_parent_label = parent_row(None)
                 with ui.row().classes("w-full gap-6"):
                     create_active_check = ui.checkbox(t("lang_admin.active"))
                     create_is_ui_check = ui.checkbox(t("lang_admin.is_ui"))
@@ -185,8 +266,7 @@ async def languages_page() -> None:
             create_label_input.set_value("")
             create_label_input.on_value_change(lambda e: _set_label_locale(str(e.value)))
             name_input_ref["el"] = create_label_input
-            fill_parent_options(create_parent_select)
-            create_parent_select.set_value(str(edit_state["parent"] or ""))
+            create_parent_label.set_text(parent_display())
             create_active_check.set_value(True)
             create_is_ui_check.set_value(False)
             create_dialog.open()
@@ -311,16 +391,7 @@ async def languages_page() -> None:
                         ui.button(icon="translate").props("flat round dense").on_click(
                             open_name
                         ).tooltip(t("form.languages_edit"))
-                    parent_select = (
-                        ui.select({}, label=t("lang_admin.parent"), value=None)
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    fill_parent_options(parent_select, include_self=code)
-                    parent_select.set_value(str(edit_state["parent"] or ""))
-                    parent_select.on_value_change(
-                        lambda e: edit_state.__setitem__("parent", str(e.value or ""))
-                    )
+                    parent_row(code)
                     active_check = ui.checkbox(
                         t("lang_admin.active"), value=bool(edit_state["active"])
                     )

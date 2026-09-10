@@ -907,53 +907,11 @@ async def product_form(object_id: str) -> None:
         }
 
         # --- Categories (product-centric assignment, vgl. Akeneo) -----------
-        async def _load_category_tree() -> list[dict]:
-            """Builds the category tree as nested ``ui.tree`` nodes (one round-trip)."""
-            try:
-                cats = await client.list_objects(token, object_type="category", limit=1000)
-                tree = await client.get_object_tree(token)
-            except Exception:  # noqa: BLE001 - degrade to no category tree
-                return []
-            cat_by_id: dict[str, dict] = {
-                str(c.get("id")): c for c in cats if isinstance(c, dict) and c.get("id")
-            }
-
-            def prune(nodes: list[dict]) -> list[dict]:
-                result: list[dict] = []
-                for node in nodes:
-                    nid = str(node.get("id"))
-                    if nid not in cat_by_id:
-                        continue
-                    children = prune(node.get("children") or [])
-                    obj = cat_by_id[nid]
-                    result.append(
-                        {
-                            "id": nid,
-                            "label": resolve_value(
-                                (obj.get("attributes") or {}).get("name"), locale
-                            )
-                            or str(obj.get("type"))
-                            or nid,
-                            "children": children,
-                        }
-                    )
-                return result
-
-            # `get_object_tree` returns `[{<root>, children}]`; keep only the
-            # category subtrees under the universal root.
-            if not tree:
-                return []
-            return prune(tree[0].get("children") or [])
-
-        category_tree_nodes = await _load_category_tree()
-        current_ticked: set[str] = {
-            str(ref.get("out"))
-            for ref in all_references
-            if ref.get("definition_id") == "rel_category_member" and ref.get("out")
-        }
-        # Live map of category id -> `category_member` reference id, so
-        # tick/untick can add/remove even for references created this session
-        # (the original `all_references` snapshot is not updated on tick).
+        # Assignment uses the shared object picker (multi-select, restricted to
+        # `category`); assigned categories render as removable chips and each change
+        # creates/removes the `category_member` edge immediately. Labels come from
+        # the picker hits / `GET /objects/{id}` — no full category-tree load.
+        cat_state: dict[str, dict] = {}
         cat_ref_ids: dict[str, str] = {
             str(ref.get("out")): ref.get("id")
             for ref in all_references
@@ -962,51 +920,94 @@ async def product_form(object_id: str) -> None:
             and ref.get("id")
         }
 
-        async def handle_category_tick(e) -> None:
-            """Creates/removes ``category_member`` edges when a category is ticked."""
-            new_ticked = set(e.value or [])
-            added = new_ticked - current_ticked
-            removed = current_ticked - new_ticked
-            current_ticked.clear()
-            current_ticked.update(new_ticked)
-            for cat_id in added:
-                try:
-                    created = await client.create_reference(
-                        token, object_id, cat_id, "rel_category_member"
-                    )
-                    if created and created.get("id"):
-                        cat_ref_ids[cat_id] = created["id"]
-                except Exception as exc:  # noqa: BLE001 - show a friendly message
-                    ui.notify(str(exc), color="negative")
-            for cat_id in removed:
-                rid = cat_ref_ids.get(cat_id)
-                if not rid:
+        async def load_category_labels() -> None:
+            """Resolves the display data of the currently assigned categories."""
+            for cat_id in cat_ref_ids:
+                if cat_id in cat_state:
                     continue
                 try:
-                    await client.delete_reference(token, rid)
+                    obj = await client.get_object(token, cat_id, locale=locale)
+                except Exception:  # noqa: BLE001 - fall back to the raw id
+                    cat_state[cat_id] = {"id": cat_id, "label": cat_id, "type": "category"}
+                    continue
+                cat_state[cat_id] = {
+                    "id": cat_id,
+                    "label": resolve_value((obj.get("attributes") or {}).get("name"), locale)
+                    or cat_id,
+                    "type": str(obj.get("type") or "category"),
+                }
+
+        async def assign_categories() -> None:
+            """Adds `category_member` edges for the categories picked in the dialog."""
+
+            async def on_pick(hits: list[dict]) -> None:
+                for hit in hits:
+                    cat_id = str(hit["id"])
+                    cat_state[cat_id] = hit
+                    if cat_id in cat_ref_ids:
+                        continue
+                    try:
+                        created = await client.create_reference(
+                            token, object_id, cat_id, "rel_category_member"
+                        )
+                    except Exception as exc:  # noqa: BLE001 - show a friendly message
+                        ui.notify(str(exc), color="negative")
+                        continue
+                    if created and created.get("id"):
+                        cat_ref_ids[cat_id] = created["id"]
+                render_sections.refresh()
+
+            await open_object_picker(
+                client=client,
+                token=token,
+                locale=locale,
+                title=t("form.categories_pick"),
+                on_pick=on_pick,
+                target_types=["category"],
+                exclude_ids=[object_id],
+                multi=True,
+            )
+
+        async def unassign_category(cat_id: str) -> None:
+            """Removes the `category_member` edge of one category."""
+            reference_id = cat_ref_ids.pop(cat_id, None)
+            cat_state.pop(cat_id, None)
+            if reference_id:
+                try:
+                    await client.delete_reference(token, reference_id)
                 except Exception as exc:  # noqa: BLE001 - show a friendly message
                     ui.notify(str(exc), color="negative")
-                cat_ref_ids.pop(cat_id, None)
+            render_sections.refresh()
 
         def build_categories_section() -> tuple[ui.expansion, ui.column] | None:
             """Renders the collapsible product-centric categories section."""
-            if not category_tree_nodes:
-                return None
             expansion = (
-                ui.expansion(f"{t('form.categories')} ({len(current_ticked)})", value=False)
+                ui.expansion(f"{t('form.categories')} ({len(cat_state)})", value=False)
                 .classes("w-full")
                 .props("header-class=bg-blue-2 text-blue-9")
             )
             with expansion:
                 content = ui.column().classes("w-full gap-2 p-2")
             with expansion, content:
-                cat_tree = ui.tree(
-                    category_tree_nodes,
-                    on_tick=handle_category_tick,
-                    tick_strategy="strict",
-                ).classes("w-full")
-                cat_tree.tick(list(current_ticked))
-                ui.label(t("form.categories_hint")).classes("text-caption text-gray-500")
+                with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
+                    ui.label(t("form.categories_hint")).classes("grow text-caption text-gray-500")
+                    ui.button(
+                        t("form.categories_pick"),
+                        icon="account_tree",
+                        on_click=lambda: assign_categories(),
+                    ).props("flat")
+                if not cat_state:
+                    ui.label(t("form.categories_none")).classes("text-caption text-gray-500")
+                else:
+                    for hit in cat_state.values():
+                        with ui.row().classes("items-center gap-2 w-full"):
+                            ui.label(f"{hit.get('label')} · {hit.get('type')}").classes(
+                                "bg-neutral px-2 py-0.5 rounded text-xs"
+                            )
+                            ui.button(
+                                icon="close",
+                                on_click=lambda c=str(hit["id"]): unassign_category(c),
+                            ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
             return expansion, content
 
         # --- "Nur fehlende Pflichtfelder" toggle + attribute search + sections.
@@ -1186,6 +1187,10 @@ async def product_form(object_id: str) -> None:
             show_missing_only = bool(value)
             app.storage.user["form_show_missing"] = show_missing_only
             render_sections.refresh()
+
+        # Resolve the labels of the already assigned categories once (the chips in
+        # the categories section render from it).
+        await load_category_labels()
 
         # Attribute sections (left) + pinned-attributes sidebar (right, sticky so
         # the pinned fields stay visible while the form scrolls). The sidebar is
