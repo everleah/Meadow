@@ -117,6 +117,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 3. **Produkt-Formular (Drill-down)**
    - Eine scrollbare Seite mit einklappbaren Attributgruppen und Sprung-Menü
    - Hybrid-Sprache (Arbeitssprache + editierbare Spalten pro Sprache), Vererbungs-UX, typspezifische Wertedarstellung
+   - **(Umgesetzt:)** **Attribut-Suchleiste** (filtert die Zeilen nach Label/Name, öffnet Treffer, Trefferzähler) und **Pinned Attributes** (`push_pin` pro Zeile → sticky Seitenleiste mit editierbaren Feldern, pro Objekttyp × Benutzer persistiert)
 
 4. **Massendatenpflege**
    - Bulk-Edit-Wizard (definierter Operationssatz, Ausführung als Hintergrundjob + Report)
@@ -168,7 +169,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 **Spätere Ausbaustufen (nicht im MVP):**
 
 - Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections
-- Pinned Attributes und Attribut-Suchleiste im Formular
+- ~~Pinned Attributes und Attribut-Suchleiste im Formular~~ **(umgesetzt, Phase 9: `meadow/frontend/form.py` – Pin-Toggle je Zeile + sticky Seitenleiste, Suchfeld mit Trefferfilter)**
 - Find & Replace, sequenzielles Editieren, Send-for-approval bei Bulk-Änderungen
 - Kanalspezifische Freigaben (per-Kanal-Vollständigkeit)
 - Starred-Entitäten, Work Areas/Aufgabenwarteschlangen

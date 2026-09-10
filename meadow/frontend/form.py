@@ -39,6 +39,9 @@ from meadow.frontend.layout import build_shell
 #: actual transition via the workflow guard.
 _STATUS_OPTIONS = ("draft", "in_review", "published", "archived")
 
+#: Debounce (ms) for the attribute search field: one re-render per typing pause.
+_SEARCH_DEBOUNCE_MS = 300
+
 
 def _label(defn: dict | None, name: str, locale: str) -> str:
     """Resolves an attribute's display label (definition label or the name)."""
@@ -189,6 +192,35 @@ async def product_form(object_id: str) -> None:
             edited[key] = dict(value) if isinstance(value, dict) else value
         main_widgets: dict[str, ui.element] = {}
         ref_labels: dict[str, dict] = {}
+        # Pinned attributes (per object type, per user): the sticky sidebar keeps
+        # them visible while scrolling. `pin_buttons` holds the rendered toggles
+        # so a pin can restyle every occurrence without re-rendering the sections
+        # (which would collapse the current open/closed state).
+        pinned_by_type: dict = dict(app.storage.user.get("pinned_attributes") or {})
+        pinned: list[str] = list(pinned_by_type.get(object_type) or [])
+        pin_buttons: dict[str, list[ui.button]] = {}
+
+        def is_pinned(attr_name: str) -> bool:
+            return attr_name in pinned
+
+        def style_pin_button(button: ui.button, attr_name: str) -> None:
+            """Marks a pin toggle as active (filled/primary) or inactive."""
+            if is_pinned(attr_name):
+                button.props("color=primary", remove="flat")
+            else:
+                button.props("flat", remove="color")
+
+        def toggle_pin(attr_name: str) -> None:
+            """Pins/unpins an attribute and persists the set for this object type."""
+            if is_pinned(attr_name):
+                pinned.remove(attr_name)
+            else:
+                pinned.append(attr_name)
+            pinned_by_type[object_type] = list(pinned)
+            app.storage.user["pinned_attributes"] = pinned_by_type
+            for button in pin_buttons.get(attr_name, []):
+                style_pin_button(button, attr_name)
+            render_pinned.refresh()
 
         def set_value(attr_name: str, lang: str, value: object, *, multilingual: bool) -> None:
             """Updates the working copy for a single attribute + language."""
@@ -271,9 +303,19 @@ async def product_form(object_id: str) -> None:
             render_chip(existing)
 
         def build_value_widget(
-            attr_name: str, defn: dict | None, value: object, *, multilingual: bool
+            attr_name: str,
+            defn: dict | None,
+            value: object,
+            *,
+            multilingual: bool,
+            register_main: bool = True,
         ) -> None:
-            """Creates the inline value widget for the main-edit language."""
+            """Creates the inline value widget for the main-edit language.
+
+            ``register_main=False`` is used by the pinned sidebar: the sidebar
+            writes to the same working copy but must not own the inline widget
+            handle (`main_widgets`), which the language dialog updates.
+            """
             atype = (defn or {}).get("type", "text")
 
             def on_change(e) -> None:
@@ -302,7 +344,8 @@ async def product_form(object_id: str) -> None:
                     .on_value_change(on_change)
                 )
                 field.classes("flex-1")
-                main_widgets[attr_name] = field
+                if register_main:
+                    main_widgets[attr_name] = field
                 ui.button(icon="add").props("dense flat round").on_click(
                     lambda: ui.navigate.to("/enum-sets")
                 ).tooltip(t("form.manage_enum_sets"))
@@ -320,7 +363,8 @@ async def product_form(object_id: str) -> None:
                     .on_value_change(on_change)
                 )
             field.classes("flex-1")
-            main_widgets[attr_name] = field
+            if register_main:
+                main_widgets[attr_name] = field
 
         def render_section(
             title: str,
@@ -357,11 +401,14 @@ async def product_form(object_id: str) -> None:
                 with ui.row().classes("items-center gap-2 w-full py-1 text-caption text-gray-500"):
                     ui.label(t("form.column_attr")).classes("w-56 shrink-0")
                     ui.label(t("form.column_value")).classes("flex-1")
-                    ui.label("").classes("w-10 shrink-0")
+                    ui.label("").classes("w-20 shrink-0")
                 for attr_name, defn in items:
                     multilingual = bool(defn is None or (defn or {}).get("multilingual"))
                     label = _label(defn, attr_name, locale)
-                    own = _raw_value(raw_attributes, attr_name, edit_lang)
+                    # Display the working copy (own values + edits), not the raw
+                    # snapshot — otherwise a refresh (search/missing toggle) would
+                    # visually revert unstaged edits.
+                    own = _raw_value(edited, attr_name, edit_lang)
                     required = _is_required(defn, object_type)
                     with ui.row().classes("items-center gap-2 w-full py-1"):
                         # Label cell (+ required marker, inherited marker).
@@ -382,11 +429,21 @@ async def product_form(object_id: str) -> None:
                         if value is None:
                             value = _raw_value(resolved_attributes, attr_name, edit_lang)
                         build_value_widget(attr_name, defn, value, multilingual=multilingual)
-                        # Language cell (icon only) opens the language editor.
-                        if multilingual:
-                            ui.button(icon="translate").props("dense flat round").on_click(
-                                lambda n=attr_name, d=defn: open_lang_dialog(n, d)
-                            ).tooltip(t("form.languages_edit"))
+                        # Action cell: language editor (multilingual only) + pin
+                        # toggle (pinned attributes appear in the sidebar).
+                        with ui.row().classes("items-center gap-1 shrink-0 w-20 justify-end"):
+                            if multilingual:
+                                ui.button(icon="translate").props("dense flat round").on_click(
+                                    lambda n=attr_name, d=defn: open_lang_dialog(n, d)
+                                ).tooltip(t("form.languages_edit"))
+                            pin_button = (
+                                ui.button(icon="push_pin")
+                                .props("dense flat round")
+                                .on_click(lambda n=attr_name: toggle_pin(n))
+                                .tooltip(t("form.pin"))
+                            )
+                            style_pin_button(pin_button, attr_name)
+                            pin_buttons.setdefault(attr_name, []).append(pin_button)
             return expansion, content
 
         # --- Language dialog: edit one attribute across all data languages. --
@@ -429,10 +486,12 @@ async def product_form(object_id: str) -> None:
                     _coerce(atype, field.value),
                     multilingual=multilingual,
                 )
-            # Reflect the change in the inline main-edit-language widget.
+            # Reflect the change in the inline main-edit-language widget and in
+            # the pinned sidebar (the attribute may be rendered in both).
             widget = main_widgets.get(attr_name)
             if widget is not None:
                 widget.value = _raw_value(edited, attr_name, edit_lang)
+            render_pinned.refresh()
             dialog.close()
 
         # --- Relations (graph edges) helpers. --------------------------------
@@ -815,6 +874,17 @@ async def product_form(object_id: str) -> None:
             ),
         )
 
+        # Catalog of the pin-able attributes in display order (the sidebar renders
+        # the pinned names from here, so it stays in sync with the sections).
+        pin_catalog: dict[str, dict | None] = {}
+        for name_, defn in summary_items:
+            pin_catalog[name_] = defn
+        for name_, defn in ungrouped_items:
+            pin_catalog[name_] = defn
+        for _, items in ordered_groups:
+            for name_, defn in items:
+                pin_catalog[name_] = defn
+
         # Resolve existing reference-attribute values to a display label.
         for d in defs:
             if d.get("type") == "reference":
@@ -951,12 +1021,21 @@ async def product_form(object_id: str) -> None:
                 ui.label(t("form.categories_hint")).classes("text-caption text-gray-500")
             return expansion, content
 
-        # --- "Nur fehlende Pflichtfelder" toggle + attribute sections. ------
+        # --- "Nur fehlende Pflichtfelder" toggle + attribute search + sections.
         show_missing_only = bool(app.storage.user.get("form_show_missing", False))
+        attribute_search = {"term": ""}
+
+        def on_attribute_search(value: str | None) -> None:
+            attribute_search["term"] = (value or "").strip()
+            render_sections.refresh()
 
         @ui.refreshable
         def render_sections() -> None:
             jump_refs: list[tuple[str, ui.expansion, ui.column]] = []
+            # Widget registries are rebuilt below — stale handles of removed
+            # elements (sections, pin toggles) must not be updated later.
+            pin_buttons.clear()
+            main_widgets.clear()
 
             def go_to(label: str) -> None:
                 for lab, exp, content in jump_refs:
@@ -965,8 +1044,17 @@ async def product_form(object_id: str) -> None:
                         content.run_method("scrollIntoView")
                         break
 
-            # "Jump to" selector (left) + "Only missing required fields" switch (right).
+            # Attribute search (left) + "jump to" selector + "only missing" switch.
             with ui.row().classes("items-center gap-2 w-full mt-4"):
+                search = (
+                    ui.input(
+                        placeholder=t("form.search_attributes"),
+                        value=attribute_search["term"],
+                    )
+                    .props(f"outline dense clearable debounce={_SEARCH_DEBOUNCE_MS}")
+                    .classes("w-72")
+                )
+                search.on_value_change(lambda e: on_attribute_search(e.value))
                 jump = (
                     ui.select([], label=t("form.jump"), on_change=lambda e: go_to(str(e.value)))
                     .props("filled dense")
@@ -979,35 +1067,65 @@ async def product_form(object_id: str) -> None:
                 ).props("dense")
                 ui.label(t("form.only_missing")).classes("text-caption")
 
+            # Attribute search: filter the rows by (localized) label or name; the
+            # matching sections open so every hit is visible right away.
+            term = attribute_search["term"].lower()
+
+            def matches(attr_name: str, defn: dict | None) -> bool:
+                if not term:
+                    return True
+                return term in attr_name.lower() or term in _label(defn, attr_name, locale).lower()
+
+            def select(items: list[tuple[str, dict | None]]) -> list[tuple[str, dict | None]]:
+                return [item for item in items if matches(*item)]
+
+            summary_view = select(summary_items) if term else summary_items
+            ungrouped_view = select(ungrouped_items)
+            groups_view = [(gid, select(items)) for gid, items in ordered_groups]
+            hits = (
+                len(summary_view)
+                + len(ungrouped_view)
+                + sum(len(items) for _, items in groups_view)
+            )
+
             with ui.column().classes("w-full gap-2 mt-2"):
+                if term:
+                    ui.label(
+                        t("form.search_hits").format(count=hits)
+                        if hits
+                        else t("form.search_no_hits")
+                    ).classes("text-caption text-gray-500")
                 if show_missing_only and not missing:
                     ui.label(t("form.no_missing")).classes("text-caption text-gray-500")
                 else:
-                    result = render_section(
-                        t("form.summary"),
-                        summary_items,
-                        open_=True,
-                        id_label=object_id,
-                        show_missing_only=show_missing_only,
-                    )
-                    if result is not None:
-                        jump_refs.append((t("form.summary"), *result))
-                    if ungrouped_items:
+                    if summary_view or not term:
+                        result = render_section(
+                            t("form.summary"),
+                            summary_view,
+                            open_=True,
+                            id_label=object_id,
+                            show_missing_only=show_missing_only,
+                        )
+                        if result is not None:
+                            jump_refs.append((t("form.summary"), *result))
+                    if ungrouped_view:
                         result = render_section(
                             t("form.ungrouped"),
-                            ungrouped_items,
-                            open_=False,
+                            ungrouped_view,
+                            open_=bool(term),
                             show_missing_only=show_missing_only,
                         )
                         if result is not None:
                             jump_refs.append((t("form.ungrouped"), *result))
-                    for gid, items in ordered_groups:
+                    for gid, items in groups_view:
+                        if not items:
+                            continue
                         group = group_by_id.get(gid)
                         title = _label(group, gid, locale) if group else t("form.general")
                         result = render_section(
                             title,
                             items,
-                            open_=False,
+                            open_=bool(term),
                             show_missing_only=show_missing_only,
                         )
                         if result is not None:
@@ -1033,13 +1151,70 @@ async def product_form(object_id: str) -> None:
                 all_references = []
             render_sections.refresh()
 
+        @ui.refreshable
+        def render_pinned() -> None:
+            """Sticky sidebar with the attributes pinned for this object type."""
+            with ui.card().classes("w-full p-3 gap-2"):
+                with ui.row().classes("items-center gap-2 w-full"):
+                    ui.icon("push_pin").classes("text-primary")
+                    ui.label(t("form.pinned")).classes("text-subtitle2")
+                visible = [name for name in pinned if name in pin_catalog]
+                if not visible:
+                    ui.label(t("form.pinned_empty")).classes("text-caption text-gray-500")
+                    return
+                for attr_name in visible:
+                    defn = pin_catalog[attr_name]
+                    multilingual = bool(defn is None or defn.get("multilingual"))
+                    with ui.column().classes("w-full gap-1 border-t pt-1"):
+                        with ui.row().classes("items-center gap-1 w-full"):
+                            ui.label(_label(defn, attr_name, locale)).classes("text-caption")
+                            if _is_required(defn, object_type):
+                                ui.label("*").classes("text-caption text-negative").tooltip(
+                                    t("form.required")
+                                )
+                            ui.space()
+                            if multilingual:
+                                ui.button(icon="translate").props(
+                                    "dense flat round size=sm"
+                                ).on_click(
+                                    lambda n=attr_name, d=defn: open_lang_dialog(n, d)
+                                ).tooltip(t("form.languages_edit"))
+                            ui.button(icon="push_pin").props(
+                                "dense flat round size=sm color=primary"
+                            ).on_click(lambda n=attr_name: toggle_pin(n)).tooltip(t("form.unpin"))
+                        value = _raw_value(edited, attr_name, edit_lang)
+                        if value is None:
+                            value = _raw_value(resolved_attributes, attr_name, edit_lang)
+                        build_value_widget(
+                            attr_name,
+                            defn,
+                            value,
+                            multilingual=multilingual,
+                            register_main=False,
+                        )
+
         def on_missing_toggle(value: bool) -> None:
             nonlocal show_missing_only
             show_missing_only = bool(value)
             app.storage.user["form_show_missing"] = show_missing_only
             render_sections.refresh()
 
-        render_sections()
+        # Attribute sections (left) + pinned-attributes sidebar (right, sticky so
+        # the pinned fields stay visible while the form scrolls). The sidebar is
+        # built first so the sections own the inline widgets (`main_widgets`) for
+        # the language dialog.
+        with ui.row().classes("w-full items-start gap-4").style("flex-wrap: nowrap"):
+            sections_column = ui.column().classes("grow min-w-0")
+            with (
+                ui.column()
+                .classes("w-80 shrink-0")
+                .style(
+                    "position: sticky; top: 0.5rem; max-height: calc(100vh - 5rem); overflow-y: auto"
+                )
+            ):
+                render_pinned()
+            with sections_column:
+                render_sections()
 
         # --- Status selector. -------------------------------------------------
         with ui.row().classes("items-center gap-2 w-full mt-4"):
