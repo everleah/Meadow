@@ -3,8 +3,9 @@
 The grid lists objects with human-friendly display (resolved name, status
 badge), supports inline editing / batch save, offers a column picker and
 personal views, and shows a composition (structure) tree that filters the
-grid to the selected subtree. Category & structure navigation with the
-Kategorien toggle and the completeness column follow in later steps.
+grid to the selected subtree. It also offers the category/collection views,
+the completeness column with its server-side filter bar, and one hidden
+per-language column for every multilingual attribute (Sprach-Spalten).
 """
 
 from __future__ import annotations
@@ -30,6 +31,37 @@ from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, re
 SEARCH_LIMIT = 100
 # Debounce (ms) for the filter bar's search field: one core request per pause.
 SEARCH_DEBOUNCE_MS = 400
+# Separator between a field prefix and the language code in field names of
+# per-language columns (e.g. ``attr_title__de`` for the German `title` value).
+LANG_SEPARATOR = "__"
+# Field prefix of the per-language columns of the convention `name` attribute.
+NAME_FIELD_PREFIX = "_name"
+
+
+def language_field(prefix: str, language: str) -> str:
+    """Returns the field name of a per-language column (`<prefix>__<lang>`)."""
+    return f"{prefix}{LANG_SEPARATOR}{language}"
+
+
+def _language_column(header_name: str, field: str) -> dict:
+    """Builds one hidden per-language column def."""
+    return {"headerName": header_name, "field": field, "width": 140, "hide": True}
+
+
+def _language_value(value: object, language: str, resolver: dict[str, str] | None) -> str:
+    """Resolves an attribute value for exactly one language.
+
+    Deliberately **without** the language-fallback of the working-language
+    column: a language column exists to show whether that language is actually
+    maintained, so an unset value stays empty instead of borrowing another
+    language's value.
+    """
+    if not isinstance(value, dict):
+        return ""
+    raw = value.get(language)
+    if raw is None:
+        return ""
+    return resolver.get(str(raw), str(raw)) if resolver is not None else str(raw)
 
 
 def _display_value(
@@ -83,21 +115,113 @@ def row_data(
     return row
 
 
-def attribute_columns(definitions: list[dict], locale: str) -> list[dict]:
-    """Builds hidden AG Grid column defs for attribute definitions.
+def attribute_column_specs(
+    definitions: list[dict], locale: str, languages: list[str] | None = None
+) -> tuple[list[dict], dict[str, str]]:
+    """Builds hidden AG Grid columns for attribute definitions.
 
     The header uses the definition's (multilingual) label, falling back to the
-    attribute name. Attribute columns are hidden by default so the grid stays
-    clean until the user enables them via the column picker.
+    attribute name. Columns are hidden by default so the grid stays clean until
+    the user enables them via the column picker. For a **multilingual**
+    attribute one extra column per language in ``languages`` is added (header
+    `<label> · <LANG>`, field `attr_<name>__<lang>`).
+
+    Returns ``(columns, language_fields)``, where ``language_fields`` maps a
+    per-language field back to its attribute name (used by the export).
     """
-    columns = []
+    columns: list[dict] = []
+    language_fields: dict[str, str] = {}
     for definition in definitions:
         name = str(definition.get("name", ""))
         if not name:
             continue
         label = resolve_value(definition.get("label"), locale) or name
         columns.append({"headerName": label, "field": f"attr_{name}", "width": 140, "hide": True})
-    return columns
+        if not definition.get("multilingual"):
+            continue
+        for language in languages or []:
+            field = language_field(f"attr_{name}", language)
+            columns.append(_language_column(f"{label} · {language.upper()}", field))
+            language_fields[field] = name
+    return columns, language_fields
+
+
+def name_language_columns(
+    name_label: str, languages: list[str] | None = None
+) -> tuple[list[dict], dict[str, str]]:
+    """Builds the hidden per-language columns of the convention `name`.
+
+    The object's display name is multilingual by convention and is **not** an
+    attribute definition, so its language columns are built separately. Returns
+    ``(columns, language_fields)`` with ``language_fields`` mapping a field back
+    to the `name` attribute (used by the export).
+    """
+    columns: list[dict] = []
+    language_fields: dict[str, str] = {}
+    for language in languages or []:
+        field = language_field(NAME_FIELD_PREFIX, language)
+        columns.append(_language_column(f"{name_label} · {language.upper()}", field))
+        language_fields[field] = "name"
+    return columns, language_fields
+
+
+def attribute_columns(
+    definitions: list[dict], locale: str, languages: list[str] | None = None
+) -> list[dict]:
+    """Builds the hidden AG Grid columns for the given attribute definitions."""
+    return attribute_column_specs(definitions, locale, languages)[0]
+
+
+def language_cells(
+    object_: dict,
+    languages: list[str] | None,
+    language_prefixes: dict[str, str] | None,
+    enum_resolvers: dict[str, dict[str, dict[str, str]]] | None = None,
+) -> dict:
+    """Builds the per-language cells (`<prefix>__<lang>`) of a grid row.
+
+    ``language_prefixes`` maps an attribute name to the field prefix of its
+    language columns (`name` → `_name`, every other attribute → `attr_<name>`).
+    """
+    attributes = object_.get("attributes") or {}
+    cells: dict = {}
+    for name in sorted(language_prefixes or {}):
+        value = attributes.get(name)
+        for language in languages or []:
+            resolver = (enum_resolvers or {}).get(language, {}).get(name)
+            field = language_field(language_prefixes[name], language)
+            cells[field] = _language_value(value, language, resolver)
+    return cells
+
+
+#: Grid field → export field name for the base columns.
+_EXPORT_BASE_FIELDS = {"_id": "id", "_type": "type", "_status": "status", "_name": "name"}
+
+
+def export_fields(
+    column_defs: list[dict],
+    visible_fields: set[str],
+    language_fields: dict[str, str] | None = None,
+) -> list[str]:
+    """Maps the visible grid columns to the field names of an export.
+
+    Per-language columns (`attr_<name>__<lang>`) map to their attribute name —
+    the export expands multilingual attributes per requested locale — and the
+    result is deduplicated, because a working-language column and its language
+    columns denote the same attribute. Falls back to the base fields.
+    """
+    fields: list[str] = []
+    for column in column_defs:
+        field = str(column.get("field") or "")
+        if field not in visible_fields:
+            continue
+        if field in _EXPORT_BASE_FIELDS:
+            fields.append(_EXPORT_BASE_FIELDS[field])
+        elif (language_fields or {}).get(field):
+            fields.append(language_fields[field])
+        elif field.startswith("attr_"):
+            fields.append(field[len("attr_") :])
+    return list(dict.fromkeys(fields)) or ["id", "type", "status"]
 
 
 def collect_subtree(node_id: str, children_by_id: dict[str, list[str]]) -> list[str]:
@@ -334,8 +458,37 @@ async def products_page(request: Request) -> None:
             str(definition.get("name")) for definition in definitions if definition.get("name")
         ]
 
+        # Per-language columns (Sprach-Spalten): the working-language column
+        # (`attr_<name>`) is joined by one hidden column per active data language
+        # for every multilingual attribute. Only `active` languages are offered,
+        # mirroring the product form.
+        active_languages: list[str] = []
+        try:
+            languages = await client.list_languages(token)
+            active_languages = [
+                str(lang.get("code"))
+                for lang in languages
+                if lang.get("code") not in (None, "root", locale) and lang.get("active", True)
+            ]
+        except Exception:  # noqa: BLE001 - degrade to a single-language grid
+            active_languages = []
+        multilingual_names = {
+            str(definition.get("name"))
+            for definition in definitions
+            if definition.get("name") and definition.get("multilingual")
+        }
+        # Field prefix of the language columns per attribute (`name` is the
+        # convention label attribute, all others are `attr_<name>` columns).
+        language_prefixes = {
+            "name": NAME_FIELD_PREFIX,
+            **{name: f"attr_{name}" for name in multilingual_names},
+        }
+
         # Resolve enum attribute values to localized labels via their enum sets.
+        # Enum option labels are multilingual themselves, so every language
+        # column resolves the stored code with its own locale.
         enum_resolvers: dict[str, dict[str, str]] = {}
+        enum_resolvers_by_language: dict[str, dict[str, dict[str, str]]] = {}
         enum_defs = [d for d in definitions if d.get("type") == "enum"]
         if enum_defs:
             try:
@@ -344,25 +497,40 @@ async def products_page(request: Request) -> None:
                 enum_sets = []
             from meadow.frontend.enums import enum_code_label_map
 
-            for defn in enum_defs:
-                name = str(defn.get("name"))
-                mapping = enum_code_label_map(enum_sets, defn, locale)
-                if mapping:
-                    enum_resolvers[name] = mapping
+            def resolvers_for(enum_locale: str) -> dict[str, dict[str, str]]:
+                """Builds the `{attribute: {code: label}}` map for one locale."""
+                return {
+                    str(defn.get("name")): mapping
+                    for defn in enum_defs
+                    if (mapping := enum_code_label_map(enum_sets, defn, enum_locale))
+                }
+
+            enum_resolvers = resolvers_for(locale)
+            enum_resolvers_by_language = {
+                language: resolvers_for(language) for language in active_languages
+            }
 
         # Column order is fixed: the reference/action column (`_refs`, the link
         # icon that opens the reference picker) is always the **last** column, so
-        # attribute columns are appended *before* it (pinned right so it stays
-        # visible however far the grid is scrolled).
+        # attribute columns (incl. the per-language ones) are appended *before*
+        # it (pinned right so it stays visible however far the grid is scrolled).
+        name_column_defs, name_language_fields = name_language_columns(
+            t("grid.name"), active_languages
+        )
+        attribute_column_defs, attribute_language_fields = attribute_column_specs(
+            definitions, locale, active_languages
+        )
+        language_fields = {**name_language_fields, **attribute_language_fields}
         column_defs = (
             [
                 {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
                 {"headerName": t("grid.name"), "field": "_name", "editable": True},
+                *name_column_defs,
                 {"headerName": t("grid.type"), "field": "_type", "width": 120},
                 {"headerName": t("grid.status"), "field": "_status", "width": 140},
                 {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
             ]
-            + attribute_columns(definitions, locale)
+            + attribute_column_defs
             + [
                 {"headerName": "", "field": "_refs", "width": 60, "pinned": "right"},
             ]
@@ -382,9 +550,20 @@ async def products_page(request: Request) -> None:
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
 
-        all_rows = [
-            row_data(object_, locale, attribute_names, enum_resolvers) for object_ in objects
-        ]
+        def make_rows(selected_objects: list[dict]) -> list[dict]:
+            """Builds the grid rows, incl. the per-language cells (Sprach-Spalten)."""
+            return [
+                row_data(object_, locale, attribute_names, enum_resolvers)
+                | language_cells(
+                    object_,
+                    active_languages,
+                    language_prefixes,
+                    enum_resolvers_by_language,
+                )
+                for object_ in selected_objects
+            ]
+
+        all_rows = make_rows(objects)
 
         def sync_url_query() -> None:
             """Keeps the URL in sync with the active filters (bookmarkable)."""
@@ -411,9 +590,7 @@ async def products_page(request: Request) -> None:
         async def apply_rows(selected_objects: list[dict]) -> None:
             nonlocal original_by_id, all_rows
             original_by_id = {str(o.get("id")): o for o in selected_objects}
-            all_rows = [
-                row_data(o, locale, attribute_names, enum_resolvers) for o in selected_objects
-            ]
+            all_rows = make_rows(selected_objects)
             grid.run_grid_method("setGridOption", "rowData", all_rows)
             selection_hint.set_visibility(len(selected_objects) == 0 and not has_filter())
             no_objects_label.set_visibility(len(selected_objects) == 0 and has_filter())
@@ -1150,22 +1327,7 @@ async def products_page(request: Request) -> None:
         # --- Export (selection / current filter) ---------------------------
         def _export_fields() -> list[str]:
             """Maps the currently visible grid columns to export field names."""
-            fields: list[str] = []
-            for column in column_defs:
-                field = str(column.get("field") or "")
-                if field not in visible_fields:
-                    continue
-                if field == "_id":
-                    fields.append("id")
-                elif field == "_type":
-                    fields.append("type")
-                elif field == "_status":
-                    fields.append("status")
-                elif field == "_name":
-                    fields.append("name")
-                elif field.startswith("attr_"):
-                    fields.append(field[len("attr_") :])
-            return fields or ["id", "type", "status"]
+            return export_fields(column_defs, visible_fields, language_fields)
 
         export_dialog = ui.dialog()
         with export_dialog, ui.card().classes("w-[32rem] max-w-[92vw]"):

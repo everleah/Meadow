@@ -6,12 +6,17 @@ import importlib
 
 from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.grid import (
+    attribute_column_specs,
     attribute_columns,
     build_patch,
     collect_subtree,
     completeness_badge,
     enrich_tree_nodes,
+    export_fields,
     filter_tree_nodes,
+    language_cells,
+    language_field,
+    name_language_columns,
     resolve_value,
     row_data,
     status_badge,
@@ -191,6 +196,87 @@ def test_row_data_with_attribute_names() -> None:
         ["price"],
     )
     assert row["attr_price"] == "9.5"
+
+
+def test_attribute_columns_adds_language_columns_for_multilingual_attributes() -> None:
+    definitions = [
+        {"name": "name", "label": {"de": "Name"}, "multilingual": True},
+        {"name": "sku", "label": {}, "multilingual": False},
+    ]
+    columns, language_fields = attribute_column_specs(definitions, "de", ["en", "fr"])
+    assert [c["field"] for c in columns] == [
+        "attr_name",
+        "attr_name__en",
+        "attr_name__fr",
+        "attr_sku",
+    ]
+    assert columns[1]["headerName"] == "Name · EN"
+    assert all(c["hide"] for c in columns)
+    assert language_fields == {"attr_name__en": "name", "attr_name__fr": "name"}
+    # A non-multilingual attribute never gets language columns.
+    assert attribute_columns(definitions, "de")[1]["field"] == "attr_sku"
+
+
+def test_language_field() -> None:
+    assert language_field("attr_name", "de-AT") == "attr_name__de-AT"
+    assert language_field("_name", "de") == "_name__de"
+
+
+def test_name_language_columns() -> None:
+    columns, language_fields = name_language_columns("Name", ["de"])
+    assert columns == [
+        {"headerName": "Name · DE", "field": "_name__de", "width": 140, "hide": True}
+    ]
+    assert language_fields == {"_name__de": "name"}
+    assert name_language_columns("Name", []) == ([], {})
+
+
+def test_language_cells_use_the_stored_value_without_fallback() -> None:
+    cells = language_cells(
+        {"attributes": {"name": {"de": "Maus", "en": "Mouse"}}},
+        ["en", "fr"],
+        {"name": "_name"},
+    )
+    assert cells == {"_name__en": "Mouse", "_name__fr": ""}
+
+
+def test_language_cells_resolve_enum_labels_per_language() -> None:
+    cells = language_cells(
+        {"attributes": {"color": {"de": "red", "en": "red"}}},
+        ["en"],
+        {"color": "attr_color"},
+        {"en": {"color": {"red": "Red"}}},
+    )
+    assert cells["attr_color__en"] == "Red"
+
+
+def test_language_cells_ignore_missing_attributes() -> None:
+    cells = language_cells({"attributes": {}}, ["en"], {"name": "_name"})
+    assert cells == {"_name__en": ""}
+
+
+def test_export_fields_maps_and_deduplicates_language_columns() -> None:
+    columns = [
+        {"field": "_id"},
+        {"field": "_name"},
+        {"field": "_completeness"},
+        {"field": "attr_name"},
+        {"field": "attr_name__en"},
+        {"field": "attr_price"},
+        {"field": "_refs"},
+    ]
+    fields = export_fields(
+        columns,
+        {"_id", "_name", "attr_name", "attr_name__en", "attr_price"},
+        {"attr_name__en": "name"},
+    )
+    # `_name`, `attr_name` and `attr_name__en` all denote the `name` attribute
+    # -> exported once.
+    assert fields == ["id", "name", "price"]
+
+
+def test_export_fields_falls_back_to_base_fields() -> None:
+    assert export_fields([{"field": "attr_price"}], set()) == ["id", "type", "status"]
 
 
 def test_collect_subtree() -> None:
