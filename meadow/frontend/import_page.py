@@ -17,7 +17,7 @@ from meadow import tabular
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
-from meadow.frontend.i18n import t
+from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 
 #: Import job types whose runs we poll (the `inbound_import` worker result).
@@ -91,17 +91,41 @@ async def import_page() -> None:
     multilingual = {str(d.get("name")) for d in definitions if d.get("multilingual")}
 
     type_options = {str(o.get("name")): str(o.get("name")) for o in object_types}
+
+    # Convention attributes: object types name a label attribute (and key attributes)
+    # that need not exist as an attribute definition — e.g. `name`, which the grid and
+    # the exports use as the display name. Offer them as mapping targets explicitly so
+    # a grid export (`id,type,name,…`) can be re-imported without manual typing.
+    conventional_names: list[str] = []
+    for object_type in object_types:
+        candidates = [
+            object_type.get("label_attribute"),
+            *(object_type.get("key_attributes") or []),
+        ]
+        for candidate in candidates:
+            candidate_name = str(candidate or "")
+            if candidate_name in ("", *conventional_names, *attribute_names):
+                continue
+            conventional_names.append(candidate_name)
+
     target_options: dict[str, str] = {
         "": t("import.ignore"),
         "id": "id",
         "type": "type",
         "status": "status",
     }
-    for name in attribute_names:
-        target_options[name] = name
-        if name in multilingual:
+    for name in [*attribute_names, *conventional_names]:
+        target_options[name] = (
+            f"{name} ({t('import.current_language')})" if name in conventional_names else name
+        )
+        if name in multilingual or name in conventional_names:
             for lang in data_languages:
                 target_options[f"{name}{tabular.LOCALE_SEPARATOR}{lang}"] = f"{name} [{lang}]"
+
+    key_names = [*attribute_names, *conventional_names]
+    # Convention attributes are multilingual by convention (e.g. `name` is stored as
+    # `{lang: value}`); a target without an explicit locale is written in the UI language.
+    main_lang = current_locale().split("-")[0] or "de"
 
     state: dict = {
         "table": tabular.TableData(),
@@ -214,7 +238,7 @@ async def import_page() -> None:
                 )
                 key_select = (
                     ui.select(
-                        {"": t("import.key_none"), **{n: n for n in attribute_names}},
+                        {"": t("import.key_none"), **{name: name for name in key_names}},
                         value="",
                         label=t("import.key_attribute"),
                         new_value_mode="add-unique",
@@ -235,7 +259,11 @@ async def import_page() -> None:
         preview_box = ui.column().classes("w-full mt-4")
 
         def _current_mapping() -> dict[str, str]:
-            return {column: str(select.value or "") for column, select in column_selects.items()}
+            mapping = {column: str(select.value or "") for column, select in column_selects.items()}
+            for column, target in mapping.items():
+                if target in conventional_names:
+                    mapping[column] = f"{target}{tabular.LOCALE_SEPARATOR}{main_lang}"
+            return mapping
 
         def _build_document() -> dict:
             default_type = str(default_type_select.value or "") or next(

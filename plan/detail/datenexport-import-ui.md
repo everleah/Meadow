@@ -125,7 +125,9 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
   - **Mapping-Zielsyntax:** `""` = Spalte ignorieren, `id`/`type`/`status` = MEF-Basisfelder, `<attribut>` = Attributwert, `<attribut>|<lang>` = mehrsprachiger Wert (`{lang: wert}`, z. B. `title|de`).
   - **MEF-Bau:** `build_mef(table, mapping, default_type=…, source=…)` erzeugt `{format_version, source, created_at, objects, references}`; leere `type`/`status`-Zellen fallen auf den Default-Typ bzw. `draft` zurück.
   - **Import:** `POST /imports` (`match_by_key`, `source`, `emit_events`) → `inbound_import`-Job; Upsert per Business-Schlüssel bzw. Source-Referenz, damit wiederholte Importe **idempotent** sind.
+  - **Konventions-Attribute:** Die Objekttypen benennen ein `label_attribute` (hier überall `name`) und optionale `key_attributes`, für die **keine Attributdefinition** existiert — der Grid-Export schreibt `name` aber mit. Damit ein Export→Import-Roundtrip ohne Handarbeit funktioniert, werden diese Namen als Mapping-Ziele angeboten (ohne Sprache: `name (aktuelle Sprache)`) und **in der aktuellen UI-Sprache** als `{sprache: wert}` geschrieben (entspricht der Ablage-Konvention des Bestands, vgl. Kategorien).
 - **UI:** Seite **`/import`** (`editor+`) — Upload, Parse-Status, Arbeitsblatt-Auswahl (nur bei mehrblättrigen Arbeitsmappen), Spalten-Mapping (Auto-Mapping bei Namensgleichheit, Freitext-Attribute möglich), Default-Objekttyp, Business-Schlüssel, Quelle, `emit_events`-Schalter, **Vorschau** (Dry-Run ohne Persistenz) und **Import** mit Report (`processed/created/updated/failed`).
+- **Roundtrip-Hinweis:** Das MEF-`id` ist eine **Source-Referenz**, nicht die Core-Objekt-ID. Ein Export→Import ohne Business-Schlüssel legt daher **neue** Objekte an (Source-Ref = exportierte `id`); für ein Update muss derselbe **Business-Schlüssel** wie im Export gesetzt werden (z. B. `sku`).
 - **Collection-Bulk-Add:** neuer Endpunkt `POST /collections/{id}/members` (`editor+`, JWT) mit `{ "object_ids": ["…"] }` — legt `collection_member`-Relationen an (`attributes.rank` aufsteigend, `added_at`); **idempotent** (bereits vorhandene Mitglieder überspringen), Antwort `{ added, skipped }`.
 
 ## 6. Frontend (NiceGUI)
@@ -170,7 +172,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - CSV/XLSX: Header-Zeile, Trenner, leere Werte, quantifizierte Werte in Anzeigeeinheit.
 - Mehrsprachig: `title_de`/`title_en` Spalten mit Fallback.
 - CSV-Roundtrip (Export → Import) idempotent (Upsert per Business-Schlüssel).
-- **Tabellarischer Import:** CSV und XLSX mit Auto-Mapping; Mehrblatt-XLSX (Arbeitsblatt-Wechsel, leeres Blatt → Hinweis); mehrsprachiges Ziel `attribut|<lang>` schreibt `{lang: wert}`; leere `type`/`status`-Zellen → Default-Typ/`draft`; Wiederholungsimport aktualisiert statt zu duplizieren (`created: 0`, `updated: N`).
+- **Tabellarischer Import:** CSV und XLSX mit Auto-Mapping; Mehrblatt-XLSX (Arbeitsblatt-Wechsel, leeres Blatt → Hinweis); mehrsprachiges Ziel `attribut|<lang>` schreibt `{lang: wert}`; **Roundtrip Grid-Export → Import** inkl. der Konventions-Spalte `name` (schreibt `{sprache: wert}` in der UI-Sprache); leere `type`/`status`-Zellen → Default-Typ/`draft`; Wiederholungsimport aktualisiert statt zu duplizieren (`created: 0`, `updated: N`).
 - Große Menge → Job mit Report (`job_run.result`).
 - Collection-Bulk-Add überspringt vorhandene Mitglieder (idempotent).
 - `viewer` → 403; unbekanntes Format/Quelle → 400; `POST /exports` mit leerer Quelle → 400.
