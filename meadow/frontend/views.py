@@ -15,6 +15,7 @@ from meadow.frontend import (
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
+    import_page,  # noqa: F401  (registers the /import page)
     jobs,  # noqa: F401  (registers the /jobs page)
     languages,  # noqa: F401  (registers the /languages page)
     logs,  # noqa: F401  (registers the /system-logs page)
@@ -52,6 +53,7 @@ _IMPLEMENTED_ROUTES = {
     "/enum-sets",
     "/config",
     "/export",
+    "/import",
 }
 
 

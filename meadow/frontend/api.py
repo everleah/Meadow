@@ -2272,6 +2272,38 @@ class CoreClient:
                 filename = disposition.split("filename=")[-1].rstrip('"').split('"')[0]
             return response.content, filename
 
+    async def create_import_mef(
+        self,
+        token: str,
+        document: dict,
+        *,
+        match_by_key: str | None = None,
+        source: str | None = None,
+        emit_events: bool = True,
+    ) -> dict:
+        """Submits a MEF document (``POST /imports``, editor+) and queues an import.
+
+        Returns ``{"job_run_id": ...}``; the ``inbound_import`` worker upserts the
+        objects (by business key or source reference).
+        """
+        params: dict[str, str] = {}
+        if match_by_key:
+            params["match_by_key"] = match_by_key
+        if source:
+            params["source"] = source
+        if not emit_events:
+            params["emit_events"] = "false"
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/imports",
+                params=params,
+                json=document,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def create_object_type(
         self,
         token: str,

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zum bestehenden MEF-Export/Import (Phase 6)
-- **Stand:** Umsetzungsreif — Core-API & Worker-Export (CSV/XLSX/JSON, Locale-Auflösung) implementiert & E2E-verifiziert; `/export`-Wizard (`editor+`) implementiert & im Browser verifiziert (Vorschau + Export + Download). **Collection-Bulk-Add** (`POST /collections/{id}/members`, idempotent) implementiert & verifiziert; die Collections-Seite bietet einen **„Add members"-Dialog** und einen **„Export"-Button** (führt mit vorausgewählter Collection (`?collection=<id>`) in den Wizard). **Grid-Auswahl-/Filter-Export** im `/products`-Grid implementiert & verifiziert (Toolbar-Download-Button → Dialog mit Scope „Selected rows" / „All filter matches" + Format; nutzt die sichtbaren Grid-Spalten als Felder über die `selection`-Quelle). **Geplante Exporte** implementiert & E2E-verifiziert: ein Export wird als `job_definition` (`type = outbound_export`, Cron im 6-Feld-Format) gespeichert und vom bestehenden Scheduler periodisch als `outbound_export`-Job ausgeführt; im `/export`-Wizard (Admin) über „Schedule…" anlegbar, mit Liste (Run-now/Aktiv/Löschen) und **„Recent exports"**-Liste (Download pro Lauf, Ablage im `job_run.result`). **E-Mail-Versand** implementiert & E2E-verifiziert: `options.email_to` → der Worker versendet den Export als Anhang (`meadow/worker/mail.py`, SMTP per Env; Dev-Catcher `mailhog` in `docker-compose.dev.yml`, SMTP 1025 / UI 8025). **Objektstorage-Ablage** implementiert & E2E-verifiziert: bei konfiguriertem S3/MinIO archiviert der Worker die Datei (`result.archive` mit `{bucket, key, size, url}`, Presigned-URL) und entfernt ab `EXPORT_INLINE_MAX_BYTES` (Standard 1 MB) die Inline-Daten; `GET /exports/{run_id}/file` leitet dann per **302** auf die Presigned-URL um (`inline_present`), sonst wird wie zuvor inline serialisiert. Ausstehend: CSV-Import mit Spalten-Mapping.
+- **Stand:** Umsetzungsreif — Core-API & Worker-Export (CSV/XLSX/JSON, Locale-Auflösung) implementiert & E2E-verifiziert; `/export`-Wizard (`editor+`) implementiert & im Browser verifiziert (Vorschau + Export + Download). **Collection-Bulk-Add** (`POST /collections/{id}/members`, idempotent) implementiert & verifiziert; die Collections-Seite bietet einen **„Add members"-Dialog** und einen **„Export"-Button** (führt mit vorausgewählter Collection (`?collection=<id>`) in den Wizard). **Grid-Auswahl-/Filter-Export** im `/products`-Grid implementiert & verifiziert (Toolbar-Download-Button → Dialog mit Scope „Selected rows" / „All filter matches" + Format; nutzt die sichtbaren Grid-Spalten als Felder über die `selection`-Quelle). **Geplante Exporte** implementiert & E2E-verifiziert: ein Export wird als `job_definition` (`type = outbound_export`, Cron im 6-Feld-Format) gespeichert und vom bestehenden Scheduler periodisch als `outbound_export`-Job ausgeführt; im `/export`-Wizard (Admin) über „Schedule…" anlegbar, mit Liste (Run-now/Aktiv/Löschen) und **„Recent exports"**-Liste (Download pro Lauf, Ablage im `job_run.result`). **E-Mail-Versand** implementiert & E2E-verifiziert: `options.email_to` → der Worker versendet den Export als Anhang (`meadow/worker/mail.py`, SMTP per Env; Dev-Catcher `mailhog` in `docker-compose.dev.yml`, SMTP 1025 / UI 8025). **Objektstorage-Ablage** implementiert & E2E-verifiziert: bei konfiguriertem S3/MinIO archiviert der Worker die Datei (`result.archive` mit `{bucket, key, size, url}`, Presigned-URL) und entfernt ab `EXPORT_INLINE_MAX_BYTES` (Standard 1 MB) die Inline-Daten; `GET /exports/{run_id}/file` leitet dann per **302** auf die Presigned-URL um (`inline_present`), sonst wird wie zuvor inline serialisiert. **Tabellarischer Import (CSV und XLSX)** implementiert & im Browser verifiziert: gemeinsamer Adapter `meadow/tabular.py` (CSV/XLSX → MEF) und die Seite `/import` (`editor+`) mit Upload, **Arbeitsblatt-Auswahl** (Mehrblatt-XLSX), automatischem Spalten-Mapping (inkl. Freitext-Attributen und Sprache `attribut|<lang>`), Vorschau und Import über die bestehende `POST /imports`-Pipeline (idempotent per Business-Schlüssel).
 
 **Getroffene Entscheidungen:**
 
@@ -47,7 +47,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 
 **Ausgabe:** Vorschau (Beispielzeilen) + Download (klein) oder Hintergrundjob + Report/Download-Link (groß).
 
-**Ausbau:** geplante Exporte (cron), E-Mail-Versand, Objektstorage-Ablage, UI-Import (CSV/MEF mit Mapping/Preview/Dry-Run).
+**Ausbau:** optionaler synchroner Export kleiner Mengen (Grid-Auswahl); automatische Retention (30 Tage, §7).
 
 ## 4. Collection-Mitglieder (Use-Case)
 
@@ -120,7 +120,12 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 ### 5.5 Import & Collection-Bulk-Add
 
 - **MEF-Import:** bestehendes `POST /imports` unverändert (Upload/JSON, `inbound_import`-Job).
-- **CSV-Import (Ausbau):** Worker-Adapter (CSV → MEF) mit Spalten-Mapping/Preview/Dry-Run.
+- **Tabellarischer Import (implementiert, `editor+`):** gemeinsamer, UI-unabhängiger Adapter `meadow/tabular.py` für **CSV und XLSX** → MEF:
+  - **Parsen:** `parse_csv` (Delimiter-Erkennung `, ; \t |`, UTF-8/-BOM/CP1252/Latin-1) bzw. `parse_xlsx` (openpyxl, `sheet_names` für die Arbeitsblatt-Auswahl); `parse_table(name, content, …)` wählt per Dateiendung (`.xlsx`/`.xlsm` → XLSX, sonst CSV).
+  - **Mapping-Zielsyntax:** `""` = Spalte ignorieren, `id`/`type`/`status` = MEF-Basisfelder, `<attribut>` = Attributwert, `<attribut>|<lang>` = mehrsprachiger Wert (`{lang: wert}`, z. B. `title|de`).
+  - **MEF-Bau:** `build_mef(table, mapping, default_type=…, source=…)` erzeugt `{format_version, source, created_at, objects, references}`; leere `type`/`status`-Zellen fallen auf den Default-Typ bzw. `draft` zurück.
+  - **Import:** `POST /imports` (`match_by_key`, `source`, `emit_events`) → `inbound_import`-Job; Upsert per Business-Schlüssel bzw. Source-Referenz, damit wiederholte Importe **idempotent** sind.
+- **UI:** Seite **`/import`** (`editor+`) — Upload, Parse-Status, Arbeitsblatt-Auswahl (nur bei mehrblättrigen Arbeitsmappen), Spalten-Mapping (Auto-Mapping bei Namensgleichheit, Freitext-Attribute möglich), Default-Objekttyp, Business-Schlüssel, Quelle, `emit_events`-Schalter, **Vorschau** (Dry-Run ohne Persistenz) und **Import** mit Report (`processed/created/updated/failed`).
 - **Collection-Bulk-Add:** neuer Endpunkt `POST /collections/{id}/members` (`editor+`, JWT) mit `{ "object_ids": ["…"] }` — legt `collection_member`-Relationen an (`attributes.rank` aufsteigend, `added_at`); **idempotent** (bereits vorhandene Mitglieder überspringen), Antwort `{ added, skipped }`.
 
 ## 6. Frontend (NiceGUI)
@@ -132,8 +137,9 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
   4. **„Vorschau"** (Beispielzeilen für die gewählten Spalten) und **„Exportieren"** → Report (Anzahl, Download via `GET /exports/{run_id}/file`).
 - Im **Product-Grid** (`/products`): „Export-Auswahl / Export-Filter" Aktion.
 - Auf der **Collections-Seite** (`/saved-searches`): „Exportieren"-Button + „Mitglieder hinzufügen"-Import-Dialog.
+- Neue Seite **`/import`** (tabellarischer Import, `editor+`): Upload (CSV/XLSX) → Parse-Status → Arbeitsblatt-Auswahl (Mehrblatt) → Spalten-Mapping → Default-Objekttyp / Business-Schlüssel / Quelle / `emit_events` → **Vorschau** und **Import** mit Report-Dialog. i18n-Keys `import.*`.
 - In der Karte **„Recent exports"** (auf `/export`): Download pro Lauf; für Admins zusätzlich **Löschen** pro Zeile und **„Alle löschen"** (`DELETE /jobs/runs/{run_id}`, admin).
-- i18n-Keys (`export.*`, `collection.import_members`) in en/de/fr.
+- i18n-Keys (`export.*`, `import.*`, `collection.import_members`) in en/de/fr.
 
 ## 7. Jobs & Scheduler
 
@@ -149,7 +155,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 | Format | **CSV + XLSX (openpyxl) + JSON** im MVP. |
 | Sprache | **Mehrere Locale-Spalten** (`<attribut>_<code>`); Fallback-Kette. |
 | Rechte | **Export `editor+`**; Import `editor+`; Collection-Verwaltung `admin`. |
-| Import-Ziel | MEF wiederverwenden; CSV als Adapter (Ausbau); Collection-Bulk-Add separat. |
+| Import-Ziel | MEF wiederverwenden — CSV **und** XLSX laufen über den gemeinsamen Tabellen-Adapter (`meadow/tabular.py`), kein separater Importpfad; Collection-Bulk-Add separat. |
 
 ## 9. Implementierungsschritte
 
@@ -164,6 +170,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - CSV/XLSX: Header-Zeile, Trenner, leere Werte, quantifizierte Werte in Anzeigeeinheit.
 - Mehrsprachig: `title_de`/`title_en` Spalten mit Fallback.
 - CSV-Roundtrip (Export → Import) idempotent (Upsert per Business-Schlüssel).
+- **Tabellarischer Import:** CSV und XLSX mit Auto-Mapping; Mehrblatt-XLSX (Arbeitsblatt-Wechsel, leeres Blatt → Hinweis); mehrsprachiges Ziel `attribut|<lang>` schreibt `{lang: wert}`; leere `type`/`status`-Zellen → Default-Typ/`draft`; Wiederholungsimport aktualisiert statt zu duplizieren (`created: 0`, `updated: N`).
 - Große Menge → Job mit Report (`job_run.result`).
 - Collection-Bulk-Add überspringt vorhandene Mitglieder (idempotent).
 - `viewer` → 403; unbekanntes Format/Quelle → 400; `POST /exports` mit leerer Quelle → 400.
@@ -172,5 +179,5 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 
 - **Automatische Retention (30 Tage)** für `job_run` **und** archivierte S3-Objekte — **zurückgestellt**; muss mit dem geplanten **Papierkorb-Konzept** (Soft-Delete/Wiederherstellung) abgestimmt werden. Aktuell nur manuelles Löschen (UI `/export` bzw. Admin `/jobs`).
 - **Dauerhafte Download-Route** ohne Presigned-URL-Ablauf (7 Tage): Core mit eigenem S3-Client (Streaming) statt 302 auf eine ablaufende Signatur.
-- CSV-Spalten-Mapping beim Import (Ausbau); optionaler synchroner Export kleiner Mengen.
+- Optionaler synchroner Export kleiner Mengen (Grid-Auswahl).
 - Optional: Anzeige/Verwaltung der Export-Schedules auch im Admin-`/jobs`-UI (Job-Typen-Liste dort veraltet).
