@@ -112,6 +112,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 2. **Grid & Suche (Hauptarbeitsfläche)**
    - Grid-first mit `ui.aggrid`: Kategorien-/Strukturbaum, konfigurierbare/pinnbare Spalten, persönliche Ansichten
    - Inline-Editing mit Batch-Save, Vollständigkeits-Spalte, Volltextsuche
+   - **(Umgesetzt:)** **Filterleiste** über dem Grid (serverseitige Volltextsuche via `GET /objects/picker` + `GET /objects?ids=`, Umschalter „Nur unvollständige“ → `?missing_required=true`, Zurücksetzen); Filterzustand in der URL gespiegelt (`?incomplete&type&ancestor&category&collection&uncategorized&q`), Nachladen ohne Seiten-Reload. **Feste Spaltenreihenfolge:** Attributspalten liegen vor der Referenzspalte (`_refs`, Link-Icon → Referenz-Picker), die immer die **letzte** Spalte ist (`pinned: right`).
 
 3. **Produkt-Formular (Drill-down)**
    - Eine scrollbare Seite mit einklappbaren Attributgruppen und Sprung-Menü

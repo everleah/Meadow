@@ -110,6 +110,14 @@ pub struct ListObjects {
     /// `category_member` reference as member); the "Nicht kategorisiert" entry.
     #[serde(default)]
     pub uncategorized: bool,
+    /// Only return objects whose completeness for `locale` is **below** this
+    /// percentage, e.g. `?completeness_lt=100` = only incomplete objects.
+    #[serde(default)]
+    pub completeness_lt: Option<i64>,
+    /// Only return objects that are missing at least one required attribute for
+    /// `locale` (the grid's "nur unvollständige" filter).
+    #[serde(default)]
+    pub missing_required: bool,
     /// Working language code (e.g. `en-US`); when set, each object gets a
     /// `completeness` value for this language.
     pub locale: Option<String>,
@@ -586,6 +594,15 @@ pub async fn list_objects(
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
+    // The completeness filter is not expressible in SQL (it needs the inherited
+    // required attributes), so it is applied to the scanned window before the
+    // result is sliced; the documented `limit` cap doubles as the scan window.
+    let completeness_filter = params.completeness_lt.is_some() || params.missing_required;
+    let (scan_limit, scan_start) = if completeness_filter {
+        (1000, 0)
+    } else {
+        (limit, start)
+    };
 
     // Soft-deleted objects (and their cascade descendants) are hidden.
     let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
@@ -658,8 +675,8 @@ pub async fn list_objects(
         query = query.bind(("object_ids", object_ids));
     }
     let mut response = query
-        .bind(("limit", limit))
-        .bind(("start", start))
+        .bind(("limit", scan_limit))
+        .bind(("start", scan_start))
         .await?
         .check()?;
     let mut objects: Vec<Value> = response.take(0)?;
@@ -670,8 +687,13 @@ pub async fn list_objects(
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_owned);
-    if let Some(locale) = &locale {
-        for object in &mut objects {
+    // Completeness (with inheritance) is only computed when the caller needs it:
+    // for the `completeness` field of the response and/or for the completeness
+    // filters. `locale` may be absent — the filter then uses the default values.
+    if locale.is_some() || completeness_filter {
+        let locale_ref = locale.as_deref();
+        let mut kept: Vec<Value> = Vec::new();
+        for mut object in objects {
             let object_id = object
                 .get("id")
                 .and_then(Value::as_str)
@@ -692,15 +714,57 @@ pub async fn list_objects(
                 &state.db,
                 &object_id,
                 &object_type,
-                Some(locale),
+                locale_ref,
                 &own_attributes,
             )
             .await?;
-            object["completeness"] = json!({ (locale): result.percent });
+            if completeness_filter
+                && !passes_completeness_filter(
+                    &result,
+                    params.completeness_lt,
+                    params.missing_required,
+                )
+            {
+                continue;
+            }
+            if let Some(locale) = &locale {
+                object["completeness"] = json!({ (locale): result.percent });
+            }
+            kept.push(object);
         }
+        objects = kept;
+    }
+    if completeness_filter {
+        objects = objects
+            .into_iter()
+            .skip(start.max(0) as usize)
+            .take(limit.max(0) as usize)
+            .collect();
     }
 
     Ok(Json(objects))
+}
+
+/// Whether a completeness result passes the optional completeness filters.
+///
+/// Without any filter every result passes. `completeness_lt` keeps results
+/// strictly below the threshold (objects whose type has no required attributes
+/// are 100 % → complete), `missing_required` keeps results that still miss at
+/// least one required attribute.
+fn passes_completeness_filter(
+    result: &crate::completeness::Completeness,
+    completeness_lt: Option<i64>,
+    missing_required: bool,
+) -> bool {
+    if let Some(threshold) = completeness_lt
+        && result.percent >= threshold
+    {
+        return false;
+    }
+    if missing_required && result.missing.is_empty() {
+        return false;
+    }
+    true
 }
 
 /// Query parameters for `GET /objects/by-source`.
@@ -1420,4 +1484,60 @@ pub async fn update_computed(
     .await;
 
     Ok(Json(object))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completeness::Completeness;
+
+    fn completeness(percent: i64, missing: &[&str]) -> Completeness {
+        Completeness {
+            percent,
+            missing: missing.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn completeness_filter_without_filters_keeps_every_object() {
+        let result = completeness(50, &["price"]);
+        assert!(passes_completeness_filter(&result, None, false));
+    }
+
+    #[test]
+    fn completeness_lt_keeps_only_objects_below_the_threshold() {
+        assert!(passes_completeness_filter(
+            &completeness(99, &["price"]),
+            Some(100),
+            false
+        ));
+        assert!(!passes_completeness_filter(
+            &completeness(100, &[]),
+            Some(100),
+            false
+        ));
+    }
+
+    #[test]
+    fn missing_required_keeps_only_incomplete_objects() {
+        assert!(passes_completeness_filter(
+            &completeness(50, &["price"]),
+            None,
+            true
+        ));
+        // A type without required attributes is complete by definition.
+        assert!(!passes_completeness_filter(
+            &completeness(100, &[]),
+            None,
+            true
+        ));
+    }
+
+    #[test]
+    fn completeness_filters_combine_with_and() {
+        // 90 % is below 95 but has nothing missing → only the failing bound counts.
+        let result = completeness(90, &[]);
+        assert!(passes_completeness_filter(&result, Some(95), false));
+        assert!(!passes_completeness_filter(&result, Some(95), true));
+    }
 }

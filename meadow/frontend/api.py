@@ -156,6 +156,9 @@ class CoreClient:
         category: str | None = None,
         collection: str | None = None,
         uncategorized: bool = False,
+        completeness_lt: int | None = None,
+        missing_required: bool = False,
+        ids: list[str] | None = None,
         locale: str | None = None,
         limit: int = 100,
         start: int = 0,
@@ -166,8 +169,11 @@ class CoreClient:
         ``category`` to objects assigned (via ``category_member``) to that category
         or its descendants; with ``collection`` to objects that are members of the
         materialized collection (flat, no hierarchy); with ``uncategorized`` to
-        objects with no category assignment. With ``locale``, each object carries
-        a ``completeness`` value for that language (computed in the core).
+        objects with no category assignment; with ``ids`` to exactly those objects
+        (used by the grid search). With ``locale``, each object carries a
+        ``completeness`` value for that language (computed in the core); with
+        ``completeness_lt``/``missing_required`` the core only returns incomplete
+        objects (filtered before ``start``/``limit`` apply).
         """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
@@ -180,6 +186,12 @@ class CoreClient:
             params["collection"] = collection
         if uncategorized:
             params["uncategorized"] = "true"
+        if completeness_lt is not None:
+            params["completeness_lt"] = str(completeness_lt)
+        if missing_required:
+            params["missing_required"] = "true"
+        if ids:
+            params["ids"] = ",".join(ids)
         if locale:
             params["locale"] = locale
         async with _api_client() as client:

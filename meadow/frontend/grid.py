@@ -23,6 +23,12 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
 
+# Maximum hits the grid search pulls per query (picker + row load); the search
+# is server-side, so the result set stays bounded regardless of dataset size.
+SEARCH_LIMIT = 100
+# Debounce (ms) for the filter bar's search field: one core request per pause.
+SEARCH_DEBOUNCE_MS = 400
+
 
 def resolve_value(value: object, locale: str) -> str:
     """Resolves a (possibly multilingual) attribute value to a display string."""
@@ -57,12 +63,6 @@ def completeness_badge(percent: int) -> str:
     else:
         classes = "bg-grey text-white"
     return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{percent}%</span>'
-
-
-def _is_incomplete(obj: dict, locale: str) -> bool:
-    """Whether an object's completeness for the locale is below 100 %."""
-    percent = (obj.get("completeness") or {}).get(locale)
-    return percent is None or int(percent) < 100
 
 
 def _display_value(
@@ -275,20 +275,32 @@ async def products_page(request: Request) -> None:
     """Lists objects in the main grid with inline editing + batch save."""
     await build_shell(active="/products")
     locale = current_locale()
-    incomplete_only = request.query_params.get("incomplete") == "1"
-    type_filter = request.query_params.get("type")
-    ancestor_filter = request.query_params.get("ancestor") or None
-    category_filter = request.query_params.get("category") or None
-    collection_filter = request.query_params.get("collection") or None
-    uncategorized_only = request.query_params.get("uncategorized") == "1"
-    has_filter = bool(
-        incomplete_only
-        or type_filter
-        or ancestor_filter
-        or category_filter
-        or collection_filter
-        or uncategorized_only
-    )
+    # Active grid filters: seeded from the URL (bookmarkable, e.g. the dashboard
+    # shortcut `?incomplete=1&type=product`) and then driven by the filter bar.
+    active: dict = {
+        "incomplete": request.query_params.get("incomplete") == "1",
+        "type": request.query_params.get("type") or None,
+        "ancestor": request.query_params.get("ancestor") or None,
+        "category": request.query_params.get("category") or None,
+        "collection": request.query_params.get("collection") or None,
+        "uncategorized": request.query_params.get("uncategorized") == "1",
+        "q": request.query_params.get("q") or None,
+    }
+    # Monotonic reload counter: a slow reload never overwrites a newer result.
+    load_seq = {"value": 0}
+
+    def has_filter() -> bool:
+        """Whether any filter is active (a plain visit deliberately loads nothing)."""
+        return bool(
+            active["incomplete"]
+            or active["type"]
+            or active["ancestor"]
+            or active["category"]
+            or active["collection"]
+            or active["uncategorized"]
+            or active["q"]
+        )
+
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.products")).classes("text-h4")
         # Prompt shown when the grid is empty because no node/filter is active.
@@ -299,46 +311,53 @@ async def products_page(request: Request) -> None:
         token = app.storage.user.get("token", "")
 
         async def fetch_filtered() -> list[dict]:
-            """Loads the objects matching the active URL filter (or an empty list)."""
-            if ancestor_filter:
-                return await client.list_objects(
-                    token, ancestor=ancestor_filter, limit=1000, locale=locale
+            """Loads the objects matching the active filters (see `active`)."""
+            if not has_filter():
+                return []
+            if active["q"]:
+                # Server-side full-text search (the grid may be empty otherwise):
+                # search the labels, then load the hits as full grid rows.
+                hits = await client.picker_search(
+                    token,
+                    active["q"],
+                    types=[active["type"]] if active["type"] else None,
+                    locale=locale,
+                    limit=SEARCH_LIMIT,
                 )
-            if category_filter:
+                ids = [str(hit.get("id")) for hit in hits if hit.get("id")]
+                if not ids:
+                    return []
                 return await client.list_objects(
-                    token, category=category_filter, limit=1000, locale=locale
+                    token,
+                    ids=ids,
+                    missing_required=bool(active["incomplete"]),
+                    locale=locale,
+                    limit=SEARCH_LIMIT,
                 )
-            if collection_filter:
-                return await client.list_objects(
-                    token, collection=collection_filter, limit=1000, locale=locale
-                )
-            if uncategorized_only:
-                return await client.list_objects(
-                    token, uncategorized=True, limit=1000, locale=locale
-                )
-            objs = await client.list_objects(
+            return await client.list_objects(
                 token,
-                limit=1000 if incomplete_only else 100,
+                object_type=active["type"],
+                ancestor=active["ancestor"],
+                category=active["category"],
+                collection=active["collection"],
+                uncategorized=bool(active["uncategorized"]),
+                missing_required=bool(active["incomplete"]),
                 locale=locale,
-                object_type=type_filter,
+                limit=1000 if has_filter() else 100,
             )
-            if incomplete_only:
-                objs = [o for o in objs if _is_incomplete(o, locale)]
-            return objs
 
         # On a plain /products visit we deliberately avoid loading every object:
-        # the grid stays empty and the user picks a node in the tree. A filter
-        # (e.g. `?incomplete=1&type=product`, `?ancestor=…`, `?category=…`) loads
-        # the targeted objects so shortcuts still work.
+        # the grid stays empty and the user picks a node in the tree or searches.
+        # A filter (e.g. `?incomplete=1&type=product`, `?ancestor=…`, `?category=…`)
+        # loads the targeted objects so shortcuts still work.
+        objects: list[dict] = []
         try:
-            objects = await fetch_filtered() if has_filter else []
-        except Exception:  # noqa: BLE001 - show a friendly message on failure
-            ui.label(t("grid.load_failed")).classes("text-subtitle1 text-negative")
-            return
-        if has_filter and not objects:
-            ui.label(t("grid.no_objects")).classes("text-subtitle1")
-            return
-        selection_hint.set_visibility(not has_filter)
+            objects = await fetch_filtered()
+        except Exception:  # noqa: BLE001 - keep the page usable (filter bar + grid)
+            ui.notify(t("grid.load_failed"), color="negative")
+        no_objects_label = ui.label(t("grid.no_objects")).classes("text-subtitle1")
+        no_objects_label.set_visibility(has_filter() and not objects)
+        selection_hint.set_visibility(not has_filter())
 
         try:
             definitions = await client.list_attribute_definitions(token)
@@ -364,14 +383,23 @@ async def products_page(request: Request) -> None:
                 if mapping:
                     enum_resolvers[name] = mapping
 
-        column_defs = [
-            {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
-            {"headerName": t("grid.name"), "field": "_name", "editable": True},
-            {"headerName": t("grid.type"), "field": "_type", "width": 120},
-            {"headerName": t("grid.status"), "field": "_status", "width": 140},
-            {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
-            {"headerName": "", "field": "_refs", "width": 60},
-        ] + attribute_columns(definitions, locale)
+        # Column order is fixed: the reference/action column (`_refs`, the link
+        # icon that opens the reference picker) is always the **last** column, so
+        # attribute columns are appended *before* it (pinned right so it stays
+        # visible however far the grid is scrolled).
+        column_defs = (
+            [
+                {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
+                {"headerName": t("grid.name"), "field": "_name", "editable": True},
+                {"headerName": t("grid.type"), "field": "_type", "width": 120},
+                {"headerName": t("grid.status"), "field": "_status", "width": 140},
+                {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
+            ]
+            + attribute_columns(definitions, locale)
+            + [
+                {"headerName": "", "field": "_refs", "width": 60, "pinned": "right"},
+            ]
+        )
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
         root_id = "object:object_root"
@@ -391,21 +419,23 @@ async def products_page(request: Request) -> None:
             row_data(object_, locale, attribute_names, enum_resolvers) for object_ in objects
         ]
 
-        def sync_url_query(params: dict) -> None:
-            """Keeps the URL in sync with the active filter so save/reload keeps it."""
+        def sync_url_query() -> None:
+            """Keeps the URL in sync with the active filters (bookmarkable)."""
             parts = []
-            if params.get("incomplete"):
+            if active["incomplete"]:
                 parts.append("incomplete=1")
-            if params.get("type"):
-                parts.append(f"type={params['type']}")
-            if params.get("ancestor"):
-                parts.append(f"ancestor={params['ancestor']}")
-            if params.get("category"):
-                parts.append(f"category={params['category']}")
-            if params.get("collection"):
-                parts.append(f"collection={params['collection']}")
-            if params.get("uncategorized"):
+            if active["type"]:
+                parts.append(f"type={quote(str(active['type']))}")
+            if active["ancestor"]:
+                parts.append(f"ancestor={quote(str(active['ancestor']))}")
+            if active["category"]:
+                parts.append(f"category={quote(str(active['category']))}")
+            if active["collection"]:
+                parts.append(f"collection={quote(str(active['collection']))}")
+            if active["uncategorized"]:
                 parts.append("uncategorized=1")
+            if active["q"]:
+                parts.append(f"q={quote(str(active['q']))}")
             query = "&".join(parts)
             ui.run_javascript(
                 f"history.replaceState(null, '', '/products{('?' + query) if query else ''}')"
@@ -418,18 +448,28 @@ async def products_page(request: Request) -> None:
                 row_data(o, locale, attribute_names, enum_resolvers) for o in selected_objects
             ]
             grid.run_grid_method("setGridOption", "rowData", all_rows)
-            selection_hint.set_visibility(len(selected_objects) == 0)
+            selection_hint.set_visibility(len(selected_objects) == 0 and not has_filter())
+            no_objects_label.set_visibility(len(selected_objects) == 0 and has_filter())
+
+        async def reload_grid() -> None:
+            """Re-fetches the grid rows for the active filters (no page reload)."""
+            load_seq["value"] += 1
+            seq = load_seq["value"]
+            try:
+                new_objects = await fetch_filtered()
+            except Exception:  # noqa: BLE001 - keep the current rows
+                ui.notify(t("grid.load_failed"), color="negative")
+                return
+            if seq != load_seq["value"]:
+                return  # a newer reload already applied its rows
+            await apply_rows(new_objects)
+            sync_url_query()
 
         async def handle_tree_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
-            if selected:
-                selected_objects = await client.list_objects(
-                    token, ancestor=selected, limit=1000, locale=locale
-                )
-            else:
-                selected_objects = [] if not has_filter else objects
-            await apply_rows(selected_objects)
-            sync_url_query({"ancestor": selected})
+            active.update(ancestor=selected, category=None, collection=None, uncategorized=False)
+            active_collection["id"] = None
+            await reload_grid()
 
         # Category tree (left-panel view): aggregation-based navigation. Category
         # nodes are objects of type `category`; their hierarchy is `depends_on`
@@ -466,21 +506,12 @@ async def products_page(request: Request) -> None:
 
         async def handle_category_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
+            active.update(ancestor=None, category=None, collection=None, uncategorized=False)
             if selected == uncategorized_id:
-                selected_objects = await client.list_objects(
-                    token, uncategorized=True, limit=1000, locale=locale
-                )
-                params = {"uncategorized": True, "category": None, "ancestor": None}
+                active["uncategorized"] = True
             elif selected:
-                selected_objects = await client.list_objects(
-                    token, category=selected, limit=1000, locale=locale
-                )
-                params = {"category": selected, "uncategorized": False, "ancestor": None}
-            else:
-                selected_objects = [] if not has_filter else objects
-                params = {"category": None, "uncategorized": False, "ancestor": None}
-            await apply_rows(selected_objects)
-            sync_url_query(params)
+                active["category"] = selected
+            await reload_grid()
 
         # Materialized collections (flat, no tree): a collection view filters the
         # grid via `?collection=<id>` (collection_member aggregation).
@@ -512,27 +543,13 @@ async def products_page(request: Request) -> None:
         async def handle_collection_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
             active_collection["id"] = selected or None
-            if selected:
-                selected_objects = await client.list_objects(
-                    token, collection=selected, limit=1000, locale=locale
-                )
-                params = {
-                    "collection": selected,
-                    "category": None,
-                    "uncategorized": False,
-                    "ancestor": None,
-                }
-            else:
-                selected_objects = [] if not has_filter else objects
-                params = {
-                    "collection": None,
-                    "category": None,
-                    "uncategorized": False,
-                    "ancestor": None,
-                }
-                active_collection["id"] = None
-            await apply_rows(selected_objects)
-            sync_url_query(params)
+            active.update(
+                ancestor=None,
+                category=None,
+                uncategorized=False,
+                collection=selected or None,
+            )
+            await reload_grid()
 
         staged_ids: set[str] = set()
 
@@ -1162,7 +1179,7 @@ async def products_page(request: Request) -> None:
         async def reload_collection() -> None:
             """Reloads the selected collection: re-materializes its members
             (``POST /collections/{id}/refresh``), refreshes the collection list
-            (member counts) and re-fetches the grid for the selected collection.
+            (member counts) and re-fetches the grid for the active filter.
             The tree is left untouched while a collection is selected — re-sending
             the node list would corrupt the selection (the node toggles off on the
             next click). Without a selection the tree is re-rendered to update the
@@ -1178,13 +1195,7 @@ async def products_page(request: Request) -> None:
             if active_view["value"] == "collection" and not col_id:
                 render_tree("collection")
             if col_id:
-                try:
-                    selected_objects = await client.list_objects(
-                        token, collection=col_id, limit=1000, locale=locale
-                    )
-                    await apply_rows(selected_objects)
-                except Exception:  # noqa: BLE001 - grid stays as-is on failure
-                    pass
+                await reload_grid()
 
         # --- Export (selection / current filter) ---------------------------
         def _export_fields() -> list[str]:
@@ -1281,7 +1292,7 @@ async def products_page(request: Request) -> None:
                         btn.props("flat", remove="color text-white")
 
                 def set_view(view: str) -> None:
-                    nonlocal active_view, collection_filter
+                    nonlocal active_view
                     active_view["value"] = view
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
@@ -1291,10 +1302,10 @@ async def products_page(request: Request) -> None:
                         view != "collection" and bool(tree_nodes or category_roots)
                     )
                     reload_btn.set_visibility(view == "collection")
-                    if view != "collection" and active_collection["id"]:
-                        collection_filter = None
+                    if view != "collection" and active["collection"]:
+                        active["collection"] = None
                         active_collection["id"] = None
-                        sync_url_query({"collection": None})
+                        sync_url_query()
                     render_tree(view)
 
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
@@ -1395,6 +1406,56 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="view_column").props("outline").tooltip(
                         t("grid.columns")
                     ).on_click(columns_dialog.open)
+
+                # --- Filter bar (server-side filters) --------------------------
+                # The grid can be empty (no tree node picked), so both filters are
+                # resolved in the core: the search via `/objects/picker` +
+                # `/objects?ids=`, "only incomplete" via `?missing_required=true`.
+                suppress_change = {"value": False}
+
+                async def on_search_change(value: str | None) -> None:
+                    if suppress_change["value"]:
+                        return
+                    text = (value or "").strip() or None
+                    if text == active["q"]:
+                        return
+                    active["q"] = text
+                    await reload_grid()
+
+                async def on_incomplete_change(event) -> None:
+                    if suppress_change["value"]:
+                        return
+                    active["incomplete"] = bool(event.value)
+                    await reload_grid()
+
+                async def reset_filters() -> None:
+                    """Clears the filter bar; the tree/category/collection stays."""
+                    active.update(incomplete=False, q=None)
+                    suppress_change["value"] = True
+                    try:
+                        incomplete_switch.value = False
+                        search_input.value = ""
+                    finally:
+                        suppress_change["value"] = False
+                    await reload_grid()
+
+                with ui.row().classes("items-center gap-2 w-full pb-1").style("flex-wrap: nowrap"):
+                    search_input = (
+                        ui.input(
+                            placeholder=t("grid.filter_search"),
+                            value=active["q"] or "",
+                        )
+                        .props(f"outline dense clearable debounce={SEARCH_DEBOUNCE_MS}")
+                        .classes("grow")
+                    )
+                    search_input.on_value_change(lambda e: on_search_change(e.value))
+                    incomplete_switch = ui.switch(
+                        t("grid.filter_incomplete"), value=bool(active["incomplete"])
+                    ).props("dense shrink-0")
+                    incomplete_switch.on_value_change(on_incomplete_change)
+                    ui.button(icon="filter_alt_off", on_click=reset_filters).props(
+                        "flat dense shrink-0"
+                    ).tooltip(t("grid.filter_reset"))
 
                 grid = ui.aggrid(
                     {
