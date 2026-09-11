@@ -123,11 +123,39 @@ Regeln:
 
 **Offene Entscheidungen (mit Vorschlag):**
 
-1. **Mehrere `category`/`collection`-Rollen zulassen (Stage 2)?** Dann müssen Kern und UI mit **Listen** statt Einzel-IDs arbeiten (Kategorien-Baum, `?category=` bräuchte eine `definition`-Angabe, Mitgliederzähler, Bulk-Operationen). **Vorschlag:** Stage 1 mit Singletons umsetzen, Stage 2 nur bei echtem Bedarf.
+1. **Mehrere `category`-Rollen zulassen?** **Entschieden: ja** (siehe „Zusatz-Kategorisierungen“ unten) – aber nur für `category`, nicht für `collection`/`composition`.
 2. **`kind` in `role` auflösen?** `kind` ist aus `role` ableitbar (weniger Redundanz), aber es ändert API- und Frontend-Stellen. **Vorschlag:** `kind` vorerst behalten, abgeleitet und schreibgeschützt.
 3. **Bezeichnung:** Feld `role`, UI „Verwendung“ (en: „Usage“). **Vorschlag:** so.
 
 **Nicht-Ziele:** keine Änderung an der Kanten-Speicherung (`reference.in`/`out`), keine Rolle außer den vier genannten, keine automatische Umklassifizierung bestehender Daten (nur Default `link`).
+
+## Zusatz-Kategorisierungen (eigene Kategorie-Relationstypen) — Plan (2026-09-11)
+
+**Motivation.** Neben der festen Kategorie-Taxonomie sollen **eigene Kategorie-Zuordnungen** möglich sein, um Zuordnungsarten zu unterscheiden (z. B. „Hauptkategorie“ vs. „Kanalkategorie“ vs. „Themenkategorie“) und je Zuordnung **Kanten-Attribute** zu pflegen (`relation_definition.attributes` → `reference.attributes`, Editor im Formular existiert bereits). Alle Typen zeigen dabei auf **dieselben** `category`-Objekte (eine Taxonomie, mehrere Zuordnungsarten) – kein zweiter Kategorie-Objekttyp.
+
+**Leitplanken:**
+
+- `role: category` darf **mehrfach** vorkommen: genau **ein** Typ ist **primär** = der System-Typ (`system: true`, `rel_category_member`) und bleibt die feste Taxonomie (Baum, Zähler, „Nicht kategorisiert“). Weitere Typen sind **Zusatz-Kategorisierungen** (`system: false`).
+- Die Rolle **erzwingt** die Struktur: `kind: aggregation`, `target_types = ["category"]` (Ziel ist immer ein Kategorie-Objekt), Richtung Objekt → Kategorie. `source_types` beschränkt weiterhin die **Mitglieder** (leer = alle). Damit ist die beobachtete Fehlkonfiguration (falsche Richtung/Restriktion) strukturell unmöglich.
+- `composition` und `collection` bleiben **Singletons** (Rollen reserviert). Mehrere Sammlungen entstehen über mehrere `collection`-**Objekte**, nicht über mehrere Kantentypen.
+- Eigene Typen starten als `link`; die Umstellung auf `category` ist ein bewusster Schritt in der Relationstyp-Verwaltung (nur bei `system: false`) und setzt `target_types` automatisch auf `["category"]`. Eine Rückstufung auf `link` ist erlaubt, solange keine Kanten des Typs existieren.
+
+**Kern (generisch statt Einzel-ID):**
+
+- `category_member_keys(db, category_id, definition_id)` – Default = primärer Typ, sonst der angegebene; die Helfer werden auf eine Definitionsliste (`definition_id IN $defs`) erweitert.
+- `GET /objects?category=<id>[&definition_id=<rel_…>]` und `?uncategorized=true[&definition_id=<rel_…>]` reichen den Typ durch (Default: primärer Typ, abwärtskompatibel).
+- `?count_members=true` zählt weiterhin den **primären** Typ (Zähler der festen Taxonomie).
+- `POST /references` prüft die Rolle (Ziel `category`) und validiert Kanten-Attribute gegen das Template **des jeweiligen Typs**.
+- `POST /relation-definitions`: `role: category` für eigene Typen erlaubt (mehrfach), `target_types` wird auf `["category"]` normalisiert.
+
+**UI:**
+
+- **Formular:** Der Abschnitt **„Kategorien“** rendert **je Kategorie-Typ einen Block** (primärer Typ zuerst, danach Zusatz-Typen alphabetisch): Picker auf `category` beschränkt, Chips wie heute, ✕ entfernt die Kante des jeweiligen Typs; Kanten-Attribute über den vorhandenen Editor (Stift). Damit sind „Zuordnungen differenzieren + Attribute je Relation“ abgedeckt.
+- `/relation-types`: Verwendung `category` wählbar (nur `system: false`), Anzeige unterscheidet „Kategorie (primär, System)“ und „Kategorie (Zusatz)“; `target_types` ist für Kategorie-Rollen schreibgeschützt.
+- **Bulk-Wizard:** `add_category`/`remove_category` bekommen ein **Typ-Feld** (Default: primärer Typ). Alternativ kann die Operation „Relation zuweisen/entfernen“ weiterhin jeden Kategorie-Typ bedienen (Picker bereits auf `category` beschränkt).
+- **Grid:** Baum, Zähler und „Nicht kategorisiert“ bleiben auf dem **primären** Typ (keine Verfälschung der bestehenden Ansichten). Optional (Stage 2b): Typ-Selektor im Kategorien-Panel, der `?category=…&definition_id=…` nutzt.
+
+**Nicht-Ziele:** keine Kategorie-**Hierarchie** je eigenem Typ (der Baum bleibt die feste Taxonomie), kein zweiter Kategorie-Objekttyp, keine Mehrfachrolle für `collection`/`composition`.
 
 ## Altlasten-Mapping (entfernt)
 
