@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections)) und Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), aufbauend auf Phase 9, Punkt 1
-- **Stand:** Plan / Entwurf (2026-09-11, überarbeitet) — **nicht umgesetzt**. Umfang nach Rückmeldung des Auftraggebers: **Stage A + B** (Feldkatalog, Validierung, Formular mit **UND/ODER-Gruppen** und `between`, Referenzen, Sortierung, Zusammenfassung, Vorschau). Die Query-DSL wird dafür **erweitert** (Abschnitt 5); bestehende Suchen werden **nicht** migriert, sondern gelöscht und neu angelegt.
+- **Stand:** **Stage A + B umgesetzt** (2026-09-11) — Feldkatalog (`GET /search-fields`), Validierung mit Pfadmeldungen, DSL-Erweiterung (UND/ODER-Baum + `between`), Formular (`meadow/frontend/search_form.py`), Vorschau (`POST /saved-searches/preview`), Referenzen, Sortierung und Zusammenfassungsspalte sind verifiziert; bestehende Suchen/Collections wurden gelöscht und neu angelegt (keine Migration). **Stage C** (Tiefe > 4, `not_between`, Volltext je Feld, erweiterte Suche im Grid) bleibt offen. Die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
 
 **Getroffene Entscheidungen:**
 
@@ -14,9 +14,29 @@
 - **Regel:** Jedes im Katalog angebotene Feld/Operator-Paar wird vom Kern ausgeführt, und jeder ausgeführte Operator steht im Katalog (sonst ist das Formular Kosmetik).
 - **Volltext bleibt global:** Der Index liegt auf `object.attributes`; eine Feld-/Sprachauswahl wird nicht angeboten, weil sie keine Wirkung hätte (eine echte Einschränkung wäre ein Index je Attribut — nicht Teil dieses Vorhabens).
 
-## 1. Ausgangslage & Problem
+## 0. Umsetzungsstand (Stages A + B, 2026-09-11)
 
-Die Verwaltungsseite `/saved-searches` (`meadow/frontend/saved_searches.py`, admin-only) legt Suchen in einem Dialog an, dessen Suchkriterien eine **JSON-CodeMirror-Fläche** mit der Query-DSL sind (`filters` / `fulltext` / `references` / `sort` / `start` / `limit`). Ausgeführt wird die DSL im Kern (`execute_query` in `crates/pim-core/src/api/saved_searches.rs`: Feld-Whitelist `type`/`status`/`id`/`attributes.<name>[.<lang>]`, Operatoren `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `contains`, `not_contains`, `not_empty`, `is_null`, `starts_with`, `ends_with`).
+| Baustein | Ort |
+|---|---|
+| Feldkatalog, Validierung, Normalisierung, Zusammenfassung | `crates/pim-core/src/api/search_schema.rs` (18 Unit-Tests) |
+| Endpunkte `GET /search-fields`, `POST /saved-searches/preview` | `crates/pim-core/src/api/saved_searches.rs` (Routen in `app.rs`, OpenAPI in `api/mod.rs`) |
+| DSL (`where`-Baum, `between`), Ausführen, Validierung in Schreiben/Ausführen/Preview/Collection-Refresh | `crates/pim-core/src/api/saved_searches.rs` (Renderer mit 5 Unit-Tests) |
+| Formular-Helfer + Gruppen-Editor | `meadow/frontend/search_form.py` |
+| Dialog (Tabs Formular/JSON, Vorschau, Hinweis, Zusammenfassungsspalte) | `meadow/frontend/saved_searches.py`, `api.py` |
+| Tests | `tests/test_search_form.py` (15 Fälle), `cargo test` (Katalog/Validator/Renderer), i18n-Parität en/de/fr (1162 Keys) |
+
+**Abweichungen vom Entwurf (bewusst):**
+
+- **Status-Werte** liefert der Katalog aus den **tatsächlich vorkommenden** `status`-Werten (`GROUP BY status`); bekannte Workflow-Zustände erhalten `status.*`-i18n-Keys (neu in en/de/fr), alles andere fällt auf den Rohwert zurück.
+- **Teilweise gefüllte Zeilen** (Referenz ohne Ziel, Bedingung ohne Wert) werden **nicht** stillschweigend verworfen, sondern gespeichert und von der Validierung mit Pfad benannt; nur **unberührte** Zeilen entfallen.
+- **Mengen:** `type`/`status`/Enums liefern Optionen mit Labels (Mehrfachauswahl für `in`/`not_in`, Freitext-Tags ohne Optionsquelle); Sprachvarianten entstehen über ein Sprach-Select (`attributes.name.de`).
+- **Sortierung** war im Kern defekt (SurrealDB verlangt jedes `ORDER BY`-Idiom in der Selektion) — Sortierfelder werden jetzt als `_sort_N` projiziert; das galt auch für die frühere flache Ausführung.
+- **`is_null`/`not_empty`** werden geklammert; vorher verband der Ausführer `a IS NONE OR a = NULL` ungeschützt mit UND (Vorrangfehler).
+- **`created_at`/`updated_at`** sind echte Datetime-Spalten; ihre Operanden werden in `type::datetime(…)` gewrappt, damit sie nicht lexikografisch mit Strings verglichen werden.
+
+## 1. Ausgangslage & Problem (vor der Umsetzung)
+
+Die Verwaltungsseite `/saved-searches` (`meadow/frontend/saved_searches.py`, admin-only) legte Suchen in einem Dialog an, dessen Suchkriterien eine **JSON-CodeMirror-Fläche** mit der Query-DSL waren (`filters` / `fulltext` / `references` / `sort` / `start` / `limit`). Ausgeführt wird die DSL im Kern (`execute_query` in `crates/pim-core/src/api/saved_searches.rs`: Feld-Whitelist `type`/`status`/`id`/`attributes.<name>[.<lang>]`, Operatoren `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `contains`, `not_contains`, `not_empty`, `is_null`, `starts_with`, `ends_with`).
 
 Für technisch versierte Anwender ist das ausreichend, für den normalen (nicht-technischen) Admin eine Hürde – dieselbe Ausgangslage wie bei den Konnektoren vor Stage 1:
 
@@ -233,7 +253,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 | `crates/AGENTS.md`, `meadow/AGENTS.md` | Modul `search_schema.rs` bzw. `search_form.py` + Regel „Katalog ↔ Ausführer“ |
 | `plan/detail/AGENTS.md` | neues Detaildokument in die Liste |
 
-## 9. Implementierungsschritte
+## 9. Implementierungsschritte (Stages A + B umgesetzt, 2026-09-11)
 
 **Stage A — DSL, Katalog, Validierung, Formular (MVP):**
 
@@ -271,7 +291,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 | Unbekannte Enum-Codes im Wert? | **Warnung in der UI statt Fehler** – Codes können aus alten Enum-Sets stammen; der Ausführer vergleicht nur Codes, der Kern akzeptiert sie |
 | Vorschau-Endpunkt oder Speichern zum Testen? | **Preview-Endpunkt** (rein lesend) – sonst hinterlässt jeder Testversuch eine Suche |
 | Ist die Zählung in der Vorschau teuer? | Vorschau mit Debounce (~800 ms), `limit`-Obergrenze, Ergebnis-IDs gekürzt; bei Bedarf später „nur zählen“ (COUNT statt ID-Liste) |
-| Standardgruppe beim Anlegen? | Eine leere **UND**-Gruppe mit einem vorgefüllten Blatt (`type = product`) wie heute im `DEFAULT_QUERY` |
+| Standardgruppe beim Anlegen? | Eine **UND**-Gruppe mit einem vorgefüllten Blatt (`type = product`) — so umgesetzt (`default_state`) |
 | Denselben Katalog auch für die erweiterte Suche im Grid? | **Ja, mittelfristig** – derselbe Vertrag, dasselbe Formular; im Grid ist es ein Filter, in `/saved-searches` ein gespeicherter Ausdruck |
 | Bezug zu Business Rules (`saved_search` als Filter)? | Unverändert; die Validierung sorgt dafür, dass gespeicherte Suchen ausführbar bleiben |
-| Collections bei der DSL-Umstellung? | Zusammen mit den Suchen löschen und neu anlegen (siehe Abschnitt 5) |
+| Collections bei der DSL-Umstellung? | **Erledigt:** die bestehenden Suchen/Collections wurden gelöscht und neu angelegt (siehe Abschnitt 5) |

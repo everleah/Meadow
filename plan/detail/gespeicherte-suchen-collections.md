@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections))
 - **Relevante Phasen:** Phase 9
-- **Stand:** Umgesetzt (Phase 9, Punkt 1). `saved_search`- und `collection`-Objekte werden als generische Objekte (`object`-Tabelle) gespeichert; die Query-DSL (`filters`/`fulltext`/`references`/`sort`/`limit`) wird im Rust-Kern ausgeführt (Endpoint `POST /saved-searches/{id}/execute`, liefert `{count, ids}`). CRUD-Endpunkte für Suchen (`GET/POST /saved-searches`, `GET/PATCH/DELETE /saved-searches/{id}`) und Collections (`GET/POST /collections`, `GET/PATCH/DELETE /collections/{id}`) sowie `POST /collections/{id}/refresh` (Sync-Refresh der `collection_member`-Relationen mit `rank`/`added_at`) und `GET /collections/{id}/members`. Ein nicht-leeres `refresh_interval` der Collection synchronisiert automatisch eine `collection_refresh`-Jobdefinition (Scheduler/Worker). Die Frontend-Verwaltungsseite `/saved-searches` (Tabs „Gespeicherte Suchen“/„Collections“, admin-only) ist umgesetzt. **Editor-Formular geplant:** Die Suchkriterien werden heute als **JSON** (Query-DSL) gepflegt; ein schema-getriebenes Formular (Feldkatalog, Zeilen-Editor, Servervalidierung) ist in [suche-formular.md](suche-formular.md) geplant — noch nicht umgesetzt.
+- **Stand:** Umgesetzt (Phase 9, Punkt 1). `saved_search`- und `collection`-Objekte werden als generische Objekte (`object`-Tabelle) gespeichert; die Query-DSL (`filters`/`fulltext`/`references`/`sort`/`limit`) wird im Rust-Kern ausgeführt (Endpoint `POST /saved-searches/{id}/execute`, liefert `{count, ids}`). CRUD-Endpunkte für Suchen (`GET/POST /saved-searches`, `GET/PATCH/DELETE /saved-searches/{id}`) und Collections (`GET/POST /collections`, `GET/PATCH/DELETE /collections/{id}`) sowie `POST /collections/{id}/refresh` (Sync-Refresh der `collection_member`-Relationen mit `rank`/`added_at`) und `GET /collections/{id}/members`. Ein nicht-leeres `refresh_interval` der Collection synchronisiert automatisch eine `collection_refresh`-Jobdefinition (Scheduler/Worker). Die Frontend-Verwaltungsseite `/saved-searches` (Tabs „Gespeicherte Suchen“/„Collections“, admin-only) ist umgesetzt. **Editor (umgesetzt):** Die Suchkriterien werden in einem **schema-getriebenen Formular** (Tabs „Formular“/„JSON“) gepflegt — Feldkatalog, UND/ODER-Gruppen, `between`, Referenzen, Sortierung, Grenzen, Vorschau-Zähler; Details: [suche-formular.md](suche-formular.md).
 
 Meadow PIM sieht die Möglichkeit vor, komplexe Suchanfragen zu speichern und deren Ergebnisse als refreshbare Collections zu materialisieren. Dies ist nicht Teil der ersten Version, wird aber von Anfang an im Datenmodell und in der Architektur berücksichtigt.
 
@@ -19,12 +19,17 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
   "attributes": {
     "name": "Aktive Produkte mit Preisfehler",
     "query": {
-      "filters": [
-        { "field": "type", "operator": "eq", "value": "product" },
-        { "field": "status", "operator": "in", "value": ["published", "approved"] },
-        { "field": "attributes.price", "operator": "lt", "value": 0 },
-        { "field": "attributes.name.de", "operator": "not_empty", "value": null }
-      ],
+      "where": {
+        "op": "and",
+        "conditions": [
+          { "field": "type", "operator": "eq", "value": "product" },
+          { "field": "attributes.name.de", "operator": "not_empty", "value": null },
+          { "op": "or", "conditions": [
+            { "field": "status", "operator": "eq", "value": "published" },
+            { "field": "attributes.gross_price", "operator": "between", "value": [0, 500] }
+          ]}
+        ]
+      },
       "fulltext": {
         "fields": ["attributes.description.*"],
         "query": "Edelstahl",
@@ -33,7 +38,7 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
       "references": [
         {
           "type": "category_member",
-          "out": "category_5",
+          "out": "object:category_5",
           "direction": "incoming"
         }
       ],
@@ -52,10 +57,13 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
 
 **Suchkriterien (Query-DSL):**
 
-- **`filters`**: Beliebige Bedingungen auf Objektfelder und Attributwerte, inkl. Vergleichsoperatoren (`eq`, `ne`, `gt`, `lt`, `in`, `contains`, `not_empty`, …).
-- **`fulltext`**: Volltextsuche über sprachabhängige Attributwerte, mit optionaler Sprachauswahl gemäß Sprachbaum.
+- **`where`**: Ein **rekursiver Bedingungsbaum** — eine **Gruppe** ist `{op: "and" | "or", conditions: [...]}`, eine **Bedingung** ist `{field, operator, value}` (beide Formen sind nicht mischbar). Fehlt `op`, gilt UND; verschachtelt wird bis Tiefe 4, höchstens 50 Bedingungen. Ersetzt die frühere flache Liste `filters` (brechende Änderung, keine Migration).
+- **Felder**: `type`, `status`, `id`, `created_at`, `updated_at`, `source` sowie `attributes.<name>[.<lang>]` (Sprachvariante mehrsprachiger Attribute).
+- **Operatoren**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, **`between`** (zwei Werte), `in`/`not_in` (Listen), `contains`/`not_contains`, `starts_with`/`ends_with`, `not_empty`, `is_null` — je Feld ist nur eine Teilmenge erlaubt (Feldkatalog, `GET /search-fields`).
+- **`fulltext`**: Volltextsuche; der Index liegt auf dem **gesamten** Attributobjekt (`attributes @@ $q`). `fields`/`language` werden angenommen, aber **nicht** ausgewertet.
 - **`references`**: Einschränkung über Relationen, z. B. nur Objekte, die in einer bestimmten Kategorie hängen oder eine bestimmte Vererbungsquelle haben.
-- **`sort`** und **`limit`**: Sortierung und Begrenzung der Ergebnisliste.
+- **`sort`**, **`start`** und **`limit`**: Sortierung (nur sortierbare Felder), Offset und Begrenzung der Ergebnisliste (1–10000).
+- **Validierung:** `POST`/`PATCH /saved-searches`, `POST /saved-searches/preview` und das Ausführen prüfen die Query gegen den Feldkatalog und melden Fehler mit Pfad im Baum (`query.where.conditions[1].operator: …`); gespeichert wird die **kanonische** Form. Detail: [suche-formular.md](suche-formular.md).
 
 **Ausführung:**
 

@@ -176,12 +176,13 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 
 14. **Gespeicherte Suchen & Collections** (nur `admin`/`superadmin`)
     - Verwaltung der **gespeicherten Suchen** (`saved_search`) und **materialisierten Collections** (`collection`) in zwei Tabs; Ausführen einer Suche zeigt die Trefferzahl, Collections listen ihre Mitglieder und lassen sich synchron refreshen (`POST /collections/{id}/refresh`)
-    - **(Umgesetzt:)** `meadow/frontend/saved_searches.py` (`/saved-searches`, admin-only) – die Suchkriterien werden im Dialog als **JSON** (Query-DSL) gepflegt; Collections pflegen Mitgliederzahl und `refresh_interval`
-    - **Geplant:** schema-getriebenes **Suchformular** statt JSON (Feldkatalog `GET /search-fields`, Zeilen-Editor Feld/Operator/Wert, Servervalidierung, Tabs Formular/JSON, Vorschau-Zähler). **Details:** [suche-formular.md](suche-formular.md)
+    - **(Umgesetzt:)** `meadow/frontend/saved_searches.py` (`/saved-searches`, admin-only) – Tabs „Gespeicherte Suchen“/„Collections“; Liste mit der Spalte **Kriterien** (Query-Zusammenfassung); der Dialog hat die Tabs **Formular**/**JSON** (Query-DSL `where`/`fulltext`/`references`/`sort`/`start`/`limit`), einen **Vorschau**-Zähler und eine Prüfung vor dem Speichern; Collections zeigen Mitglieder und Refresh
+    - **Formular-Modul:** `meadow/frontend/search_form.py` rendert den Feldkatalog (`GET /search-fields`) zu einem **rekursiven Gruppen-Editor** (UND/ODER, Bedingung/Gruppe hinzufügen, Feld + Sprache + Operator + typabhängiges Wert-Widget, `between` mit zwei Feldern, Mehrfachauswahl bei `in`/`not_in`) sowie Referenz-, Sortier- und Limit-Abschnitten und übersetzt Baum ↔ Query-DSL; die JSON-Tab-Synchronisation nutzt die zuletzt gespeicherte Query als Basis, damit nicht dargestellte Bestandteile erhalten bleiben
+    - **(Umgesetzt:)** schema-getriebenes **Suchformular** statt JSON-Editor (Feldkatalog, Validierung mit Pfadmeldungen, UND/ODER, `between`, Referenzen, Sortierung, Vorschau). **Details:** [suche-formular.md](suche-formular.md)
 
 **Spätere Ausbaustufen (nicht im MVP):**
 
-- Erweiterte Suche mit Query-Builder („Advanced Search“) – **Formular für gespeicherte Suchen geplant:** [suche-formular.md](suche-formular.md); gespeicherte Suchen und materialisierte Collections sind bereits umgesetzt (Modul 14)
+- Erweiterte Suche mit Query-Builder („Advanced Search“) – ~~für gespeicherte Suchen **umgesetzt, Phase 9**~~ (`meadow/frontend/search_form.py`, siehe Modul 14 und [suche-formular.md](suche-formular.md)); gespeicherte Suchen und materialisierte Collections sind umgesetzt; offen bleibt die Übernahme desselben Katalogs in eine erweiterte Suche **im Grid** (`/products`, Stage C)
 - ~~Pinned Attributes und Attribut-Suchleiste im Formular~~ **(umgesetzt, Phase 9: `meadow/frontend/form.py` – Pin-Toggle je Zeile + sticky Seitenleiste, Suchfeld mit Trefferfilter)**
 - ~~Find & Replace~~ **(umgesetzt, Phase 9: Grid-Dialog `find_replace` + Bulk-Operation `replace_text` im Worker)**, ~~sequenzielles Editieren~~ **(umgesetzt, Phase 9: `meadow/frontend/edit_queue.py` + Grid-Button `edit_note` + Fortschrittsbanner im Formular)**, ~~Send-for-approval bei Bulk-Änderungen~~ **(umgesetzt, Phase 9: Operation `send_for_approval` + Schalter „anschließend zur Freigabe“)**
 - Kanalspezifische Freigaben (per-Kanal-Vollständigkeit)
