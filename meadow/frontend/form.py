@@ -44,6 +44,10 @@ _STATUS_OPTIONS = ("draft", "in_review", "published", "archived")
 #: Debounce (ms) for the attribute search field: one re-render per typing pause.
 _SEARCH_DEBOUNCE_MS = 300
 
+#: Session key holding the open/closed state of the form's attribute sections
+#: (`{object_type: {section_key: bool}}`), so a reload keeps them as they were.
+SECTIONS_STORAGE_KEY = "form_sections"
+
 
 def _label(defn: dict | None, name: str, locale: str) -> str:
     """Resolves an attribute's display label (definition label or the name)."""
@@ -211,32 +215,20 @@ async def product_form(object_id: str) -> None:
         def render_value_marker(attr_name: str, defn: dict | None, own: object) -> None:
             """Adds the inheritance/interruption marker next to the label.
 
-            The grey value alone is easy to miss, so the state gets an icon **and**
-            a small badge (like the required-field asterisk).
+            Icon + tooltip are the whole marker: a text badge next to it would
+            only cost space without adding information.
             """
             state = attr_state(attr_name, defn, own)
             if state == "inherited":
                 source = inherited_source(attr_name) or {}
                 origin = str(source.get("label") or source.get("from") or "")
-                with (
-                    ui.row()
-                    .classes("items-center gap-1 flex-nowrap shrink-0")
-                    .tooltip(t("form.inherited_from", label=origin))
-                ):
-                    ui.icon("swap_horiz").classes("text-gray-400 text-xs")
-                    ui.badge(t("form.inherited_badge")).props("outline color=grey-6").classes(
-                        "text-caption"
-                    )
+                ui.icon("swap_horiz").classes("text-gray-400 text-xs shrink-0").tooltip(
+                    t("form.inherited_from", label=origin)
+                )
             elif state == "interrupted":
-                with (
-                    ui.row()
-                    .classes("items-center gap-1 flex-nowrap shrink-0")
-                    .tooltip(t("form.interrupted"))
-                ):
-                    ui.icon("link_off").classes("text-warning text-xs")
-                    ui.badge(t("form.interrupted_badge")).props("outline color=warning").classes(
-                        "text-caption"
-                    )
+                ui.icon("link_off").classes("text-warning text-xs shrink-0").tooltip(
+                    t("form.interrupted")
+                )
 
         async def apply_value_action(attr_name: str, *, remove: bool) -> None:
             """Removes the own value (back to inherited) or sets it explicitly empty."""
@@ -504,20 +496,32 @@ async def product_form(object_id: str) -> None:
             title: str,
             items: list[tuple[str, dict | None]],
             *,
+            section_key: str,
             open_: bool = True,
+            force_open: bool = False,
             id_label: str | None = None,
             show_missing_only: bool = False,
         ) -> tuple[ui.expansion, ui.column] | None:
-            """Renders a collapsible section as an aligned attribute table."""
+            """Renders a collapsible section as an aligned attribute table.
+
+            ``section_key`` identifies the section for the persisted open/closed
+            state, so a save or an inheritance action (both reload the page) does
+            not collapse what the user just had open. ``open_`` is only the
+            initial default; ``force_open`` (an active attribute search) wins.
+            """
             if show_missing_only:
                 missing_set = set(missing)
                 items = [(n, d) for n, d in items if n in missing_set]
                 if not items and id_label is None:
                     return None
+            is_open = force_open or section_state.get(section_key, open_)
             expansion = (
-                ui.expansion(title, value=open_)
+                ui.expansion(title, value=is_open)
                 .classes("w-full")
                 .props("header-class=bg-green-2 text-green-9")
+            )
+            expansion.on_value_change(
+                lambda event, key=section_key: remember_section(key, bool(event.value))
             )
             with expansion:
                 content = ui.column().classes("w-full gap-0 p-2")
@@ -853,9 +857,15 @@ async def product_form(object_id: str) -> None:
                 [r for r in all_references if r.get("definition_id") != "rel_category_member"]
             )
             expansion = (
-                ui.expansion(f"{t('form.relations')} ({total})", value=True)
+                ui.expansion(
+                    f"{t('form.relations')} ({total})",
+                    value=section_state.get("__relations__", True),
+                )
                 .classes("w-full")
                 .props("header-class=bg-green-2 text-green-9")
+            )
+            expansion.on_value_change(
+                lambda event: remember_section("__relations__", bool(event.value))
             )
             with expansion:
                 content = ui.column().classes("w-full gap-2 p-2")
@@ -1108,9 +1118,15 @@ async def product_form(object_id: str) -> None:
         def build_categories_section() -> tuple[ui.expansion, ui.column] | None:
             """Renders the collapsible product-centric categories section."""
             expansion = (
-                ui.expansion(f"{t('form.categories')} ({len(cat_state)})", value=False)
+                ui.expansion(
+                    f"{t('form.categories')} ({len(cat_state)})",
+                    value=section_state.get("__categories__", False),
+                )
                 .classes("w-full")
                 .props("header-class=bg-blue-2 text-blue-9")
+            )
+            expansion.on_value_change(
+                lambda event: remember_section("__categories__", bool(event.value))
             )
             with expansion:
                 content = ui.column().classes("w-full gap-2 p-2")
@@ -1139,6 +1155,16 @@ async def product_form(object_id: str) -> None:
         # --- "Nur fehlende Pflichtfelder" toggle + attribute search + sections.
         show_missing_only = bool(app.storage.user.get("form_show_missing", False))
         attribute_search = {"term": ""}
+        section_state = dict(
+            (app.storage.user.get(SECTIONS_STORAGE_KEY) or {}).get(object_type) or {}
+        )
+
+        def remember_section(section_key: str, is_open: bool) -> None:
+            """Persists a section's open/closed state for the current object type."""
+            section_state[section_key] = is_open
+            stored = dict(app.storage.user.get(SECTIONS_STORAGE_KEY) or {})
+            stored[object_type] = section_state
+            app.storage.user[SECTIONS_STORAGE_KEY] = stored
 
         def on_attribute_search(value: str | None) -> None:
             attribute_search["term"] = (value or "").strip()
@@ -1217,6 +1243,7 @@ async def product_form(object_id: str) -> None:
                         result = render_section(
                             t("form.summary"),
                             summary_view,
+                            section_key="__summary__",
                             open_=True,
                             id_label=object_id,
                             show_missing_only=show_missing_only,
@@ -1227,7 +1254,9 @@ async def product_form(object_id: str) -> None:
                         result = render_section(
                             t("form.ungrouped"),
                             ungrouped_view,
-                            open_=bool(term),
+                            section_key="__ungrouped__",
+                            open_=False,
+                            force_open=bool(term),
                             show_missing_only=show_missing_only,
                         )
                         if result is not None:
@@ -1240,7 +1269,9 @@ async def product_form(object_id: str) -> None:
                         result = render_section(
                             title,
                             items,
-                            open_=bool(term),
+                            section_key=f"group:{gid}",
+                            open_=False,
+                            force_open=bool(term),
                             show_missing_only=show_missing_only,
                         )
                         if result is not None:

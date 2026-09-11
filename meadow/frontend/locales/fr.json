@@ -946,7 +946,5 @@
   "grid.inherited_cell": "Hérité de {label}",
   "export.resolve_inheritance": "Exporter aussi les valeurs héritées",
   "export.resolve_inheritance_hint": "Remplit les attributs non maintenus sur l’objet avec la valeur héritée du parent.",
-  "form.inherited_badge": "hérité",
-  "form.interrupted_badge": "interrompu",
   "grid.interrupted_cell": "Défini vide : la valeur interrompt l’héritage"
 }

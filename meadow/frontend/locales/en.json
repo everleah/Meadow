@@ -946,7 +946,5 @@
   "grid.inherited_cell": "Inherited from {label}",
   "export.resolve_inheritance": "Also export inherited values",
   "export.resolve_inheritance_hint": "Fills attributes that are not maintained on the object itself with the value inherited from its parent.",
-  "form.inherited_badge": "inherited",
-  "form.interrupted_badge": "interrupted",
   "grid.interrupted_cell": "Explicitly empty: the value interrupts inheritance"
 }
