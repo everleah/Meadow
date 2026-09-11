@@ -32,6 +32,7 @@ from typing import Any
 import httpx
 import nats
 import nats.js.api as jsapi
+import nats.js.errors as jserrors
 from pydantic import BaseModel, Field, field_validator
 
 from meadow.worker.log_sender import LogSender
@@ -267,7 +268,7 @@ async def _ensure_dlq_stream(js) -> None:
     """Ensures the webhook dead-letter stream exists (idempotent)."""
     try:
         await js.stream_info(EVENTS_DLQ_STREAM)
-    except nats.js.errors.NotFoundError:
+    except jserrors.NotFoundError:
         await js.add_stream(name=EVENTS_DLQ_STREAM, subjects=[EVENTS_DLQ_SUBJECT])
 
 
@@ -580,7 +581,9 @@ async def _handle_message(
     immediate = [connector for connector in matching if connector.buffer is None]
     buffered = [connector for connector in matching if connector.buffer is not None]
     for connector in buffered:
-        await connector.buffer.add(_coalesce_key(event), event, msg)
+        buffer = connector.buffer
+        if buffer is not None:
+            await buffer.add(_coalesce_key(event), event, msg)
 
     await tracker.open(msg, len(immediate) + len(buffered))
     for connector in immediate:

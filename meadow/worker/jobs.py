@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import nats
 import nats.js.api as jsapi
+import nats.js.errors as jserrors
 from pydantic import BaseModel, Field
 
 from meadow.worker.http import loopback_host
@@ -217,7 +218,7 @@ async def ensure_dlq_stream(js) -> None:
     """Ensures the dead-letter stream exists (idempotent)."""
     try:
         await js.stream_info(JOBS_DLQ_STREAM)
-    except nats.js.errors.NotFoundError:
+    except jserrors.NotFoundError:
         await js.add_stream(name=JOBS_DLQ_STREAM, subjects=[JOBS_DLQ_SUBJECT])
 
 
