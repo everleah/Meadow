@@ -945,5 +945,7 @@
   "form.inherit_failed": "L’action n’a pas pu être appliquée.",
   "grid.inherited_cell": "Hérité de {label}",
   "export.resolve_inheritance": "Exporter aussi les valeurs héritées",
-  "export.resolve_inheritance_hint": "Remplit les attributs non maintenus sur l’objet avec la valeur héritée du parent."
+  "export.resolve_inheritance_hint": "Remplit les attributs non maintenus sur l’objet avec la valeur héritée du parent.",
+  "form.inherited_badge": "hérité",
+  "form.interrupted_badge": "interrompu"
 }

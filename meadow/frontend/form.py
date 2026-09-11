@@ -205,16 +205,34 @@ async def product_form(object_id: str) -> None:
             return "own"
 
         def render_value_marker(attr_name: str, defn: dict | None, own: object) -> None:
-            """Adds the inheritance/interruption marker next to the label."""
+            """Adds the inheritance/interruption marker next to the label.
+
+            The grey value alone is easy to miss, so the state gets an icon **and**
+            a small badge (like the required-field asterisk).
+            """
             state = attr_state(attr_name, defn, own)
             if state == "inherited":
                 source = inherited_source(attr_name) or {}
                 origin = str(source.get("label") or source.get("from") or "")
-                ui.icon("swap_horiz").classes("text-gray-400 text-xs").tooltip(
-                    t("form.inherited_from", label=origin)
-                )
+                with (
+                    ui.row()
+                    .classes("items-center gap-1 flex-nowrap shrink-0")
+                    .tooltip(t("form.inherited_from", label=origin))
+                ):
+                    ui.icon("swap_horiz").classes("text-gray-400 text-xs")
+                    ui.badge(t("form.inherited_badge")).props("outline color=grey-6").classes(
+                        "text-caption"
+                    )
             elif state == "interrupted":
-                ui.icon("link_off").classes("text-warning text-xs").tooltip(t("form.interrupted"))
+                with (
+                    ui.row()
+                    .classes("items-center gap-1 flex-nowrap shrink-0")
+                    .tooltip(t("form.interrupted"))
+                ):
+                    ui.icon("link_off").classes("text-warning text-xs")
+                    ui.badge(t("form.interrupted_badge")).props("outline color=warning").classes(
+                        "text-caption"
+                    )
 
         async def apply_value_action(attr_name: str, *, remove: bool) -> None:
             """Removes the own value (back to inherited) or sets it explicitly empty."""

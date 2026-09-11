@@ -67,14 +67,41 @@ _APPROVAL_MODIFIER_OPS = (
 # keys into real JavaScript functions on the client (`convertDynamicProperties`),
 # so an inherited cell is dimmed/italic and carries the source as browser tooltip.
 INHERITED_FIELD = "_inherited"
+#: Dimmed + italic cell for inherited values (the marker icon comes from the
+#: renderer below, because "not maintained here" must be recognisable at a
+#: glance — a grey tone alone is too subtle).
 INHERITED_CELL_STYLE = (
     "(params) => (params.data && params.data._inherited"
     " && params.data._inherited[params.colDef.field])"
-    " ? {opacity: 0.55, fontStyle: 'italic'} : null"
+    " ? {fontStyle: 'italic', color: '#6b7280'} : null"
 )
 INHERITED_CELL_TOOLTIP = (
     "(params) => (params.data && params.data._inherited"
     " && params.data._inherited[params.colDef.field]) || ''"
+)
+#: Cell renderer that prefixes an inherited value with the `swap_horiz` icon
+#: (same symbol as the product form) and keeps the source as native tooltip.
+#: The renderer only affects the display — `params.value` stays the plain value,
+#: so sorting and the inline editor keep working.
+INHERITED_CELL_RENDERER = (
+    "(params) => {"
+    " const marker = params.data && params.data._inherited"
+    " && params.data._inherited[params.colDef.field];"
+    " const span = document.createElement('span');"
+    " const text = params.value === null || params.value === undefined"
+    " ? '' : String(params.value);"
+    " if (marker) {"
+    "  const icon = document.createElement('i');"
+    "  icon.className = 'material-icons';"
+    "  icon.style.cssText = 'font-size:14px;vertical-align:-2px;margin-right:2px;"
+    "color:#9e9e9e;font-style:normal';"
+    "  icon.textContent = 'swap_horiz';"
+    "  span.appendChild(icon);"
+    "  span.title = marker;"
+    " }"
+    " span.appendChild(document.createTextNode(text));"
+    " return span;"
+    "}"
 )
 
 
@@ -824,6 +851,7 @@ async def products_page(request: Request) -> None:
             if isinstance(field, str) and LANG_SEPARATOR not in field:
                 column[":cellStyle"] = INHERITED_CELL_STYLE
                 column[":tooltipValueGetter"] = INHERITED_CELL_TOOLTIP
+                column[":cellRenderer"] = INHERITED_CELL_RENDERER
         language_fields = {**name_language_fields, **attribute_language_fields}
         column_defs = with_header_tooltips(
             [

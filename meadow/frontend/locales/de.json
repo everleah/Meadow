@@ -945,5 +945,7 @@
   "form.inherit_failed": "Die Aktion konnte nicht ausgeführt werden.",
   "grid.inherited_cell": "Vererbt von {label}",
   "export.resolve_inheritance": "Auch vererbte Werte exportieren",
-  "export.resolve_inheritance_hint": "Füllt Attribute, die am Objekt selbst nicht gepflegt sind, mit dem vom Elternteil geerbten Wert."
+  "export.resolve_inheritance_hint": "Füllt Attribute, die am Objekt selbst nicht gepflegt sind, mit dem vom Elternteil geerbten Wert.",
+  "form.inherited_badge": "vererbt",
+  "form.interrupted_badge": "unterbrochen"
 }
