@@ -121,6 +121,7 @@ DEFINE INDEX IF NOT EXISTS idx_ref_out_def ON TABLE reference FIELDS out, defini
 DEFINE TABLE IF NOT EXISTS relation_definition;
 DEFINE FIELD IF NOT EXISTS name ON TABLE relation_definition TYPE string;
 DEFINE FIELD IF NOT EXISTS kind ON TABLE relation_definition TYPE string;
+DEFINE FIELD IF NOT EXISTS role ON TABLE relation_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS source_types ON TABLE relation_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS target_types ON TABLE relation_definition TYPE array;
 DEFINE FIELD IF NOT EXISTS label ON TABLE relation_definition TYPE object;

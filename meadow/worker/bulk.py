@@ -67,10 +67,27 @@ _NO_APPROVAL_OPS = frozenset({"change_status", "send_for_approval", "delete"})
 #: return `changed: 0` in that case).
 _SKIPPABLE_OPS = frozenset({"replace_text", "add_relation", "remove_relation"})
 
-#: Relation type of a collection membership: it is created through
-#: `POST /collections/{id}/members` (which maintains `rank`/`added_at`) instead
-#: of the generic `POST /references`.
-COLLECTION_MEMBER_DEF = "rel_collection_member"
+#: Roles a relation type can have (see `plan/detail/relationen.md`).
+ROLE_COMPOSITION = "composition"
+ROLE_CATEGORY = "category"
+ROLE_COLLECTION = "collection"
+ROLE_LINK = "link"
+
+#: Relation type of the built-in primary categorisation, used when a bulk
+#: category operation does not name a specific type.
+PRIMARY_CATEGORY_DEF = "rel_category_member"
+
+#: Roles of the built-in relation types, used as fallback when the core cannot
+#: be asked (e.g. the definition list is unavailable).
+_BUILTIN_ROLES = {
+    "rel_depends_on": ROLE_COMPOSITION,
+    "rel_category_member": ROLE_CATEGORY,
+    "rel_collection_member": ROLE_COLLECTION,
+    "rel_related": ROLE_LINK,
+}
+
+#: Cache key for the relation-type roles fetched once per job run.
+_ROLE_CACHE_KEY = "relation_roles"
 
 #: Default minimum number of children before a value is pushed up (see the
 #: consolidation plan: with a single child there is no maintenance gain).
@@ -240,8 +257,11 @@ async def _apply(
         target = str(params.get("target") or "")
         if not definition_id or not target:
             raise RuntimeError("`parameters.definition_id` and `parameters.target` are required")
+        role = await _relation_role(
+            active, core_url, definition_id, cache if cache is not None else {}
+        )
         if op == "add_relation":
-            return await _add_relation(active, core_url, object_id, definition_id, target)
+            return await _add_relation(active, core_url, object_id, definition_id, role, target)
         return await _remove_relation(active, core_url, object_id, definition_id, target)
 
     if op == "change_status":
@@ -261,22 +281,27 @@ async def _apply(
         category = str(params.get("category") or "")
         if not category:
             raise RuntimeError("`parameters.category` is required")
+        # Custom category relation types may be addressed explicitly; without
+        # `definition_id` the built-in primary type is used.
+        definition_id = str(params.get("definition_id") or "") or PRIMARY_CATEGORY_DEF
         if op == "add_category":
             response = await active.post(
                 f"{core_url}/references",
                 json={
                     "source": object_id,
                     "target": category,
-                    "definition_id": "rel_category_member",
+                    "definition_id": definition_id,
                 },
             )
         else:
-            ref_id = await _find_category_member(active, core_url, object_id, category)
+            ref_id = await _find_category_member(
+                active, core_url, object_id, category, definition_id
+            )
             if ref_id is None:
                 raise RuntimeError("category membership not found")
             response = await active.delete(f"{core_url}/references/{ref_id}")
         response.raise_for_status()
-        return {"category": category}
+        return {"category": category, "relation": definition_id}
 
     if op == "change_parent":
         parent = str(params.get("parent") or "")
@@ -326,16 +351,43 @@ async def request_approval(
     return {"approval": status}
 
 
+async def _relation_role(
+    active: httpx.AsyncClient,
+    core_url: str,
+    definition_id: str,
+    cache: dict[str, Any],
+) -> str:
+    """Returns the role of a relation type (`link` when unknown).
+
+    The definition list is fetched at most once per job run; if it cannot be
+    read, the roles of the built-in types are used.
+    """
+    roles = cache.get(_ROLE_CACHE_KEY)
+    if roles is None:
+        roles = dict(_BUILTIN_ROLES)
+        try:
+            response = await active.get(f"{core_url}/relation-definitions")
+            response.raise_for_status()
+            for definition in response.json() or []:
+                key = str(definition.get("id") or "")
+                key = key.split(":", 1)[1] if ":" in key else key
+                if key:
+                    roles[key] = str(definition.get("role") or ROLE_LINK)
+        except Exception as exc:  # noqa: BLE001 - roles only refine the routing
+            logger.warning("relation roles unavailable, using built-ins: %s", exc)
+        cache[_ROLE_CACHE_KEY] = roles
+    return roles.get(definition_id, ROLE_LINK)
+
+
 async def _find_category_member(
     active: httpx.AsyncClient,
     core_url: str,
     object_id: str,
     category: str,
+    definition_id: str = PRIMARY_CATEGORY_DEF,
 ) -> str | None:
-    """Returns the `category_member` reference id linking object <-> category."""
-    for reference_id in await _reference_ids(
-        active, core_url, object_id, "rel_category_member", category
-    ):
+    """Returns the reference id linking object <-> category of a category type."""
+    for reference_id in await _reference_ids(active, core_url, object_id, definition_id, category):
         return reference_id
     return None
 
@@ -345,6 +397,7 @@ async def _add_relation(
     core_url: str,
     object_id: str,
     definition_id: str,
+    role: str,
     target: str,
 ) -> dict[str, Any]:
     """Links `object_id` to `target` with `definition_id` (idempotent).
@@ -352,7 +405,7 @@ async def _add_relation(
     Reports `changed: 0` when the link already exists, so the caller counts the
     object as skipped instead of writing a duplicate edge.
     """
-    if definition_id == COLLECTION_MEMBER_DEF:
+    if role == ROLE_COLLECTION:
         # Collection membership goes through the collections endpoint: it creates
         # the edge in the stored direction (member -> collection) and maintains
         # `rank`/`added_at`.

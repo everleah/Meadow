@@ -98,10 +98,16 @@ pub struct ListObjects {
     /// Filter to the composition subtree of this object (server-side lazy tree filter).
     #[serde(default)]
     pub ancestor: Option<String>,
-    /// Filter to objects assigned (via `category_member`) to this category or
-    /// any of its composition descendants (category tree in the grid).
+    /// Filter to objects assigned (via a category relation) to this category or
+    /// any of its composition descendants (category tree in the grid). By
+    /// default the built-in primary category type is used; `definition_id`
+    /// selects another relation type with the usage `category`.
     #[serde(default)]
     pub category: Option<String>,
+    /// Relation type used by `category`/`uncategorized` (must be a category
+    /// relation); empty = the built-in primary category type.
+    #[serde(default)]
+    pub definition_id: Option<String>,
     /// Filter to objects that are members of this materialized collection
     /// (via `collection_member`; flat, no hierarchy).
     #[serde(default)]
@@ -110,8 +116,9 @@ pub struct ListObjects {
     /// return; used for grid selections and saved-search results.
     #[serde(default)]
     pub ids: Option<String>,
-    /// Only return objects that are NOT assigned to any category (no
-    /// `category_member` reference as member); the "Nicht kategorisiert" entry.
+    /// Only return objects that are NOT assigned to any category (no reference
+    /// of the category relation as member, see `definition_id`); the
+    /// "Nicht kategorisiert" entry.
     #[serde(default)]
     pub uncategorized: bool,
     /// Only return objects whose completeness for `locale` is **below** this
@@ -635,9 +642,22 @@ pub async fn list_objects(
             "id IN array::map($collection_member_ids, |$k| type::record('object', $k))".to_owned(),
         );
     }
+    // The category filters work on a single category relation type: the built-in
+    // primary type by default, or the one requested via `definition_id`. An
+    // explicit `definition_id` is always validated, even if no filter uses it.
+    let mut category_definition: Option<String> = None;
+    if params.category.is_some() || params.uncategorized || params.definition_id.is_some() {
+        category_definition = Some(
+            crate::api::references::resolve_category_definition(
+                &state.db,
+                params.definition_id.as_deref(),
+            )
+            .await?,
+        );
+    }
     if params.uncategorized {
         conditions.push(
-            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = 'rel_category_member') AND type NOT IN ['category', 'root']"
+            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = $category_definition) AND type NOT IN ['category', 'root']"
                 .to_owned(),
         );
     }
@@ -676,8 +696,15 @@ pub async fn list_objects(
         query = query.bind(("ancestor_ids", keys));
     }
     if let Some(category) = &params.category {
-        let keys = crate::api::references::category_member_keys(&state.db, category).await?;
+        let definition = category_definition
+            .as_deref()
+            .unwrap_or(crate::api::references::PRIMARY_CATEGORY_DEFINITION);
+        let keys =
+            crate::api::references::category_member_keys(&state.db, category, definition).await?;
         query = query.bind(("category_member_ids", keys));
+    }
+    if let Some(definition) = &category_definition {
+        query = query.bind(("category_definition", definition.clone()));
     }
     if let Some(collection) = &params.collection {
         let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;

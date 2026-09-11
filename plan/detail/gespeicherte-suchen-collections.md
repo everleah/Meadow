@@ -70,7 +70,7 @@ Eine **Collection** ist ein eigenständiges Objekt (z. B. `type: "collection"`),
 **Modellierung:**
 
 - Das Collection-Objekt besitzt eine Referenz auf die zugrunde liegende `saved_search`.
-- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden. Analog zu `category_member` zeigt die Relation vom Mitgliedsobjekt (`in`) auf das Container-Objekt (`out`). Die Mitgliedschaft ist die **Verwendung/Rolle `collection`** eines Relationstyps (geplant: `relation_definition.role`, siehe Abschnitt „Verwendung von Relationstypen“ in [relationen.md](relationen.md)) – sie erzwingt den Zieltyp `collection` und die Kanten-Metadaten `rank`/`added_at`:
+- Die Ergebnisse werden über Relationen des Typs `collection_member` mit dem Collection-Objekt verbunden. Analog zu `category_member` zeigt die Relation vom Mitgliedsobjekt (`in`) auf das Container-Objekt (`out`). Die Mitgliedschaft ist die **Verwendung/Rolle `collection`** eines Relationstyps (`relation_definition.role`, siehe Abschnitt „Verwendung von Relationstypen“ in [relationen.md](relationen.md)) – sie erzwingt den Zieltyp `collection` und die Kanten-Metadaten `rank`/`added_at`:
 
   ```json
   {

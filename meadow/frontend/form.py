@@ -37,6 +37,13 @@ from meadow.frontend.enums import enum_options
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
+from meadow.frontend.relation_roles import (
+    PRIMARY_CATEGORY_DEF,
+    ROLE_CATEGORY,
+    category_definitions,
+    definition_key,
+    role_of,
+)
 
 #: Workflow statuses offered in the status selector. The core validates the
 #: actual transition via the workflow guard.
@@ -883,10 +890,14 @@ async def product_form(object_id: str) -> None:
             if not rel_defs:
                 return None
             rows_by_dk = build_reference_rows()
-            # Category assignment is handled in the dedicated "Categories"
-            # section; hide `category_member` here to avoid duplication.
+            # Categorisation is handled in the dedicated "Categories" sections;
+            # hide every category relation type here to avoid duplication.
             total = len(
-                [r for r in all_references if r.get("definition_id") != "rel_category_member"]
+                [
+                    r
+                    for r in all_references
+                    if role_of(rel_def_by_key.get(str(r.get("definition_id")), {})) != ROLE_CATEGORY
+                ]
             )
             expansion = (
                 ui.expansion(
@@ -908,7 +919,7 @@ async def product_form(object_id: str) -> None:
                     return (rank, rel_label(dk).lower())
 
                 for dk in sorted(rel_def_by_key, key=sort_key):
-                    if dk == "rel_category_member":
+                    if role_of(rel_def_by_key[dk]) == ROLE_CATEGORY:
                         continue
                     defn = rel_def_by_key[dk]
                     kind = rel_kind(dk)
@@ -1077,52 +1088,58 @@ async def product_form(object_id: str) -> None:
         # --- Categories (product-centric assignment, vgl. Akeneo) -----------
         # Assignment uses the shared object picker (multi-select, restricted to
         # `category`); assigned categories render as removable chips and each change
-        # creates/removes the `category_member` edge immediately. Labels come from
+        # creates/removes the category edge immediately. Labels come from
         # the picker hits / `GET /objects/{id}` — no full category-tree load.
+        # One section per category relation type (primary first); custom category
+        # types (e.g. "Marke") keep their own assignment set.
+        category_defs = category_definitions(rel_defs)
         cat_state: dict[str, dict] = {}
-        cat_ref_ids: dict[str, str] = {
-            str(ref.get("out")): ref.get("id")
-            for ref in all_references
-            if ref.get("definition_id") == "rel_category_member"
-            and ref.get("out")
-            and ref.get("id")
+        cat_ref_ids: dict[str, dict[str, str]] = {
+            definition_key(defn): {
+                str(ref.get("out")): ref.get("id")
+                for ref in all_references
+                if ref.get("definition_id") == definition_key(defn)
+                and ref.get("out")
+                and ref.get("id")
+            }
+            for defn in category_defs
         }
 
         async def load_category_labels() -> None:
             """Resolves the display data of the currently assigned categories."""
-            for cat_id in cat_ref_ids:
-                if cat_id in cat_state:
-                    continue
-                try:
-                    obj = await client.get_object(token, cat_id, locale=locale)
-                except Exception:  # noqa: BLE001 - fall back to the raw id
-                    cat_state[cat_id] = {"id": cat_id, "label": cat_id, "type": "category"}
-                    continue
-                cat_state[cat_id] = {
-                    "id": cat_id,
-                    "label": resolve_value((obj.get("attributes") or {}).get("name"), locale)
-                    or cat_id,
-                    "type": str(obj.get("type") or "category"),
-                }
+            for assigned in cat_ref_ids.values():
+                for cat_id in assigned:
+                    if cat_id in cat_state:
+                        continue
+                    try:
+                        obj = await client.get_object(token, cat_id, locale=locale)
+                    except Exception:  # noqa: BLE001 - fall back to the raw id
+                        cat_state[cat_id] = {"id": cat_id, "label": cat_id, "type": "category"}
+                        continue
+                    cat_state[cat_id] = {
+                        "id": cat_id,
+                        "label": resolve_value((obj.get("attributes") or {}).get("name"), locale)
+                        or cat_id,
+                        "type": str(obj.get("type") or "category"),
+                    }
 
-        async def assign_categories() -> None:
-            """Adds `category_member` edges for the categories picked in the dialog."""
+        async def assign_categories(def_key: str) -> None:
+            """Adds category edges for the categories picked in the dialog."""
+            assigned = cat_ref_ids.setdefault(def_key, {})
 
             async def on_pick(hits: list[dict]) -> None:
                 for hit in hits:
                     cat_id = str(hit["id"])
                     cat_state[cat_id] = hit
-                    if cat_id in cat_ref_ids:
+                    if cat_id in assigned:
                         continue
                     try:
-                        created = await client.create_reference(
-                            token, object_id, cat_id, "rel_category_member"
-                        )
+                        created = await client.create_reference(token, object_id, cat_id, def_key)
                     except Exception as exc:  # noqa: BLE001 - show a friendly message
                         ui.notify(str(exc), color="negative")
                         continue
                     if created and created.get("id"):
-                        cat_ref_ids[cat_id] = created["id"]
+                        assigned[cat_id] = created["id"]
                 render_sections.refresh()
 
             await open_object_picker(
@@ -1136,9 +1153,9 @@ async def product_form(object_id: str) -> None:
                 multi=True,
             )
 
-        async def unassign_category(cat_id: str) -> None:
-            """Removes the `category_member` edge of one category."""
-            reference_id = cat_ref_ids.pop(cat_id, None)
+        async def unassign_category(def_key: str, cat_id: str) -> None:
+            """Removes one category edge of a category relation type."""
+            reference_id = cat_ref_ids.get(def_key, {}).pop(cat_id, None)
             cat_state.pop(cat_id, None)
             if reference_id:
                 try:
@@ -1147,18 +1164,28 @@ async def product_form(object_id: str) -> None:
                     ui.notify(str(exc), color="negative")
             render_sections.refresh()
 
-        def build_categories_section() -> tuple[ui.expansion, ui.column] | None:
-            """Renders the collapsible product-centric categories section."""
+        def build_category_section(definition: dict) -> tuple[ui.expansion, ui.column]:
+            """Renders the collapsible section of one category relation type."""
+            def_key = definition_key(definition)
+            assigned = cat_ref_ids.setdefault(def_key, {})
+            # The primary type keeps the established title; custom types are
+            # labelled with their own (multilingual) name.
+            title = (
+                t("form.categories")
+                if def_key == PRIMARY_CATEGORY_DEF
+                else (resolve_value(definition.get("label"), locale) or def_key)
+            )
+            state_key = f"__categories__:{def_key}"
             expansion = (
                 ui.expansion(
-                    f"{t('form.categories')} ({len(cat_state)})",
-                    value=section_state.get("__categories__", False),
+                    f"{title} ({len(assigned)})",
+                    value=section_state.get(state_key, False),
                 )
                 .classes("w-full")
                 .props("header-class=bg-blue-2 text-blue-9")
             )
             expansion.on_value_change(
-                lambda event: remember_section("__categories__", bool(event.value))
+                lambda event, key=state_key: remember_section(key, bool(event.value))
             )
             with expansion:
                 content = ui.column().classes("w-full gap-2 p-2")
@@ -1168,19 +1195,20 @@ async def product_form(object_id: str) -> None:
                     ui.button(
                         t("form.categories_pick"),
                         icon="account_tree",
-                        on_click=lambda: assign_categories(),
+                        on_click=lambda d=def_key: assign_categories(d),
                     ).props("flat")
-                if not cat_state:
+                if not assigned:
                     ui.label(t("form.categories_none")).classes("text-caption text-gray-500")
                 else:
-                    for hit in cat_state.values():
+                    for cat_id in assigned:
+                        hit = cat_state.get(cat_id) or {"id": cat_id, "label": cat_id}
                         with ui.row().classes("items-center gap-2 w-full"):
                             ui.label(f"{hit.get('label')} · {hit.get('type')}").classes(
                                 "bg-neutral px-2 py-0.5 rounded text-xs"
                             )
                             ui.button(
                                 icon="close",
-                                on_click=lambda c=str(hit["id"]): unassign_category(c),
+                                on_click=lambda c=cat_id, d=def_key: unassign_category(d, c),
                             ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
             return expansion, content
 
@@ -1308,10 +1336,17 @@ async def product_form(object_id: str) -> None:
                         )
                         if result is not None:
                             jump_refs.append((title, *result))
-                # Categories (product-centric assignment) — always visible.
-                result = build_categories_section()
-                if result is not None:
-                    jump_refs.append((t("form.categories"), *result))
+                # Categories (product-centric assignment) — one section per
+                # category relation type, the built-in primary type first.
+                for definition in category_defs:
+                    def_key = definition_key(definition)
+                    title = (
+                        t("form.categories")
+                        if def_key == PRIMARY_CATEGORY_DEF
+                        else (resolve_value(definition.get("label"), locale) or def_key)
+                    )
+                    result = build_category_section(definition)
+                    jump_refs.append((title, *result))
                 # Relations (graph edges) — always visible.
                 result = build_relations_section()
                 if result is not None:

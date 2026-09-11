@@ -81,10 +81,11 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 - `source_types` / `target_types` schränken die erlaubten Objekttypen ein; **leer = alle Typen erlaubt**. Die Prüfung erfolgt **beim Anlegen jeder Relation** (Phase 1–2), nicht nur deklarativ.
 - `attributes` (Phase 9) ist die Liste der **Edge-Attribute** eines Relationstyps (Namen, die auf `attribute_definition` verweisen). Die zugehörigen Werte liegen auf der Kante in `reference.attributes[name]`; das Produkt-Formular rendert dafür typspezifische Eingabefelder.
 - `system: true` kennzeichnet eingebaute Typen (Seed in Phase 1–2): `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation).
-- `role` (geplant, s. u.) klassifiziert die **Verwendung** des Typs (`composition` | `category` | `collection` | `link`); Standard-Typen tragen ihre feste Rolle, neue benutzerdefinierte Typen starten als `link`.
-- Benutzerdefinierte Relationstypen (`system: false`, Phase 9) werden über die API angelegt (`POST /relation-definitions`) und sind immer Aggregationen; `PATCH /relation-definitions/{id}` ändert Label/Restriktionen/Attribute, `DELETE /relation-definitions/{id}` entfernt einen ungenutzten benutzerdefinierten Typ (400 für `system`-Typen, 409 solange Referenzen ihn nutzen).
+- `role` klassifiziert die **Verwendung** des Typs (`composition` | `category` | `collection` | `link`); Standard-Typen tragen ihre feste Rolle, neue benutzerdefinierte Typen starten als `link` und dürfen `link` oder `category` sein.- Benutzerdefinierte Relationstypen (`system: false`, Phase 9) werden über die API angelegt (`POST /relation-definitions`) und sind immer Aggregationen; `PATCH /relation-definitions/{id}` ändert Label/Restriktionen/Attribute, `DELETE /relation-definitions/{id}` entfernt einen ungenutzten benutzerdefinierten Typ (400 für `system`-Typen, 409 solange Referenzen ihn nutzen).
 
 ## Verwendung von Relationstypen (`role`) — Plan (2026-09-11)
+
+**Status: umgesetzt (Stage 1 + Zusatz-Kategorisierungen, 2026-09-11).** Kern, Seed-Fix, Worker, Formular, Relationstyp-Verwaltung, Bulk-Wizard und Tests sind umgesetzt; die Abweichungen zur ursprünglichen Planung stehen am Ende dieses Abschnitts.
 
 **Ausgangslage.** Alle Aggregationen sind technisch gleich (n:m-Kanten ohne Vererbung/Kaskade), haben aber schon heute **unterschiedliche Bedeutungen**: Kategorisierung (`category_member`), Sammlungs-Mitgliedschaft (`collection_member`) und allgemeine Verknüpfung (`related`). Diese Bedeutung steckt bisher nur in **hartkodierten IDs** – im Kern (`COMPOSITION_DEFINITION`, `category_member_keys`, `collection_member_keys`, `'rel_category_member'` in den Grid-Filtern), im Frontend (`form.py` blendet `rel_category_member` aus und behandelt `rel_depends_on` speziell, `grid.py::_DEDICATED_RELATION_DEFS`, Kategorien-/Collections-Sichten, Referenz-Modal) und im Worker (`bulk.py::COLLECTION_MEMBER_DEF` plus Sonder-Routing sowie `rel_category_member` für die Kategorie-Operationen).
 
@@ -107,19 +108,26 @@ Sichtbare Folgen der fehlenden Klassifizierung:
 Regeln:
 
 - **Konsistenz:** `role == 'composition'` ⟺ `kind == 'composition'`; `kind` bleibt im Datenmodell (Traversal, Ein-Eltern-Invariante), wird aber aus der Rolle abgeleitet und ist in API/UI nicht separat zu pflegen.
-- **Singletons:** `composition`, `category` und `collection` sind **System-Rollen** – genau eine Definition je Rolle, `system: true`, Rolle **nicht** änderbar.
+- **Singletons:** `composition` und `collection` sind **System-Rollen** – genau eine Definition je Rolle, `system: true`, Rolle **nicht** änderbar. `category` darf mehrfach vorkommen (primärer System-Typ + Zusatz-Typen, s. u.).
 - **Default:** Jeder neu angelegte Typ ist `link` ohne Sondermetadaten (kein `rank`/`added_at`, keine Sonder-UI) – also genau die erwartete „normale Verknüpfung“.
-- **Änderbar für Custom-Typen:** Eigene Typen dürfen ihre Rolle wechseln, sobald Sonderrollen mehrfach zugelassen sind (Stage 2). In **Stage 1** ist `link` die einzige zulässige Rolle für eigene Typen; im Dialog ist die Verwendung sichtbar und für `system`-Typen fest.
-- **Rollenprüfung im Kern:** `POST /references` prüft zusätzlich die Rolle – `category` ⇒ Zielobjekt vom Typ `category`, `collection` ⇒ Zielobjekt vom Typ `collection`, `composition` ⇒ bestehende Regeln (ein Elternteil, Zyklenschutz). Eine falsch konfigurierte Rolle wird damit sofort gemeldet statt später als Filter-Überraschung.
+- **Änderbar für Custom-Typen:** Eigene Typen dürfen ihre Rolle wechseln (`link` ⇄ `category`); `composition` und `collection` bleiben den System-Typen vorenthalten. Im Dialog ist die Verwendung wählbar, für `system`-Typen fest.
+- **Rollenprüfung im Kern:** `POST /references` prüft zusätzlich die Rolle – `category` ⇒ Zielobjekt vom Typ `category`, `collection` ⇒ Zielobjekt vom Typ `collection`, `composition` ⇒ bestehende Regeln (ein Elternteil, Zyklenschutz). Eine fehlkonfigurierte Rolle wird damit sofort gemeldet statt später als Filter-Überraschung. Zusätzlich normalisiert der Kern `target_types` auf den von der Rolle erzwungenen Typ (`category` ⇒ `["category"]`) und lehnt widersprüchliche Angaben mit `400` ab (gilt für benutzerdefinierte, nicht für `system`-Typen).
 - **Sichtbarkeit:** Die Relationstyp-Verwaltung und der Relationen-Abschnitt im Formular zeigen die Verwendung (Badge), damit „Verknüpfung vs. Kategorie vs. Sammlung“ ohne ID-Wissen erkennbar ist.
 
-**Umsetzungsschritte (Stage 1):**
+**Umsetzungsschritte (Stage 1) — alle erledigt:**
 
 1. **Schema & Seed:** `role` an `relation_definition` (`schema.rs`), Seed setzt die vier Rollen. **Dabei mitzubeheben:** `seed::apply` schreibt System-Records bei **jedem** Kernstart per `UPSERT … CONTENT` und überschreibt damit Laufzeit-Änderungen (Relationstypen, Objekttypen, Einheiten, Sprachen) – der Seed darf nur fehlende Records anlegen bzw. nur Identitätsfelder (`name`, `kind`, `system`, `role`) setzen. Eine einmalige Migration füllt fehlende Rollen mit `link`.
 2. **Kern:** `role` in Response/DTO + Validierung (`POST`/`PATCH /relation-definitions`: Default `link`, `system` ⇒ Rolle unveränderlich, Singletons erzwungen), Rollenprüfung in `create_reference`.
 3. **Frontend/Worker:** Hartkodierte IDs durch Rollen-Lookups ersetzen (`relation_def_by_key` → `role`, Abschnitte in `form.py`, `grid.py::_DEDICATED_RELATION_DEFS` → „Rollen mit eigener Operation“, `worker/bulk.py`-Routing über die Rolle statt `COLLECTION_MEMBER_DEF`).
-4. **UI:** `/relation-types` zeigt die **Verwendung** (Spalte + Badge, Auswahl im Dialog, für `system` deaktiviert); der Bulk-Wizard bietet `link` und `collection` (mit korrektem Routing) und blendet `composition`/`category` aus; der Relationen-Abschnitt im Formular folgt derselben Regel.
-5. **Tests & Doku:** Rollen-Validierung (Core-Unit-Tests), Wizard-Filter und Worker-Routing (pytest), Doku-Nachzug (`kategorisierung.md`, `gespeicherte-suchen-collections.md`, `api-design.md`, DOX-Dateien).
+4. **UI:** `/relation-types` zeigt die **Verwendung** (Spalte + Badge, Auswahl im Dialog, für `system` deaktiviert, `target_types` bei Kategorie-Rollen fixiert); der Bulk-Wizard bietet `link`/`collection` generisch (mit korrektem Routing) und blendet `composition`/`category` aus – für die Kategorie-Operationen wählt ein eigenes Feld den Kategorie-Typ (Default: primärer Typ); der Relationen-Abschnitt im Formular folgt derselben Regel.
+5. **Tests & Doku:** Rollen-Validierung (Core-Unit-Tests), Rollen-Helfer und Worker-Routing (pytest), Doku-Nachzug (`kategorisierung.md`, `gespeicherte-suchen-collections.md`, `api-design.md`, DOX-Dateien).
+
+**Abweichungen zur Planung (umgesetzt):**
+
+- Die Rollenprüfung greift zusätzlich in `check_type_restriction` (das normalisierte `target_types` erzwingt den Zieltyp); die Meldung nennt daher den Ziel-Typ.
+- `GET /relation-definitions` ist mit dem Worker-API-Key lesbar (`api_key_or_role(..., ROLE_EDITOR)`), damit der Worker Rollen je Job-Lauf einmal auflösen kann (Fallback: eingebaute Rollen-Tabelle).
+- Der Worker adressiert Kategorie-Operationen über `parameters.definition_id` (Default `rel_category_member`) und gibt den verwendeten Typ im Ergebnisbericht mit aus.
+- `?definition_id=` wird auch ohne `category`/`uncategorized` validiert (`400`, wenn der Typ keine Kategorie-Rolle hat).
 
 **Offene Entscheidungen (mit Vorschlag):**
 
@@ -130,6 +138,8 @@ Regeln:
 **Nicht-Ziele:** keine Änderung an der Kanten-Speicherung (`reference.in`/`out`), keine Rolle außer den vier genannten, keine automatische Umklassifizierung bestehender Daten (nur Default `link`).
 
 ## Zusatz-Kategorisierungen (eigene Kategorie-Relationstypen) — Plan (2026-09-11)
+
+**Status: umgesetzt (2026-09-11).**
 
 **Motivation.** Neben der festen Kategorie-Taxonomie sollen **eigene Kategorie-Zuordnungen** möglich sein, um Zuordnungsarten zu unterscheiden (z. B. „Hauptkategorie“ vs. „Kanalkategorie“ vs. „Themenkategorie“) und je Zuordnung **Kanten-Attribute** zu pflegen (`relation_definition.attributes` → `reference.attributes`, Editor im Formular existiert bereits). Alle Typen zeigen dabei auf **dieselben** `category`-Objekte (eine Taxonomie, mehrere Zuordnungsarten) – kein zweiter Kategorie-Objekttyp.
 

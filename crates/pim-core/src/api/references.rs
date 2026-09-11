@@ -21,6 +21,118 @@ use crate::error::ApiError;
 
 const COMPOSITION_DEFINITION: &str = "rel_depends_on";
 
+/// Usage classification of a relation type (`relation_definition.role`):
+/// * `composition` – the (single) composition type: inheritance, cascade, tree.
+/// * `category` – categorisation: target is a `category` object.
+/// * `collection` – membership in a materialised collection: target is a
+///   `collection` object, edges carry `rank`/`added_at`.
+/// * `link` – plain association (**default** for new types).
+///
+/// `composition` and `collection` are reserved for the built-in types; custom
+/// types may be `link` or `category` (see `plan/detail/relationen.md`).
+pub const ROLE_COMPOSITION: &str = "composition";
+pub const ROLE_CATEGORY: &str = "category";
+pub const ROLE_COLLECTION: &str = "collection";
+pub const ROLE_LINK: &str = "link";
+
+/// Role a relation type has when none is stored (records created before the
+/// classification was introduced).
+pub const DEFAULT_ROLE: &str = ROLE_LINK;
+
+/// Roles custom relation types may carry.
+const CUSTOM_ROLES: [&str; 2] = [ROLE_LINK, ROLE_CATEGORY];
+
+/// Key of the built-in primary category relation type (used when no other
+/// category type is requested).
+pub const PRIMARY_CATEGORY_DEFINITION: &str = "rel_category_member";
+
+/// Returns the relation type's usage (`link` when nothing is stored).
+pub fn role_of(definition: &Value) -> &str {
+    definition
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .unwrap_or(DEFAULT_ROLE)
+}
+
+/// The definition's name for messages (falls back to the given key).
+fn definition_id_of(definition: &Value, fallback: &str) -> String {
+    definition
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+/// Resolves the relation type used for the category filters: the requested one
+/// (must have role `category`) or the built-in primary category type.
+pub async fn resolve_category_definition(
+    db: &Db,
+    requested: Option<&str>,
+) -> Result<String, ApiError> {
+    if let Some(key) = requested.map(str::trim).filter(|key| !key.is_empty()) {
+        let definition = fetch_relation_definition(db, key)
+            .await?
+            .ok_or_else(|| ApiError::bad_request(format!("unknown relation type `{key}`")))?;
+        if role_of(&definition) != ROLE_CATEGORY {
+            return Err(ApiError::bad_request(format!(
+                "relation type `{key}` is not a category relation"
+            )));
+        }
+        return Ok(key.to_owned());
+    }
+    let rows: Vec<Value> = db
+        .inner()
+        .query("SELECT id FROM relation_definition WHERE role = $role AND system = true LIMIT 1;")
+        .bind(("role", ROLE_CATEGORY))
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("id"))
+        .and_then(Value::as_str)
+        .map(key_of)
+        .unwrap_or_else(|| PRIMARY_CATEGORY_DEFINITION.to_owned()))
+}
+
+/// Validates a requested role for a **custom** relation type.
+fn custom_role(raw: Option<&str>) -> Result<&str, ApiError> {
+    let role = raw
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .unwrap_or(DEFAULT_ROLE);
+    if CUSTOM_ROLES.contains(&role) {
+        return Ok(role);
+    }
+    Err(ApiError::bad_request(format!(
+        "role `{role}` is reserved for the built-in relation types (allowed for custom types: {})",
+        CUSTOM_ROLES.join(", ")
+    )))
+}
+
+/// Object types a role fixes on the **target** side (empty = unrestricted).
+fn role_target_types(role: &str) -> Vec<String> {
+    match role {
+        ROLE_CATEGORY => vec!["category".to_owned()],
+        ROLE_COLLECTION => vec!["collection".to_owned()],
+        _ => Vec::new(),
+    }
+}
+
+/// Rejects an explicit target-type list that contradicts the role's rule.
+fn check_role_target_types(role: &str, requested: &[String]) -> Result<(), ApiError> {
+    let enforced = role_target_types(role);
+    if enforced.is_empty() || requested.is_empty() || requested == enforced.as_slice() {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "role `{role}` fixes the target type to `{}`",
+        enforced.join(", ")
+    )))
+}
+
 /// Payload for creating a reference between two objects.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateReference {
@@ -68,6 +180,10 @@ pub struct CreateRelationDefinition {
     /// Attribute names (referencing `attribute_definition`) available on the edge.
     #[serde(default)]
     pub attributes: Option<Vec<String>>,
+    /// Usage: `link` (default) or `category`. `composition`/`collection` are
+    /// reserved for the built-in types.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 /// Payload for partially updating a relation definition.
@@ -81,6 +197,9 @@ pub struct UpdateRelationDefinition {
     pub target_types: Option<Vec<String>>,
     #[serde(default)]
     pub attributes: Option<Vec<String>>,
+    /// Usage: only changeable for custom types (`system: false`).
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 /// Payload for updating an edge's metadata (attributes) on a reference.
@@ -334,6 +453,19 @@ pub async fn create_reference(
         .to_owned();
 
     check_type_restriction(&definition, source_type, target_type)?;
+    // The usage decides which object the edge may point to (see `role`): a
+    // categorisation only points at categories, a collection membership only at
+    // collections. This makes a misconfigured role impossible to use silently.
+    let role = role_of(&definition);
+    for required in role_target_types(role) {
+        if target_type != required {
+            return Err(ApiError::bad_request(format!(
+                "relation type `{}` is a {} relation: the target must be an object of type `{required}`",
+                definition_id_of(&definition, &body.definition_id),
+                role
+            )));
+        }
+    }
     validate_edge_attributes(&state.db, &body.definition_id, &body.attributes).await?;
 
     if kind == "composition" {
@@ -421,7 +553,8 @@ pub async fn create_reference(
     Ok((StatusCode::CREATED, Json(edge)))
 }
 
-/// Lists relation definitions (used by the reference picker).
+/// Lists relation definitions (used by the reference picker and by the worker to
+/// resolve relation roles). Readable with an editor JWT or the worker API key.
 #[utoipa::path(
     get,
     path = "/relation-definitions",
@@ -431,12 +564,10 @@ pub async fn create_reference(
     )
 )]
 pub async fn list_relation_definitions(
-    AuthUser(claims): AuthUser,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let sql = "SELECT * FROM relation_definition ORDER BY name;";
     let mut response = state.db.inner().query(sql).await?.check()?;
     let definitions: Vec<Value> = response.take(0)?;
@@ -492,7 +623,16 @@ pub async fn create_relation_definition(
     }
 
     let source_types = type_names_array(&body.source_types.unwrap_or_default());
-    let target_types = type_names_array(&body.target_types.unwrap_or_default());
+    let role = custom_role(body.role.as_deref())?.to_owned();
+    let requested_targets = body.target_types.clone().unwrap_or_default();
+    check_role_target_types(&role, &requested_targets)?;
+    // A role may fix the target type (e.g. `category` ⇒ `category` objects).
+    let enforced_targets = role_target_types(&role);
+    let target_types = if enforced_targets.is_empty() {
+        type_names_array(&requested_targets)
+    } else {
+        type_names_array(&enforced_targets)
+    };
     let attributes_list = body.attributes.unwrap_or_default();
     let attributes = attr_names_array(&attributes_list);
     validate_relation_attributes(&state.db, &attributes_list).await?;
@@ -501,6 +641,7 @@ pub async fn create_relation_definition(
     let mut content = Map::new();
     content.insert("name".to_owned(), Value::String(name.clone()));
     content.insert("kind".to_owned(), Value::String("aggregation".to_owned()));
+    content.insert("role".to_owned(), Value::String(role.clone()));
     if let Some(label) = body.label.clone() {
         content.insert("label".to_owned(), label);
     } else {
@@ -536,7 +677,7 @@ pub async fn create_relation_definition(
             object_id: Some(&record_id),
             from: None,
             to: None,
-            metadata: Some(json!({ "name": name })),
+            metadata: Some(json!({ "name": name, "role": role })),
         },
     )
     .await;
@@ -578,11 +719,40 @@ pub async fn update_relation_definition(
     if let Some(label) = body.label {
         content.insert("label".to_owned(), label);
     }
+    let is_system = current
+        .get("system")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // The usage of the built-in types is fixed; custom types may switch between
+    // `link` and `category`.
+    let effective_role = if let Some(requested) = body.role.as_deref() {
+        let requested = requested.trim();
+        if is_system && requested != role_of(&current) {
+            return Err(ApiError::bad_request(format!(
+                "the usage of the built-in relation type `{key}` is fixed to `{}`",
+                role_of(&current)
+            )));
+        }
+        custom_role(Some(requested))?.to_owned()
+    } else {
+        role_of(&current).to_owned()
+    };
+    if body.role.is_some() {
+        content.insert("role".to_owned(), Value::String(effective_role.clone()));
+    }
     if let Some(source_types) = body.source_types {
         content.insert("source_types".to_owned(), type_names_array(&source_types));
     }
     if let Some(target_types) = body.target_types {
+        check_role_target_types(&effective_role, &target_types)?;
         content.insert("target_types".to_owned(), type_names_array(&target_types));
+    }
+    // A role change normalises the target type it fixes.
+    if body.role.is_some() {
+        let enforced = role_target_types(&effective_role);
+        if !enforced.is_empty() {
+            content.insert("target_types".to_owned(), type_names_array(&enforced));
+        }
     }
     if let Some(attributes) = body.attributes {
         validate_relation_attributes(&state.db, &attributes).await?;
@@ -613,7 +783,7 @@ pub async fn update_relation_definition(
             object_id: Some(&record_id),
             from: None,
             to: None,
-            metadata: Some(json!({ "name": key })),
+            metadata: Some(json!({ "name": key, "role": effective_role })),
         },
     )
     .await;
@@ -1028,13 +1198,15 @@ pub async fn list_object_children(
         })
         .collect();
     if params.count_members {
-        // Category children: add the number of objects assigned via
-        // `category_member` to the category subtree (category tree counter).
+        // Category children: add the number of objects assigned via the primary
+        // category type to the category subtree (category tree counter).
+        // Additional category relations are deliberately not counted here.
         let mut counted: Vec<Value> = Vec::new();
         for mut value in result {
             if value.get("type").and_then(Value::as_str) == Some("category") {
                 let cid = value.get("id").and_then(Value::as_str).unwrap_or("");
-                let keys = category_member_keys(&state.db, cid).await?;
+                let keys =
+                    category_member_keys(&state.db, cid, PRIMARY_CATEGORY_DEFINITION).await?;
                 value["memberCount"] = json!(keys.len());
             }
             counted.push(value);
@@ -1134,20 +1306,27 @@ pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiErro
     Ok(result.iter().map(|id| key_of(id)).collect())
 }
 
-/// Returns the bare keys of every object assigned (via `category_member`) to
-/// the given category or any of its composition descendants. Used for the
-/// server-side category filter (`GET /objects?category=...`).
-pub async fn category_member_keys(db: &Db, category_id: &str) -> Result<Vec<String>, ApiError> {
+/// Returns the bare keys of every object assigned (via the given category
+/// relation type) to the given category or any of its composition descendants.
+/// Used for the server-side category filter (`GET /objects?category=...`);
+/// `definition` selects a specific category relation (default: the built-in
+/// primary type, resolved by the caller).
+pub async fn category_member_keys(
+    db: &Db,
+    category_id: &str,
+    definition: &str,
+) -> Result<Vec<String>, ApiError> {
     let category_keys = subtree_keys(db, category_id).await?;
     let sql = "
         LET $cats = array::map($keys, |$k| type::record('object', $k));
         SELECT in AS member FROM reference
-        WHERE definition_id = 'rel_category_member' AND out IN $cats;
+        WHERE definition_id = $def AND out IN $cats;
     ";
     let mut response = db
         .inner()
         .query(sql)
         .bind(("keys", category_keys))
+        .bind(("def", definition.to_owned()))
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(1)?;
@@ -1307,4 +1486,48 @@ pub async fn reparent_object(
     .await;
 
     Ok(Json(object))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_of_defaults_to_link() {
+        assert_eq!(role_of(&json!({ "role": "category" })), ROLE_CATEGORY);
+        assert_eq!(role_of(&json!({ "role": "  " })), ROLE_LINK);
+        assert_eq!(role_of(&json!({})), ROLE_LINK);
+    }
+
+    #[test]
+    fn custom_roles_accept_link_and_category_only() {
+        assert_eq!(custom_role(None).expect("default role"), ROLE_LINK);
+        assert_eq!(
+            custom_role(Some("category")).expect("category"),
+            ROLE_CATEGORY
+        );
+        assert!(custom_role(Some("composition")).is_err());
+        assert!(custom_role(Some("collection")).is_err());
+    }
+
+    #[test]
+    fn role_target_types_fix_the_target_side() {
+        assert_eq!(
+            role_target_types(ROLE_CATEGORY),
+            vec!["category".to_owned()]
+        );
+        assert_eq!(
+            role_target_types(ROLE_COLLECTION),
+            vec!["collection".to_owned()]
+        );
+        assert!(role_target_types(ROLE_LINK).is_empty());
+    }
+
+    #[test]
+    fn a_category_role_rejects_a_conflicting_target_type() {
+        assert!(check_role_target_types(ROLE_CATEGORY, &["category".to_owned()]).is_ok());
+        assert!(check_role_target_types(ROLE_CATEGORY, &[]).is_ok());
+        assert!(check_role_target_types(ROLE_CATEGORY, &["product".to_owned()]).is_err());
+        assert!(check_role_target_types(ROLE_LINK, &["product".to_owned()]).is_ok());
+    }
 }

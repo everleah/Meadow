@@ -1,8 +1,15 @@
 //! Seed data: system relation types, the universal root object, and the unit
 //! catalog (Phase 1).
 //!
-//! Records are seeded idempotently with `UPSERT`; system records are owned by
-//! this seed (they are `readonly`/`system` and must not be edited at runtime).
+//! Records are seeded **create-if-missing** (`INSERT … ON DUPLICATE KEY UPDATE
+//! id = id`): a record that already exists is left untouched, so edits made in
+//! the admin pages (labels, type restrictions, edge attributes, unit or
+//! language data) survive a restart. The seed only *owns* the structural
+//! identity of the built-in relation types (`kind`, `system`, `role`), which is
+//! enforced with an explicit `UPDATE`.
+//!
+//! Background: the seed used `UPSERT … CONTENT` before, which rewrote every
+//! system record on every start and silently discarded runtime edits.
 
 use crate::auth;
 use crate::db::Db;
@@ -32,16 +39,28 @@ struct LangSeed {
 }
 
 /// System relation types: exactly one composition, the rest aggregations.
+///
+/// Seeded with `INSERT … ON DUPLICATE KEY UPDATE id = id`, so an existing
+/// record is **never overwritten**: edits made in the relation-type admin
+/// (label, source types, edge attributes) survive a restart. Only the fields the
+/// seed *owns* (`kind`, `system`, `role`) are enforced afterwards; runtime
+/// records without a role (created before the classification) fall back to
+/// `link`.
 const RELATION_DEFINITIONS: &str = r#"
-UPSERT relation_definition:rel_depends_on CONTENT { name: 'depends_on', kind: 'composition', source_types: [], target_types: [], label: { de: 'Abhängig von', en: 'Depends on' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_category_member CONTENT { name: 'category_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Kategorie-Zuordnung', en: 'Category membership' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_collection_member CONTENT { name: 'collection_member', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Collection-Zuordnung', en: 'Collection membership' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT relation_definition:rel_related CONTENT { name: 'related', kind: 'aggregation', source_types: [], target_types: [], label: { de: 'Verknüpft mit', en: 'Related to' }, attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
+INSERT INTO relation_definition (id, name, kind, role, source_types, target_types, label, attributes, system, created_at, updated_at) VALUES (relation_definition:rel_depends_on, 'depends_on', 'composition', 'composition', [], [], { de: 'Abhängig von', en: 'Depends on' }, [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO relation_definition (id, name, kind, role, source_types, target_types, label, attributes, system, created_at, updated_at) VALUES (relation_definition:rel_category_member, 'category_member', 'aggregation', 'category', [], [], { de: 'Kategorie-Zuordnung', en: 'Category membership' }, [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO relation_definition (id, name, kind, role, source_types, target_types, label, attributes, system, created_at, updated_at) VALUES (relation_definition:rel_collection_member, 'collection_member', 'aggregation', 'collection', [], [], { de: 'Collection-Zuordnung', en: 'Collection membership' }, [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO relation_definition (id, name, kind, role, source_types, target_types, label, attributes, system, created_at, updated_at) VALUES (relation_definition:rel_related, 'related', 'aggregation', 'link', [], [], { de: 'Verknüpft mit', en: 'Related to' }, [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+UPDATE relation_definition:rel_depends_on SET kind = 'composition', role = 'composition', system = true;
+UPDATE relation_definition:rel_category_member SET kind = 'aggregation', role = 'category', system = true;
+UPDATE relation_definition:rel_collection_member SET kind = 'aggregation', role = 'collection', system = true;
+UPDATE relation_definition:rel_related SET kind = 'aggregation', role = 'link', system = true;
+UPDATE relation_definition SET role = 'link' WHERE role IS NONE;
 "#;
 
 /// The universal root: the composition tree's root, structurally immutable.
 const ROOT_OBJECT: &str = r#"
-UPSERT object:object_root CONTENT { type: 'root', attributes: {}, status: 'published', version: 1, created_at: time::now(), updated_at: time::now() };
+INSERT INTO object (id, type, attributes, status, version, created_at, updated_at) VALUES (object:object_root, 'root', {}, 'published', 1, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
 "#;
 
 /// Managed object-type registry (STIBO STEP / Akeneo family model). Seeded
@@ -49,13 +68,13 @@ UPSERT object:object_root CONTENT { type: 'root', attributes: {}, status: 'publi
 /// mandatory keys per type), `label_attribute` defaults to the `name` attribute
 /// for business types.
 const OBJECT_TYPES: &str = r#"
-UPSERT object_type:product CONTENT { name: 'product', label: { de: 'Produkt', en: 'Product' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:category CONTENT { name: 'category', label: { de: 'Kategorie', en: 'Category' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:asset CONTENT { name: 'asset', label: { de: 'Asset', en: 'Asset' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:variant CONTENT { name: 'variant', label: { de: 'Variante', en: 'Variant' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:root CONTENT { name: 'root', label: { de: 'Universal-Root', en: 'Universal root' }, description: 'Der übergeordnete Universal-Root', key_attributes: [], system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:saved_search CONTENT { name: 'saved_search', label: { de: 'Gespeicherte Suche', en: 'Saved search' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
-UPSERT object_type:collection CONTENT { name: 'collection', label: { de: 'Collection', en: 'Collection' }, description: '', key_attributes: [], label_attribute: 'name', system: true, created_at: time::now(), updated_at: time::now() };
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:product, 'product', { de: 'Produkt', en: 'Product' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:category, 'category', { de: 'Kategorie', en: 'Category' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:asset, 'asset', { de: 'Asset', en: 'Asset' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:variant, 'variant', { de: 'Variante', en: 'Variant' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, system, created_at, updated_at) VALUES (object_type:root, 'root', { de: 'Universal-Root', en: 'Universal root' }, 'Der übergeordnete Universal-Root', [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:saved_search, 'saved_search', { de: 'Gespeicherte Suche', en: 'Saved search' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:collection, 'collection', { de: 'Collection', en: 'Collection' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
 "#;
 
 /// Unit catalog covering the 13 dimensions documented in
@@ -753,7 +772,7 @@ fn unit_upsert(u: &UnitSeed) -> String {
         None => "NONE".to_owned(),
     };
     format!(
-        "UPSERT unit:{} CONTENT {{ symbol: '{}', dimension: '{}', canonical_unit_id: {}, factor: {}, offset: {}, label: {{ de: '{}', en: '{}' }}, system: 'default', readonly: true, created_at: time::now(), updated_at: time::now() }};",
+        "INSERT INTO unit (id, symbol, dimension, canonical_unit_id, factor, offset, label, system, readonly, created_at, updated_at) VALUES (unit:{}, '{}', '{}', {}, {}, {}, {{ de: '{}', en: '{}' }}, 'default', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;",
         u.key, u.symbol, u.dimension, canonical, u.factor, u.offset, u.de, u.en,
     )
 }
@@ -847,7 +866,7 @@ fn lang_upsert(lang: &LangSeed) -> String {
     // Base languages (root's children) are offered as UI languages.
     let is_ui = lang.parent == Some("lang_root") && lang.code != "root";
     format!(
-        "UPSERT type::record('language_tree', 'lang_{}') CONTENT {{ code: '{}', parent: {}, label: {{ de: '{}', en: '{}' }}, fallback_order: [{}], active: true, is_ui: {} }};",
+        "INSERT INTO language_tree (id, code, parent, label, fallback_order, active, is_ui) VALUES (type::record('language_tree', 'lang_{}'), '{}', {}, {{ de: '{}', en: '{}' }}, [{}], true, {}) ON DUPLICATE KEY UPDATE id = id;",
         lang.code, lang.code, parent, lang.de, lang.en, fallback_order, is_ui,
     )
 }

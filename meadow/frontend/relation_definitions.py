@@ -8,6 +8,10 @@ declare ``source_types``/``target_types`` (allowed object types) and
 ``attributes`` (edge metadata, referencing ``attribute_definition`` names) that
 are editable when adding/editing a relation edge in the product form.
 
+Every type carries a **usage** (``role``, see ``relation_roles``): built-in
+roles are fixed, custom types may be ``link`` (default) or ``category``. A role
+may fix the target type (``category`` ⇒ ``category`` objects).
+
 - **List** (``GET /relation-definitions``), **create/edit** (``POST``/``PATCH
   /relation-definitions``) in a dialog, **delete** (``DELETE
   /relation-definitions/{id}``; 400 for system types, 409 while references use
@@ -26,6 +30,17 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
+from meadow.frontend.relation_roles import (
+    DEFAULT_ROLE,
+    ROLE_CATEGORY,
+    ROLE_COLLECTION,
+    ROLE_COMPOSITION,
+    custom_role_options,
+    definition_key,
+    role_label,
+    role_of,
+    role_target_types,
+)
 
 
 def _label(value: object, locale: str) -> str:
@@ -54,6 +69,17 @@ def _kind_badge(kind: str) -> str:
         + t("relation_definitions.kind_aggregation")
         + "</span>"
     )
+
+
+def _role_badge(role: str) -> str:
+    """Renders the usage (`role`) of a relation type as a badge."""
+    styles = {
+        ROLE_COMPOSITION: "bg-orange-2 text-orange-9",
+        ROLE_CATEGORY: "bg-teal-2 text-teal-9",
+        ROLE_COLLECTION: "bg-purple-2 text-purple-9",
+    }
+    style = styles.get(role, "bg-grey-3 text-grey-8")
+    return f'<span class="px-2 py-0.5 rounded text-xs {style}">{role_label(role)}</span>'
 
 
 def _system_badge(system: bool) -> str:
@@ -127,6 +153,7 @@ async def relation_definitions_page() -> None:
                     "key": str(r.get("id", "")).split(":", 1)[-1],
                     "name": str(r.get("name")),
                     "label": _label(r.get("label"), locale),
+                    "role": _role_badge(role_of(r)),
                     "kind": _kind_badge(str(r.get("kind") or "")),
                     "source": _names_of(r.get("source_types")),
                     "target": _names_of(r.get("target_types")),
@@ -149,6 +176,7 @@ async def relation_definitions_page() -> None:
         column_defs = [
             {"headerName": t("relation_definitions.col_name"), "field": "name", "width": 160},
             {"headerName": t("relation_definitions.col_label"), "field": "label", "width": 180},
+            {"headerName": t("relation_definitions.col_role"), "field": "role", "width": 150},
             {"headerName": t("relation_definitions.col_kind"), "field": "kind", "width": 140},
             {"headerName": t("relation_definitions.col_source"), "field": "source", "width": 180},
             {"headerName": t("relation_definitions.col_target"), "field": "target", "width": 180},
@@ -167,7 +195,7 @@ async def relation_definitions_page() -> None:
                 "rowSelection": {"mode": "singleRow"},
             },
             html_columns=[
-                i for i, col in enumerate(column_defs) if col["field"] in ("kind", "system")
+                i for i, col in enumerate(column_defs) if col["field"] in ("role", "kind", "system")
             ],
         ).classes("w-full")
 
@@ -235,6 +263,16 @@ async def relation_definitions_page() -> None:
                     .props("filled dense")
                     .classes("w-full")
                 )
+                role_select = (
+                    ui.select(
+                        custom_role_options(),
+                        label=t("relation_definitions.field_role"),
+                        value=DEFAULT_ROLE,
+                    )
+                    .props("filled dense")
+                    .classes("w-full")
+                )
+                role_hint = ui.label("").classes("text-caption text-gray-500")
                 target_select = (
                     ui.select(
                         {name: name for name in sorted(type_options)},
@@ -265,12 +303,31 @@ async def relation_definitions_page() -> None:
                     t("relation_definitions.save"), icon="save", on_click=lambda: save()
                 ).props("flat")
 
+        def _sync_role() -> None:
+            """A usage fixes the target type; free types get the picker back."""
+            role = str(role_select.value or DEFAULT_ROLE)
+            fixed = role_target_types(role)
+            if fixed:
+                target_select.set_value(fixed)
+                target_select.disable()
+            else:
+                target_select.enable()
+            if role == ROLE_CATEGORY:
+                role_hint.set_text(t("relation_definitions.role_category_hint"))
+            elif role == ROLE_COLLECTION:
+                role_hint.set_text(t("relation_definitions.role_collection_hint"))
+            else:
+                role_hint.set_text(t("relation_definitions.role_link_hint"))
+
+        role_select.on_value_change(lambda _event: _sync_role())
+
         _state: dict = {"editing": False, "key": None}
 
         def _fill_editor(record: dict | None) -> None:
             editing = record is not None
             _state["editing"] = editing
-            _state["key"] = str(record.get("id", "")).split(":", 1)[-1] if editing else None
+            _state["system"] = bool(record.get("system")) if editing else False
+            _state["key"] = definition_key(record) if editing else None
             editor_title.set_text(
                 t("relation_definitions.edit") if editing else t("relation_definitions.new")
             )
@@ -283,8 +340,17 @@ async def relation_definitions_page() -> None:
                 str(record.get("kind") or "aggregation") if editing else "aggregation"
             )
             kind_select.disable()
+            # The usage of the built-in types is fixed (enforced by the core).
+            if editing and _state["system"]:
+                role_select.set_value(role_of(record))
+                role_select.disable()
+            else:
+                role_select.set_value(role_of(record) if editing else DEFAULT_ROLE)
+                role_select.enable()
+            _sync_role()
             source_select.set_value(list(record.get("source_types") or []) if editing else [])
             target_select.set_value(list(record.get("target_types") or []) if editing else [])
+            _sync_role()
             attr_select.set_value(list(record.get("attributes") or []) if editing else [])
 
         def open_editor(record: dict | None) -> None:
@@ -298,8 +364,14 @@ async def relation_definitions_page() -> None:
                 return
             label = dict(rel_label_store["label"] or {})
             source = list(source_select.value or [])
-            target = list(target_select.value or [])
+            target = list(role_target_types(str(role_select.value or DEFAULT_ROLE))) or list(
+                target_select.value or []
+            )
             attrs = list(attr_select.value or [])
+            role = str(role_select.value or DEFAULT_ROLE)
+            # The usage of the built-in types is immutable; only send it for
+            # custom types so the core does not reject the request.
+            send_role = None if _state["system"] else role
             try:
                 if _state["editing"]:
                     await client.update_relation_definition(
@@ -309,6 +381,7 @@ async def relation_definitions_page() -> None:
                         source_types=source if source else None,
                         target_types=target if target else None,
                         attributes=attrs if attrs else None,
+                        role=send_role,
                     )
                 else:
                     await client.create_relation_definition(
@@ -318,6 +391,7 @@ async def relation_definitions_page() -> None:
                         source_types=source if source else None,
                         target_types=target if target else None,
                         attributes=attrs if attrs else None,
+                        role=role,
                     )
             except CoreError as error:
                 ui.notify(f"{t('relation_definitions.save_failed')}: {error}", color="negative")

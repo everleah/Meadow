@@ -27,6 +27,12 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
+from meadow.frontend.relation_roles import (
+    PRIMARY_CATEGORY_DEF,
+    association_definitions,
+    category_definitions,
+    definition_key,
+)
 
 # Maximum hits the grid search pulls per query (picker + row load); the search
 # is server-side, so the result set stays bounded regardless of dataset size.
@@ -64,10 +70,10 @@ _APPROVAL_MODIFIER_OPS = (
     "remove_relation",
     "change_parent",
 )
-# Relation types that have a dedicated bulk operation and are therefore hidden in
-# the generic relation selection: composition (`change_parent`), category
-# assignment (`add_category`/`remove_category`).
-_DEDICATED_RELATION_DEFS = ("rel_depends_on", "rel_category_member")
+# Relation types with a dedicated bulk operation are hidden in the generic
+# relation selection: composition (`change_parent`) and every categorisation
+# (`add_category`/`remove_category`). Their usages (`role`) decide this, so
+# custom category types behave like the built-in one.
 # Field of the per-row inheritance markers (`{field: "inherited from …"}`) and
 # the AG Grid column options that render them: NiceGUI converts `:`-prefixed
 # keys into real JavaScript functions on the client (`convertDynamicProperties`),
@@ -1256,15 +1262,17 @@ async def products_page(request: Request) -> None:
         # Reference picker (modal): display + add/remove an object's references.
         relation_options: dict[str, str] = {}
         relation_def_by_key: dict[str, dict] = {}
+        relation_definitions: list[dict] = []
         try:
-            for definition in await client.list_relation_definitions(token):
+            relation_definitions = await client.list_relation_definitions(token)
+            for definition in relation_definitions:
                 if str(definition.get("kind")) != "aggregation":
                     continue
                 # The core's `create_reference` expects the definition's short
                 # record key (e.g. `rel_category_member`, from the record id
                 # `relation_definition:rel_category_member`), not the full id or
                 # the display `name` (which differs, e.g. `category_member`).
-                def_key = str(definition["id"]).split(":", 1)[-1]
+                def_key = definition_key(definition)
                 relation_def_by_key[def_key] = definition
                 relation_options[def_key] = (
                     resolve_value(definition.get("label"), locale) or def_key
@@ -1272,13 +1280,21 @@ async def products_page(request: Request) -> None:
         except Exception:  # noqa: BLE001 - degrade to an empty picker
             relation_options = {}
             relation_def_by_key = {}
+            relation_definitions = []
 
         # The bulk wizard assigns relations generically; types with a dedicated
-        # operation (parent, categories) are hidden there to avoid duplicates.
+        # operation (composition parent, categorisation) are hidden there to
+        # avoid duplicates. Custom category types are offered by the category
+        # operation instead.
         bulk_relation_options = {
-            key: label
-            for key, label in relation_options.items()
-            if key not in _DEDICATED_RELATION_DEFS
+            definition_key(definition): resolve_value(definition.get("label"), locale)
+            or definition_key(definition)
+            for definition in association_definitions(relation_definitions)
+        }
+        category_bulk_options = {
+            definition_key(definition): resolve_value(definition.get("label"), locale)
+            or definition_key(definition)
+            for definition in category_definitions(relation_definitions)
         }
 
         current_ref_object: dict = {"id": None}
@@ -1608,6 +1624,26 @@ async def products_page(request: Request) -> None:
                         ui.button(icon="account_tree", on_click=choose_target).props(
                             "outline dense"
                         ).tooltip(t("grid.bulk_pick_label").format(label=t(label_key)))
+                    if op in ("add_category", "remove_category") and len(category_bulk_options) > 1:
+                        # Several categorisations may exist; the primary type is
+                        # preselected so the common case stays a single click.
+                        category_type = (
+                            ui.select(
+                                category_bulk_options,
+                                value=(
+                                    PRIMARY_CATEGORY_DEF
+                                    if PRIMARY_CATEGORY_DEF in category_bulk_options
+                                    else next(iter(category_bulk_options))
+                                ),
+                                label=t("grid.bulk_category_type"),
+                            )
+                            .props("filled dense")
+                            .classes("w-full")
+                        )
+                        bulk_fields["category_definition"] = category_type
+                        ui.label(t("grid.bulk_category_type_hint")).classes(
+                            "text-caption text-gray-400"
+                        )
                 elif op in ("add_relation", "remove_relation"):
                     relation = (
                         ui.select(
@@ -1706,6 +1742,9 @@ async def products_page(request: Request) -> None:
             elif op in ("add_category", "remove_category"):
                 category = bulk_picked.get("category")
                 parameters["category"] = category.get("id") if category else None
+                category_type = bulk_fields.get("category_definition")
+                if category_type is not None and category_type.value:
+                    parameters["definition_id"] = str(category_type.value)
             elif op == "change_parent":
                 parent = bulk_picked.get("parent")
                 parameters["parent"] = parent.get("id") if parent else None

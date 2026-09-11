@@ -1,9 +1,12 @@
-"""Tests for the relation bulk operations (`add_relation` / `remove_relation`).
+"""Tests for the relation bulk operations (`add_relation` / `remove_relation`)
+and the definition-aware category operations (`add_category` / `remove_category`).
 
 They assign one target object to a whole selection (Phase 9, mass maintenance):
-either as a generic reference edge (`POST /references`) or – for a collection
-membership – through the collections endpoint, which also maintains
-`rank`/`added_at`. Both operations are idempotent.
+either as a generic reference edge (`POST /references`) or – when the relation
+usage is a collection membership (`role: collection`) – through the collections
+endpoint, which also maintains `rank`/`added_at`. Category operations address a
+specific category relation type (`parameters.definition_id`, default: the
+built-in primary type). All operations are idempotent.
 """
 
 from __future__ import annotations
@@ -29,8 +32,13 @@ def _client(
     references: dict[str, list[dict[str, Any]]] | None = None,
     requests: list[httpx.Request] | None = None,
     added: int = 1,
+    roles: dict[str, str] | None = None,
 ):
-    """Transport over a small in-memory world (references per object)."""
+    """Transport over a small in-memory world (references per object).
+
+    `roles` serves `GET /relation-definitions`; without it the endpoint is
+    unknown and the worker falls back to the roles of the built-in types.
+    """
     refs = references if references is not None else {}
     edges: list[dict[str, Any]] = []
 
@@ -38,6 +46,16 @@ def _client(
         if requests is not None:
             requests.append(request)
         path = request.url.path
+        if path == "/relation-definitions":
+            if roles is None:
+                return httpx.Response(404, json={"detail": "unexpected"})
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": f"relation_definition:{key}", "name": key, "role": role}
+                    for key, role in roles.items()
+                ],
+            )
         if path == "/attribute-definitions":
             return httpx.Response(200, json=[])
         if path.startswith("/collections/") and path.endswith("/members"):
@@ -285,3 +303,104 @@ async def test_relation_operations_can_send_for_approval_afterwards() -> None:
     assert report["succeeded"] == 1
     assert report["approvals"] == 1
     assert patched == ["in_review"]
+
+
+async def test_add_relation_routes_a_custom_collection_role_to_the_collections_endpoint() -> None:
+    """The usage decides the routing, not the built-in key."""
+    requests: list[httpx.Request] = []
+    client = _client(requests=requests, roles={"rel_my_coll": "collection"})
+    handler = build_bulk_handler("http://core", client=client)
+
+    report = await handler(
+        _message(
+            "add_relation",
+            {"definition_id": "rel_my_coll", "target": "object:coll"},
+            object_ids=["object:1"],
+        )
+    )
+
+    assert report["succeeded"] == 1
+    assert [r.url.path for r in requests if r.url.path.endswith("/members")] == [
+        "/collections/object:coll/members"
+    ]
+    assert not [r for r in requests if r.url.path == "/references" and r.method == "POST"]
+
+
+async def test_relation_roles_are_fetched_once_per_run() -> None:
+    requests: list[httpx.Request] = []
+    client = _client(requests=requests, roles={"rel_related": "link"})
+    handler = build_bulk_handler("http://core", client=client)
+
+    await handler(
+        _message("add_relation", {"definition_id": "rel_related", "target": "object:target"})
+    )
+
+    lookups = [r for r in requests if r.url.path == "/relation-definitions"]
+    assert len(lookups) == 1
+
+
+async def test_add_category_uses_the_requested_relation_type() -> None:
+    requests: list[httpx.Request] = []
+    client = _client(requests=requests)
+    handler = build_bulk_handler("http://core", client=client)
+
+    report = await handler(
+        _message(
+            "add_category",
+            {"category": "object:marke", "definition_id": "rel_marke"},
+            object_ids=["object:1"],
+        )
+    )
+
+    assert report["succeeded"] == 1
+    created = [json.loads(r.content) for r in requests if r.url.path == "/references"]
+    assert created == [
+        {"source": "object:1", "target": "object:marke", "definition_id": "rel_marke"}
+    ]
+    assert report["results"][0]["relation"] == "rel_marke"
+
+
+async def test_add_category_defaults_to_the_primary_relation_type() -> None:
+    requests: list[httpx.Request] = []
+    client = _client(requests=requests)
+    handler = build_bulk_handler("http://core", client=client)
+
+    await handler(_message("add_category", {"category": "object:cat"}, object_ids=["object:1"]))
+
+    created = [json.loads(r.content) for r in requests if r.url.path == "/references"]
+    assert created == [
+        {"source": "object:1", "target": "object:cat", "definition_id": "rel_category_member"}
+    ]
+
+
+async def test_remove_category_removes_the_requested_relation_type() -> None:
+    references = {
+        "object:1": [
+            {
+                "id": "reference:primary",
+                "definition_id": "rel_category_member",
+                "in": "object:1",
+                "out": "object:cat",
+            },
+            {
+                "id": "reference:marke",
+                "definition_id": "rel_marke",
+                "in": "object:1",
+                "out": "object:cat",
+            },
+        ]
+    }
+    requests: list[httpx.Request] = []
+    client = _client(references=references, requests=requests)
+    handler = build_bulk_handler("http://core", client=client)
+
+    report = await handler(
+        _message(
+            "remove_category",
+            {"category": "object:cat", "definition_id": "rel_marke"},
+            object_ids=["object:1"],
+        )
+    )
+
+    assert report["succeeded"] == 1
+    assert [r.url.path for r in requests if r.method == "DELETE"] == ["/references/reference:marke"]

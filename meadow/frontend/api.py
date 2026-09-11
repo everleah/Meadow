@@ -194,6 +194,7 @@ class CoreClient:
         object_type: str | None = None,
         ancestor: str | None = None,
         category: str | None = None,
+        definition_id: str | None = None,
         collection: str | None = None,
         uncategorized: bool = False,
         completeness_lt: int | None = None,
@@ -207,10 +208,12 @@ class CoreClient:
         """Lists objects, optionally filtered by type, ancestor, category or collection.
 
         With ``ancestor`` the result is limited to that composition subtree; with
-        ``category`` to objects assigned (via ``category_member``) to that category
-        or its descendants; with ``collection`` to objects that are members of the
-        materialized collection (flat, no hierarchy); with ``uncategorized`` to
-        objects with no category assignment; with ``ids`` to exactly those objects
+        ``category`` to objects assigned to that category or its descendants;
+        ``definition_id`` selects the category relation type used by
+        ``category``/``uncategorized`` (default: the built-in primary type); with
+        ``collection`` to objects that are members of the materialized collection
+        (flat, no hierarchy); with ``uncategorized`` to objects with no category
+        assignment; with ``ids`` to exactly those objects
         (used by the grid search). With ``locale``, each object carries a
         ``completeness`` value for that language (computed in the core); with
         ``completeness_lt``/``missing_required`` the core only returns incomplete
@@ -223,6 +226,8 @@ class CoreClient:
             params["ancestor"] = ancestor
         if category:
             params["category"] = category
+        if definition_id:
+            params["definition_id"] = definition_id
         if collection:
             params["collection"] = collection
         if uncategorized:
@@ -920,8 +925,12 @@ class CoreClient:
         source_types: list[str] | None = None,
         target_types: list[str] | None = None,
         attributes: list[str] | None = None,
+        role: str | None = None,
     ) -> dict:
-        """Creates a custom relation type (always an aggregation, admin)."""
+        """Creates a custom relation type (aggregation, admin).
+
+        `role` is the usage of the type (`link`, `category`).
+        """
         payload: dict[str, object] = {"name": name}
         if label:
             payload["label"] = label
@@ -931,6 +940,8 @@ class CoreClient:
             payload["target_types"] = target_types
         if attributes:
             payload["attributes"] = attributes
+        if role:
+            payload["role"] = role
         async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/relation-definitions",
@@ -950,8 +961,9 @@ class CoreClient:
         source_types: list[str] | None = None,
         target_types: list[str] | None = None,
         attributes: list[str] | None = None,
+        role: str | None = None,
     ) -> dict:
-        """Partially updates a relation type (admin)."""
+        """Partially updates a relation type (admin; `role` for custom types)."""
         payload: dict[str, object] = {}
         if label is not None:
             payload["label"] = label
@@ -961,6 +973,8 @@ class CoreClient:
             payload["target_types"] = target_types
         if attributes is not None:
             payload["attributes"] = attributes
+        if role is not None:
+            payload["role"] = role
         async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/relation-definitions/{id}",
