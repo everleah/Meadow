@@ -274,6 +274,14 @@ pub fn router(state: AppState) -> Router {
             post(api::saved_searches::execute_saved_search),
         )
         .route(
+            "/saved-searches/preview",
+            post(api::saved_searches::preview_saved_search),
+        )
+        .route(
+            "/search-fields",
+            get(api::saved_searches::list_search_fields),
+        )
+        .route(
             "/collections",
             get(api::saved_searches::list_collections).post(api::saved_searches::create_collection),
         )

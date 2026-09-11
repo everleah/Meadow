@@ -20,6 +20,7 @@ pub mod references;
 pub mod rules;
 pub mod saved_searches;
 pub mod search;
+pub mod search_schema;
 pub mod system;
 pub mod units;
 pub mod users;
@@ -93,6 +94,8 @@ use utoipa::OpenApi;
         saved_searches::update_saved_search,
         saved_searches::delete_saved_search,
         saved_searches::execute_saved_search,
+        saved_searches::preview_saved_search,
+        saved_searches::list_search_fields,
         saved_searches::list_collections,
         saved_searches::get_collection,
         saved_searches::create_collection,
@@ -183,6 +186,7 @@ use utoipa::OpenApi;
         rules::RecomputeRule,
         saved_searches::SavedSearchQuery,
         saved_searches::QueryFilter,
+        saved_searches::QueryCondition,
         saved_searches::QueryFulltext,
         saved_searches::QueryReference,
         saved_searches::QuerySort,

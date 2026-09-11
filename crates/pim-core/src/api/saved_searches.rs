@@ -27,6 +27,8 @@ use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
 use crate::db::Db;
 use crate::error::ApiError;
 
+use super::search_schema;
+
 const SAVED_SEARCH_TYPE: &str = "saved_search";
 const COLLECTION_TYPE: &str = "collection";
 const COLLECTION_MEMBER_DEF: &str = "rel_collection_member";
@@ -37,12 +39,36 @@ pub struct QueryFilter {
     /// Field to filter on (`type`, `status`, `attributes.<name>`,
     /// `attributes.<name>.<lang>`).
     pub field: String,
-    /// Operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`,
-    /// `contains`, `not_contains`, `not_empty`, `is_null`, `starts_with`,
-    /// `ends_with`.
+    /// Operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`,
+    /// `not_in`, `contains`, `not_contains`, `not_empty`, `is_null`,
+    /// `starts_with`, `ends_with`.
     pub operator: String,
-    /// Operand (array for `in`/`not_in`).
+    /// Operand (array for `in`/`not_in`, two values for `between`).
     #[serde(default)]
+    pub value: Option<Value>,
+}
+
+/// A node of the condition tree: a **group** (`op` + `conditions`) or a
+/// **condition** (`field`/`operator`/`value`).
+///
+/// Exactly one of the two shapes is valid; the validator rejects mixed nodes
+/// and empty groups (see `plan/detail/suche-formular.md`, Abschnitt 5).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
+pub struct QueryCondition {
+    /// Group combinator: `and` (default) or `or`. Only groups may set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    /// Child conditions and groups of a group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<QueryCondition>>,
+    /// Field of a condition (`type`, `status`, `id`, `attributes.<name>[.<lang>]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Operator of a condition (see `search_schema::OPERATORS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    /// Operand (list for `in`/`not_in`, two values for `between`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
 }
 
@@ -86,24 +112,59 @@ fn default_order() -> String {
 }
 
 /// The saved-search query DSL.
-#[derive(Debug, Default, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct SavedSearchQuery {
-    #[serde(default)]
-    pub filters: Vec<QueryFilter>,
-    #[serde(default)]
+    /// Condition tree: every level is an AND- or OR-group.
+    #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+    pub where_: Option<QueryCondition>,
+    /// Full-text restriction (searches all attribute values).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fulltext: Option<QueryFulltext>,
-    #[serde(default)]
+    /// Reference (relation) restrictions; combined with AND.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<QueryReference>,
-    #[serde(default)]
+    /// Sort clauses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<QuerySort>,
-    #[serde(default)]
+    /// Number of results to skip.
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub start: u32,
-    #[serde(default = "default_query_limit")]
+    /// Maximum number of results.
+    #[serde(
+        default = "default_query_limit",
+        skip_serializing_if = "is_default_limit"
+    )]
     pub limit: u32,
+    /// Legacy flat filter list: replaced by `where`, rejected by validation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<QueryFilter>,
 }
 
 fn default_query_limit() -> u32 {
-    1000
+    search_schema::DEFAULT_LIMIT
+}
+
+/// The default query: no restriction, default limit.
+impl Default for SavedSearchQuery {
+    fn default() -> Self {
+        Self {
+            where_: None,
+            fulltext: None,
+            references: Vec::new(),
+            sort: Vec::new(),
+            start: 0,
+            limit: default_query_limit(),
+            filters: Vec::new(),
+        }
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_default_limit(value: &u32) -> bool {
+    *value == search_schema::DEFAULT_LIMIT
 }
 
 /// Payload for creating a saved search.
@@ -189,7 +250,11 @@ async fn fetch_object(db: &Db, id: &str) -> Result<Option<Value>, ApiError> {
 
 /// Validates a filter/sort field reference against a strict whitelist.
 fn sanitize_field(field: &str) -> Result<String, ApiError> {
-    if field == "type" || field == "status" || field == "id" {
+    // System fields offered by `GET /search-fields` (`search_schema`).
+    if matches!(
+        field,
+        "type" | "status" | "id" | "created_at" | "updated_at" | "source"
+    ) {
         return Ok(field.to_owned());
     }
     if let Some(rest) = field.strip_prefix("attributes.") {
@@ -216,48 +281,164 @@ fn sanitize_field(field: &str) -> Result<String, ApiError> {
     )))
 }
 
+/// Binds a value and returns its `$name` reference (names are counted across
+/// the whole tree so nested groups cannot collide).
+fn push_param(params: &mut Vec<(String, Value)>, counter: &mut usize, value: Value) -> String {
+    let name = format!("f{}", *counter);
+    *counter += 1;
+    params.push((name.clone(), value));
+    format!("${name}")
+}
+
+/// Binds an operand of a condition.
+///
+/// System timestamps (`created_at`/`updated_at`) are real datetime columns, so
+/// their operand is wrapped in `type::datetime(…)`; attribute values are stored
+/// as given (usually ISO strings) and compared literally.
+fn push_operand(
+    catalog: &search_schema::Catalog,
+    field_key: &str,
+    value: Value,
+    params: &mut Vec<(String, Value)>,
+    counter: &mut usize,
+) -> String {
+    let name = push_param(params, counter, value);
+    let is_datetime = catalog
+        .field(field_key)
+        .is_some_and(|field| field.value_type == search_schema::ValueType::DateTime);
+    if is_datetime {
+        format!("type::datetime({name})")
+    } else {
+        name
+    }
+}
+
+/// Renders one node of the condition tree into a SurrealQL predicate.
+fn render_condition(
+    condition: &QueryCondition,
+    params: &mut Vec<(String, Value)>,
+    counter: &mut usize,
+    catalog: &search_schema::Catalog,
+) -> Result<String, ApiError> {
+    let Some(children) = &condition.conditions else {
+        return render_filter(condition, params, counter, catalog);
+    };
+    if children.is_empty() {
+        return Ok("true".to_owned());
+    }
+    let separator = match condition.op.as_deref().unwrap_or("and") {
+        "or" => " OR ",
+        _ => " AND ",
+    };
+    let mut rendered: Vec<String> = Vec::with_capacity(children.len());
+    for child in children {
+        rendered.push(render_condition(child, params, counter, catalog)?);
+    }
+    Ok(format!("({})", rendered.join(separator)))
+}
+
+/// Translates a single condition into a SurrealQL clause.
+///
+/// Composite clauses (`between`, `not_empty`, `is_null`) are parenthesized:
+/// inside a group they are joined with `AND`/`OR`, and `AND` binds tighter.
+fn render_filter(
+    condition: &QueryCondition,
+    params: &mut Vec<(String, Value)>,
+    counter: &mut usize,
+    catalog: &search_schema::Catalog,
+) -> Result<String, ApiError> {
+    let field_key = condition.field.as_deref().unwrap_or_default();
+    let field = sanitize_field(field_key)?;
+    let operator = condition.operator.as_deref().unwrap_or_default();
+    let value = condition.value.clone();
+    let null_value = value.as_ref().is_some_and(Value::is_null);
+    let operand = |params: &mut Vec<(String, Value)>, counter: &mut usize| {
+        push_operand(
+            catalog,
+            field_key,
+            value.clone().unwrap_or(Value::Null),
+            params,
+            counter,
+        )
+    };
+    let clause = match operator {
+        "eq" if null_value => format!("{field} IS NONE"),
+        "ne" if null_value => format!("{field} IS NOT NONE"),
+        "eq" => format!("{field} = {}", operand(params, counter)),
+        "ne" => format!("{field} != {}", operand(params, counter)),
+        "gt" => format!("{field} > {}", operand(params, counter)),
+        "gte" => format!("{field} >= {}", operand(params, counter)),
+        "lt" => format!("{field} < {}", operand(params, counter)),
+        "lte" => format!("{field} <= {}", operand(params, counter)),
+        "between" => {
+            let items = value.as_ref().and_then(Value::as_array);
+            let low = items
+                .and_then(|items| items.first())
+                .cloned()
+                .unwrap_or(Value::Null);
+            let high = items
+                .and_then(|items| items.get(1))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let low_param = push_operand(catalog, field_key, low, params, counter);
+            let high_param = push_operand(catalog, field_key, high, params, counter);
+            format!("({field} >= {low_param} AND {field} <= {high_param})")
+        }
+        "in" => format!("{field} IN {}", operand(params, counter)),
+        "not_in" => format!("{field} NOT IN {}", operand(params, counter)),
+        "contains" => format!("{field} CONTAINS {}", operand(params, counter)),
+        "not_contains" => format!("{field} NOT CONTAINS {}", operand(params, counter)),
+        "starts_with" => {
+            let param = operand(params, counter);
+            format!("string::startsWith(string::lower({field}), string::lower({param}))")
+        }
+        "ends_with" => {
+            let param = operand(params, counter);
+            format!("string::endsWith(string::lower({field}), string::lower({param}))")
+        }
+        "not_empty" => format!("({field} IS NOT NONE AND {field} != NULL)"),
+        "is_null" => format!("({field} IS NONE OR {field} = NULL)"),
+        op => {
+            return Err(ApiError::bad_request(format!(
+                "unsupported filter operator `{op}`"
+            )));
+        }
+    };
+    Ok(clause)
+}
+
+/// Normalizes and validates a query against the field catalog.
+///
+/// Returns the catalog so the caller can execute the normalized query without
+/// loading it twice.
+async fn check_query(
+    db: &Db,
+    query: &mut SavedSearchQuery,
+) -> Result<search_schema::Catalog, ApiError> {
+    search_schema::normalize_query(query);
+    let catalog = search_schema::load(db).await?;
+    let errors = search_schema::validate_query(query, &catalog);
+    if !errors.is_empty() {
+        return Err(ApiError::bad_request(errors.join("; ")));
+    }
+    Ok(catalog)
+}
+
 /// Executes the query DSL and returns the ordered object ids.
-async fn execute_query(db: &Db, query: &SavedSearchQuery) -> Result<Vec<String>, ApiError> {
+async fn execute_query(
+    db: &Db,
+    query: &SavedSearchQuery,
+    catalog: &search_schema::Catalog,
+) -> Result<Vec<String>, ApiError> {
     let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
     let mut params: Vec<(String, Value)> = Vec::new();
     let mut order: Vec<String> = Vec::new();
+    let mut counter: usize = 0;
 
-    for (idx, filter) in query.filters.iter().enumerate() {
-        let field = sanitize_field(&filter.field)?;
-        let p = format!("f{idx}");
-        let null_value = filter.value.as_ref().map(Value::is_null).unwrap_or(false);
-        let clause = match filter.operator.as_str() {
-            "eq" if null_value => format!("{field} IS NONE"),
-            "ne" | "neq" if null_value => format!("{field} IS NOT NONE"),
-            "eq" => format!("{field} = ${p}"),
-            "ne" | "neq" => format!("{field} != ${p}"),
-            "gt" => format!("{field} > ${p}"),
-            "gte" | "ge" => format!("{field} >= ${p}"),
-            "lt" => format!("{field} < ${p}"),
-            "lte" | "le" => format!("{field} <= ${p}"),
-            "in" => format!("{field} IN ${p}"),
-            "not_in" => format!("{field} NOT IN ${p}"),
-            "contains" => format!("{field} CONTAINS ${p}"),
-            "not_contains" => format!("{field} NOT CONTAINS ${p}"),
-            "starts_with" => {
-                format!("string::startsWith(string::lower({field}), string::lower(${p}))")
-            }
-            "ends_with" => format!("string::endsWith(string::lower({field}), string::lower(${p}))"),
-            "not_empty" => format!("{field} IS NOT NONE AND {field} != NULL"),
-            "is_null" | "is_empty" => format!("{field} IS NONE OR {field} = NULL"),
-            op => {
-                return Err(ApiError::bad_request(format!(
-                    "unsupported filter operator `{op}`"
-                )));
-            }
-        };
-        conditions.push(clause);
-        if !matches!(
-            filter.operator.as_str(),
-            "not_empty" | "is_null" | "is_empty"
-        ) && !null_value
-        {
-            params.push((p, filter.value.clone().unwrap_or(Value::Null)));
+    if let Some(root) = &query.where_ {
+        let rendered = render_condition(root, &mut params, &mut counter, catalog)?;
+        if rendered != "true" {
+            conditions.push(rendered);
         }
     }
 
@@ -403,11 +584,13 @@ pub async fn create_saved_search(
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
+    let mut query = body.query;
+    check_query(&state.db, &mut query).await?;
     let mut attributes = Map::new();
     attributes.insert("name".to_owned(), Value::String(name));
     attributes.insert(
         "query".to_owned(),
-        serde_json::to_value(&body.query).unwrap_or_else(|_| json!({})),
+        serde_json::to_value(&query).unwrap_or_else(|_| json!({})),
     );
     if let Some(interval) = body
         .refresh_interval
@@ -497,6 +680,8 @@ pub async fn update_saved_search(
         attributes.insert("name".to_owned(), Value::String(name));
     }
     if let Some(query) = body.query {
+        let mut query = query;
+        check_query(&state.db, &mut query).await?;
         attributes.insert(
             "query".to_owned(),
             serde_json::to_value(&query).unwrap_or_else(|_| json!({})),
@@ -629,14 +814,67 @@ pub async fn execute_saved_search(
     if object.get("type").and_then(Value::as_str) != Some(SAVED_SEARCH_TYPE) {
         return Err(ApiError::bad_request("object is not a saved search"));
     }
-    let query: SavedSearchQuery = object
+    let mut query: SavedSearchQuery = object
         .get("attributes")
         .and_then(|a| a.get("query"))
         .map(|q| serde_json::from_value(q.clone()))
         .transpose()
         .map_err(|e| ApiError::bad_request(format!("invalid stored query: {e}")))?
         .unwrap_or_default();
-    let ids = execute_query(&state.db, &query).await?;
+    let catalog = check_query(&state.db, &mut query).await?;
+    let ids = execute_query(&state.db, &query, &catalog).await?;
+    Ok(Json(json!({ "count": ids.len(), "ids": ids })))
+}
+
+/// Returns the field/operator catalog the admin UI renders its search form
+/// from (`plan/detail/suche-formular.md`).
+///
+/// Metadata only, so editors (and the worker API key) may read it: the form
+/// offers exactly the fields and operators the core executes.
+#[utoipa::path(
+    get,
+    path = "/search-fields",
+    responses(
+        (status = 200, description = "Field and operator catalog", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn list_search_fields(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let catalog = search_schema::load(&state.db).await?;
+    let document = serde_json::to_value(&catalog)
+        .map_err(|error| ApiError::internal(format!("catalog is not serializable: {error}")))?;
+    Ok(Json(document))
+}
+
+/// Runs a query without storing it (live hit count for the search form).
+///
+/// Read-only: nothing is written, so a preview cannot leave a stray saved
+/// search behind.
+#[utoipa::path(
+    post,
+    path = "/saved-searches/preview",
+    request_body = SavedSearchQuery,
+    responses(
+        (status = 200, description = "Matching object ids", body = Value),
+        (status = 400, description = "Invalid query", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn preview_saved_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SavedSearchQuery>,
+) -> Result<Json<Value>, ApiError> {
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let mut query = body;
+    let catalog = check_query(&state.db, &mut query).await?;
+    let ids = execute_query(&state.db, &query, &catalog).await?;
     Ok(Json(json!({ "count": ids.len(), "ids": ids })))
 }
 
@@ -1061,14 +1299,15 @@ pub async fn refresh_collection(
     let saved_search = fetch_object(&state.db, &saved_search_id)
         .await?
         .ok_or_else(|| ApiError::bad_request("referenced saved search not found"))?;
-    let query: SavedSearchQuery = saved_search
+    let mut query: SavedSearchQuery = saved_search
         .get("attributes")
         .and_then(|a| a.get("query"))
         .map(|q| serde_json::from_value(q.clone()))
         .transpose()
         .map_err(|e| ApiError::bad_request(format!("invalid stored query: {e}")))?
         .unwrap_or_default();
-    let ids = execute_query(&state.db, &query).await?;
+    let catalog = check_query(&state.db, &mut query).await?;
+    let ids = execute_query(&state.db, &query, &catalog).await?;
 
     let member_keys: Vec<String> = ids
         .iter()
@@ -1313,4 +1552,151 @@ pub async fn list_collection_members(
         }));
     }
     Ok(Json(members))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf(field: &str, operator: &str, value: Value) -> QueryCondition {
+        QueryCondition {
+            field: Some(field.to_owned()),
+            operator: Some(operator.to_owned()),
+            value: Some(value),
+            ..Default::default()
+        }
+    }
+
+    fn group(op: &str, conditions: Vec<QueryCondition>) -> QueryCondition {
+        QueryCondition {
+            op: Some(op.to_owned()),
+            conditions: Some(conditions),
+            ..Default::default()
+        }
+    }
+
+    fn catalog() -> search_schema::Catalog {
+        search_schema::build_catalog(&search_schema::CatalogSources::default())
+    }
+
+    fn render(condition: &QueryCondition) -> (String, Vec<(String, Value)>) {
+        let catalog = catalog();
+        let mut params: Vec<(String, Value)> = Vec::new();
+        let mut counter = 0usize;
+        let sql =
+            render_condition(condition, &mut params, &mut counter, &catalog).expect("renders");
+        (sql, params)
+    }
+
+    #[test]
+    fn groups_keep_their_parentheses_and_parameters_stay_unique() {
+        let tree = group(
+            "and",
+            vec![
+                leaf("type", "eq", json!("product")),
+                group(
+                    "or",
+                    vec![
+                        leaf("status", "eq", json!("published")),
+                        group("and", vec![leaf("attributes.price", "gt", json!(10))]),
+                    ],
+                ),
+            ],
+        );
+        let (sql, params) = render(&tree);
+        assert_eq!(
+            sql,
+            "(type = $f0 AND (status = $f1 OR (attributes.price > $f2)))"
+        );
+        let names: Vec<&str> = params.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, vec!["f0", "f1", "f2"]);
+    }
+
+    #[test]
+    fn composite_clauses_are_parenthesized() {
+        let (sql, params) = render(&leaf("attributes.price", "between", json!([10, 50])));
+        assert_eq!(sql, "(attributes.price >= $f0 AND attributes.price <= $f1)");
+        assert_eq!(params.len(), 2);
+
+        let (sql, params) = render(&leaf("attributes.name", "is_null", Value::Null));
+        assert_eq!(sql, "(attributes.name IS NONE OR attributes.name = NULL)");
+        assert!(params.is_empty());
+
+        let (sql, params) = render(&leaf("attributes.name", "not_empty", Value::Null));
+        assert_eq!(
+            sql,
+            "(attributes.name IS NOT NONE AND attributes.name != NULL)"
+        );
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn null_comparisons_render_is_none() {
+        let (sql, params) = render(&leaf("attributes.price", "eq", Value::Null));
+        assert_eq!(sql, "attributes.price IS NONE");
+        assert!(params.is_empty());
+
+        let (sql, _) = render(&leaf("attributes.price", "ne", Value::Null));
+        assert_eq!(sql, "attributes.price IS NOT NONE");
+    }
+
+    #[test]
+    fn text_operators_and_multilingual_fields_render() {
+        let (sql, params) = render(&leaf("attributes.name.de", "starts_with", json!("Edel")));
+        assert_eq!(
+            sql,
+            "string::startsWith(string::lower(attributes.name.de), string::lower($f0))"
+        );
+        assert_eq!(params[0].1, json!("Edel"));
+
+        let (sql, params) = render(&leaf("status", "in", json!(["published", "draft"])));
+        assert_eq!(sql, "status IN $f0");
+        assert_eq!(params[0].1, json!(["published", "draft"]));
+    }
+
+    #[test]
+    fn unsupported_fields_and_operators_are_rejected() {
+        let catalog = catalog();
+        let mut params: Vec<(String, Value)> = Vec::new();
+        let mut counter = 0usize;
+        assert!(
+            render_filter(
+                &leaf("attributes.name`; DROP", "eq", json!("x")),
+                &mut params,
+                &mut counter,
+                &catalog
+            )
+            .is_err()
+        );
+        assert!(
+            render_filter(
+                &leaf("type", "matches", json!("x")),
+                &mut params,
+                &mut counter,
+                &catalog
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn datetime_system_fields_are_wrapped() {
+        let (sql, params) = render(&leaf("created_at", "gte", json!("2026-01-01")));
+        assert_eq!(sql, "created_at >= type::datetime($f0)");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].1, json!("2026-01-01"));
+
+        let (sql, _) = render(&leaf(
+            "updated_at",
+            "between",
+            json!(["2026-01-01", "2026-02-01"]),
+        ));
+        assert_eq!(
+            sql,
+            "(updated_at >= type::datetime($f0) AND updated_at <= type::datetime($f1))"
+        );
+
+        let (sql, _) = render(&leaf("attributes.price", "gte", json!(1)));
+        assert_eq!(sql, "attributes.price >= $f0");
+    }
 }
