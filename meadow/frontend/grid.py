@@ -67,35 +67,56 @@ _APPROVAL_MODIFIER_OPS = (
 # keys into real JavaScript functions on the client (`convertDynamicProperties`),
 # so an inherited cell is dimmed/italic and carries the source as browser tooltip.
 INHERITED_FIELD = "_inherited"
+#: Field of the per-row "explicitly empty" markers (`{field: tooltip}`): the key
+#: exists but carries no value, so the attribute does **not** inherit.
+INTERRUPTED_FIELD = "_interrupted"
 #: Dimmed + italic cell for inherited values (the marker icon comes from the
 #: renderer below, because "not maintained here" must be recognisable at a
-#: glance — a grey tone alone is too subtle).
+#: glance — a grey tone alone is too subtle). An explicitly empty value is
+#: tinted like a warning instead, because it silently blocks inheritance.
 INHERITED_CELL_STYLE = (
-    "(params) => (params.data && params.data._inherited"
-    " && params.data._inherited[params.colDef.field])"
-    " ? {fontStyle: 'italic', color: '#6b7280'} : null"
+    "(params) => {"
+    " const data = params.data || {};"
+    " const field = params.colDef.field;"
+    " if (data._inherited && data._inherited[field])"
+    "  return {fontStyle: 'italic', color: '#6b7280'};"
+    " if (data._interrupted && data._interrupted[field])"
+    "  return {fontStyle: 'italic', color: '#b45309'};"
+    " return null;"
+    "}"
 )
 INHERITED_CELL_TOOLTIP = (
-    "(params) => (params.data && params.data._inherited"
-    " && params.data._inherited[params.colDef.field]) || ''"
+    "(params) => {"
+    " const data = params.data || {};"
+    " const field = params.colDef.field;"
+    " return (data._inherited && data._inherited[field])"
+    " || (data._interrupted && data._interrupted[field]) || '';"
+    "}"
 )
-#: Cell renderer that prefixes an inherited value with the `swap_horiz` icon
-#: (same symbol as the product form) and keeps the source as native tooltip.
-#: The renderer only affects the display — `params.value` stays the plain value,
-#: so sorting and the inline editor keep working.
+#: Cell renderer that prefixes an inherited value with the `swap_horiz` icon and
+#: an explicitly empty one with `link_off` (same symbols as the product form) and
+#: keeps the explanation as native tooltip. The renderer only affects the display
+#: — `params.value` stays the plain value, so sorting and the inline editor keep
+#: working.
 INHERITED_CELL_RENDERER = (
     "(params) => {"
-    " const marker = params.data && params.data._inherited"
-    " && params.data._inherited[params.colDef.field];"
+    " const data = params.data || {};"
+    " const field = params.colDef.field;"
+    " const inherited = data._inherited && data._inherited[field];"
+    " const interrupted = data._interrupted && data._interrupted[field];"
+    " const marker = inherited || interrupted;"
     " const span = document.createElement('span');"
     " const text = params.value === null || params.value === undefined"
     " ? '' : String(params.value);"
     " if (marker) {"
     "  const icon = document.createElement('i');"
     "  icon.className = 'material-icons';"
-    "  icon.style.cssText = 'font-size:14px;vertical-align:-2px;margin-right:2px;"
-    "color:#9e9e9e;font-style:normal';"
-    "  icon.textContent = 'swap_horiz';"
+    "  icon.style.fontSize = '14px';"
+    "  icon.style.verticalAlign = '-2px';"
+    "  icon.style.marginRight = '2px';"
+    "  icon.style.fontStyle = 'normal';"
+    "  icon.style.color = inherited ? '#9e9e9e' : '#b45309';"
+    "  icon.textContent = inherited ? 'swap_horiz' : 'link_off';"
     "  span.appendChild(icon);"
     "  span.title = marker;"
     " }"
@@ -105,24 +126,37 @@ INHERITED_CELL_RENDERER = (
 )
 
 
-def inherited_cells(object_: dict, locale: str) -> dict:
-    """Builds the per-row map of inherited attribute fields → tooltip text.
+def inherited_cells(object_: dict, locale: str, inheritable_names: list[str] | None = None) -> dict:
+    """Builds the per-row marker maps of the attribute fields.
 
     The core reports the origin of every inherited value in `inherited`
     (`{name: {from, label}}`); the grid marks those cells (dimmed + tooltip)
-    via the `:cellStyle`/`:tooltipValueGetter` column options. The tooltip is
-    built here, where the locale and the translations are available.
+    via the `:cellStyle`/`:tooltipValueGetter`/`:cellRenderer` column options.
+    An attribute that is **inheritable** but carries an own empty value
+    (`null`/empty string/empty language map) is marked as *interrupted*: the
+    key blocks inheritance. The tooltips are built here, where the locale and
+    the translations are available.
     """
-    sources = object_.get("inherited")
-    if not isinstance(sources, dict) or not sources:
-        return {INHERITED_FIELD: {}}
     markers: dict[str, str] = {}
-    for name, source in sources.items():
-        if not isinstance(source, dict):
-            continue
-        label = str(source.get("label") or source.get("from") or "")
-        markers[attribute_field(str(name))] = t("grid.inherited_cell", locale=locale, label=label)
-    return {INHERITED_FIELD: markers}
+    blocked: dict[str, str] = {}
+    sources = object_.get("inherited")
+    if isinstance(sources, dict):
+        for name, source in sources.items():
+            if not isinstance(source, dict):
+                continue
+            label = str(source.get("label") or source.get("from") or "")
+            markers[attribute_field(str(name))] = t(
+                "grid.inherited_cell", locale=locale, label=label
+            )
+    attributes = object_.get("attributes")
+    if isinstance(attributes, dict):
+        for name in inheritable_names or []:
+            if attribute_field(name) in markers or name not in attributes:
+                continue
+            value = attributes.get(name)
+            if value is None or value == "" or value == {}:
+                blocked[attribute_field(name)] = t("grid.interrupted_cell", locale=locale)
+    return {INHERITED_FIELD: markers, INTERRUPTED_FIELD: blocked}
 
 
 def with_header_tooltips(column_defs: list[dict]) -> list[dict]:
@@ -804,6 +838,15 @@ async def products_page(request: Request) -> None:
             for definition in definitions
             if definition.get("name") and is_editable_definition(definition)
         }
+        # Attributes that participate in inheritance: an own empty value there
+        # blocks the inherited one (marked as "interrupted" in the grid).
+        inheritable_names = [
+            str(definition.get("name"))
+            for definition in definitions
+            if definition.get("name")
+            and definition.get("inheritable")
+            and not definition.get("computed")
+        ]
         # Fields the grid edits inline (`_name` is editable as well); a double
         # click there must open the cell editor instead of the product form.
         editable_fields = {"_name", *(attribute_field(name) for name in editable_defs)}
@@ -896,7 +939,7 @@ async def products_page(request: Request) -> None:
                     language_prefixes,
                     enum_resolvers_by_language,
                 )
-                | inherited_cells(object_, locale)
+                | inherited_cells(object_, locale, inheritable_names)
                 for object_ in selected_objects
             ]
 

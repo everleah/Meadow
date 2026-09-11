@@ -197,10 +197,14 @@ async def product_form(object_id: str) -> None:
             """Classifies the value for the marker: own, inherited or interrupted."""
             if own is None and inherited_source(attr_name) is not None:
                 return "inherited"
-            multilingual = bool(defn is None or (defn or {}).get("multilingual"))
-            if not multilingual and attr_name in edited and own in (None, ""):
-                # Key present but empty = the value deliberately interrupts
-                # inheritance ("leer gesetzt").
+            if attr_name not in edited:
+                return "own"
+            raw = edited.get(attr_name)
+            # The key exists but carries nothing (`null`, empty string or an empty
+            # language map) = the value deliberately interrupts inheritance
+            # ("leer gesetzt"); a language map filled for *another* language is a
+            # normal own value.
+            if raw is None or raw == "" or raw == {}:
                 return "interrupted"
             return "own"
 
@@ -1356,6 +1360,10 @@ async def product_form(object_id: str) -> None:
             new_attrs: dict = {
                 k: (dict(v) if isinstance(v, dict) else v) for k, v in edited.items()
             }
+            # Keys cleared in the UI must be **removed** on the server: the core
+            # merges `attributes`, so sending the shorter map alone would keep the
+            # old value (and block inheritance). `remove_attributes` drops them.
+            removed = [name for name in raw_attributes if name not in new_attrs]
             changed = new_attrs != raw_attributes
             status = status_select.value if status_select.value else None
             if status is not None and status != resolved.get("status"):
@@ -1363,7 +1371,12 @@ async def product_form(object_id: str) -> None:
             if changed:
                 try:
                     await client.update_object(
-                        token, object_id, attributes=new_attrs, status=status, locale=locale
+                        token,
+                        object_id,
+                        attributes=new_attrs,
+                        status=status,
+                        locale=locale,
+                        remove_attributes=removed,
                     )
                     ui.notify(t("form.saved"), color="positive")
                 except CoreError as error:

@@ -8,6 +8,7 @@ from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session
 from meadow.frontend.edit_queue import next_object_id, position_of
 from meadow.frontend.grid import (
     INHERITED_FIELD,
+    INTERRUPTED_FIELD,
     MAX_CONTENT_CHARS,
     attribute_column_specs,
     attribute_columns,
@@ -548,9 +549,36 @@ def test_inherited_cells_maps_attribute_fields_to_the_source() -> None:
 
 
 def test_inherited_cells_without_sources_is_empty() -> None:
-    assert inherited_cells({"id": "object:1", "attributes": {}}, "en") == {INHERITED_FIELD: {}}
+    empty = {INHERITED_FIELD: {}, INTERRUPTED_FIELD: {}}
+    assert inherited_cells({"id": "object:1", "attributes": {}}, "en") == empty
     # A malformed marker block must not break the rows.
-    assert inherited_cells({"inherited": "nope"}, "en") == {INHERITED_FIELD: {}}
+    assert inherited_cells({"inherited": "nope"}, "en") == empty
+
+
+def test_inherited_cells_marks_explicitly_empty_values() -> None:
+    object_ = {
+        "id": "object:1",
+        "attributes": {"brand": None, "supplier": "", "width": 2, "color": {}},
+    }
+    markers = inherited_cells(object_, "en", ["brand", "supplier", "width", "color", "height"])
+    # Own empty values on inheritable attributes block the inherited value …
+    assert set(markers[INTERRUPTED_FIELD]) == {"attr_brand", "attr_supplier", "attr_color"}
+    # … a filled value and an attribute without own key do not.
+    assert "attr_width" not in markers[INTERRUPTED_FIELD]
+    assert "attr_height" not in markers[INTERRUPTED_FIELD]
+    assert markers[INHERITED_FIELD] == {}
+    assert "inheritance" in markers[INTERRUPTED_FIELD]["attr_brand"]
+
+
+def test_inherited_cells_prefers_the_inherited_marker() -> None:
+    object_ = {
+        "id": "object:1",
+        "attributes": {"brand": None},
+        "inherited": {"brand": {"from": "object:parent", "label": "Parent"}},
+    }
+    markers = inherited_cells(object_, "en", ["brand"])
+    assert markers[INHERITED_FIELD] == {"attr_brand": "Inherited from Parent"}
+    assert markers[INTERRUPTED_FIELD] == {}
 
 
 def test_inheritance_i18n_keys_translate() -> None:

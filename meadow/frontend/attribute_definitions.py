@@ -133,9 +133,9 @@ async def attribute_definitions_page() -> None:
                         "group": ", ".join(
                             groups_by_id.get(str(gid), "") for gid in (d.get("group_ids") or [])
                         ),
-                        "key": "✔" if d.get("is_key") else "",
-                        "inheritable": "✔" if d.get("inheritable") else "",
-                        "multilingual": "✔" if d.get("multilingual") else "",
+                        "key": "✔" if d.get("is_key") else "–",
+                        "inheritable": "✔" if d.get("inheritable") else "–",
+                        "multilingual": "✔" if d.get("multilingual") else "–",
                         "applicable": ", ".join(d.get("applicable_types") or []),
                         "required": ", ".join(d.get("required_types") or []),
                     }
