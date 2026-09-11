@@ -174,9 +174,14 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
     - **Verbindung testen (Stage 2c):** Der Dialog-Fuß hat einen Button `Test connection` (`POST /connectors/{id}/test`, nur für gespeicherte Konnektoren), der im Worker einen Test auslöst (Webhook: synthetisches Event; Import/Export: Trockenlauf der Profilwerte), den Lauf über `GET /jobs/runs?ids=…` pollt und das Ergebnis (Status, Dauer, Antwort-Auszug bzw. aufgelöste Werte) samt Klartext-Hinweis anzeigt.
     - **Geplant (Stage 3, skizziert):** eigene Konnektor-Typen (Plugin-Registry), getrennte Secret-Ablage, Konnektor-Profile im MCF-Export/-Import, Auto-Test nach dem Speichern und ein Konnektor-Status in der Liste. **Details:** [konnektor-konfiguration.md](konnektor-konfiguration.md), Abschnitt 14.
 
+14. **Gespeicherte Suchen & Collections** (nur `admin`/`superadmin`)
+    - Verwaltung der **gespeicherten Suchen** (`saved_search`) und **materialisierten Collections** (`collection`) in zwei Tabs; Ausführen einer Suche zeigt die Trefferzahl, Collections listen ihre Mitglieder und lassen sich synchron refreshen (`POST /collections/{id}/refresh`)
+    - **(Umgesetzt:)** `meadow/frontend/saved_searches.py` (`/saved-searches`, admin-only) – die Suchkriterien werden im Dialog als **JSON** (Query-DSL) gepflegt; Collections pflegen Mitgliederzahl und `refresh_interval`
+    - **Geplant:** schema-getriebenes **Suchformular** statt JSON (Feldkatalog `GET /search-fields`, Zeilen-Editor Feld/Operator/Wert, Servervalidierung, Tabs Formular/JSON, Vorschau-Zähler). **Details:** [suche-formular.md](suche-formular.md)
+
 **Spätere Ausbaustufen (nicht im MVP):**
 
-- Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections
+- Erweiterte Suche mit Query-Builder („Advanced Search“) – **Formular für gespeicherte Suchen geplant:** [suche-formular.md](suche-formular.md); gespeicherte Suchen und materialisierte Collections sind bereits umgesetzt (Modul 14)
 - ~~Pinned Attributes und Attribut-Suchleiste im Formular~~ **(umgesetzt, Phase 9: `meadow/frontend/form.py` – Pin-Toggle je Zeile + sticky Seitenleiste, Suchfeld mit Trefferfilter)**
 - ~~Find & Replace~~ **(umgesetzt, Phase 9: Grid-Dialog `find_replace` + Bulk-Operation `replace_text` im Worker)**, ~~sequenzielles Editieren~~ **(umgesetzt, Phase 9: `meadow/frontend/edit_queue.py` + Grid-Button `edit_note` + Fortschrittsbanner im Formular)**, ~~Send-for-approval bei Bulk-Änderungen~~ **(umgesetzt, Phase 9: Operation `send_for_approval` + Schalter „anschließend zur Freigabe“)**
 - Kanalspezifische Freigaben (per-Kanal-Vollständigkeit)

@@ -1,6 +1,6 @@
 # Konnektor-Konfiguration über Formulare (schema-getrieben)
 
-- **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend))
+- **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zu Phase 6/7 (Konnektoren & Admin-UI)
 - **Stand:** **Stage 1 und 2 umgesetzt** (2026-09-11) — Schema, Servervalidierung, `parameters_mode: merge`, `GET /connector-types`, Konfigurationsformular, Wiederholungsrichtlinie, Import-/Export-Profile und Verbindungstest sind im Betrieb verifiziert. **Stage 3** (Plugin-Registry, Secret-Ablage, MCF-Sektion, kleinere Ausbauten) ist **skizziert, aber nicht umgesetzt** (Abschnitt 14). Die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
 
