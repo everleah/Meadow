@@ -32,6 +32,7 @@ JOB_TYPES = (
     "bulk_operation",
     "collection_refresh",
     "config_import",
+    "connector_test",
 )
 #: Known job-run statuses (matches the core's VALID_RUN_STATUSES).
 RUN_STATUSES = ("pending", "running", "success", "failed", "retry")

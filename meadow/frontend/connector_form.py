@@ -307,6 +307,61 @@ def summary_parts(parameters: dict | None, *, locale: str | None = None) -> list
     return parts
 
 
+def connector_test_lines(result: dict | None, *, locale: str | None = None) -> list[str]:
+    """Renders a `connector_test` result as translatable lines for the dialog."""
+    result = result or {}
+    ok = bool(result.get("ok"))
+    lines = [t("connector_test.ok" if ok else "connector_test.failed", locale=locale)]
+    if result.get("dry_run"):
+        resolved = result.get("resolved") or {}
+        rendered = ", ".join(
+            f"{key}={value}" for key, value in resolved.items() if value not in (None, [], "")
+        )
+        lines.append(t("connector_test.resolved", locale=locale, value=rendered or "—"))
+        return lines
+
+    url = result.get("url")
+    if url:
+        method = str(result.get("method") or "POST")
+        lines.append(t("connector_test.target", locale=locale, value=f"{method} {url}"))
+    if result.get("reachable") is False:
+        lines.append(t("connector_test.unreachable", locale=locale))
+    if result.get("status_code") is not None:
+        lines.append(t("connector_test.status", locale=locale, value=str(result["status_code"])))
+    if result.get("latency_ms") is not None:
+        lines.append(t("connector_test.latency", locale=locale, value=str(result["latency_ms"])))
+    if result.get("excerpt"):
+        lines.append(t("connector_test.body", locale=locale, value=str(result["excerpt"])))
+    if result.get("error"):
+        lines.append(t("connector_test.error", locale=locale, value=str(result["error"])))
+    hint = connector_test_hint(result)
+    if hint:
+        lines.append(t(hint, locale=locale))
+    return lines
+
+
+def connector_test_hint(result: dict | None) -> str:
+    """Plain-language next step for a failed test (or `""` when it passed).
+
+    Returns an i18n key; the caller translates it (or `connector_test_lines` does).
+    """
+    result = result or {}
+    if result.get("ok"):
+        return ""
+    if result.get("reachable") is False:
+        return "connector_test.hint_unreachable"
+    status = result.get("status_code")
+    if status in (401, 403):
+        return "connector_test.hint_auth"
+    if status == 404:
+        return "connector_test.hint_url"
+    if isinstance(status, int) and status >= 500:
+        return "connector_test.hint_server"
+    if isinstance(status, int) and status >= 400:
+        return "connector_test.hint_client"
+    return "connector_test.hint_generic"
+
+
 def summary_text(schema: dict | None, parameters: dict | None, *, locale: str | None = None) -> str:
     """One-line description of a connector's configuration for the grid."""
     if not fields_of(schema):

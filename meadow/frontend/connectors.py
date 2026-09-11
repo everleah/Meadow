@@ -13,10 +13,16 @@ konnektor-konfiguration.md``):
   ``parameters_mode=merge`` so undeclared keys (and masked secrets) survive.
 * **JSON** — the expert tab edits the raw ``parameters`` object and sends it as
   a full replacement. Undeclared keys are listed as a hint, never removed.
+
+The dialog can **test** a stored connector (``POST /connectors/{id}/test``):
+webhooks get a synthetic event, the import/export profiles a dry run of the
+values they would contribute; the result dialog reports status, latency and an
+excerpt (or the resolved profile values).
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json as _json
 from datetime import datetime
@@ -30,6 +36,7 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.connector_form import (
     apply_patch,
     build_patch,
+    connector_test_lines,
     default_values,
     nest,
     project_fields,
@@ -44,6 +51,10 @@ from meadow.frontend.layout import build_shell
 #: Connector types used only when the schema endpoint is unreachable (the schema
 #: from `GET /connector-types` is the source of truth for types and labels).
 _FALLBACK_TYPES = ("webhook", "json_import", "json_export")
+
+#: Connection test: number of polls and the wait between them (~15 s budget).
+TEST_POLLS = 30
+TEST_POLL_SECONDS = 0.5
 
 
 def _type_label(connector_type: str) -> str:
@@ -312,6 +323,12 @@ async def connectors_page() -> None:
                         )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=editor_dialog.close).props("flat")
+                test_button = ui.button(
+                    t("connectors.test"),
+                    icon="network_check",
+                    on_click=lambda: run_connector_test(),
+                ).props("flat")
+                test_button.tooltip(t("connectors.test_hint"))
                 ui.button(
                     t("connectors.save"),
                     icon="save",
@@ -496,6 +513,61 @@ async def connectors_page() -> None:
             editor_dialog.close()
             await reload_rows()
             ui.notify(t("connectors.saved"), color="positive")
+
+        async def run_connector_test() -> None:
+            """Queues a connection test in the worker and shows the result."""
+            connector_id = editor_state["id"]
+            if not connector_id:
+                ui.notify(t("connectors.test_unsaved"), color="warning")
+                return
+            try:
+                run_id = await client.test_connector(token, str(connector_id))
+            except CoreError as error:
+                ui.notify(f"{t('connectors.test_failed')}: {error}", color="negative")
+                return
+            if not run_id:
+                ui.notify(t("connectors.test_failed"), color="negative")
+                return
+
+            result: dict | None = None
+            with ui.dialog() as result_dialog, ui.card().classes("w-[38rem] max-w-[92vw]"):
+                ui.label(t("connectors.test_title")).classes("text-subtitle1")
+                body = ui.column().classes("w-full gap-1")
+                with body:
+                    ui.spinner(size="lg")
+                    ui.label(t("connectors.test_running")).classes("text-caption")
+                with ui.row().classes("w-full justify-end mt-2"):
+                    ui.button(t("grid.close"), on_click=result_dialog.close).props("flat")
+            result_dialog.open()
+
+            for _ in range(TEST_POLLS):
+                try:
+                    runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+                except CoreError as error:
+                    ui.notify(f"{t('connectors.test_failed')}: {error}", color="negative")
+                    break
+                run = runs[0] if runs else {}
+                if run.get("status") in ("success", "failed"):
+                    result = run.get("result") if isinstance(run.get("result"), dict) else None
+                    if result is None:
+                        result = {"ok": False, "error": run.get("error") or ""}
+                    break
+                await asyncio.sleep(TEST_POLL_SECONDS)
+
+            body.clear()
+            with body:
+                if result is None:
+                    ui.label(t("connectors.test_timeout")).classes("text-caption text-negative")
+                    return
+                for index, line in enumerate(connector_test_lines(result)):
+                    style = "text-body2"
+                    if index == 0:
+                        style = (
+                            "text-subtitle2 text-positive"
+                            if result.get("ok")
+                            else ("text-subtitle2 text-negative")
+                        )
+                    ui.label(line).classes(style)
 
         async def reload_rows() -> None:
             nonlocal connectors

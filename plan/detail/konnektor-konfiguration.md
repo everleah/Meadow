@@ -19,9 +19,11 @@
 | Schema, `validate`, `normalize`, `apply_defaults`, `merge_parameters` | `crates/pim-core/src/api/connector_schema.rs` |
 | Endpunkt `GET /connector-types` | `crates/pim-core/src/api/connectors.rs::list_connector_types` (Route in `app.rs`, OpenAPI in `api/mod.rs`) |
 | Validierung + Defaults + `parameters_mode` in `POST`/`PATCH /connectors` | `crates/pim-core/src/api/connectors.rs` |
+| Vorgabe-Profile (`type_defaults`) für `POST /imports` / `POST /exports` | `crates/pim-core/src/api/connectors.rs` + `imports.rs`/`exports.rs` |
+| Verbindungstest `POST /connectors/{id}/test` + Job-Typ `connector_test` | `crates/pim-core/src/api/connectors.rs`, `meadow/worker/connector_test.py` |
 | Formular-Renderer (Schema ↔ Werte ↔ Patch) | `meadow/frontend/connector_form.py` |
-| Dialog, Tabs, Zusammenfassungsspalte | `meadow/frontend/connectors.py` |
-| Tests | `cargo test` (Validator/Merge), `tests/test_connector_form.py`, `tests/test_connector_form_state.py` (Patch-Baseline), Locale-Parität en/de/fr |
+| Dialog, Tabs, Test-Dialog, Zusammenfassungsspalte | `meadow/frontend/connectors.py` |
+| Tests | `cargo test` (Validator/Merge), `tests/test_connector_form.py`, `tests/test_connector_form_state.py` (Patch-Baseline), `tests/test_connector_test.py` (Test-Handler), `tests/test_webhooks.py`/`tests/test_connectors.py` (Wiederholung), Locale-Parität en/de/fr |
 
 **Abweichungen vom ursprünglichen Entwurf (bewusst):**
 
@@ -187,13 +189,16 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
    - `POST /exports`: `format` (ist jetzt optional; ohne Vorgabe weiterhin `json`), `fields`, `locales`, `options.email_to` (Reihenfolge: Anfrage > Profil > bisheriger Default).
    Ohne Konnektor bleibt alles wie vorher (`wired: true` in beiden Typen, die Felder sind damit auch validiert und im Formular). **Verifiziert:** Import über das Profil `source=erp-test` schreibt `source` an die Objekte; `emit_events: true` erzeugt genau ein `object.created`, `false` genau ein `import.completed` (über die DLQ beobachtet); Export ohne `format`/`fields` liefert `xlsx` mit den Profil-Spalten und nutzt `options.email_to` („SMTP is not configured" als Beweis, dass die Empfänger ankamen).
 
-## 8. Test-Button (Stage 2)
+## 8. Test-Button (Stage 2c, umgesetzt)
 
-„Verbindung testen" ist der größte UX-Gewinn gegenüber JSON. Der Kern hat **keinen HTTP-Client** (keine `reqwest`-Abhängigkeit) → der Test gehört in den Worker:
+„Verbindung testen" ist der größte UX-Gewinn gegenüber JSON. Der Kern hat **keinen HTTP-Client** (keine `reqwest`-Abhängigkeit) → der Test läuft im Worker:
 
-- Neuer Job-Typ `connector_test` (`POST /connectors/{id}/test`, admin): der Worker führt einen echten Test-Versand aus (Webhook: synthetisches Event an `url`, Antwort-Status/Latenz/Auszug aus dem Body; Import/Export: Auflösen der Defaults + Trockenlauf) und schreibt das Ergebnis in `job_run.result`.
-- UI: Button im Dialog → Fortschritt (bestehendes Job-Polling-Muster) → Ergebnisdialog mit Status, Dauer, Antwortauszug und Klartext-Hinweis (z. B. „401 Unauthorized — Token prüfen").
-- Der Test verändert keine Daten (kein Event im Stream, kein Objekt wird geschrieben).
+- **Job-Typ `connector_test`:** `POST /connectors/{id}/test` (admin) legt einen Lauf mit `parameters = {connector_id, name, connector_type, parameters}` an und liefert `202 {job_run_id}`; auditiert als `connector_tested` (ohne Werte). Der Worker (`meadow/worker/connector_test.py`) führt den Test aus:
+  - `webhook`: ein **synthetisches Event** (`event_id: connector_test`, `test: true`, Form wie `object.updated`) geht an die gespeicherte URL – mit den konfigurierten Kopfzeilen, Methode und Timeout. Das Ergebnis nennt `ok`, `status_code`, `latency_ms`, eine **Antwort-Kurzfassung** (max. 300 Zeichen, Whitespace normalisiert) und `reachable`; ein Transportfehler wird zu `reachable: false` + `error`. Es entsteht **kein** Outbox-Event, die DLQ bleibt unberührt.
+  - `json_import`/`json_export`: **Trockenlauf** der Profilwerte (`dry_run: true`, `resolved: {…}`) – genau das, was `POST /imports`/`POST /exports` übernehmen würden; es wird nichts geschrieben und nichts gesendet.
+- **UI:** Button **„Verbindung testen"** im Konnektor-Dialog (Fußzeile) → Erfolgs-/Fehlerdialog mit Status, Dauer, Antwort-Auszug bzw. den aufgelösten Profilwerten und einem **Klartext-Hinweis** (nicht erreichbar · 401/403 → Token prüfen · 404 → Pfad prüfen · 5xx → Ziel-Logs · sonstige 4xx → Methode/Header). Polling über `GET /jobs/runs?ids=<run_id>` (~15 s Budget, danach Hinweis „läuft der Worker?"); für **ungespeicherte** Konnektoren erscheint der Hinweis, zuerst zu speichern (getestet wird der gespeicherte Stand).
+- Der Test verändert keine Daten (kein Event im Stream, kein Objekt wird geschrieben; der Aufruf beim Middleware-Ziel ist beabsichtigt).
+- **Verifiziert (Live + Browser):** lokaler HTTP-Sink → `ok`, 200, 4 ms, Antwort-Auszug; geschlossener Port → `ok: false`, `reachable: false`, `ConnectError`, Hinweis „Ziel nicht erreichbar"; `json_import`-Profil → `resolved: {match_by_key: sku, emit_events: false, source: erp}`.
 
 ## 9. Rechte, Geheimnisse, Audit
 
@@ -231,7 +236,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 6. `json_import`/`json_export` sind als Job-Defaults verdrahtet und im Schema `wired: true` (Abschnitt 7, Punkt 3); `POST /exports.format` ist dafür optional geworden. Neu im Formular: eine Mehrfachauswahl **ohne** Optionsquelle rendert als Freitext-Eingabe mit Tags (nötig für `options.email_to`), und die Optionsquelle `languages` (aktive Datensprachen) ist ergänzt; die Listenzusammenfassung zeigt die Profilwerte (`Format: csv · E-Mail: 1`).
 
-**Stage 2c — offen:**
+**Stage 2c — Test-Button — umgesetzt:**
 
 7. Job-Typ `connector_test` + Worker-Testversand + „Verbindung testen"-Dialog mit Ergebnis (Abschnitt 8).
 
@@ -256,6 +261,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 - Wiederholungsrichtlinie: `retry_policy.max_attempts` begrenzt die Versuche je Konnektor (Dead-Letter danach), `retry_policy.backoff_seconds` ist die Wartezeit vor dem nächsten Versuch, Wertebereiche werden vom Kern geprüft, fehlende Richtlinien behalten das alte Verhalten (5 Versuche, 5 s). *(Kern-Test, Worker-Tests + Live-Prüfung: `attempt 1/2 → 2/2` bzw. `1/3 → 3/3`, bei `backoff_seconds: 1` lagen alle drei Versuche in ~2 s)*
 - Import-/Export-Profil: `POST /imports` übernimmt `source`/`match_by_key`/`match_by_id`/`emit_events` des `json_import`-Konnektors, wenn die Anfrage sie nicht setzt; `POST /exports` übernimmt `format`/`fields`/`locales`/`options.email_to` des `json_export`-Konnektors. Ohne Konnektor bleibt das Verhalten unverändert. *(Kern-Unit-Tests für die Accessor-Funktionen + Live-Prüfung: `source` am Objekt, `emit_events` über die DLQ, `format`/`fields`/`email_to` im Exportergebnis)*
 - Freitext-Mehrfachauswahl: ein `multiselect` ohne Optionsquelle (`options.email_to`) nimmt getippte Werte als Tags an. *(Browser-Verifikation: gespeichert als `options.email_to: ["ops@example.com"]`)*
+- Verbindungstest: Webhook-Test meldet Status/Latenz/Auszug, ein geschlossener Port `reachable: false` mit Fehler und Hinweis, ein Import-/Export-Profil die aufgelösten Werte (`dry_run`). Fehlerhinweise werden nach Status gewählt (401/403 → Token, 404 → Pfad, 5xx → Ziel, sonst generisch). Der Test schreibt keine Events und keine Objekte. *(9 Worker-Unit-Tests mit `MockTransport`, 4 Frontend-Tests für die Aufbereitung + Live-/Browser-Prüfung)*
 - Worker-Regression: ein per Formular gespeicherter Konnektor wird vom Webhook-Supervisor geladen (Live-Reload ≤ 30 s) und liefert ein Event aus. *(über den bestehenden Supervisor-Pfad; der Dialog ändert die gespeicherte Struktur nicht)*
 - Rechte: `editor` → `403` auf `POST/PATCH /connectors`; Worker mit `X-Api-Key` liest weiterhin (`GET /connectors`, `GET /connector-types`). *(bestehende Rollenprüfung, unverändert)*
 - Locale-Parität für die neuen Keys (`connectors.*`, `connector_form.*`, `connector_fields.*`). *(Formular-Test)*

@@ -305,6 +305,78 @@ pub async fn list_connectors(
     Ok(Json(rows))
 }
 
+/// Queues a connection test for a connector (admin only).
+///
+/// The core has no HTTP client: the test runs in the worker, which sends a
+/// synthetic event for `webhook` connectors and resolves the profile values for
+/// `json_import`/`json_export` (dry run). The result lands in `job_run.result`
+/// (`{ok, …}`) — no data is changed by the test.
+#[utoipa::path(
+    post,
+    path = "/connectors/{id}/test",
+    responses(
+        (status = 202, description = "Test queued", body = Value),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Not found", body = Value),
+        (status = 503, description = "Job queue unavailable", body = Value)
+    )
+)]
+pub async fn test_connector(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id)?;
+    let connector = fetch_connector(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("connector `{id}` not found")))?;
+    let connector_type = connector
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let parameters = json!({
+        "connector_id": connector.get("id"),
+        "name": connector.get("name"),
+        "connector_type": connector_type,
+        "parameters": connector.get("parameters").cloned().unwrap_or(json!({})),
+    });
+    let (_, run) = crate::api::jobs::queue_run(
+        &state.db,
+        &state.config,
+        None,
+        "connector_test",
+        parameters,
+        "manual",
+        &claims.sub,
+    )
+    .await?;
+    let run_id = run
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "connector_tested",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(json!({ "name": connector.get("name"), "type": connector_type })),
+        },
+    )
+    .await;
+
+    Ok((StatusCode::ACCEPTED, Json(json!({ "job_run_id": run_id }))))
+}
+
 /// Loads a single connector (API key or admin).
 #[utoipa::path(
     get,

@@ -234,6 +234,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(api::connectors::delete_connector),
         )
         .route(
+            "/connectors/{id}/test",
+            post(api::connectors::test_connector),
+        )
+        .route(
             "/imports",
             post(api::imports::create_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )

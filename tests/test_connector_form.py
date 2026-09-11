@@ -13,6 +13,8 @@ from meadow.frontend.connector_form import (
     MISSING,
     apply_patch,
     build_patch,
+    connector_test_hint,
+    connector_test_lines,
     default_values,
     fields_of,
     format_value,
@@ -355,6 +357,57 @@ def test_summary_text_mentions_undeclared_and_unwired() -> None:
     )
 
 
+def test_connector_connector_test_lines_render_the_outcome() -> None:
+    lines = connector_test_lines(
+        {
+            "ok": True,
+            "url": "https://middleware.example/events",
+            "method": "PUT",
+            "status_code": 200,
+            "latency_ms": 12.3,
+            "excerpt": "accepted",
+        },
+        locale="en",
+    )
+    assert lines[0] == "Connection successful"
+    assert any("PUT https://middleware.example/events" in line for line in lines)
+    assert any("HTTP status: 200" in line for line in lines)
+    assert any("12.3" in line for line in lines)
+    assert any("accepted" in line for line in lines)
+
+
+def test_connector_connector_test_lines_render_a_dry_run() -> None:
+    lines = connector_test_lines(
+        {
+            "ok": True,
+            "dry_run": True,
+            "resolved": {"format": "csv", "fields": ["name"], "locales": []},
+        },
+        locale="en",
+    )
+    assert lines[0] == "Connection successful"
+    assert "format=csv" in lines[1]
+    assert "fields=['name']" in lines[1]
+
+
+def test_connector_test_hint_matches_the_failure() -> None:
+    assert connector_test_hint({"ok": True}) == ""
+    assert connector_test_hint({"ok": False, "reachable": False}) == (
+        "connector_test.hint_unreachable"
+    )
+    assert connector_test_hint({"ok": False, "status_code": 403}) == "connector_test.hint_auth"
+    assert connector_test_hint({"ok": False, "status_code": 404}) == "connector_test.hint_url"
+    assert connector_test_hint({"ok": False, "status_code": 503}) == "connector_test.hint_server"
+    assert connector_test_hint({"ok": False, "status_code": 422}) == "connector_test.hint_client"
+    assert connector_test_hint({"ok": False}) == "connector_test.hint_generic"
+
+
+def test_connector_test_lines_include_the_hint() -> None:
+    lines = connector_test_lines({"ok": False, "status_code": 401}, locale="en")
+    assert lines[0] == "Connection failed"
+    assert any("Authorization" in line for line in lines)
+
+
 def test_i18n_keys_of_the_schema_exist() -> None:
     """Guards against typos in the core's label/help keys (all three locales)."""
     keys = [
@@ -419,6 +472,28 @@ def test_i18n_keys_of_the_schema_exist() -> None:
         "connector_form.row_value",
         "connector_form.field_required",
         "connector_form.field_enum",
+        "connectors.test",
+        "connectors.test_hint",
+        "connectors.test_unsaved",
+        "connectors.test_failed",
+        "connectors.test_title",
+        "connectors.test_running",
+        "connectors.test_timeout",
+        "connector_test.ok",
+        "connector_test.failed",
+        "connector_test.resolved",
+        "connector_test.target",
+        "connector_test.unreachable",
+        "connector_test.status",
+        "connector_test.latency",
+        "connector_test.body",
+        "connector_test.error",
+        "connector_test.hint_unreachable",
+        "connector_test.hint_auth",
+        "connector_test.hint_url",
+        "connector_test.hint_server",
+        "connector_test.hint_client",
+        "connector_test.hint_generic",
     ]
     for locale in ("en", "de", "fr"):
         for key in keys:

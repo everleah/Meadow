@@ -51,6 +51,7 @@ use utoipa::OpenApi;
         connectors::list_connector_types,
         connectors::update_connector,
         connectors::delete_connector,
+        connectors::test_connector,
         exports::create_export,
         exports::get_export_file,
         imports::create_import,

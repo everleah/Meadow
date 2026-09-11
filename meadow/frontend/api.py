@@ -1841,6 +1841,22 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    async def test_connector(self, token: str, connector_id: str) -> str:
+        """Queues a connection test (``POST /connectors/{id}/test``, admin).
+
+        The core has no HTTP client of its own, so the test runs in the worker;
+        the returned `job_run` id is polled with `list_job_runs` until the
+        result (`{ok, …}`) is available.
+        """
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/connectors/{connector_id}/test",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return str(response.json().get("job_run_id") or "")
+
     async def list_units(
         self,
         token: str,
