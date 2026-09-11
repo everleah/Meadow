@@ -2,16 +2,17 @@
 
 - **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections)) und Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), aufbauend auf Phase 9, Punkt 1
-- **Stand:** Plan / Entwurf (2026-09-11) — **nicht umgesetzt**. Umsetzungsreif für **Stage A** (Feldkatalog + Validierung + Formular für `filters`/`fulltext`/`limit`); Stage B/C sind skizziert und offen.
+- **Stand:** Plan / Entwurf (2026-09-11, überarbeitet) — **nicht umgesetzt**. Umfang nach Rückmeldung des Auftraggebers: **Stage A + B** (Feldkatalog, Validierung, Formular mit **UND/ODER-Gruppen** und `between`, Referenzen, Sortierung, Zusammenfassung, Vorschau). Die Query-DSL wird dafür **erweitert** (Abschnitt 5); bestehende Suchen werden **nicht** migriert, sondern gelöscht und neu angelegt.
 
-**Getroffene Entscheidungen (Vorschlag, zur Bestätigung):**
+**Getroffene Entscheidungen:**
 
-- **Der Feldkatalog ist Server-Vertrag** (`GET /search-fields`) — nicht Frontend-Wissen. Damit nutzen UI, MCP/CLI und die Validierung dieselbe Quelle (genau das Muster, das sich beim Konnektor-Formular bewährt hat: [konnektor-konfiguration.md](konnektor-konfiguration.md)).
-- **Das Formular bleibt flach:** eine Liste von Bedingungen, die **UND**-verknüpft sind. Die DSL kennt heute keine Gruppen/Verschachtelung; ODER-Gruppen wären eine **DSL-Erweiterung** und sind Stage C.
+- **Der Feldkatalog ist Server-Vertrag** (`GET /search-fields`) — nicht Frontend-Wissen. Damit nutzen UI, Validierung und künftige Clients dieselbe Quelle (Muster aus [konnektor-konfiguration.md](konnektor-konfiguration.md)).
+- **Die DSL wird erweitert:** `filters` (flache Liste, nur UND) wird durch einen **rekursiven Bedingungsbaum** `where` ersetzt — **UND** und **ODER**, verschachtelt bis Tiefe 4 — plus den neuen Operator **`between`** (zwei Werte). Das ist eine **brechende Änderung**; bestehende Suchen werden gelöscht und neu angelegt (Entscheidung: keine Migration, kein Altbestands-Schalter).
+- **Das Formular kann alles, was die DSL kann:** Gruppen anlegen/verschachteln, UND/ODER umschalten, `between` mit zwei Wertfeldern, Referenzen und Sortierung.
 - **JSON bleibt** als Expertenmodus erhalten (Tab „JSON“), inklusive Bestandteilen, die das Formular nicht darstellt; nichts wird beim Speichern stillschweigend entfernt.
 - **Kein neues Rollenmodell:** Katalog lesen `editor+`/`X-Api-Key` (Metadaten, wie `/attribute-definitions`), Suchen schreiben bleibt `admin`.
 - **Regel:** Jedes im Katalog angebotene Feld/Operator-Paar wird vom Kern ausgeführt, und jeder ausgeführte Operator steht im Katalog (sonst ist das Formular Kosmetik).
-- **Ehrliche UI statt Scheinfunktion:** Volltext läuft über **alle** Attributwerte (der Index liegt auf `object.attributes`); eine Feld-/Sprachauswahl für den Volltext wird **nicht** angeboten, solange sie nichts bewirkt.
+- **Volltext bleibt global:** Der Index liegt auf `object.attributes`; eine Feld-/Sprachauswahl wird nicht angeboten, weil sie keine Wirkung hätte (eine echte Einschränkung wäre ein Index je Attribut — nicht Teil dieses Vorhabens).
 
 ## 1. Ausgangslage & Problem
 
@@ -25,6 +26,8 @@ Für technisch versierte Anwender ist das ausreichend, für den normalen (nicht-
 - **Mehrsprachigkeit und Enums:** Für mehrsprachige Attribute muss die Sprachvariante von Hand geschrieben werden; Enum-Werte müssen als **Code** eingetragen werden (Labels kennt das JSON nicht).
 - **Doppelpflege:** Operator-Whitelist und Feldregeln stehen im Kern; ein Formular müsste sie sonst im Frontend nachbauen.
 - **Kein Zwischenstand:** Es gibt keine Vorschau („so viele Treffer“) – man muss speichern und dann „Ausführen“ drücken.
+- **Kein ODER, keine Gruppen:** `filters` ist eine **flache Liste**, die der Kern mit UND verknüpft; „veröffentlicht **oder** freigegeben“ geht nur über `in`, und ein geschachtelter Ausdruck (`(A UND B) ODER C`) ist gar nicht darstellbar.
+- **Kein „zwischen“:** Für Spannen (Preis 10–50) braucht es zwei Zeilen (`gte` + `lte`).
 
 **Nicht das Problem:** Die Seite selbst (Liste, Ausführen, Löschen, Collections, Refresh) ist umgesetzt und bleibt unverändert. Es geht ausschließlich um den **Editor** der Suchkriterien.
 
@@ -35,7 +38,7 @@ Für technisch versierte Anwender ist das ausreichend, für den normalen (nicht-
 - **Deklaratives Schema → Formular** (n8n-Filterknoten, Home-Assistant-Bedingungen, JSON Schema + `uiSchema`, aus der Konnektor-Recherche): Feldbeschreibung, Anzeige-Widget und Sichtbarkeitsbedingung kommen aus einem Server-Vertrag; das Frontend rendert nur. Das ist die Vorlage für den Feldkatalog hier.
 - **Gemeinsames Muster:** (1) Feldkatalog als Single Source of Truth, (2) Zeilen aus Feld/Operator/Wert, (3) **Operator setzt das Wert-Widget** (kein Widget für 0-Input-Operatoren, Mehrfachauswahl für `in`), (4) Validierung vor dem Speichern mit Pfad/Meldung, (5) Ergebnis-Vorschau, (6) **JSON als Rückfall**, (7) Gruppen/ODER nur, wenn die Datenstruktur sie kann.
 
-**Konsequenz für Meadow:** Feldkatalog + Validierung in den Kern, Zeilen-Editor im Frontend, flaches UND, JSON-Tab als Rückfall. Genau die Arbeitsteilung des Konnektor-Formulars, nur mit einer **Zeilenliste** statt einer Feldliste.
+**Konsequenz für Meadow:** Feldkatalog + Validierung in den Kern, **rekursiver Gruppen-Editor** im Frontend (UND/ODER, `between`), JSON-Tab als Rückfall. Genau die Arbeitsteilung des Konnektor-Formulars, nur mit einer **Baumstruktur** statt einer Feldliste. Die DSL muss dafür Gruppen und `between` lernen (Abschnitt 5).
 
 ## 3. Zielbild
 
@@ -43,12 +46,13 @@ Für technisch versierte Anwender ist das ausreichend, für den normalen (nicht-
 Suche bearbeiten                                              [ Formular | JSON ]
 Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 * * * ]
 
-▾ Bedingungen (alle müssen zutreffen)
-   [ Objekttyp ▾ ] [ ist ▾ ]            [ product      ▾ ]  ✕
-   [ Status     ▾ ] [ ist einer von ▾ ] [ published ✕ approved ✕ ] [ + ]  ✕
-   [ Preis      ▾ ] [ kleiner als ▾ ]   [ 0                ]  ✕
-   [ Name (en)  ▾ ] [ ist nicht leer ▾ ]                      ✕
-   [ + Bedingung ]
+▾ Bedingungen (oberste Gruppe: UND)
+   [ UND ▾ ]   [ + Bedingung ] [ + Gruppe ]
+     [ Objekttyp ▾ ] [ ist ▾ ]       [ product      ▾ ]                       ✕
+     [ Preis     ▾ ] [ zwischen ▾ ]  [ 10 ] – [ 50 ]                          ✕
+     ▾ [ ODER ▾ ] (Untergruppe)     [ + Bedingung ] [ + Gruppe ]         ✕
+         [ Status ▾ ] [ ist ▾ ]     [ published  ▾ ]                       ✕
+         [ Status ▾ ] [ ist ▾ ]     [ approved   ▾ ]                       ✕
 
 ▾ Volltext
    [ Edelstahl                                            ]   ← durchsucht alle Attributwerte
@@ -60,12 +64,13 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
    „Aktuell 42 Treffer“  [ Vorschau aktualisieren ]           ← nur Anzeige, speichert nichts
 ```
 
+- **Gruppen sind verschachtelbar:** jede Gruppe hat einen Operator (**UND**/**ODER**) und enthält Bedingungen **und** weitere Gruppen; die oberste Gruppe ist die Wurzel des Baums (`where`).
 - **Feldauswahl** ist ein gruppiertes Select (Objektfelder · Attribute, alphabetisch nach Label).
-- **Operatorauswahl** hängt am Feld (`operators` aus dem Katalog), **Wert-Widget** am Feldtyp **und** am Operator (`nb_inputs`/`multiple`).
+- **Operatorauswahl** hängt am Feld (`operators` aus dem Katalog), **Wert-Widget** am Feldtyp **und** am Operator: kein Feld bei `arity: 0`, **zwei** Felder bei `between`, Mehrfachauswahl bei `multi`.
 - **Mehrsprachige Attribute** bekommen zusätzlich ein Sprach-Select (aktive Datensprachen) – daraus entsteht `attributes.<name>.<lang>`; ohne Sprachwahl gilt das Basisfeld.
 - **Enum-Attribute** zeigen ihre **Labels** (mehrsprachig, aus dem Enum-Set) und speichern die **Codes**.
-- **Referenzen** (Stage B) sind eine eigene Zeilenliste: Relationstyp + Zielobjekt (gemeinsamer Picker) + Richtung.
-- **Sortierung** (Stage B) ist eine Zeilenliste aus sortierbarem Feld + Richtung.
+- **Referenzen** sind eine eigene Zeilenliste (Relationstyp + Zielobjekt über den Objekt-Picker + Richtung; `direction` „incoming“ = das Ziel ist der Container).
+- **Sortierung** ist eine Zeilenliste aus sortierbarem Feld + Richtung.
 
 ## 4. Feldkatalog (Kern-Vertrag)
 
@@ -79,6 +84,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
   ],
   "operators": [
     { "type": "eq", "label_key": "search_form.op_eq", "arity": 1, "multi": false },
+    { "type": "between", "label_key": "search_form.op_between", "arity": 2, "multi": false },
     { "type": "in", "label_key": "search_form.op_in", "arity": 1, "multi": true },
     { "type": "not_empty", "label_key": "search_form.op_not_empty", "arity": 0, "multi": false }
   ],
@@ -104,7 +110,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
     {
       "key": "attributes.price", "group": "attribute", "label": { "en": "Price", "de": "Preis" },
       "value_type": "number", "widget": "number", "unit": { "symbol": "€", "factor": 1.0 },
-      "operators": ["eq", "ne", "gt", "gte", "lt", "lte", "not_empty", "is_null"],
+      "operators": ["eq", "ne", "gt", "gte", "lt", "lte", "between", "not_empty", "is_null"],
       "sortable": true, "fulltext": false
     },
     {
@@ -139,51 +145,82 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 | `sortable` | Feld darf in `sort` verwendet werden |
 | `fulltext` | Feld fließt in die Volltextsuche ein (heute: nur Kennzeichnung, siehe §7) |
 
-**Operatorattribute:** `type` (DSL-Code), `label_key`, `arity` (0 = kein Wert, 1 = ein Wert), `multi` (Wert ist eine Liste). Beides steuert das Widget: `arity: 0` blendet den Wert aus, `multi: true` macht eine Mehrfachauswahl daraus.
+**Operatorattribute:** `type` (DSL-Code), `label_key`, `arity` (**0** = kein Wert, **1** = ein Wert, **2** = zwei Werte bei `between`), `multi` (Wert ist eine Liste). Das steuert das Widget: `arity: 0` blendet den Wert aus, `arity: 2` zeigt zwei Felder, `multi: true` macht eine Mehrfachauswahl daraus.
 
-**Herkunft der Daten:** `attribute_definition` (Name, `label`, Datentyp, `multilingual`, `enum_set_id`, `unit_id`, `computed`), `object_type` (Typ-Optionen), Workflow-Status (Kern-Konstante), `enum_set`/`enum_option` (Optionsliste mit Labels), `language_tree` (aktive Datensprachen), `relation_definition` (Referenzen mit Rolle/Zieltypen, Stage B).
+**Gruppenoperatoren:** `and` · `or` — sie stehen nicht in der Operatortabelle, sondern im Gruppenknoten (`op`). Die UI bietet sie als Select in jeder Gruppe an.
+
+**Herkunft der Daten:** `attribute_definition` (Name, `label`, Datentyp, `multilingual`, `enum_set_id`, `unit_id`, `computed`), `object_type` (Typ-Optionen), **Status** (distinct `status`-Werte aus `object`, bekannte Werte mit i18n-Key), `enum_set`/`enum_option` (Optionsliste mit Labels), `language_tree` (aktive Datensprachen), `relation_definition` (Referenzen mit Rolle/Zieltypen).
 
 **Wo der Katalog lebt:** neues Modul `src/api/search_schema.rs`, ausgeliefert über `search.rs`/`saved_searches.rs`. Verworfen: **Katalog nur im Frontend** (doppelte Pflege, keine Servervalidierung, MCP/CLI ohne Schema) und **freies JSON-Schema** (unsere DSL ist kein JSON Schema; Operatoren/Widget-Zuordnung wäre umständlicher).
 
-## 5. Validierung & Schreib-Semantik
+## 5. DSL-Erweiterung, Validierung & Schreib-Semantik
 
-**Der Kern validiert die Query** bei `POST /saved-searches` und `PATCH /saved-searches/{id}` (heute passiert das nicht):
+**Die DSL bekommt einen Bedingungsbaum.** Statt der flachen Liste `filters` gibt es `where`:
 
-- **Feld:** muss im Katalog stehen (Systemfeld, existierendes Attribut, ggf. mit aktiver Sprache). Unbekannt → `400` mit Pfad: `query.filters[1].field: unknown field \`attributes.preis_alt\``.
-- **Operator:** muss für dieses Feld erlaubt sein: `query.filters[1].operator: \`gt\` is not allowed for \`attributes.brand\` (use eq, ne, in, not_in)`.
-- **Wert:** `arity: 0` verlangt **keinen** Wert (ein mitgeschickter Wert wird ignoriert oder abgelehnt), `arity: 1` verlangt einen; `multi: true` verlangt eine **Liste**, sonst einen Skalar. Typfehler werden gemeldet (`must be a number`, `must be a list`), Enum-Werte gegen die Optionsliste geprüft (unbekannter Code → Meldung **oder** Warnung, siehe Abschnitt 11).
+```json
+{
+  "where": {
+    "op": "and",
+    "conditions": [
+      { "field": "type", "operator": "eq", "value": "product" },
+      { "field": "attributes.price", "operator": "between", "value": [10, 50] },
+      { "op": "or", "conditions": [
+        { "field": "status", "operator": "eq", "value": "published" },
+        { "field": "status", "operator": "eq", "value": "approved" }
+      ]}
+    ]
+  },
+  "fulltext": { "query": "Edelstahl" },
+  "references": [{ "type": "category_member", "out": "object:xyz", "direction": "incoming" }],
+  "sort": [{ "field": "attributes.name.de", "order": "asc" }],
+  "start": 0,
+  "limit": 1000
+}
+```
+
+- **Ein Knoten ist entweder Gruppe oder Bedingung:** `{op, conditions[]}` bzw. `{field, operator, value}`. Fehlt `op`, gilt UND; erlaubt sind `and`/`or`.
+- **Übersetzung nach SurrealQL:** Gruppe → `(…)` mit `AND`/`OR` zwischen den Kindern, Bedingung → Klausel. Parameter werden **rekursiv** durchnummeriert (`f0`, `f1`, …), damit Untergruppen nicht mit der äußeren Gruppe kollidieren.
+- **`between`** → `field >= $a AND field <= $b` (zwei Parameter).
+- **Grenzen:** Tiefe ≤ 4, Bedingungen (Blätter) ≤ 50, leere Gruppe → Fehler. Damit bleibt die erzeugte Abfrage beherrschbar.
+- **Operator-Aliase** (`neq`, `ge`, `le`, `is_empty`) werden beim Normalisieren auf die kanonischen Namen gezogen (`ne`, `gte`, `lte`, `is_null`), damit gespeicherte Queries einheitlich sind.
+- **Keine Migration:** `filters` entfällt; vorhandene gespeicherte Suchen werden gelöscht und neu angelegt (Entscheidung des Auftraggebers). Collections hängen an Suchen und werden zusammen mit ihnen neu angelegt.
+
+**Der Kern validiert die Query** bei `POST /saved-searches`, `PATCH /saved-searches/{id}`, `POST /saved-searches/preview` und beim Ausführen: 
+
+- **Struktur:** Gruppe ohne `conditions`, Gruppe **mit** `field`, Bedingung **mit** `conditions`, Tiefe > 4, mehr als 50 Bedingungen → `400` mit Pfad (z. B. `query.where.conditions[2]: group requires a non-empty conditions list`).
+- **Feld:** muss im Katalog stehen (Systemfeld, existierendes Attribut, ggf. mit aktiver Sprache). Unbekannt → `query.where.conditions[1].field: unknown field attributes.preis_alt`.
+- **Operator:** muss für dieses Feld erlaubt sein → `query.where.conditions[1].operator: gt is not allowed for attributes.brand (use eq, ne, in, not_in)`.
+- **Wert:** `arity: 0` verlangt **keinen** Wert, `arity: 1` einen, `arity: 2` (`between`) genau **zwei**; `multi: true` verlangt eine **Liste**, sonst einen Skalar. Typfehler werden gemeldet (`must be a number`, `must be a list of two values`); Enum-Werte werden gegen die Optionsliste geprüft (unbekannter Code → UI-Warnung, der Kern akzeptiert ihn, siehe Abschnitt 11).
 - **Sortierung:** nur `sortable`-Felder, `order` ∈ `asc`/`desc`; **`limit`** 1–10000, **`start`** ≥ 0 (der Ausführer klemmt heute stillschweigend – künftig meldet der Kern).
-- **Mehrere Fehler** werden gesammelt (`; `-getrennt) wie bei den Konnektoren; `ApiError` bleibt unverändert einfach.
-- **Ausführen bleibt tolerant:** `POST /saved-searches/{id}/execute` validiert ebenfalls (damit Altbestand nicht stillschweigend 0 Treffer liefert), aber mit **denselben** Regeln – kein zweiter Pfad.
-- **Bestandsschutz:** Suchen, die heute gespeichert sind, können Felder/Operatoren enthalten, die der strengere Katalog nicht mehr kennt (Attribut gelöscht, Operator entfernt). Empfehlung: **Validierung beim nächsten Speichern** (die Meldung nennt die Zeile), das Formular markiert solche Zeilen sichtbar („nicht mehr vorhanden“), und der JSON-Tab bleibt unangetastet. Alternative (offener Punkt): ein Schalter `strict_fields=false` für Installationen mit Altbestand.
+- **Mehrere Fehler** werden gesammelt (`; `-getrennt, dedupliziert) wie bei den Konnektoren; `ApiError` bleibt unverändert einfach.
+- **Normierung beim Schreiben:** Der Kern speichert die **kanonische** Form (Operator-Aliase aufgelöst, `op` gesetzt, leere optionale Felder weggelassen) — Formular und JSON-Tab sehen nach dem Speichern dasselbe.
 
 ## 6. Frontend
 
 **Neues Modul `meadow/frontend/search_form.py`** (analog zu `connector_form.py`), reine, testbare Helfer zuerst:
 
-- **Abbildung DSL ↔ Zeilen:** `filter_to_row(filter, catalog)` / `row_to_filter(row, catalog)` – inklusive Sprachauswahl (`attributes.name` + Sprache `de` → `attributes.name.de`) und Enum-Label ↔ Code.
-- **Abhängigkeiten:** `operators_for(field_key, catalog)`, `default_operator(field_key, catalog)`, `needs_value(operator)`, `is_multi(operator)`, `value_widget(field, operator)`.
-- **Validierung vorab** (Spiegel des Kerns, gleiche Meldungen wie das Konnektor-Formular): `validate_rows(rows, catalog, locale)`.
-- **Gesamt-Query:** `query_from_rows(state, catalog)` / `rows_from_query(query, catalog)` für `filters`/`fulltext`/`references`/`sort`/`start`/`limit`.
-- **Hinweis auf nicht dargestellte Bestandteile:** `unsupported_parts(query, catalog)` (z. B. unbekanntes Feld, `start > 0` wenn nicht im Formular) → Liste mit Zähler im Dialog.
-- **Zusammenfassung** für die Listenspalte: `summary_text(query, catalog, locale)` – z. B. `3 Bedingungen · Volltext „Edelstahl“ · 500 Treffer`.
+- **Baum-Abbildung:** `tree_to_form(where, catalog)` / `form_to_tree(state, catalog)` – rekursiv, inklusive Sprachauswahl (`attributes.name` + Sprache `de` → `attributes.name.de`), Enum-Label ↔ Code und `between` (zwei Werte).
+- **Abhängigkeiten:** `operators_for(field_key, catalog)`, `default_operator(field_key, catalog)`, `arity(operator)`, `is_multi(operator)`, `value_widget_kind(field, operator)`.
+- **Baum-Helfer:** `new_leaf(catalog)`, `new_group(op)`, `remove_at(path, tree)`, `max_depth(tree)`, `count_leaves(tree)`.
+- **Validierung vorab** (Spiegel des Kerns, gleiche Meldungen wie das Konnektor-Formular): `validate_tree(tree, catalog, locale)` → Liste aus `{path, message}`.
+- **Gesamt-Query:** `query_from_state(state, catalog)` / `state_from_query(query, catalog)` für `where`/`fulltext`/`references`/`sort`/`start`/`limit`.
+- **Hinweis auf nicht dargestellte Bestandteile:** `unsupported_parts(query, catalog)` (unbekannte Schlüssel, nicht auflösbare Felder, `fulltext.fields`/`language`) → Liste mit Zähler im Dialog.
+- **Zusammenfassung** für die Listenspalte: `summary_text(query, catalog, locale)` – z. B. `3 Bedingungen · 1 ODER-Gruppe · Volltext „Edelstahl“ · 500 Treffer`.
 
-**UI-Bausteine:** `FilterRows` (Zeilenstapel: Feld-Select gruppiert, Operator-Select mit i18n-Labels, Wert-Widget je Typ/Operator, ✕ je Zeile, „+ Bedingung“), `ReferenceRows` und `SortRows` (Stage B), Volltext-Eingabe, `limit`/`start`, **Vorschau** (siehe §8) und die Tabs **Formular/JSON**.
+**UI-Bausteine:** `ConditionGroupEditor` (rekursiv: Kopfzeile mit UND/ODER-Select, „+ Bedingung“, „+ Gruppe“ – nur unterhalb der Maximaltiefe – und ✕; darunter Bedingungszeilen und Untergruppen), `ConditionRow` (Feld-Select gruppiert, Operator-Select mit i18n-Labels, Wert-Widget je Typ/Operator, Sprach-Select bei mehrsprachigen Feldern, ✕), `ReferenceRows`, `SortRows`, Volltext-Eingabe, `limit`/`start`, **Vorschau** (Abschnitt 9) und die Tabs **Formular/JSON**.
 
-**Wiederverwendung:** `object_picker.open_object_picker` für Referenzziele (inkl. `target_types` aus dem Katalog), die Enum-Auflösung wie im Grid (`enum_code_label_map`), das Patch-/JSON-Muster des Konnektor-Dialogs (Tab-Synchronisation, „nicht dargestellt“-Hinweis, `parameters_mode`-Analogon gibt es hier nicht – die Query wird als Ganzes gespeichert).
+**Wiederverwendung:** `object_picker.open_object_picker` für Referenzziele (inkl. `target_types` aus dem Katalog), die Enum-Auflösung wie im Grid (`enum_code_label_map`), das Tab-/Baseline-Muster des Konnektor-Dialogs („nicht dargestellt“-Hinweis; die Query wird als Ganzes gespeichert, es gibt kein `parameters_mode`-Analogon).
 
-**i18n:** neue Keys `search_form.*` (Operatoren, Gruppen, Titel, Hinweise, „Bedingung hinzufügen“, Validierungsmeldungen) sowie ein Label-Key für die Listenspalte; Attribut- und Enum-Labels sind **Daten**, keine i18n-Keys.
+**i18n:** neue Keys `search_form.*` (Operatoren, Gruppentitel, Hinweise, „Bedingung hinzufügen“, „Gruppe hinzufügen“, Validierungsmeldungen, Spaltentitel) sowie ein Label-Key für die Listenspalte; Attribut- und Enum-Labels sind **Daten**, keine i18n-Keys. Die Statusliste kommt künftig aus dem Katalog (die Duplizierung `_STATUS_OPTIONS` in `form.py` entfällt perspektivisch).
 
-## 7. Bewusste Einschränkungen (Komplexitätsbremse)
+## 7. Bewusste Einschränkungen
 
-Ein vollwertiger Query-Builder kann beliebig groß werden. Deshalb gilt für dieses Vorhaben:
-
-1. **Flaches UND, keine Gruppen.** Die DSL kann keine ODER-/verschachtelten Ausdrücke – sie zu bauen wäre eine **DSL-Erweiterung** (Kern + Ausführer + Katalog + Formular) und ist **nicht** Teil dieses Plans (Stage C, nur bei echtem Bedarf).
-2. **Kein `between`, kein „zwischen“.** Wäre `arity: 2`; bis dahin zwei Zeilen (`gte` und `lte`).
-3. **Volltext ohne Feld-/Sprachauswahl.** Der Index liegt auf `object.attributes`; die UI verspricht keine Einschränkung, die nichts bewirkt. Per-Feld-Volltext wäre eine eigene Aufgabe (Index je Feld).
-4. **Wert-Widgets nur für die vorhandenen Werttypen** (Text, Zahl, boolesch, Datum, Enum). Medien-/Referenz-Attribute sind **nicht** filterbar (heute ebenfalls nicht).
-5. **Kein Ersatz des JSON-Tabs.** Alles, was das Formular nicht kann, bleibt dort möglich – und wird im Formular als „nicht dargestellt“ gemeldet.
-6. **Falls Stage A zu groß wird**, ist die Reihenfolge der Streichungen: zuerst `sort` (bleibt JSON), dann `references`, zuletzt `fulltext` – `filters` + `limit` sind der Kern des Nutzens.
+1. **Gruppen nur bis Tiefe 4 und 50 Bedingungen.** Ein unbegrenzter Ausdrucksbaum wäre im Formular nicht mehr bedienbar; die Grenzen gelten in Kern und UI („+ Gruppe“ verschwindet an der Maximaltiefe).
+2. **Kein `not_between`, kein `in` auf Objektwerten.** Es bleibt bei der Operatormenge aus Abschnitt 4.
+3. **Volltext ohne Feld-/Sprachauswahl.** Der Index liegt auf `object.attributes`; die UI verspricht keine Einschränkung, die nichts bewirkt.
+4. **Wert-Widgets nur für die vorhandenen Werttypen** (Text, Zahl, boolesch, Datum, Enum). `reference`- und Medien-Attribute sind **nicht** filterbar – dafür gibt es die Referenz-Zeilen (Relationstyp + Zielobjekt).
+5. **Kein Ersatz des JSON-Tabs.** Alles, was das Formular nicht darstellt, bleibt dort möglich und wird im Formular als „nicht dargestellt“ gemeldet.
+6. **Keine Migration.** Bestehende gespeicherte Suchen (und ihre Collections) werden gelöscht und im Formular neu angelegt.
 
 ## 8. Auswirkungen auf bestehende Dokumente & Endpunkte
 
@@ -198,30 +235,30 @@ Ein vollwertiger Query-Builder kann beliebig groß werden. Deshalb gilt für die
 
 ## 9. Implementierungsschritte
 
-**Stage A — Katalog, Validierung, Formular (MVP):**
+**Stage A — DSL, Katalog, Validierung, Formular (MVP):**
 
-1. **Kern:** `src/api/search_schema.rs` (Feldkatalog aus `attribute_definition`/`object_type`/`enum_set`/`language_tree`/Status-Konstante, Operatortabelle mit `arity`/`multi`, `validate(query, catalog)` mit Pfadmeldungen, `catalog_document()`), Endpunkt `GET /search-fields` (`editor+`/`X-Api-Key`), Validierung in `create_saved_search`/`update_saved_search` (auch `execute`), Unit-Tests für Katalog und Validator.
-2. **Frontend:** `search_form.py` (Helfer + Zeilen-Editor + Tabs Formular/JSON, Hinweis auf nicht dargestellte Bestandteile, Zusammenfassungsspalte), Dialog in `saved_searches.py` umbauen, `api.py` um `list_search_fields` erweitern, i18n-Keys in en/de/fr.
-3. **Vorschau:** `POST /saved-searches/preview` (Body = Query, `editor+`) → `{count, ids}`; Button „Vorschau“ mit Debounce, Anzeige „Aktuell N Treffer“ (rein lesend, speichert nichts).
-4. **Doku/Test:** dieses Dokument auf „umgesetzt (Stage A)“ setzen, Querverweise, pytest für die Helfer, Browser-Verifikation mit einer echten Suche.
+1. **DSL-Erweiterung:** `where`-Baum (`QueryCondition` mit `op`/`conditions`/`field`/`operator`/`value`), Operatortabelle inkl. `between`, **rekursive** SurrealQL-Übersetzung mit durchgezählten Parametern, Operator-Normalisierung; `filters` entfällt.
+2. **Kern-Katalog & Validierung:** neues Modul `src/api/search_schema.rs` (Feldkatalog aus `attribute_definition`/`object_type`/`object`-Status/`enum_set`/`language_tree`/`relation_definition`, Operatortabelle mit `arity`/`multi`, `validate(query, catalog)` mit Pfadmeldungen, `catalog_document()`), Endpunkt `GET /search-fields` (`editor+`/`X-Api-Key`), Validierung in `create_saved_search`/`update_saved_search`/`execute`; Unit-Tests für Übersetzung, Katalog und Validator.
+3. **Frontend:** `search_form.py` (Helfer + **rekursiver Gruppen-Editor** + Tabs Formular/JSON, „nicht dargestellt“-Hinweis, Zusammenfassungsspalte), Dialog in `saved_searches.py` umbauen, `api.py` um `list_search_fields` erweitern, i18n-Keys in en/de/fr.
+4. **Vorschau:** `POST /saved-searches/preview` (Body = Query, `editor+`) → `{count, ids}`; Button „Vorschau“ mit Debounce, Anzeige „Aktuell N Treffer“ (rein lesend, speichert nichts).
 
 **Stage B — Referenzen, Sortierung, Feinschliff:**
 
-5. `references` (Relationstyp + Zielobjekt über den Picker + Richtung) und `sort` (Feld + Richtung) im Formular; `start` im Formular sichtbar machen; Spalte „Zusammenfassung“ in der Liste.
+5. `references` (Relationstyp + Zielobjekt über den Objekt-Picker + Richtung) und `sort` (Feld + Richtung) im Formular; `start` im Formular; Spalte „Zusammenfassung“ in der Liste; bestehende Suchen/Collections löschen und neu anlegen.
 
-**Stage C — nur bei Bedarf:**
+**Stage C — nur bei Bedarf (nicht Teil dieses Vorhabens):**
 
-6. ODER-/Gruppenausdrücke (DSL-Erweiterung), `between` (`arity: 2`), Volltext je Feld (Index je Attribut), Übernahme desselben Katalogs in eine **erweiterte Suche im Grid** (`/products`).
+6. Tiefere Ausdrücke (Tiefe > 4), weitere Operatoren (`not_between`), Volltext je Feld (Index je Attribut), Übernahme desselben Katalogs in eine **erweiterte Suche im Grid** (`/products`).
 
 **Nicht-Ziele:** kein Ersatz des JSON-Expertenmodus, keine Migration bestehender Suchen, keine neuen Rollen, keine Änderung an Collections/Refresh, kein Query-Builder für die Middleware-Schnittstellen.
 
 ## 10. Testfälle
 
 - `GET /search-fields` liefert Systemfelder, Attributfelder mit Typ/Operatoren/`sortable`, Enum-Optionen mit Labels und die Operatortabelle mit `arity`/`multi`.
-- `POST /saved-searches` mit unbekanntem Feld → `400` mit `query.filters[0].field`; mit Operator, der nicht zum Feld passt → `400` mit Hinweis auf die erlaubten; `in` ohne Liste → `400`; `gt` auf einem Enum-Feld → `400`; `limit: 99999` → `400`; gültige Query → `201`.
-- Bestands-Query (heute gespeichert, Feld existiert) bleibt gültig; dieselbe Query mit gelöschtem Attribut → `400` mit Pfad (Entscheidung s. Abschnitt 11).
-- Formular-Roundtrip: Zeilen → DSL → Zeilen ist verlustfrei (inkl. mehrsprachigem Feld, Enum-Code, `not_empty` ohne Wert).
-- Operatorabhängiges Widget: `not_empty` blendet den Wert aus, `in` bietet Mehrfachauswahl, `gt` zeigt ein Zahlenfeld.
+- `POST /saved-searches` mit unbekanntem Feld → `400` mit `query.where.conditions[0].field`; mit Operator, der nicht zum Feld passt → `400` mit Hinweis auf die erlaubten; `in` ohne Liste → `400`; `between` mit einem statt zwei Werten → `400`; `gt` auf einem Enum-Feld → `400`; leere Gruppe → `400`; Tiefe 5 → `400`; `limit: 99999` → `400`; gültige Query → `201`.
+- Übersetzung: `(A UND B) ODER C` ergibt genau diese Klammerung; `between` erzeugt zwei Parameter; Untergruppen kollidieren nicht mit den Parametern der äußeren Gruppe.
+- Formular-Roundtrip: Baum → DSL → Baum ist verlustfrei (mehrsprachiges Feld, Enum-Code, `between`, `not_empty` ohne Wert, verschachtelte Gruppen).
+- Operatorabhängiges Widget: `not_empty` blendet den Wert aus, `in` bietet Mehrfachauswahl, `between` zeigt zwei Felder, `gt` ein Zahlenfeld.
 - JSON-Tab → Formular: nicht darstellbare Bestandteile werden gezählt und angezeigt, **nicht** verworfen; Speichern aus dem Formular schickt genau die dargestellte Query plus die unveränderten Bestandteile.
 - Vorschau: Query ohne Speichern → Trefferzahl; Vorschau schreibt nichts (kein Objekt, keine Collection, kein Event).
 - Rechte: `editor` liest den Katalog, schreibt aber **keine** Suche (`403`); `viewer` → `403` für den Katalog.
@@ -231,11 +268,10 @@ Ein vollwertiger Query-Builder kann beliebig groß werden. Deshalb gilt für die
 
 | Frage | Vorschlag |
 |---|---|
-| Validierung existierender Felder bei Altbestand? | **Meldung beim nächsten Speichern** (Pfad + Zeile), markierte Zeile im Formular; optionaler Schalter `strict_fields=false` nur, falls echte Installationen betroffen sind |
-| Unbekannte Enum-Codes im Wert? | **Warnung statt Fehler** – Codes können aus alten Enum-Sets stammen; die UI markiert sie, der Kern akzeptiert sie (der Ausführer vergleicht nur Codes) |
-| Gruppen/ODER? | **Nicht** in Stage A/B; DSL-Erweiterung erst bei belegtem Bedarf (Stage C) |
-| Volltext je Feld statt global? | Erst mit Index je Feld; bis dahin ehrlich „über alle Attributwerte“ |
+| Unbekannte Enum-Codes im Wert? | **Warnung in der UI statt Fehler** – Codes können aus alten Enum-Sets stammen; der Ausführer vergleicht nur Codes, der Kern akzeptiert sie |
 | Vorschau-Endpunkt oder Speichern zum Testen? | **Preview-Endpunkt** (rein lesend) – sonst hinterlässt jeder Testversuch eine Suche |
-| Zählung im Vorschaubild teuer? | Vorschau mit Debounce (~800 ms) und `limit`-Obergrenze; bei großen Datenbeständen optional „nur zählen“ (COUNT statt ID-Liste) |
+| Ist die Zählung in der Vorschau teuer? | Vorschau mit Debounce (~800 ms), `limit`-Obergrenze, Ergebnis-IDs gekürzt; bei Bedarf später „nur zählen“ (COUNT statt ID-Liste) |
+| Standardgruppe beim Anlegen? | Eine leere **UND**-Gruppe mit einem vorgefüllten Blatt (`type = product`) wie heute im `DEFAULT_QUERY` |
 | Denselben Katalog auch für die erweiterte Suche im Grid? | **Ja, mittelfristig** – derselbe Vertrag, dasselbe Formular; im Grid ist es ein Filter, in `/saved-searches` ein gespeicherter Ausdruck |
 | Bezug zu Business Rules (`saved_search` als Filter)? | Unverändert; die Validierung sorgt dafür, dass gespeicherte Suchen ausführbar bleiben |
+| Collections bei der DSL-Umstellung? | Zusammen mit den Suchen löschen und neu anlegen (siehe Abschnitt 5) |
