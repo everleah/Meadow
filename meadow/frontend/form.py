@@ -23,13 +23,14 @@ instead of only showing a generic failure message.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from functools import partial
 from urllib.parse import quote
 
 from nicegui import app, ui
 
-from meadow.frontend import config, edit_queue
+from meadow.frontend import auth, config, edit_queue
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.enums import enum_options
@@ -43,6 +44,12 @@ _STATUS_OPTIONS = ("draft", "in_review", "published", "archived")
 
 #: Debounce (ms) for the attribute search field: one re-render per typing pause.
 _SEARCH_DEBOUNCE_MS = 300
+
+#: Polls of a consolidation job before the "no worker running" hint is shown.
+_PENDING_WARN_POLLS = 5
+
+#: Poll interval (s) for a running consolidation job.
+_JOB_POLL_SECONDS = 2
 
 #: Session key holding the open/closed state of the form's attribute sections
 #: (`{object_type: {section_key: bool}}`), so a reload keeps them as they were.
@@ -129,6 +136,17 @@ def _coerce(atype: str, raw: object) -> object:
     return str(raw)
 
 
+def _consolidation_parent(move: dict, locale: str) -> str:
+    """Display name of the node a value is pushed up to (id as fallback)."""
+    label = resolve_value(move.get("parent_label"), locale)
+    return label or str(move.get("parent") or "")
+
+
+def _consolidation_value(value: object, locale: str) -> str:
+    """Display form of a moved value (multilingual maps resolved, empty = dash)."""
+    return resolve_value(value, locale) or "–"
+
+
 @ui.page("/products/{object_id}", response_timeout=15)
 async def product_form(object_id: str) -> None:
     """Opens a single object for deep editing."""
@@ -178,6 +196,13 @@ async def product_form(object_id: str) -> None:
         name = resolve_value(resolved_attributes.get("name"), locale) or object_type
         missing = resolved.get("missing_required") or []
         completeness = (resolved.get("completeness") or {}).get(locale, 0)
+
+        # A leaf has nothing to consolidate, so the action is only offered for
+        # nodes that actually have children.
+        try:
+            has_children = bool(await client.list_object_children(token, object_id, limit=1))
+        except Exception:  # noqa: BLE001 - the action is simply not offered
+            has_children = False
 
         # Data languages (base languages for the per-attribute language dialog;
         # only `active` languages are offered for data maintenance).
@@ -269,6 +294,13 @@ async def product_form(object_id: str) -> None:
             ui.html(completeness_badge(int(completeness))).classes("text-sm").tooltip(
                 t("form.missing_required").format(count=len(missing))
             )
+            if has_children and auth.is_editor():
+                ui.space()
+                ui.button(
+                    t("form.consolidate"),
+                    icon="arrow_upward",
+                    on_click=lambda: open_consolidate_dialog(),
+                ).props("flat dense").tooltip(t("consolidate.hint"))
 
         # --- Sequential editing (queue started in the grid): progress + actions.
         # The lambdas defer resolving `save_and_next`/`skip_object`/`stop_sequence`
@@ -1372,6 +1404,151 @@ async def product_form(object_id: str) -> None:
                 render_pinned()
             with sections_column:
                 render_sections()
+
+        # --- Consolidate inheritance (Phase 9). ------------------------------
+        # Identical values of *all* children are pushed up to this node and
+        # removed from the children, so they inherit again instead of keeping
+        # data copies (`plan/detail/vererbung-konsolidierung.md`).
+        def open_consolidate_dialog() -> None:
+            """Previews and applies the consolidation for this object's subtree."""
+            options = {
+                str(definition.get("name")): _label(definition, str(definition.get("name")), locale)
+                for definition in definitions
+                if definition.get("name") and is_inheritable(definition)
+            }
+            dialog = ui.dialog()
+            with (
+                dialog,
+                ui.card().classes("w-[48rem] max-w-[92vw] max-h-[80vh] overflow-y-auto"),
+            ):
+                ui.label(t("consolidate.title")).classes("text-subtitle1")
+                ui.label(t("consolidate.hint")).classes("text-caption text-gray-500")
+                with ui.row().classes("items-center gap-3 w-full"):
+                    min_children = (
+                        ui.number(t("consolidate.min_children"), value=2, min=2, precision=0)
+                        .props("outline dense")
+                        .classes("w-44")
+                    )
+                    attribute_select = (
+                        ui.select(options, multiple=True, label=t("consolidate.attributes"))
+                        .props("outline dense use-chips")
+                        .classes("grow")
+                    )
+                result_area = ui.column().classes("w-full gap-1")
+
+                async def poll_job(run_id: str) -> dict | None:
+                    """Waits for the queued job and returns its result (None = failure)."""
+                    for _ in range(120):
+                        try:
+                            runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+                        except Exception:  # noqa: BLE001 - retry on transient errors
+                            runs = []
+                        if not runs:
+                            return None
+                        status = str(runs[0].get("status") or "")
+                        if status == "success":
+                            return dict(runs[0].get("result") or {})
+                        if status == "failed":
+                            return None
+                        await asyncio.sleep(_JOB_POLL_SECONDS)
+                    return None
+
+                def render_result(result: dict) -> None:
+                    """Shows the proposal (preview) or the outcome of the run."""
+                    result_area.clear()
+                    moves = list(result.get("moves") or [])
+                    with result_area:
+                        ui.label(
+                            t("consolidate.summary").format(
+                                promoted=result.get("promoted", 0),
+                                removed=result.get("removed", 0),
+                                skipped=result.get("skipped", 0),
+                                nodes=result.get("nodes", 0),
+                            )
+                        ).classes("text-caption")
+                        if not any(move.get("action") == "promote" for move in moves):
+                            ui.label(t("consolidate.empty")).classes("text-caption text-warning")
+                        for move in moves:
+                            parent = _consolidation_parent(move, locale)
+                            attribute = str(move.get("attribute"))
+                            if move.get("action") == "promote":
+                                ui.label(
+                                    t("consolidate.move").format(
+                                        parent=parent,
+                                        attribute=attribute,
+                                        value=_consolidation_value(move.get("value"), locale),
+                                        count=len(move.get("children") or []),
+                                    )
+                                ).classes("text-caption")
+                            else:
+                                reason = str(move.get("reason") or "")
+                                ui.label(
+                                    t("consolidate.skip").format(
+                                        parent=parent,
+                                        attribute=attribute,
+                                        reason=t(f"consolidate.reason.{reason}") if reason else "",
+                                    )
+                                ).classes("text-caption text-gray-500")
+                        for row in result.get("results") or []:
+                            if row.get("status") == "error":
+                                ui.label(
+                                    t("consolidate.root_failed").format(
+                                        object_id=row.get("object_id"),
+                                        reason=row.get("error"),
+                                    )
+                                ).classes("text-caption text-negative")
+
+                async def run_consolidation(*, dry_run: bool) -> None:
+                    """Queues the run (dry run = preview) and renders its report."""
+                    parameters: dict = {
+                        "dry_run": dry_run,
+                        "min_children": int(min_children.value or 2),
+                    }
+                    selected = [str(entry) for entry in attribute_select.value or []]
+                    if selected:
+                        parameters["attributes"] = selected
+                    try:
+                        run = await client.post_bulk(
+                            token,
+                            op="consolidate_inheritance",
+                            object_ids=[object_id],
+                            parameters=parameters,
+                        )
+                    except Exception:  # noqa: BLE001 - show a friendly message
+                        ui.notify(t("consolidate.failed"), color="negative")
+                        return
+                    run_id = str(run.get("id") or "")
+                    result_area.clear()
+                    with result_area:
+                        ui.label(t("consolidate.running")).classes("text-caption")
+                    if not run_id:
+                        return
+                    result = await poll_job(run_id)
+                    if result is None:
+                        result_area.clear()
+                        with result_area:
+                            ui.label(t("consolidate.failed")).classes("text-caption text-negative")
+                        return
+                    render_result(result)
+                    if not dry_run:
+                        ui.notify(t("consolidate.done"), color="positive")
+                        # Show the result on the form itself; section state and
+                        # preferences survive the reload.
+                        ui.timer(2.0, lambda: ui.navigate.reload(), once=True)
+
+                with ui.row().classes("w-full justify-end"):
+                    ui.button(t("grid.close"), on_click=dialog.close).props("flat")
+                    ui.button(
+                        t("consolidate.preview"),
+                        icon="visibility",
+                        on_click=lambda: run_consolidation(dry_run=True),
+                    ).props("flat")
+                    ui.button(
+                        t("consolidate.apply"),
+                        icon="arrow_upward",
+                        on_click=lambda: run_consolidation(dry_run=False),
+                    ).props("flat")
+            dialog.open()
 
         # --- Status selector. -------------------------------------------------
         with ui.row().classes("items-center gap-2 w-full mt-4"):

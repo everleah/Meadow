@@ -20,6 +20,16 @@ operation: with `parameters.send_for_approval = true` the worker sends each
 object for approval **after** its change. A change is never rolled back when the
 transition is rejected (a `workflow_guard` rule); the object then carries
 `approval_error` instead of `approval`.
+
+`consolidate_inheritance` repairs redundancy: values that **all** direct children
+of a node maintain **identically** are pushed up to that node and removed from
+the children, so they inherit again instead of keeping data copies
+(`plan/detail/vererbung-konsolidierung.md`). The subtree is walked level by level
+(top-down), so a value promoted one level up can be promoted again by the next
+level. `parameters.dry_run = true` computes the full proposal without writing
+anything; `parameters.attributes` restricts the run to a set of attribute names
+and `parameters.min_children` (default 2) requires a minimum number of children
+before a value is moved.
 """
 
 from __future__ import annotations
@@ -46,6 +56,31 @@ DEFAULT_APPROVAL_STATUS = "in_review"
 #: Operations that must not get an extra approval transition afterwards.
 _NO_APPROVAL_OPS = frozenset({"change_status", "send_for_approval", "delete"})
 
+#: Default minimum number of children before a value is pushed up (see the
+#: consolidation plan: with a single child there is no maintenance gain).
+CONSOLIDATION_MIN_CHILDREN = 2
+
+#: Children fetched per level; the core caps this at 1000.
+CONSOLIDATION_CHILD_LIMIT = 1000
+
+#: Skip reasons reported by the consolidation preview (verbindlich).
+CONSOLIDATION_REASONS = (
+    "not_inheritable",
+    "no_children",
+    "missing_on_child",
+    "interrupted",
+    "conflict_child_values",
+    "conflict_parent",
+)
+
+#: Sentinel for "the child does not maintain this attribute at all".
+_MISSING = object()
+
+
+def is_interrupting_value(value: Any) -> bool:
+    """True when a value deliberately interrupts inheritance ("leer gesetzt")."""
+    return value is None or value == "" or value == {}
+
 
 def build_bulk_handler(
     core_url: str,
@@ -70,6 +105,12 @@ def build_bulk_handler(
             raise RuntimeError("`parameters.parameters` must be an object")
         if not object_ids:
             raise RuntimeError("bulk job is missing `parameters.object_ids`")
+
+        if op == "consolidate_inheritance":
+            # Walks a whole subtree instead of applying one change per object.
+            return await _consolidate_inheritance(
+                active, core_url, [str(oid) for oid in object_ids], op_params
+            )
 
         results: list[dict[str, Any]] = []
         succeeded = 0
@@ -398,3 +439,331 @@ def _replace_in_string(
         return value, 0
     # A lambda keeps backslashes and group references in the replacement literal.
     return pattern.sub(lambda _match: replacement, value), count
+
+
+# --- Consolidating inheritance (bulk operation `consolidate_inheritance`) -------
+#
+# Plan: `plan/detail/vererbung-konsolidierung.md`. A value that **all** direct
+# children maintain identically is written to the parent and removed from the
+# children, so they inherit again instead of keeping data copies. The subtree is
+# walked level by level (top-down), which is why a value pushed up one level can
+# be pushed up again by the next level; a second run reports nothing to do.
+
+
+async def _consolidate_inheritance(
+    active: httpx.AsyncClient,
+    core_url: str,
+    roots: list[str],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Consolidates the subtrees of `roots` and reports the proposal/outcome."""
+    dry_run = bool(params.get("dry_run"))
+    min_children = _min_children(params.get("min_children"))
+    attributes = {str(name) for name in params.get("attributes") or []} or None
+    definitions = await _attribute_definitions(active, core_url, {})
+
+    moves: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    nodes = 0
+    failed = 0
+    for root in roots:
+        try:
+            visited = await _consolidate_subtree(
+                active, core_url, root, definitions, attributes, min_children, dry_run, moves
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate per-root failures
+            results.append({"object_id": root, "status": "error", "error": str(exc)})
+            failed += 1
+            continue
+        nodes += visited
+        results.append({"object_id": root, "status": "ok", "nodes": visited})
+
+    promotions = [move for move in moves if move["action"] == "promote"]
+    skipped = [move for move in moves if move["action"] == "skip"]
+    logger.info(
+        "consolidate_inheritance%s: %d promotions, %d skipped, %d nodes, %d failed",
+        " (dry run)" if dry_run else "",
+        len(promotions),
+        len(skipped),
+        nodes,
+        failed,
+    )
+    return {
+        "op": "consolidate_inheritance",
+        "dry_run": dry_run,
+        "min_children": min_children,
+        "processed": len(roots),
+        "succeeded": len(roots) - failed,
+        "skipped": len(skipped),
+        "failed": failed,
+        "nodes": nodes,
+        "promoted": len(promotions),
+        "removed": sum(len(move["children"]) for move in promotions),
+        "moves": moves,
+        "results": results,
+    }
+
+
+async def _consolidate_subtree(
+    active: httpx.AsyncClient,
+    core_url: str,
+    root: str,
+    definitions: dict[str, dict[str, Any]],
+    attributes: set[str] | None,
+    min_children: int,
+    dry_run: bool,
+    moves: list[dict[str, Any]],
+) -> int:
+    """Walks one subtree top-down, records every case and applies the promotions.
+
+    Returns the number of visited nodes. `dry_run` computes the identical
+    proposal but performs no write.
+    """
+    # Values this run writes (or would write) and keys it removes, so the next
+    # level already sees the state the run produces.
+    written: dict[str, dict[str, Any]] = {}
+    removed: dict[str, set[str]] = {}
+    # Keys a node no longer maintains because this run removed them: their value
+    # now comes from an ancestor (that is why the parent needs no second write).
+    inherited: dict[str, dict[str, Any]] = {}
+    queue = [root]
+    visited = 0
+    while queue:
+        node = queue.pop(0)
+        visited += 1
+        children = await _children(active, core_url, node)
+        parent_attributes = dict((await _object(active, core_url, node)).get("attributes") or {})
+        node_attributes = _effective_attributes(
+            parent_attributes, written.get(node), removed.get(node)
+        )
+        child_attributes = [
+            _effective_attributes(
+                dict(child.get("attributes") or {}),
+                written.get(str(child.get("id"))),
+                removed.get(str(child.get("id"))),
+            )
+            for child in children
+        ]
+        plan = plan_consolidation(
+            parent=node,
+            parent_label=parent_attributes.get("name"),
+            parent_attributes=node_attributes,
+            inherited=inherited.get(node, {}),
+            children=[str(child.get("id")) for child in children],
+            child_attributes=child_attributes,
+            definitions=definitions,
+            attributes=attributes,
+            min_children=min_children,
+        )
+        moves.extend(plan)
+        for move in plan:
+            if move["action"] != "promote":
+                continue
+            attribute = str(move["attribute"])
+            if move["parent_written"]:
+                written.setdefault(node, {})[attribute] = move["value"]
+                if not dry_run:
+                    await _set_attribute(active, core_url, node, attribute, move["value"])
+            for child_id in move["children"]:
+                removed.setdefault(child_id, set()).add(attribute)
+                inherited.setdefault(child_id, {})[attribute] = move["value"]
+                if not dry_run:
+                    await _remove_attribute(active, core_url, child_id, attribute)
+        # Only descend into children that are parents themselves (`hasChildren`
+        # comes with the children listing) - a leaf has nothing to consolidate.
+        queue.extend(str(child.get("id")) for child in children if child.get("hasChildren"))
+    return visited
+
+
+def plan_consolidation(
+    *,
+    parent: str,
+    parent_label: Any = None,
+    parent_attributes: dict[str, Any],
+    inherited: dict[str, Any],
+    children: list[str],
+    child_attributes: list[dict[str, Any]],
+    definitions: dict[str, dict[str, Any]],
+    attributes: set[str] | None,
+    min_children: int,
+) -> list[dict[str, Any]]:
+    """Plans the promotions of one node (pure, unit-tested).
+
+    Returns one entry per candidate attribute: `action: "promote"` when the value
+    may be pushed up, otherwise `action: "skip"` with a `reason` from
+    `CONSOLIDATION_REASONS`. Candidates are the **defined** attributes at least
+    one child maintains; undefined convention fields (`name`) are ignored, and an
+    attribute no child maintains is no case at all.
+    """
+    candidates = sorted(
+        {
+            name
+            for attrs in child_attributes
+            for name in attrs
+            if not name.startswith("_") and name in definitions
+        }
+    )
+    moves: list[dict[str, Any]] = []
+    for attribute in candidates:
+        if attributes is not None and attribute not in attributes:
+            continue
+        child_values = [attrs.get(attribute, _MISSING) for attrs in child_attributes]
+        parent_written, reason = _consolidation_decision(
+            definition=definitions.get(attribute),
+            child_count=len(child_attributes),
+            min_children=min_children,
+            child_values=child_values,
+            attribute=attribute,
+            parent_attributes=parent_attributes,
+            inherited=inherited,
+        )
+        moves.append(
+            {
+                "parent": parent,
+                "parent_label": parent_label,
+                "attribute": attribute,
+                "value": _reported_value(child_values),
+                "children": list(children),
+                "action": "promote" if parent_written is not None else "skip",
+                "reason": reason,
+                "parent_written": bool(parent_written),
+            }
+        )
+    return moves
+
+
+def _consolidation_decision(
+    *,
+    definition: dict[str, Any] | None,
+    child_count: int,
+    min_children: int,
+    child_values: list[Any],
+    attribute: str,
+    parent_attributes: dict[str, Any],
+    inherited: dict[str, Any],
+) -> tuple[bool | None, str | None]:
+    """Decides one attribute: `(parent_written, None)` or `(None, reason)`."""
+    if child_count < min_children:
+        return None, "no_children"
+    if any(value is _MISSING for value in child_values):
+        return None, "missing_on_child"
+    if any(is_interrupting_value(value) for value in child_values):
+        return None, "interrupted"
+    if any(value != child_values[0] for value in child_values):
+        return None, "conflict_child_values"
+    if not _is_promotable(definition):
+        return None, "not_inheritable"
+    value = child_values[0]
+    if attribute in inherited:
+        # An ancestor already carries this value: the parent needs no write, the
+        # redundant copies at the children are simply removed.
+        if inherited[attribute] != value:
+            return None, "conflict_parent"
+        return False, None
+    if attribute not in parent_attributes:
+        return True, None
+    if parent_attributes[attribute] != value:
+        return None, "conflict_parent"
+    return False, None
+
+
+def _is_promotable(definition: dict[str, Any] | None) -> bool:
+    """True when the attribute may inherit at all (`inheritable`, not computed/key)."""
+    if not definition:
+        return False
+    if not definition.get("inheritable"):
+        return False
+    return not definition.get("computed") and not definition.get("is_key")
+
+
+def _reported_value(child_values: list[Any]) -> Any:
+    """The value the children agree on, ignoring children without a value.
+
+    Used for the report: a skipped case that is only skipped because one child
+    does not maintain the attribute still names the value the others share; a
+    real value conflict or an all-empty set reports None.
+    """
+    values = [
+        value
+        for value in child_values
+        if value is not _MISSING and not is_interrupting_value(value)
+    ]
+    if not values:
+        return None
+    if any(value != values[0] for value in values):
+        return None
+    return values[0]
+
+
+def _min_children(raw: Any) -> int:
+    """Resolves `parameters.min_children` (default 2, never below 2)."""
+    try:
+        value = int(raw)
+    except TypeError, ValueError:
+        return CONSOLIDATION_MIN_CHILDREN
+    return max(2, value)
+
+
+def _effective_attributes(
+    attributes: dict[str, Any],
+    written: dict[str, Any] | None,
+    removed: set[str] | None,
+) -> dict[str, Any]:
+    """Applies what this run already wrote/removed, so the next level sees it."""
+    merged = dict(attributes)
+    merged.update(written or {})
+    for name in removed or ():
+        merged.pop(name, None)
+    return merged
+
+
+async def _children(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+) -> list[dict[str, Any]]:
+    """Direct composition children of an object (with their own attributes)."""
+    response = await active.get(
+        f"{core_url}/objects/{object_id}/children",
+        params={"limit": str(CONSOLIDATION_CHILD_LIMIT)},
+    )
+    response.raise_for_status()
+    return list(response.json())
+
+
+async def _object(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+) -> dict[str, Any]:
+    """One object as the core returns it (own attributes, not inherited ones)."""
+    response = await active.get(f"{core_url}/objects/{object_id}")
+    response.raise_for_status()
+    return dict(response.json())
+
+
+async def _set_attribute(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    attribute: str,
+    value: Any,
+) -> None:
+    """Writes one attribute on the node a value is pushed up to."""
+    response = await active.patch(
+        f"{core_url}/objects/{object_id}", json={"attributes": {attribute: value}}
+    )
+    response.raise_for_status()
+
+
+async def _remove_attribute(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    attribute: str,
+) -> None:
+    """Drops one attribute key from a child so it inherits the value again."""
+    response = await active.patch(
+        f"{core_url}/objects/{object_id}", json={"remove_attributes": [attribute]}
+    )
+    response.raise_for_status()

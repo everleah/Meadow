@@ -34,6 +34,7 @@ from meadow.frontend.grid import (
     with_header_tooltips,
 )
 from meadow.frontend.i18n import best_locale, t
+from meadow.worker.bulk import CONSOLIDATION_REASONS
 
 
 def test_frontend_modules_import() -> None:
@@ -588,3 +589,17 @@ def test_inheritance_i18n_keys_translate() -> None:
     assert t("form.clear_value", locale="en").startswith("Set empty")
     assert "unterbrochen" in t("form.interrupted", locale="de")
     assert t("export.resolve_inheritance", locale="de") == "Auch vererbte Werte exportieren"
+
+
+def test_consolidation_i18n_keys_translate() -> None:
+    """The dialog and every skip reason the worker reports are translated."""
+    for locale in ("en", "de", "fr"):
+        assert t("form.consolidate", locale=locale) != "form.consolidate"
+        assert t("consolidate.preview", locale=locale) != "consolidate.preview"
+        summary = t("consolidate.summary", locale=locale).format(
+            promoted=1, removed=2, skipped=3, nodes=4
+        )
+        assert "1" in summary and "4" in summary
+        for reason in CONSOLIDATION_REASONS:
+            key = f"consolidate.reason.{reason}"
+            assert t(key, locale=locale) != key, (locale, key)

@@ -929,6 +929,9 @@ pub struct ChildrenListParams {
 /// loading the whole subtree (lazy loading); `?limit`/`?offset` paginate nodes
 /// with many direct children. With `?count_members=true`, category children also
 /// carry a `memberCount` for the category tree's counter.
+///
+/// Accepts an editor JWT or the `X-Api-Key` service account (the bulk worker
+/// walks the tree for `consolidate_inheritance`).
 #[utoipa::path(
     get,
     path = "/objects/{id}/children",
@@ -940,14 +943,12 @@ pub struct ChildrenListParams {
     )
 )]
 pub async fn list_object_children(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<ChildrenListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let key = parse_object_key(&id)?;
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));

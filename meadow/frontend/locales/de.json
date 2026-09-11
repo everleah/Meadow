@@ -946,6 +946,26 @@
   "grid.inherited_cell": "Vererbt von {label}",
   "export.resolve_inheritance": "Auch vererbte Werte exportieren",
   "export.resolve_inheritance_hint": "Füllt Attribute, die am Objekt selbst nicht gepflegt sind, mit dem vom Elternteil geerbten Wert.",
-
-  "grid.interrupted_cell": "Explizit leer gesetzt: der Wert unterbricht die Vererbung"
+  "grid.interrupted_cell": "Explizit leer gesetzt: der Wert unterbricht die Vererbung",
+  "form.consolidate": "Vererbung konsolidieren…",
+  "consolidate.title": "Vererbung konsolidieren",
+  "consolidate.hint": "Werte, die alle direkten Kinder identisch pflegen, werden auf diesen Knoten hochgeschoben und bei den Kindern entfernt – sie erben danach wieder. Läuft über den ganzen Teilbaum, Ebene für Ebene.",
+  "consolidate.min_children": "Mindestanzahl Kinder",
+  "consolidate.attributes": "Attribute (leer = alle vererbbaren)",
+  "consolidate.preview": "Vorschau",
+  "consolidate.apply": "Übernehmen",
+  "consolidate.running": "Läuft …",
+  "consolidate.summary": "Vorschläge: {promoted} · entfernte Kindwerte: {removed} · übersprungen: {skipped} · geprüfte Knoten: {nodes}",
+  "consolidate.empty": "Nichts zu konsolidieren.",
+  "consolidate.move": "{parent} · {attribute} = {value} ← {count} Kinder",
+  "consolidate.skip": "{parent} · {attribute}: übersprungen ({reason})",
+  "consolidate.root_failed": "{object_id}: {reason}",
+  "consolidate.failed": "Die Konsolidierung konnte nicht ausgeführt werden.",
+  "consolidate.done": "Konsolidierung übernommen.",
+  "consolidate.reason.no_children": "weniger als die nötige Anzahl Kinder",
+  "consolidate.reason.missing_on_child": "nicht von jedem Kind gepflegt",
+  "consolidate.reason.interrupted": "ein Kindwert ist bewusst leer",
+  "consolidate.reason.conflict_child_values": "die Kinder haben unterschiedliche Werte",
+  "consolidate.reason.conflict_parent": "der Knoten hat bereits einen anderen Wert",
+  "consolidate.reason.not_inheritable": "Attribut ist nicht vererbbar"
 }
