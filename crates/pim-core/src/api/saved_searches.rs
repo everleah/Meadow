@@ -77,12 +77,12 @@ pub struct QueryCondition {
 pub struct QueryFulltext {
     /// Fields to restrict the search to (best-effort; the full-text index is on
     /// the whole `attributes` object).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<String>>,
     /// Search terms.
     pub query: String,
     /// Language code (accepted, used by clients for field selection).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }
 
@@ -472,21 +472,29 @@ async fn execute_query(
         params.push((out_param, Value::String(out_key.to_owned())));
     }
 
-    for sort in &query.sort {
+    let mut select: Vec<String> = vec!["id".to_owned()];
+    for (index, sort) in query.sort.iter().enumerate() {
         let field = sanitize_field(&sort.field)?;
+        let alias = format!("_sort_{index}");
         let direction = if sort.order.eq_ignore_ascii_case("desc") {
             "DESC"
         } else {
             "ASC"
         };
-        order.push(format!("{field} {direction}"));
+        // SurrealDB requires every `ORDER BY` idiom to be part of the selection
+        // (`Missing order idiom`), so sort fields are projected under aliases.
+        select.push(format!("{field} AS {alias}"));
+        order.push(format!("{alias} {direction}"));
     }
 
     let limit = query.limit.clamp(1, 10_000) as i64;
     let start = query.start as i64;
 
     let where_clause = conditions.join(" AND ");
-    let mut sql = format!("SELECT id FROM object WHERE {where_clause}");
+    let mut sql = format!(
+        "SELECT {} FROM object WHERE {where_clause}",
+        select.join(", ")
+    );
     if !order.is_empty() {
         sql.push_str(" ORDER BY ");
         sql.push_str(&order.join(", "));

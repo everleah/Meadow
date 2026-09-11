@@ -185,7 +185,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 - **Operator-Aliase** (`neq`, `ge`, `le`, `is_empty`) werden beim Normalisieren auf die kanonischen Namen gezogen (`ne`, `gte`, `lte`, `is_null`), damit gespeicherte Queries einheitlich sind.
 - **Keine Migration:** `filters` entfällt; vorhandene gespeicherte Suchen werden gelöscht und neu angelegt (Entscheidung des Auftraggebers). Collections hängen an Suchen und werden zusammen mit ihnen neu angelegt.
 
-**Der Kern validiert die Query** bei `POST /saved-searches`, `PATCH /saved-searches/{id}`, `POST /saved-searches/preview` und beim Ausführen: 
+**Der Kern validiert die Query** bei `POST /saved-searches`, `PATCH /saved-searches/{id}`, `POST /saved-searches/preview` und beim Ausführen:
 
 - **Struktur:** Gruppe ohne `conditions`, Gruppe **mit** `field`, Bedingung **mit** `conditions`, Tiefe > 4, mehr als 50 Bedingungen → `400` mit Pfad (z. B. `query.where.conditions[2]: group requires a non-empty conditions list`).
 - **Feld:** muss im Katalog stehen (Systemfeld, existierendes Attribut, ggf. mit aktiver Sprache). Unbekannt → `query.where.conditions[1].field: unknown field attributes.preis_alt`.

@@ -2222,6 +2222,28 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    async def list_search_fields(self, token: str) -> dict:
+        """Returns the search field/operator catalog (``GET /search-fields``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/search-fields",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def preview_saved_search(self, token: str, query: dict) -> dict:
+        """Runs a query without storing it (``POST /saved-searches/preview``)."""
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/saved-searches/preview",
+                json=query,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def list_collections(
         self,
         token: str,
