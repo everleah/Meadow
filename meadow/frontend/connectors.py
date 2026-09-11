@@ -132,7 +132,11 @@ async def connectors_page() -> None:
             connector_type: _type_label(connector_type) for connector_type in _FALLBACK_TYPES
         }
 
-    option_sources: dict[str, list[str]] = {"object_types": [], "attribute_names": []}
+    option_sources: dict[str, list[str]] = {
+        "object_types": [],
+        "attribute_names": [],
+        "languages": [],
+    }
     try:
         object_types = await client.list_object_types(token, limit=1000)
         option_sources["object_types"] = [
@@ -144,6 +148,15 @@ async def connectors_page() -> None:
         definitions = await client.list_attribute_definitions(token, limit=1000)
         option_sources["attribute_names"] = [
             str(item.get("name")) for item in definitions if item.get("name")
+        ]
+    except Exception:  # noqa: BLE001 - the picker then only offers entered values
+        pass
+    try:
+        languages = await client.list_languages(token)
+        option_sources["languages"] = [
+            str(item.get("code"))
+            for item in languages
+            if item.get("active") and item.get("code") not in (None, "root")
         ]
     except Exception:  # noqa: BLE001 - the picker then only offers entered values
         pass

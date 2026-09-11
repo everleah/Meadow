@@ -132,6 +132,14 @@ pub async fn create_import(
     let document = extract_mef_document(&headers, body).await?;
     validate_mef(&document)?;
 
+    // Defaults of the `json_import` connector profile (empty without one):
+    // explicit query parameters win, then the profile, then the document field.
+    let defaults = crate::api::connectors::type_defaults(
+        &state.db,
+        crate::api::connectors::CONNECTOR_TYPE_JSON_IMPORT,
+    )
+    .await?;
+
     let format_version = document
         .get("format_version")
         .and_then(Value::as_str)
@@ -142,6 +150,7 @@ pub async fn create_import(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+        .or_else(|| crate::api::connectors::default_string(&defaults, "source"))
         .or_else(|| {
             document
                 .get("source")
@@ -182,12 +191,28 @@ pub async fn create_import(
         .unwrap_or_default()
         .to_owned();
 
+    let match_by_key = params
+        .match_by_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| crate::api::connectors::default_string(&defaults, "match_by_key"));
+    let match_by_id = params
+        .match_by_id
+        .or_else(|| crate::api::connectors::default_bool(&defaults, "match_by_id"))
+        .unwrap_or(false);
+    let emit_events = params
+        .emit_events
+        .or_else(|| crate::api::connectors::default_bool(&defaults, "emit_events"))
+        .unwrap_or(true);
+
     let parameters = json!({
         "document_id": document_id,
-        "match_by_key": params.match_by_key.as_deref().map(str::trim).filter(|v| !v.is_empty()),
-        "match_by_id": params.match_by_id.unwrap_or(false),
+        "match_by_key": match_by_key,
+        "match_by_id": match_by_id,
         "source": source,
-        "emit_events": params.emit_events.unwrap_or(true),
+        "emit_events": emit_events,
     });
     let (_, run) = queue_run(
         &state.db,

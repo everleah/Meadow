@@ -14,9 +14,11 @@
 //!   (`PATCH /connectors/{id}` with `parameters_mode: "merge"`, `null` deletes).
 //!
 //! Contract: every declared field is evaluated by a consumer, and every
-//! evaluated field is declared here. Types that no consumer reads yet carry
-//! `wired: false` and declare **no** fields (they are free JSON until Stage 2,
-//! see `plan/detail/konnektor-konfiguration.md`).
+//! evaluated field is declared here. All three built-in types are wired today:
+//! `webhook` is read by the webhook outbound worker, `json_import`/`json_export`
+//! are the default profiles of `POST /imports` and `POST /exports` (see
+//! `plan/detail/konnektor-konfiguration.md`). The `wired`/`note_key` fields stay
+//! in the contract so a future type without a consumer can be declared honestly.
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -313,30 +315,82 @@ fn webhook_spec() -> TypeSpec {
     }
 }
 
-/// Types without a consumer yet: free JSON, no declared fields (Stage 2 wires
-/// `json_import`/`json_export` as job defaults, see the plan document).
-fn unwired_spec(
-    type_key: &'static str,
-    label_key: &'static str,
-    direction: &'static str,
-) -> TypeSpec {
+/// `json_import`: profile for `POST /imports` (the job takes the values the
+/// request does not set).
+fn json_import_spec() -> TypeSpec {
     TypeSpec {
-        type_key,
-        label_key,
-        direction,
-        wired: false,
-        note_key: Some("connector_fields.unwired"),
-        groups: Vec::new(),
+        type_key: "json_import",
+        label_key: "connectors.type_json_import",
+        direction: "inbound",
+        wired: true,
+        note_key: None,
+        groups: vec![Group {
+            key: "import",
+            label_key: "connector_fields.group_import",
+            fields: vec![
+                Field::new("match_by_key", FieldKind::String, Widget::Text)
+                    .label("connector_fields.json_import.match_by_key.label")
+                    .help("connector_fields.json_import.match_by_key.help"),
+                Field::new("match_by_id", FieldKind::Boolean, Widget::Switch)
+                    .label("connector_fields.json_import.match_by_id.label")
+                    .help("connector_fields.json_import.match_by_id.help")
+                    .default(json!(false)),
+                Field::new("emit_events", FieldKind::Boolean, Widget::Switch)
+                    .label("connector_fields.json_import.emit_events.label")
+                    .help("connector_fields.json_import.emit_events.help")
+                    .default(json!(true)),
+                Field::new("source", FieldKind::String, Widget::Text)
+                    .label("connector_fields.json_import.source.label")
+                    .help("connector_fields.json_import.source.help"),
+            ],
+        }],
+    }
+}
+
+/// `json_export`: profile for `POST /exports` (the request wins where it sets a
+/// value).
+fn json_export_spec() -> TypeSpec {
+    TypeSpec {
+        type_key: "json_export",
+        label_key: "connectors.type_json_export",
+        direction: "outbound",
+        wired: true,
+        note_key: None,
+        groups: vec![Group {
+            key: "export",
+            label_key: "connector_fields.group_export",
+            fields: vec![
+                Field::new("format", FieldKind::String, Widget::Select)
+                    .label("connector_fields.json_export.format.label")
+                    .help("connector_fields.json_export.format.help")
+                    .options(&["csv", "xlsx", "json"])
+                    .default(json!("csv")),
+                Field::new("fields", FieldKind::StringList, Widget::Multiselect)
+                    .label("connector_fields.json_export.fields.label")
+                    .help("connector_fields.json_export.fields.help")
+                    .options_from("attribute_names")
+                    .default(json!([])),
+                Field::new("locales", FieldKind::StringList, Widget::Multiselect)
+                    .label("connector_fields.json_export.locales.label")
+                    .help("connector_fields.json_export.locales.help")
+                    .options_from("languages")
+                    .default(json!([])),
+                Field::new(
+                    "options.email_to",
+                    FieldKind::StringList,
+                    Widget::Multiselect,
+                )
+                .label("connector_fields.json_export.options_email_to.label")
+                .help("connector_fields.json_export.options_email_to.help")
+                .default(json!([])),
+            ],
+        }],
     }
 }
 
 /// All connector types known to the core.
 pub fn specs() -> Vec<TypeSpec> {
-    vec![
-        webhook_spec(),
-        unwired_spec("json_import", "connectors.type_json_import", "inbound"),
-        unwired_spec("json_export", "connectors.type_json_export", "outbound"),
-    ]
+    vec![webhook_spec(), json_import_spec(), json_export_spec()]
 }
 
 /// The spec of one connector type.
@@ -653,10 +707,10 @@ mod tests {
         assert!(keys.contains(&"retry_policy.max_attempts"));
         assert!(keys.contains(&"retry_policy.backoff_seconds"));
 
-        // Unwired types declare nothing: their parameters stay free JSON.
-        let import = spec("json_import").expect("import spec");
-        assert!(!import.wired);
-        assert!(import.groups.is_empty());
+        // Every built-in type is wired to a consumer today.
+        for type_key in ["webhook", "json_import", "json_export"] {
+            assert!(spec(type_key).expect("spec").wired, "{type_key}");
+        }
     }
 
     #[test]
@@ -767,8 +821,60 @@ mod tests {
     }
 
     #[test]
-    fn unwired_types_accept_any_object() {
-        assert!(validate("json_import", &object(json!({"anything": [1, 2, 3]}))).is_empty());
+    fn import_and_export_profiles_are_declared() {
+        // `json_import`/`json_export` are the default profiles of the
+        // import/export endpoints, so their fields are validated too.
+        let import = spec("json_import").expect("import spec");
+        assert!(import.wired);
+        assert_eq!(import.direction, "inbound");
+        let keys: Vec<&str> = import
+            .groups
+            .iter()
+            .flat_map(|group| group.fields.iter().map(|field| field.key))
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["match_by_key", "match_by_id", "emit_events", "source"]
+        );
+
+        let export = spec("json_export").expect("export spec");
+        assert!(export.wired);
+        assert_eq!(export.direction, "outbound");
+        let keys: Vec<&str> = export
+            .groups
+            .iter()
+            .flat_map(|group| group.fields.iter().map(|field| field.key))
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["format", "fields", "locales", "options.email_to"]
+        );
+
+        assert!(validate("json_import", &object(json!({"anything": true}))).is_empty());
+        let errors = validate(
+            "json_import",
+            &object(json!({"emit_events": "yes", "match_by_id": 1})),
+        );
+        assert_eq!(
+            errors,
+            vec![
+                "parameters.match_by_id: must be a boolean".to_owned(),
+                "parameters.emit_events: must be a boolean".to_owned()
+            ]
+        );
+
+        let errors = validate("json_export", &object(json!({"format": "xml"})));
+        assert_eq!(
+            errors,
+            vec!["parameters.format: must be one of csv, xlsx, json".to_owned()]
+        );
+
+        let mut parameters = object(json!({}));
+        apply_defaults("json_export", &mut parameters);
+        assert_eq!(
+            Value::Object(parameters),
+            json!({"format": "csv", "fields": [], "locales": [], "options": {"email_to": []}})
+        );
     }
 
     #[test]

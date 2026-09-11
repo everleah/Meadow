@@ -25,8 +25,8 @@
 
 **Abweichungen vom ursprünglichen Entwurf (bewusst):**
 
-- `retry_policy` und ein Payload-Modus stehen **nicht** im Schema (sie sind nicht verdrahtet, siehe Abschnitt 7) — sie erscheinen im Formular nur als „nicht deklarierte Parameter" (Hinweis mit Anzahl).
-- `json_import`/`json_export` liefern `wired: false`, **keine** Felder und einen Hinweis-Key (`note_key: connector_fields.unwired`); der Dialog zeigt dort statt des Formulars den Hinweis (Abschnitt 7).
+- Ein Payload-Modus steht **nicht** im Schema (nicht verdrahtet, siehe Abschnitt 7) — er erscheint im Formular nur als „nicht deklarierter Parameter" (Hinweis mit Anzahl). `retry_policy` ist seit Stage 2a deklariert und wirksam.
+- `json_import`/`json_export` sind seit Stage 2b **verdrahtet** (`wired: true`) und tragen je eine Gruppe (`import` bzw. `export`); der Hinweis-Key (`note_key`) bleibt als Vertragsbestandteil für künftige Typen ohne Verbraucher erhalten.
 - Die Audit-Metadaten nennen `{name, type, changed_keys}` — **ohne Werte** (Abschnitt 9).
 - Beim Anlegen füllt der Kern fehlende deklarierte Felder mit ihren Defaults auf (`apply_defaults`); `normalize` trimmt Strings, bereinigt Listen und entfernt `null`-Werte.
 - Unbekannte Schlüssel bleiben erlaubt und werden von `merge` **nicht** entfernt; ein unbekannter `parameters_mode` quittiert der Kern mit `400`.
@@ -85,8 +85,8 @@ Die Liste zeigt statt nur „Typ" zusätzlich eine **Zusammenfassung** (z. B. `T
 ```json
 [
   { "type": "webhook", "label_key": "connectors.type_webhook", "direction": "outbound", "wired": true, "groups": [ /* target, headers, filter, coalesce */ ] },
-  { "type": "json_import", "label_key": "connectors.type_json_import", "direction": "inbound", "wired": false, "groups": [], "note_key": "connector_fields.unwired" },
-  { "type": "json_export", "label_key": "connectors.type_json_export", "direction": "outbound", "wired": false, "groups": [], "note_key": "connector_fields.unwired" }
+  { "type": "json_import", "label_key": "connectors.type_json_import", "direction": "inbound", "wired": true, "groups": [ /* import: match_by_key, match_by_id, emit_events, source */ ] },
+  { "type": "json_export", "label_key": "connectors.type_json_export", "direction": "outbound", "wired": true, "groups": [ /* export: format, fields, locales, options.email_to */ ] }
 ]
 ```
 
@@ -109,7 +109,7 @@ Ausschnitt `webhook.target` (alle Felder der Installation):
 
 Weitere deklarierte Felder: `headers` (`string_map`, `widget: key_value`, `secret: true`), `filter.event_types` (`string_list`, `enum` aus den Kern-Konstanten in `event.rs`), `filter.object_types` / `filter.attribute_changes` (`string_list`, `options_source: object_types` / `attribute_names`), `coalesce.enabled` (`boolean`, `switch`) und `coalesce.window_seconds` (`number`, `show_if: {"key": "coalesce.enabled", "equals": true}`). `format`/`pattern`/`placeholder` sind im Beispiel oben nur skizziert; der Kern liefert sie (noch) nicht, das Formular nutzt sie nicht.
 
-**Typ-Ebene:** `type`, `label_key`, `direction` (`inbound`/`outbound`), `wired`, `groups`; `note_key` nur bei nicht verdrahteten Typen (`wired: false` → der Dialog zeigt einen Hinweis statt des Formulars).
+**Typ-Ebene:** `type`, `label_key`, `direction` (`inbound`/`outbound`), `wired`, `groups`; `note_key` nur bei Typen ohne Verbraucher (`wired: false` → der Dialog zeigt einen Hinweis statt des Formulars; heute gibt es keinen solchen Typ mehr, der Mechanismus bleibt für spätere Erweiterungen).
 
 **Feldattribute (verbindlich):**
 
@@ -169,10 +169,10 @@ Weitere deklarierte Felder: `headers` (`string_map`, `widget: key_value`, `secre
 - **Bereiche** als aufklappbare, farbige `ui.expansion` (Muster wie im Produktformular), Reihenfolge und Gruppierung aus dem Schema.
 - **Bedingte Felder** über `show_if` (unsichtbare Felder werden ausgeblendet, aber nicht mitgesendet; der Wert bleibt in den Formularwerten erhalten).
 - **Inline-Validierung** mit demselben Schema (Pflichtfeld, Bereich, Auswahl elementweise bei Listen) + Serverfehler als Meldung am Dialog.
-- **Dynamische Optionsquellen** (`object_types`, `attribute_names`) werden über die API geladen und angeboten; unbekannte gespeicherte Werte werden angehängt (Muster: Enum-Editor — verhindert `Invalid value` in `ui.select`). Leere Einzelauswahlen werden als „nicht gesetzt" (`None`) behandelt, nicht als `""`.
+- **Dynamische Optionsquellen** (`object_types`, `attribute_names`, `languages`) werden über die API geladen und angeboten; unbekannte gespeicherte Werte werden angehängt (Muster: Enum-Editor — verhindert `Invalid value` in `ui.select`). Leere Einzelauswahlen werden als „nicht gesetzt" (`None`) behandelt, nicht als `""`. Eine **Mehrfachauswahl ohne Optionsquelle** ist eine Freitext-Eingabe mit Tags (`new_value_mode="add-unique"`) — so wird `options.email_to` gepflegt, ohne eine Liste von E-Mail-Adressen vorzugeben.
 - **Tabs „Formular" / „JSON":** JSON zeigt das vollständige `parameters`-Objekt (inkl. unbekannter Schlüssel) und ist der Rückfall für Sonderfälle; Umschalten übernimmt die Werte in beide Richtungen (JSON → Formular: Werte übernehmen, **ohne** die Patch-Baseline neu zu erfassen; Formular → JSON: hübsch formatiert aus den aktuellen Formularwerten). Unbekannte Schlüssel werden im Formular-Tab als Hinweis mit Anzahl gelistet (Listenspalte: `· 1 not evaluated`).
 - **Vorschau/Test:** Stage 2 (Abschnitt 8). Bis dahin: „Speichern" setzt `parameters_mode: "merge"` mit den geänderten Feldern; nur der JSON-Tab (und nicht verdrahtete Typen) sendet `replace`.
-- **Liste:** zusätzliche Spalte „Konfiguration" (Zusammenfassung via `summary_text`, z. B. `Target: … · Filter: 2 event types · Batched: 30 s · 1 not evaluated`), Typ-Spalte mit Label aus dem Schema, weiterhin `enabled`-Badge und `type`-Filter (Liste der Typen aus `GET /connector-types` statt der lokalen Konstante).
+- **Liste:** zusätzliche Spalte „Konfiguration" (Zusammenfassung via `summary_text`, z. B. `Target: … · Filter: 2 event types · Batched: 30 s · 1 not evaluated` bzw. für die Profile `Match: sku · Source: erp` und `Format: csv · Fields: 2 · E-mail: 1`), Typ-Spalte mit Label aus dem Schema, weiterhin `enabled`-Badge und `type`-Filter (Liste der Typen aus `GET /connector-types` statt der lokalen Konstante).
 - **Bedienung:** Doppelklick auf die Zeile löst den Datensatz über die **ID** aus der geladenen Liste auf (die AG-Grid-Zeile enthält nur Anzeigefelder).
 - **i18n:** Keys `connector_fields.<typ>.<pfad>.label|help` plus `connector_form.*` (Tab-Titel, Hinweise, „unbekannte Parameter", Bestätigungen) in en/de/fr — Parität wie gehabt.
 
@@ -182,7 +182,10 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 1. **`retry_policy` — umgesetzt (Stage 2a):** Der Webhook-Worker liest `retry_policy.max_attempts` (1–10, Default 5) und `retry_policy.backoff_seconds` (1–3600, Default 5) **je Konnektor** (`meadow/worker/webhooks.py::WebhookRetry`): `max_attempts` bestimmt, wann ein Event in die Dead-Letter-Queue wandert (vorher global `WEBHOOK_MAX_DELIVER = 5`), `backoff_seconds` ist die Wartezeit vor dem nächsten Versuch (vorher global 5 s). Der JetStream-Consumer bekommt als `max_deliver` den **Schema-Höchstwert** (10), damit der Worker zuerst dead-lettert und nicht JetStream. Weil eine Nachricht an mehrere Konnektoren verteilt wird, gilt: das **strengste** Limit gewinnt (jede terminale Zustellung beendet die Nachricht) und beim erneuten Zustellen gewinnt die **längste** angeforderte Wartezeit. Verifiziert: `attempt 1/2 → 2/2` (dann DLQ) mit `max_attempts: 2` bzw. `1/3 → 2/3 → 3/3` mit `max_attempts: 3`, und mit `backoff_seconds: 1` liefen alle drei Versuche innerhalb von ~2 s (vorher hätte der Default 5 s gebraucht), Log-Zeile jetzt `attempt n/max`.
 2. **Payload-Modus (`payload.mode = event|object`):** weiterhin **nicht** verdrahtet und deshalb nicht im Schema (der Worker sendet immer das Event). Entscheidung: erst umsetzen, wenn die Middleware es braucht.
-3. **`json_import` / `json_export`-Konnektoren** werden von niemandem geladen. Stage 2b koppelt sie als **Defaults** an den Job-Pfad: `POST /imports` ohne explizite Parameter zieht `match_by_key`/`match_by_id`/`emit_events`/`source` des Typ-Konnektors (Kern oder Worker), der Export-Job entsprechend `format`/`fields`/`locales`/`options`. Vorher gibt es für diese Typen **kein** Formular (das Schema markiert sie `wired: false`, die UI zeigt einen Hinweis „Parameter werden noch nicht ausgewertet").
+3. **`json_import` / `json_export` — umgesetzt (Stage 2b):** Beide Typen sind jetzt **Profile** für die Job-Enden. Der Kern liest die Parameter des **ersten aktivierten** Konnektors des Typs (`connectors::type_defaults`, sortiert nach `name`) als Vorgaben und füllt damit die Werte, die die Anfrage nicht setzt:
+   - `POST /imports`: `match_by_key`, `match_by_id`, `emit_events`, `source` (Reihenfolge: expliziter Query-Parameter > Profil > `source`-Feld des MEF-Dokuments).
+   - `POST /exports`: `format` (ist jetzt optional; ohne Vorgabe weiterhin `json`), `fields`, `locales`, `options.email_to` (Reihenfolge: Anfrage > Profil > bisheriger Default).
+   Ohne Konnektor bleibt alles wie vorher (`wired: true` in beiden Typen, die Felder sind damit auch validiert und im Formular). **Verifiziert:** Import über das Profil `source=erp-test` schreibt `source` an die Objekte; `emit_events: true` erzeugt genau ein `object.created`, `false` genau ein `import.completed` (über die DLQ beobachtet); Export ohne `format`/`fields` liefert `xlsx` mit den Profil-Spalten und nutzt `options.email_to` („SMTP is not configured" als Beweis, dass die Empfänger ankamen).
 
 ## 8. Test-Button (Stage 2)
 
@@ -224,9 +227,12 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 5. `retry_policy.max_attempts`/`backoff_seconds` sind im Schema deklariert (Gruppe „Wiederholung"), werden je Konnektor im Worker angewandt und sind live verifiziert (Abschnitt 7); der Payload-Modus bleibt bewusst entfernt. `crates/AGENTS.md`, `meadow/AGENTS.md`, `integration-eventsystem.md` und dieses Dokument sind angepasst.
 
-**Stage 2b/2c — offen:**
+**Stage 2b — Import-/Export-Profile — umgesetzt:**
 
-6. `json_import`/`json_export` als Job-Defaults verdrahten und im Schema `wired: true` setzen (Abschnitt 7, Punkt 3).
+6. `json_import`/`json_export` sind als Job-Defaults verdrahtet und im Schema `wired: true` (Abschnitt 7, Punkt 3); `POST /exports.format` ist dafür optional geworden. Neu im Formular: eine Mehrfachauswahl **ohne** Optionsquelle rendert als Freitext-Eingabe mit Tags (nötig für `options.email_to`), und die Optionsquelle `languages` (aktive Datensprachen) ist ergänzt; die Listenzusammenfassung zeigt die Profilwerte (`Format: csv · E-Mail: 1`).
+
+**Stage 2c — offen:**
+
 7. Job-Typ `connector_test` + Worker-Testversand + „Verbindung testen"-Dialog mit Ergebnis (Abschnitt 8).
 
 **Stage 3 — Ausbau (optional):**
@@ -248,6 +254,8 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 - Formular-Roundtrip: Schema → Werte → Patch entspricht dem bisherigen JSON (`url`, `method`, `headers`, `filter.*`, `coalesce.*`, `timeout_s`); die Patch-Baseline ist die Projektion der **gespeicherten** Parameter, damit JSON-Tab-Änderungen beim Speichern aus dem Formular nicht verloren gehen. *(Formular-Test + Browser-Verifikation: Fenster im JSON-Tab 30 → 45, Speichern aus dem Formular, Prüfung per API)*
 - `show_if`: `coalesce.window_seconds` ist unsichtbar bei `enabled = false`, sichtbar danach; der Wert bleibt beim Ausblenden erhalten und wird beim Ausblenden nicht weggeschrieben. *(Formular-Test + Browser-Verifikation)*
 - Wiederholungsrichtlinie: `retry_policy.max_attempts` begrenzt die Versuche je Konnektor (Dead-Letter danach), `retry_policy.backoff_seconds` ist die Wartezeit vor dem nächsten Versuch, Wertebereiche werden vom Kern geprüft, fehlende Richtlinien behalten das alte Verhalten (5 Versuche, 5 s). *(Kern-Test, Worker-Tests + Live-Prüfung: `attempt 1/2 → 2/2` bzw. `1/3 → 3/3`, bei `backoff_seconds: 1` lagen alle drei Versuche in ~2 s)*
+- Import-/Export-Profil: `POST /imports` übernimmt `source`/`match_by_key`/`match_by_id`/`emit_events` des `json_import`-Konnektors, wenn die Anfrage sie nicht setzt; `POST /exports` übernimmt `format`/`fields`/`locales`/`options.email_to` des `json_export`-Konnektors. Ohne Konnektor bleibt das Verhalten unverändert. *(Kern-Unit-Tests für die Accessor-Funktionen + Live-Prüfung: `source` am Objekt, `emit_events` über die DLQ, `format`/`fields`/`email_to` im Exportergebnis)*
+- Freitext-Mehrfachauswahl: ein `multiselect` ohne Optionsquelle (`options.email_to`) nimmt getippte Werte als Tags an. *(Browser-Verifikation: gespeichert als `options.email_to: ["ops@example.com"]`)*
 - Worker-Regression: ein per Formular gespeicherter Konnektor wird vom Webhook-Supervisor geladen (Live-Reload ≤ 30 s) und liefert ein Event aus. *(über den bestehenden Supervisor-Pfad; der Dialog ändert die gespeicherte Struktur nicht)*
 - Rechte: `editor` → `403` auf `POST/PATCH /connectors`; Worker mit `X-Api-Key` liest weiterhin (`GET /connectors`, `GET /connector-types`). *(bestehende Rollenprüfung, unverändert)*
 - Locale-Parität für die neuen Keys (`connectors.*`, `connector_form.*`, `connector_fields.*`). *(Formular-Test)*
@@ -259,7 +267,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 | `retry_policy` wirksam machen statt entfernen? | **Umgesetzt (Stage 2a):** wirksam gemacht — max. Versuche + Wartezeit je Konnektor (Abschnitt 7). |
 | Einzelne Backoff-Werte je Versuch (`[30, 60, 120, 300]`)? | **Offen.** Umgesetzt ist eine konstante Wartezeit (ein Zahlenfeld, auch für Nicht-Techniker verständlich). Eine Liste bräuchte eine neue Feldart (`number_list`) in Schema, Formular und Tests; der Worker akzeptiert eine gespeicherte Liste bereits defensiv (letzter Wert gewinnt). |
 | Payload-Modus (Event vs. vollständiges Objekt)? | **Nicht** in Stage 1/2; erst wenn die Middleware es braucht (heute sendet der Worker immer das Event). |
-| `json_import`/`json_export` als Job-Defaults verdrahten? | **Ja (Stage 2b)** — sonst bleibt das Formular für diese Typen wirkungslos. |
+| `json_import`/`json_export` als Job-Defaults verdrahten? | **Umgesetzt (Stage 2b)** — der erste aktivierte Konnektor des Typs ist das Profil (Abschnitt 7, Punkt 3). |
 | Unbekannte Schlüssel ablehnen? | Nein, nur melden; optionaler Schalter `strict_parameters` später. |
 | Strukturierte Feldfehler (`{"error": …, "fields": {…}}`)? | Erst wenn das Formular Feldmarkierungen braucht; Stage 1 kommt mit Pfad in der Meldung aus. |
 | Schema als JSON-Schema ausliefern (statt eigenem Format)? | Nein — das eigene, kleinere Format genügt (kein vollständiger Validator nötig) und bleibt ohne Zusatzabhängigkeit. Mehrfachauswahl (`string_list`) und Key-Wert-Tabellen sind in JSON Schema umständlicher als hier. |

@@ -42,7 +42,7 @@ pub struct ExportSource {
 }
 
 /// Serialization options.
-#[derive(Debug, Deserialize, serde::Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, ToSchema)]
 pub struct ExportOptions {
     #[serde(default = "default_true")]
     pub header: bool,
@@ -56,17 +56,31 @@ pub struct ExportOptions {
     pub email_to: Option<Vec<String>>,
 }
 
+impl Default for ExportOptions {
+    /// Mirrors the serde defaults (used when a request omits `options`).
+    fn default() -> Self {
+        Self {
+            header: true,
+            separator: default_separator(),
+            include_system: false,
+            email_to: None,
+        }
+    }
+}
+
 /// Structured export request for `POST /exports`.
 #[derive(Debug, Deserialize, serde::Serialize, ToSchema)]
 pub struct ExportRequest {
     pub source: ExportSource,
-    /// Field/column names; empty => the worker derives them from the objects.
+    /// Field/column names; empty => the `json_export` connector profile, else
+    /// the worker derives them from the objects.
     #[serde(default)]
     pub fields: Option<Vec<String>>,
-    /// `csv` | `xlsx` | `json`.
-    #[serde(default = "default_format")]
-    pub format: String,
-    /// Locales for multilingual columns (`<attr>_<code>`); empty => default locale.
+    /// `csv` | `xlsx` | `json`; unset => the `json_export` connector profile.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Locales for multilingual columns (`<attr>_<code>`); empty => the
+    /// `json_export` connector profile, else the default locale.
     #[serde(default)]
     pub locales: Option<Vec<String>>,
     #[serde(default)]
@@ -137,11 +151,39 @@ pub async fn create_export(
             "unsupported source kind `{kind}`"
         )));
     }
-    if !matches!(req.format.as_str(), "csv" | "xlsx" | "json") {
+
+    // Defaults of the `json_export` connector profile (empty without one):
+    // explicit request fields win, the profile fills the rest.
+    let defaults = crate::api::connectors::type_defaults(
+        &state.db,
+        crate::api::connectors::CONNECTOR_TYPE_JSON_EXPORT,
+    )
+    .await?;
+    let format = req
+        .format
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| crate::api::connectors::default_string(&defaults, "format"))
+        .unwrap_or_else(default_format);
+    if !matches!(format.as_str(), "csv" | "xlsx" | "json") {
         return Err(ApiError::bad_request(format!(
-            "unsupported format `{}` (expected csv | xlsx | json)",
-            req.format
+            "unsupported format `{format}` (expected csv | xlsx | json)"
         )));
+    }
+    let fields = req
+        .fields
+        .clone()
+        .filter(|values| !values.is_empty())
+        .or_else(|| crate::api::connectors::default_string_list(&defaults, "fields"));
+    let locales = req
+        .locales
+        .clone()
+        .filter(|values| !values.is_empty())
+        .or_else(|| crate::api::connectors::default_string_list(&defaults, "locales"));
+    let mut options = req.options.clone().unwrap_or_default();
+    if options.email_to.is_none() {
+        options.email_to =
+            crate::api::connectors::default_string_list(&defaults, "options.email_to");
     }
     match kind {
         "collection" | "saved_search" if req.source.id.is_none() => {
@@ -176,10 +218,10 @@ pub async fn create_export(
 
     let parameters = json!({
         "source": req.source,
-        "fields": req.fields,
-        "format": req.format,
-        "locales": req.locales,
-        "options": req.options,
+        "fields": fields,
+        "format": format,
+        "locales": locales,
+        "options": options,
     });
     let (_, run) = queue_run(
         &state.db,

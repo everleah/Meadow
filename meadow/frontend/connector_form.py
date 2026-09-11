@@ -277,25 +277,51 @@ def summary_parts(parameters: dict | None, *, locale: str | None = None) -> list
                 str(int(window)) if isinstance(window, (int, float)) else "",
             )
         )
+    # Import profile (`json_import`).
+    for key, summary_key in (
+        ("match_by_key", "connectors.summary_match_key"),
+        ("source", "connectors.summary_source"),
+    ):
+        value = get_path(parameters, key)
+        if value not in (MISSING, None, ""):
+            parts.append((summary_key, str(value)))
+    # Export profile (`json_export`).
+    export_format = get_path(parameters, "format")
+    if export_format not in (MISSING, None, ""):
+        parts.append(("connectors.summary_format", str(export_format)))
+    for key, summary_key in (
+        ("fields", "connectors.summary_fields"),
+        ("locales", "connectors.summary_locales"),
+    ):
+        value = get_path(parameters, key)
+        if isinstance(value, list) and value:
+            rendered = (
+                str(len(value))
+                if summary_key.endswith("fields")
+                else ", ".join(str(item) for item in value)
+            )
+            parts.append((summary_key, rendered))
+    recipients = get_path(parameters, "options.email_to")
+    if isinstance(recipients, list) and recipients:
+        parts.append(("connectors.summary_recipients", str(len(recipients))))
     return parts
 
 
 def summary_text(schema: dict | None, parameters: dict | None, *, locale: str | None = None) -> str:
     """One-line description of a connector's configuration for the grid."""
+    if not fields_of(schema):
+        # A type without declared fields is not evaluated at all: the hint is
+        # more useful than a list of undeclared keys.
+        return t("connectors.summary_unwired", locale=locale)
     parts = [
         t(key, locale=locale, value=value)
         for key, value in summary_parts(parameters, locale=locale)
     ]
-    if not parts:
-        declared = len(fields_of(schema))
-        return (
-            t("connectors.summary_plain", locale=locale)
-            if declared
-            else t("connectors.summary_unwired", locale=locale)
-        )
     extra = len(unknown_keys(schema, parameters))
     if extra:
         parts.append(t("connectors.summary_undeclared", locale=locale, count=extra))
+    if not parts:
+        return t("connectors.summary_plain", locale=locale)
     return " · ".join(parts)
 
 
@@ -478,11 +504,15 @@ def _render_field(
             if not multiple and current in ("", None):
                 # `ui.select` rejects a value that is not part of the options.
                 current = None
+            options = _options_for(field, sources, current)
             widget = ui.select(
-                _options_for(field, sources, current),
+                options,
                 label=label,
                 value=current,
                 multiple=multiple,
+                # A list without declared options (e.g. e-mail recipients) is a
+                # free tag input: the user types the values themselves.
+                new_value_mode="add-unique" if multiple and not options else None,
             ).props("filled dense")
             form._readers[key] = lambda w=widget: w.value
             form._setters[key] = lambda new, w=widget: w.set_value(new)

@@ -312,6 +312,36 @@ def test_summary_parts_describe_the_configuration() -> None:
     assert summary_parts({}, locale="en") == []
 
 
+def test_summary_parts_cover_the_import_and_export_profiles() -> None:
+    imported = {
+        "match_by_key": "sku",
+        "source": "erp",
+        "emit_events": False,
+    }
+    parts = dict(summary_parts(imported, locale="en"))
+    assert parts["connectors.summary_match_key"] == "sku"
+    assert parts["connectors.summary_source"] == "erp"
+
+    exported = {
+        "format": "xlsx",
+        "fields": ["name", "brand"],
+        "locales": ["de", "en"],
+        "options": {"email_to": ["ops@example.com"]},
+    }
+    parts = dict(summary_parts(exported, locale="en"))
+    assert parts["connectors.summary_format"] == "xlsx"
+    assert parts["connectors.summary_fields"] == "2"
+    assert parts["connectors.summary_locales"] == "de, en"
+    assert parts["connectors.summary_recipients"] == "1"
+
+
+def test_summary_lists_undeclared_keys_without_other_values() -> None:
+    """Only-undeclared parameters must not read as "no parameters yet"."""
+    schema = _webhook_schema()
+    summary = summary_text(schema, {"retry_policy": {"max_attempts": 2}}, locale="en")
+    assert summary == "1 not evaluated"
+
+
 def test_summary_text_mentions_undeclared_and_unwired() -> None:
     schema = _webhook_schema()
     assert summary_text(schema, {}, locale="en") == "No parameters yet"
@@ -334,6 +364,24 @@ def test_i18n_keys_of_the_schema_exist() -> None:
         "connector_fields.group_filter",
         "connector_fields.group_coalesce",
         "connector_fields.group_retry",
+        "connector_fields.group_import",
+        "connector_fields.group_export",
+        "connector_fields.json_import.match_by_key.label",
+        "connector_fields.json_import.match_by_key.help",
+        "connector_fields.json_import.match_by_id.label",
+        "connector_fields.json_import.match_by_id.help",
+        "connector_fields.json_import.emit_events.label",
+        "connector_fields.json_import.emit_events.help",
+        "connector_fields.json_import.source.label",
+        "connector_fields.json_import.source.help",
+        "connector_fields.json_export.format.label",
+        "connector_fields.json_export.format.help",
+        "connector_fields.json_export.fields.label",
+        "connector_fields.json_export.fields.help",
+        "connector_fields.json_export.locales.label",
+        "connector_fields.json_export.locales.help",
+        "connector_fields.json_export.options_email_to.label",
+        "connector_fields.json_export.options_email_to.help",
         "connector_fields.webhook.url.label",
         "connector_fields.webhook.url.help",
         "connector_fields.webhook.method.label",

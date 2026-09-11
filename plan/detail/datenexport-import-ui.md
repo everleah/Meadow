@@ -76,6 +76,8 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
 }
 ```
 
+- **Vorgaben aus dem `json_export`-Konnektor (Stage 2b, implementiert):** `format`, `fields`, `locales` und `options.email_to` sind optional — fehlen sie in der Anfrage, zieht der Kern die Werte des ersten aktivierten `json_export`-Konnektors (Profil). Ohne Konnektor bleibt `format` bei `json` und der Worker leitet die Felder wie bisher ab. Analog füllt `POST /imports` `match_by_key`/`match_by_id`/`emit_events`/`source` aus dem `json_import`-Profil.
+
 - **`source.kind`:** Bestimmt die Auflösung der Objektmenge. `selection` = Grid-Auswahl (explizite `object_ids`).
 - **Auflösung:**
   - `collection` → `GET /collections/{id}/members` (nur Mitglieder).
@@ -154,7 +156,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 
 | Entscheidung | Entscheidung |
 |---|---|
-| Connector `json_export` behalten? | **Ja** — technischer Pfad bleibt; UI-Export nutzt strukturierte Job-Parameter. |
+| Connector `json_export` behalten? | **Ja** — als **Profil** für die Vorgaben des technischen Pfads (`format`/`fields`/`locales`/`options.email_to`), implementiert in Stage 2b; der UI-Export nutzt strukturierte Job-Parameter und überschreibt das Profil bei Bedarf. |
 | Dateiablage | **`job_run.result`** — strukturierte `columns`/`rows` (bzw. MEF) dort; Datei beim Download serialisiert. |
 | Format | **CSV + XLSX (openpyxl) + JSON** im MVP. |
 | Sprache | **Mehrere Locale-Spalten** (`<attribut>_<code>`); Fallback-Kette. |

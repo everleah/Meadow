@@ -21,6 +21,13 @@ use crate::error::ApiError;
 
 const TABLE: &str = "connector";
 
+/// Connector type of the webhook outbound connector.
+pub const CONNECTOR_TYPE_WEBHOOK: &str = "webhook";
+/// Connector type whose parameters act as defaults for `POST /imports`.
+pub const CONNECTOR_TYPE_JSON_IMPORT: &str = "json_import";
+/// Connector type whose parameters act as defaults for `POST /exports`.
+pub const CONNECTOR_TYPE_JSON_EXPORT: &str = "json_export";
+
 /// Payload for creating a connector.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateConnector {
@@ -456,6 +463,83 @@ pub async fn update_connector(
     .await;
 
     Ok(Json(connector))
+}
+
+/// Parameters of the first enabled connector of a type, used as job defaults.
+///
+/// The `json_import`/`json_export` types carry no runtime configuration of
+/// their own; they act as a **profile** for the import/export jobs. When more
+/// than one enabled connector of a type exists, the name decides (stable
+/// choice). Returns an empty map when no such connector exists — the caller
+/// then falls back to its own default.
+pub async fn type_defaults(db: &Db, type_key: &str) -> Result<Map<String, Value>, ApiError> {
+    let sql = "
+        SELECT name, parameters FROM connector
+        WHERE type = $type AND enabled = true
+        ORDER BY name
+        LIMIT 1;
+    ";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("type", type_key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let parameters = rows
+        .into_iter()
+        .next()
+        .and_then(|row| row.get("parameters").cloned())
+        .unwrap_or(Value::Null);
+    Ok(parameters.as_object().cloned().unwrap_or_default())
+}
+
+/// Reads a (possibly nested, dotted) default from a defaults map.
+pub fn default_value<'a>(defaults: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut current: Option<&Value> = None;
+    for (index, part) in path.split('.').enumerate() {
+        let node = if index == 0 {
+            defaults.get(part)
+        } else {
+            current
+                .and_then(Value::as_object)
+                .and_then(|map| map.get(part))
+        };
+        current = node;
+        node?;
+    }
+    current
+}
+
+/// Reads a non-empty string default (blank strings count as unset).
+pub fn default_string(defaults: &Map<String, Value>, path: &str) -> Option<String> {
+    default_value(defaults, path)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Reads a boolean default.
+pub fn default_bool(defaults: &Map<String, Value>, path: &str) -> Option<bool> {
+    default_value(defaults, path).and_then(Value::as_bool)
+}
+
+/// Reads a non-empty string-list default.
+pub fn default_string_list(defaults: &Map<String, Value>, path: &str) -> Option<Vec<String>> {
+    let items: Vec<String> = default_value(defaults, path)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if items.is_empty() { None } else { Some(items) }
 }
 
 /// Returns the parameter schema of every connector type.
