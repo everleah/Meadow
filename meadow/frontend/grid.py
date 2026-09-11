@@ -50,6 +50,18 @@ COLUMNS_STORAGE_KEY = "grid_columns"
 # Number of 2-second polls a bulk run may stay `pending` before the progress
 # dialog warns that no worker seems to be connected (~20 s).
 PENDING_WARN_POLLS = 10
+# Review status of the workflow state machine (plan/detail/workflow-freigaben.md);
+# the default target of the `send_for_approval` bulk operation.
+APPROVAL_STATUS = "in_review"
+# Operations that change data and therefore offer the "send for approval
+# afterwards" switch (`change_status`, `send_for_approval` and `delete` do not).
+_APPROVAL_MODIFIER_OPS = (
+    "set_attribute",
+    "clear_attribute",
+    "add_category",
+    "remove_category",
+    "change_parent",
+)
 
 
 def with_header_tooltips(column_defs: list[dict]) -> list[dict]:
@@ -1375,6 +1387,7 @@ async def products_page(request: Request) -> None:
                         "set_attribute": t("grid.op_set_attribute"),
                         "clear_attribute": t("grid.op_clear_attribute"),
                         "change_status": t("grid.op_change_status"),
+                        "send_for_approval": t("grid.op_send_for_approval"),
                         "add_category": t("grid.op_add_category"),
                         "remove_category": t("grid.op_remove_category"),
                         "change_parent": t("grid.op_change_parent"),
@@ -1422,6 +1435,17 @@ async def products_page(request: Request) -> None:
                         .classes("w-full")
                     )
                     bulk_fields["status"] = select
+                elif op == "send_for_approval":
+                    select = (
+                        ui.select(
+                            bulk_status_options,
+                            value=APPROVAL_STATUS,
+                            label=t("grid.approval_status"),
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["approval_status"] = select
                 elif op in ("add_category", "remove_category", "change_parent"):
                     field_key = "category" if op != "change_parent" else "parent"
                     label_key = (
@@ -1452,6 +1476,10 @@ async def products_page(request: Request) -> None:
                         ).tooltip(t("grid.bulk_pick_label").format(label=t(label_key)))
                 elif op == "delete":
                     ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
+                if op in _APPROVAL_MODIFIER_OPS:
+                    bulk_fields["send_for_approval"] = ui.switch(
+                        t("grid.bulk_send_for_approval")
+                    ).tooltip(f"{t('grid.approval_status')}: {APPROVAL_STATUS}")
 
         async def _current_page_ids() -> list[str]:
             """Return the object ids of the rows on the current grid page."""
@@ -1493,12 +1521,20 @@ async def products_page(request: Request) -> None:
             elif op == "change_status":
                 status = bulk_fields.get("status")
                 parameters["status"] = status.value if status else None
+            elif op == "send_for_approval":
+                target = bulk_fields.get("approval_status")
+                parameters["approval_status"] = target.value if target else None
             elif op in ("add_category", "remove_category"):
                 category = bulk_picked.get("category")
                 parameters["category"] = category.get("id") if category else None
             elif op == "change_parent":
                 parent = bulk_picked.get("parent")
                 parameters["parent"] = parent.get("id") if parent else None
+
+            if op in _APPROVAL_MODIFIER_OPS:
+                approval = bulk_fields.get("send_for_approval")
+                if approval is not None and approval.value:
+                    parameters["send_for_approval"] = True
 
             missing = [k for k, v in parameters.items() if not v]
             if missing:
@@ -1577,6 +1613,18 @@ async def products_page(request: Request) -> None:
                             ui.label(f"{r.get('object_id')} · {r.get('error')}").classes(
                                 "text-caption text-negative"
                             )
+                blocked = [r for r in result.get("results", []) if r.get("approval_error")]
+                if blocked:
+                    # The data change is saved; only the workflow transition was
+                    # rejected (e.g. by a `workflow_guard` rule).
+                    with ui.column().classes("w-full mt-2 gap-1"):
+                        ui.label(
+                            t("grid.bulk_approval_blocked").format(count=len(blocked))
+                        ).classes("text-caption text-warning")
+                        for r in blocked:
+                            ui.label(f"{r.get('object_id')} · {r.get('approval_error')}").classes(
+                                "text-caption text-warning"
+                            )
                 with ui.row().classes("w-full justify-end mt-2"):
                     ui.button(t("grid.close"), on_click=report_dialog.close).props("flat")
             report_dialog.open()
@@ -1624,6 +1672,9 @@ async def products_page(request: Request) -> None:
                 ui.input(label=t("grid.replace_with")).props("filled dense").classes("w-full")
             )
             replace_case = ui.switch(t("grid.replace_case_sensitive"))
+            replace_approval = ui.switch(t("grid.bulk_send_for_approval")).tooltip(
+                f"{t('grid.approval_status')}: {APPROVAL_STATUS}"
+            )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=replace_dialog.close).props("flat")
                 ui.button(
@@ -1647,6 +1698,8 @@ async def products_page(request: Request) -> None:
                 "attribute": str(replace_attribute.value or ""),
                 "case_sensitive": bool(replace_case.value),
             }
+            if replace_approval.value:
+                parameters["send_for_approval"] = True
             try:
                 run = await client.post_bulk(
                     token, op="replace_text", object_ids=ids, parameters=parameters

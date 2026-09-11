@@ -932,5 +932,9 @@
   "grid.replace_case_sensitive": "Respecter la casse",
   "grid.replace_start": "Remplacer",
   "grid.replace_search_required": "Veuillez saisir le texte à rechercher.",
-  "grid.replace_summary": "Remplacements : {replacements} · Sans résultat : {skipped}"
+  "grid.replace_summary": "Remplacements : {replacements} · Sans résultat : {skipped}",
+  "grid.op_send_for_approval": "Envoyer pour validation",
+  "grid.approval_status": "Statut cible",
+  "grid.bulk_send_for_approval": "Envoyer ensuite pour validation",
+  "grid.bulk_approval_blocked": "{count} objet(s) : validation bloquée"
 }

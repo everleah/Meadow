@@ -932,5 +932,9 @@
   "grid.replace_case_sensitive": "Groß-/Kleinschreibung beachten",
   "grid.replace_start": "Ersetzen",
   "grid.replace_search_required": "Bitte den Suchtext angeben.",
-  "grid.replace_summary": "Ersetzungen: {replacements} · Ohne Treffer: {skipped}"
+  "grid.replace_summary": "Ersetzungen: {replacements} · Ohne Treffer: {skipped}",
+  "grid.op_send_for_approval": "Zur Freigabe senden",
+  "grid.approval_status": "Zielstatus",
+  "grid.bulk_send_for_approval": "Anschließend zur Freigabe senden",
+  "grid.bulk_approval_blocked": "{count} Objekt(e): Freigabe blockiert"
 }

@@ -932,5 +932,9 @@
   "grid.replace_case_sensitive": "Match case",
   "grid.replace_start": "Replace",
   "grid.replace_search_required": "Please enter the text to search for.",
-  "grid.replace_summary": "Replacements: {replacements} · Without match: {skipped}"
+  "grid.replace_summary": "Replacements: {replacements} · Without match: {skipped}",
+  "grid.op_send_for_approval": "Send for approval",
+  "grid.approval_status": "Target status",
+  "grid.bulk_send_for_approval": "Send for approval afterwards",
+  "grid.bulk_approval_blocked": "{count} object(s): approval blocked"
 }

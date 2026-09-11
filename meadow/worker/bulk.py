@@ -12,6 +12,14 @@ the object's text attributes (a single `attribute` or every non-computed `text`
 attribute plus the convention fields) and reports `changed` (fields) and
 `replacements` (occurrences) per object. Objects without a match get the status
 `skipped`, and the run result carries a `skipped` counter.
+
+`send_for_approval` pushes the selection through the approval workflow by
+transitioning every object into the review status (`parameters.approval_status`,
+default `in_review`). The same transition can be appended to any data-changing
+operation: with `parameters.send_for_approval = true` the worker sends each
+object for approval **after** its change. A change is never rolled back when the
+transition is rejected (a `workflow_guard` rule); the object then carries
+`approval_error` instead of `approval`.
 """
 
 from __future__ import annotations
@@ -31,6 +39,12 @@ _ATTR_OPS = {"set_attribute", "clear_attribute"}
 
 #: Fields that live in `attributes` but are never text-replaceable.
 _NON_TEXT_FIELDS = frozenset({"id", "type", "status", "parent", "key"})
+
+#: Review state of the workflow state machine (Abschnitt 8 / workflow-freigaben.md).
+DEFAULT_APPROVAL_STATUS = "in_review"
+
+#: Operations that must not get an extra approval transition afterwards.
+_NO_APPROVAL_OPS = frozenset({"change_status", "send_for_approval", "delete"})
 
 
 def build_bulk_handler(
@@ -62,12 +76,20 @@ def build_bulk_handler(
         failed = 0
         skipped = 0
         replacements = 0
+        approvals = 0
+        # Opt-in approval transition appended to a data-changing operation.
+        wants_approval = bool(op_params.get("send_for_approval")) and op not in _NO_APPROVAL_OPS
+        approval_status = str(op_params.get("approval_status") or DEFAULT_APPROVAL_STATUS)
         # Shared per-run cache (attribute definitions for `replace_text`).
         cache: dict[str, Any] = {}
         for oid in object_ids:
             record: dict[str, Any] = {"object_id": str(oid), "status": "skipped"}
             try:
                 detail = await _apply(active, core_url, op, str(oid), op_params, cache)
+                if wants_approval and detail.get("changed", 1) != 0:
+                    # `changed: 0` means the operation wrote nothing (no match).
+                    approval = await request_approval(active, core_url, str(oid), approval_status)
+                    detail = {**detail, **approval}
                 if op == "replace_text" and not detail.get("changed"):
                     # No match in this object: report it as skipped, not as a change.
                     record.update(detail)
@@ -78,6 +100,7 @@ def build_bulk_handler(
                         record.update(detail)
                     succeeded += 1
                     replacements += int(detail.get("replacements") or 0)
+                    approvals += 1 if detail.get("approval") else 0
             except Exception as exc:  # noqa: BLE001 - isolate per-object failures
                 record["status"] = "error"
                 record["error"] = str(exc)
@@ -85,11 +108,12 @@ def build_bulk_handler(
             results.append(record)
 
         logger.info(
-            "bulk_operation %s: %d ok, %d skipped, %d failed of %d objects",
+            "bulk_operation %s: %d ok, %d skipped, %d failed, %d approvals of %d objects",
             op,
             succeeded,
             skipped,
             failed,
+            approvals,
             len(object_ids),
         )
         return {
@@ -99,6 +123,7 @@ def build_bulk_handler(
             "skipped": skipped,
             "failed": failed,
             "replacements": replacements,
+            "approvals": approvals,
             "results": results,
         }
 
@@ -119,7 +144,12 @@ async def _apply(
     params: dict[str, Any],
     cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Applies one bulk operation to a single object and returns extra detail."""
+    """Applies one bulk operation to a single object and returns extra detail.
+
+    An operation that may write nothing reports `changed: 0` (only
+    `replace_text` currently does); the caller skips the approval transition in
+    that case.
+    """
     if op in _ATTR_OPS:
         attribute = str(params.get("attribute") or "")
         if not attribute:
@@ -147,9 +177,14 @@ async def _apply(
         status = str(params.get("status") or "")
         if not status:
             raise RuntimeError("`parameters.status` is required")
-        response = await active.patch(f"{core_url}/objects/{object_id}", json={"status": status})
-        response.raise_for_status()
-        return {"status": status}
+        await set_status(active, core_url, object_id, status)
+        # `new_status` (not `status`) keeps the per-object record status intact.
+        return {"new_status": status}
+
+    if op == "send_for_approval":
+        status = str(params.get("approval_status") or DEFAULT_APPROVAL_STATUS)
+        await set_status(active, core_url, object_id, status)
+        return {"approval": status}
 
     if op in ("add_category", "remove_category"):
         category = str(params.get("category") or "")
@@ -188,6 +223,36 @@ async def _apply(
         return {}
 
     raise RuntimeError(f"unknown bulk operation `{op}`")
+
+
+async def set_status(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    status: str,
+) -> None:
+    """Transitions one object into `status` (workflow_guard rules apply)."""
+    response = await active.patch(f"{core_url}/objects/{object_id}", json={"status": status})
+    response.raise_for_status()
+
+
+async def request_approval(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    status: str = DEFAULT_APPROVAL_STATUS,
+) -> dict[str, Any]:
+    """Sends one object for approval and reports the outcome.
+
+    Used as an **appended** step after a data change, so a rejection by a
+    `workflow_guard` rule must not fail the object: the change is already saved
+    and the outcome is reported as `approval_error` instead.
+    """
+    try:
+        await set_status(active, core_url, object_id, status)
+    except Exception as exc:  # noqa: BLE001 - the data change stays applied
+        return {"approval_error": str(exc)}
+    return {"approval": status}
 
 
 async def _find_category_member(

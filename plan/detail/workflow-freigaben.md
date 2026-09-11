@@ -24,3 +24,10 @@ draft → in_review → approved → published → archived
 - **Grundprinzip**: Jedes Objekt besitzt ein Statusfeld (`status`). Der Wert `published` bedeutet global freigegeben.
 - Outbound-Prozesse filtern standardmäßig nach `status: "published"`.
 - **Kanalspezifische Freigaben** (z. B. „freigegeben für Webshop“) werden bei Bedarf später über eine separate Tabelle `release` umgesetzt (object_id, channel, status). Für den Start reicht das einfache Statusfeld.
+
+## Massen-Freigabe (implementiert, Phase 9)
+
+- **Operation `send_for_approval`** der Bulk-API (`POST /objects/bulk`, [api-design.md](api-design.md)): überführt **alle Objekte einer Auswahl** in den Freigabe-Workflow, indem der Status auf `parameters.approval_status` gesetzt wird (Default **`in_review`**, also der Review-Zustand der Zustandsmaschine). Der Übergang läuft über den normalen Schreibpfad des Kerns und wird damit weiterhin von **`workflow_guard`-Regeln** geprüft.
+- **„Bulk-Änderung durch den Freigabe-Workflow schleusen“:** jede datenändernde Operation (`set_attribute`, `clear_attribute`, `add_category`, `remove_category`, `change_parent`, `replace_text`) akzeptiert `parameters.send_for_approval = true`. Der Worker (`meadow/worker/bulk.py`) wendet zuerst die Änderung an und ruft danach `request_approval` auf.
+- **Ablehnung ist nicht destruktiv:** Lehnt eine `workflow_guard`-Regel den Übergang ab, bleibt die Änderung gespeichert (sie wurde bereits committet); der Report weist das Objekt mit `approval_error` aus. Nur bei der Operation `send_for_approval` selbst (keine Datenänderung) gilt eine Ablehnung als Fehler des Objekts.
+- **UI:** Der Bulk-Wizard bietet die Operation „Zur Freigabe senden“ (mit Zielstatus-Feld) und bei allen datenändernden Operationen den Schalter „Anschließend zur Freigabe senden“; Find & Replace hat denselben Schalter. Der Report zählt `approvals` und listet blockierte Freigaben.

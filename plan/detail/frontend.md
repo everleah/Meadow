@@ -124,6 +124,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
    - Bulk-Edit-Wizard (definierter Operationssatz, Ausführung als Hintergrundjob + Report)
    - **(Umgesetzt, Phase 9):** **Sequenzielles Editieren** – ausgewählte Grid-Zeilen nacheinander im Formular bearbeiten (Queue im Session-Speicher, Fortschrittsbanner „Objekt i von n“, „Speichern & weiter“ / „Überspringen“ / Abbrechen), siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) §3.2
    - **(Umgesetzt, Phase 9):** **Find & Replace** – Suchtext in den Textattributen der Auswahl ersetzen (Grid-Dialog, Ausführung als Bulk-Operation `replace_text` mit Report), siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md) §3.2
+   - **(Umgesetzt, Phase 9):** **Send-for-approval** – Auswahl per Operation `send_for_approval` (Zielstatus wählbar, Default `in_review`) in den Freigabe-Workflow überführen, wahlweise **nach** jeder datenändernden Operation („anschließend zur Freigabe senden“), siehe [workflow-freigaben.md](workflow-freigaben.md)
 
 5. **Attributdefinitionen & -gruppen**
    - Verwaltung von Attributgruppen und -definitionen (nur `admin`/`superadmin`)
@@ -173,7 +174,7 @@ Die Oberfläche fokussiert sich in der ersten Version auf die wesentlichen Arbei
 
 - Erweiterte Suche mit Query-Builder („Advanced Search“), gespeicherte Suchen und materialisierte Collections
 - ~~Pinned Attributes und Attribut-Suchleiste im Formular~~ **(umgesetzt, Phase 9: `meadow/frontend/form.py` – Pin-Toggle je Zeile + sticky Seitenleiste, Suchfeld mit Trefferfilter)**
-- ~~Find & Replace~~ **(umgesetzt, Phase 9: Grid-Dialog `find_replace` + Bulk-Operation `replace_text` im Worker)**, ~~sequenzielles Editieren~~ **(umgesetzt, Phase 9: `meadow/frontend/edit_queue.py` + Grid-Button `edit_note` + Fortschrittsbanner im Formular)**, Send-for-approval bei Bulk-Änderungen
+- ~~Find & Replace~~ **(umgesetzt, Phase 9: Grid-Dialog `find_replace` + Bulk-Operation `replace_text` im Worker)**, ~~sequenzielles Editieren~~ **(umgesetzt, Phase 9: `meadow/frontend/edit_queue.py` + Grid-Button `edit_note` + Fortschrittsbanner im Formular)**, ~~Send-for-approval bei Bulk-Änderungen~~ **(umgesetzt, Phase 9: Operation `send_for_approval` + Schalter „anschließend zur Freigabe“)**
 - Kanalspezifische Freigaben (per-Kanal-Vollständigkeit)
 - Starred-Entitäten, Work Areas/Aufgabenwarteschlangen
 - Echtzeit-Updates über Websockets/NATS
