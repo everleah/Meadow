@@ -20,7 +20,6 @@ use crate::db::Db;
 use crate::error::ApiError;
 
 const TABLE: &str = "connector";
-const VALID_CONNECTOR_TYPES: [&str; 3] = ["webhook", "json_import", "json_export"];
 
 /// Payload for creating a connector.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -32,7 +31,9 @@ pub struct CreateConnector {
     pub connector_type: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Free-form parameters (URL, method, headers, filter, coalesce, …).
+    /// Connector parameters. The structure per type is described by
+    /// `GET /connector-types`; declared fields are validated (types, required
+    /// fields, value ranges) and missing defaults are filled in.
     #[serde(default = "default_parameters")]
     pub parameters: Value,
 }
@@ -48,6 +49,12 @@ pub struct UpdateConnector {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub parameters: Option<Value>,
+    /// How `parameters` is applied: `replace` (default, whole object) or
+    /// `merge` (recursive; `null` deletes a key). Letzteres nutzt das
+    /// Konfigurationsformular, damit nicht angezeigte Felder (z. B. maskierte
+    /// Header-Token) erhalten bleiben.
+    #[serde(default)]
+    pub parameters_mode: Option<String>,
 }
 
 /// Query parameters for listing connectors.
@@ -74,6 +81,34 @@ fn default_parameters() -> Value {
 
 fn default_limit() -> u32 {
     100
+}
+
+/// Reads the `parameters` object of a payload.
+fn parameters_object(value: Value) -> Result<Map<String, Value>, ApiError> {
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(ApiError::bad_request("`parameters` must be an object")),
+    }
+}
+
+/// Rejects parameters that violate the type's schema (message names the field path).
+fn ensure_valid_parameters(
+    connector_type: &str,
+    parameters: &Map<String, Value>,
+) -> Result<(), ApiError> {
+    let errors = crate::api::connector_schema::validate(connector_type, parameters);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(errors.join("; ")))
+    }
+}
+
+/// Top-level keys of a submitted `parameters` patch (for the audit trail).
+fn changed_keys(patch: &Map<String, Value>) -> Vec<String> {
+    let mut keys: Vec<String> = patch.keys().cloned().collect();
+    keys.sort();
+    keys
 }
 
 /// Splits a `connector:<key>` path segment and verifies the expected table.
@@ -145,7 +180,7 @@ pub async fn create_connector(
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
-    if !VALID_CONNECTOR_TYPES.contains(&body.connector_type.as_str()) {
+    if !crate::api::connector_schema::is_known_type(&body.connector_type) {
         return Err(ApiError::bad_request(format!(
             "unknown connector type `{}`",
             body.connector_type
@@ -153,11 +188,19 @@ pub async fn create_connector(
     }
     ensure_unique_name(&state.db, &name, None).await?;
 
+    let mut parameters = parameters_object(body.parameters)?;
+    crate::api::connector_schema::normalize(&body.connector_type, &mut parameters);
+    crate::api::connector_schema::apply_defaults(&body.connector_type, &mut parameters);
+    ensure_valid_parameters(&body.connector_type, &parameters)?;
+
     let mut content = Map::new();
     content.insert("name".to_owned(), Value::String(name));
-    content.insert("type".to_owned(), Value::String(body.connector_type));
+    content.insert(
+        "type".to_owned(),
+        Value::String(body.connector_type.clone()),
+    );
     content.insert("enabled".to_owned(), Value::Bool(body.enabled));
-    content.insert("parameters".to_owned(), body.parameters);
+    content.insert("parameters".to_owned(), Value::Object(parameters));
     content.insert("updated_by".to_owned(), Value::String(claims.sub.clone()));
 
     let sql = "
@@ -191,7 +234,10 @@ pub async fn create_connector(
             object_id: Some(&connector_id),
             from: None,
             to: None,
-            metadata: Some(json!({ "name": connector.get("name") })),
+            metadata: Some(json!({
+                "name": connector.get("name"),
+                "type": connector.get("type")
+            })),
         },
     )
     .await;
@@ -310,7 +356,7 @@ pub async fn update_connector(
         changes.insert("name".to_owned(), Value::String(name));
     }
     if let Some(connector_type) = body.connector_type {
-        if !VALID_CONNECTOR_TYPES.contains(&connector_type.as_str()) {
+        if !crate::api::connector_schema::is_known_type(&connector_type) {
             return Err(ApiError::bad_request(format!(
                 "unknown connector type `{connector_type}`"
             )));
@@ -320,17 +366,58 @@ pub async fn update_connector(
     if let Some(enabled) = body.enabled {
         changes.insert("enabled".to_owned(), Value::Bool(enabled));
     }
+
+    let effective_type = changes
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| current.get("type").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let current_parameters: Map<String, Value> = current
+        .get("parameters")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut audit_keys: Vec<String> = Vec::new();
     if let Some(parameters) = body.parameters {
-        changes.insert("parameters".to_owned(), parameters);
+        let patch = parameters_object(parameters)?;
+        audit_keys = changed_keys(&patch);
+        let mut merged = match body.parameters_mode.as_deref() {
+            None | Some("replace") => patch,
+            Some("merge") => {
+                crate::api::connector_schema::merge_parameters(&current_parameters, &patch)
+            }
+            Some(other) => {
+                return Err(ApiError::bad_request(format!(
+                    "unknown parameters_mode `{other}` (expected `replace` or `merge`)"
+                )));
+            }
+        };
+        crate::api::connector_schema::normalize(&effective_type, &mut merged);
+        ensure_valid_parameters(&effective_type, &merged)?;
+        changes.insert("parameters".to_owned(), Value::Object(merged));
+    } else if changes.contains_key("type") {
+        // A type switch alone must not leave a configuration behind the new
+        // type's schema rejects.
+        ensure_valid_parameters(&effective_type, &current_parameters)?;
     }
 
     if changes.is_empty() {
         return Ok(Json(current));
     }
 
+    // `parameters` is written with an explicit `SET`: a `MERGE` would deep-merge
+    // into the stored object, so keys deleted by the caller would survive.
+    let stored_parameters = match changes.remove("parameters") {
+        Some(Value::Object(merged)) => merged,
+        _ => current_parameters,
+    };
+
     let sql = "
         LET $c = type::record('connector', $key);
         UPDATE $c MERGE $changes;
+        UPDATE $c SET parameters = $parameters;
         UPDATE $c SET updated_at = time::now(), updated_by = $user;
         SELECT * FROM $c;
     ";
@@ -340,10 +427,11 @@ pub async fn update_connector(
         .query(sql)
         .bind(("key", key))
         .bind(("changes", Value::Object(changes)))
+        .bind(("parameters", Value::Object(stored_parameters)))
         .bind(("user", claims.sub.clone()))
         .await?
         .check()?;
-    let rows: Vec<Value> = response.take(3)?;
+    let rows: Vec<Value> = response.take(4)?;
     let connector = rows
         .into_iter()
         .next()
@@ -357,12 +445,39 @@ pub async fn update_connector(
             object_id: Some(&id),
             from: None,
             to: None,
-            metadata: None,
+            // Names only — never the values (headers may carry tokens).
+            metadata: Some(json!({
+                "name": connector.get("name"),
+                "type": connector.get("type"),
+                "changed_keys": audit_keys
+            })),
         },
     )
     .await;
 
     Ok(Json(connector))
+}
+
+/// Returns the parameter schema of every connector type.
+///
+/// The admin UI renders its configuration form from this description; other
+/// clients (MCP, CLI) use it for validation hints. Open to the machine-to-machine
+/// API key and admins.
+#[utoipa::path(
+    get,
+    path = "/connector-types",
+    responses(
+        (status = 200, description = "Parameter schema per connector type", body = Vec<Value>),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn list_connector_types(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    Ok(Json(crate::api::connector_schema::schema_document()))
 }
 
 /// Deletes a connector (admin only).
@@ -428,9 +543,49 @@ mod tests {
 
     #[test]
     fn rejects_unknown_connector_types() {
-        assert!(VALID_CONNECTOR_TYPES.contains(&"webhook"));
-        assert!(VALID_CONNECTOR_TYPES.contains(&"json_import"));
-        assert!(VALID_CONNECTOR_TYPES.contains(&"json_export"));
-        assert!(!VALID_CONNECTOR_TYPES.contains(&"ftp"));
+        assert!(crate::api::connector_schema::is_known_type("webhook"));
+        assert!(crate::api::connector_schema::is_known_type("json_import"));
+        assert!(crate::api::connector_schema::is_known_type("json_export"));
+        assert!(!crate::api::connector_schema::is_known_type("ftp"));
+    }
+
+    #[test]
+    fn parameters_must_be_an_object() {
+        assert!(parameters_object(json!({})).is_ok());
+        assert!(parameters_object(Value::Array(Vec::new())).is_err());
+    }
+
+    #[test]
+    fn invalid_parameters_are_reported_with_their_path() {
+        let error = ensure_valid_parameters("webhook", &Map::new()).expect_err("missing url");
+        assert_eq!(error.message(), "parameters.url: is required");
+
+        let mut valid = Map::new();
+        valid.insert(
+            "url".to_owned(),
+            Value::String("https://x.example".to_owned()),
+        );
+        assert!(ensure_valid_parameters("webhook", &valid).is_ok());
+    }
+
+    #[test]
+    fn parameter_modes_are_merged_or_replaced() {
+        let current: Map<String, Value> = json!({
+            "url": "https://x.example",
+            "headers": {"Authorization": "Bearer token"}
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+        let patch: Map<String, Value> = json!({"headers": {"X-Extra": "1"}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+
+        let merged = crate::api::connector_schema::merge_parameters(&current, &patch);
+        assert_eq!(
+            merged.get("headers"),
+            Some(&json!({"Authorization": "Bearer token", "X-Extra": "1"}))
+        );
     }
 }

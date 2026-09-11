@@ -4,6 +4,7 @@ pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
 pub mod config;
+pub mod connector_schema;
 pub mod connectors;
 pub mod enum_sets;
 pub mod exports;
@@ -47,6 +48,7 @@ use utoipa::OpenApi;
         connectors::create_connector,
         connectors::get_connector,
         connectors::list_connectors,
+        connectors::list_connector_types,
         connectors::update_connector,
         connectors::delete_connector,
         exports::create_export,

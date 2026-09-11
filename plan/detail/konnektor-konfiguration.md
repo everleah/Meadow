@@ -2,15 +2,34 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zu Phase 6/7 (Konnektoren & Admin-UI)
-- **Stand:** Plan / Entwurf (2026-09-11) — noch nicht umgesetzt. Umsetzungsreif für **Stage 1** (Schema + Validierung + Formular für `webhook`); Stage 2/3 sind skizziert und offen.
+- **Stand:** **Stage 1 umgesetzt** (2026-09-11) — Schema, Servervalidierung, `parameters_mode: merge`, `GET /connector-types` und das Konfigurationsformular sind im Betrieb verifiziert. Stage 2/3 sind skizziert und offen; die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
 
-**Getroffene Entscheidungen (Vorschlag, zur Bestätigung):**
+**Getroffene Entscheidungen (umgesetzt):**
 
 - Das Parameter-Schema ist **Server-Vertrag** (`GET /connector-types`, Rust-Konstante) — nicht Frontend-Wissen. Damit nutzen UI, MCP/CLI und Validierung dieselbe Quelle.
 - **Kein neues Rollenmodell:** `/connectors` bleibt `admin`/`superadmin` (Schreiben) bzw. `X-Api-Key` (Worker, Lesen).
 - **JSON bleibt** als Expertenmodus erhalten (Tab „JSON"), inklusive nicht deklarierter Schlüssel. Nichts wird automatisch gelöscht (Abwärtskompatibilität).
 - **`PATCH /connectors/{id}`** bekommt optional `parameters_mode: "merge"` (Default bleibt `replace`), damit Formulare nur geänderte Felder senden und maskierte Geheimnisse nichts überschreiben.
 - **Regel:** Jeder im Schema deklarierte Parameter wird ausgewertet, und jeder ausgewertete Parameter steht im Schema (sonst ist das Formular Kosmetik).
+
+## 0. Umsetzungsstand (Stage 1, 2026-09-11)
+
+| Baustein | Ort |
+|---|---|
+| Schema, `validate`, `normalize`, `apply_defaults`, `merge_parameters` | `crates/pim-core/src/api/connector_schema.rs` |
+| Endpunkt `GET /connector-types` | `crates/pim-core/src/api/connectors.rs::list_connector_types` (Route in `app.rs`, OpenAPI in `api/mod.rs`) |
+| Validierung + Defaults + `parameters_mode` in `POST`/`PATCH /connectors` | `crates/pim-core/src/api/connectors.rs` |
+| Formular-Renderer (Schema ↔ Werte ↔ Patch) | `meadow/frontend/connector_form.py` |
+| Dialog, Tabs, Zusammenfassungsspalte | `meadow/frontend/connectors.py` |
+| Tests | `cargo test` (Validator/Merge), `tests/test_connector_form.py`, `tests/test_connector_form_state.py` (Patch-Baseline), Locale-Parität en/de/fr |
+
+**Abweichungen vom ursprünglichen Entwurf (bewusst):**
+
+- `retry_policy` und ein Payload-Modus stehen **nicht** im Schema (sie sind nicht verdrahtet, siehe Abschnitt 7) — sie erscheinen im Formular nur als „nicht deklarierte Parameter" (Hinweis mit Anzahl).
+- `json_import`/`json_export` liefern `wired: false`, **keine** Felder und einen Hinweis-Key (`note_key: connector_fields.unwired`); der Dialog zeigt dort statt des Formulars den Hinweis (Abschnitt 7).
+- Die Audit-Metadaten nennen `{name, type, changed_keys}` — **ohne Werte** (Abschnitt 9).
+- Beim Anlegen füllt der Kern fehlende deklarierte Felder mit ihren Defaults auf (`apply_defaults`); `normalize` trimmt Strings, bereinigt Listen und entfernt `null`-Werte.
+- Unbekannte Schlüssel bleiben erlaubt und werden von `merge` **nicht** entfernt; ein unbekannter `parameters_mode` quittiert der Kern mit `400`.
 
 ## 1. Ausgangslage & Problem
 
@@ -57,62 +76,40 @@ Name            [ Middleware Webhook        ]   Typ  [ Webhook           ]
    Unbekannte Parameter (1): "retry_policy" – wird nicht ausgewertet (JSON-Tab)
 ```
 
-Die Liste zeigt statt nur „Typ" zusätzlich eine **Zusammenfassung** (z. B. `https://middleware… · Filter: 4 Event-Typen · gebündelt 30 s`), damit erkennbar ist, was ein Konnektor tut.
+Die Liste zeigt statt nur „Typ" zusätzlich eine **Zusammenfassung** (z. B. `Target: https://middleware… · Filter: 4 Event-Typen · Batched: 30 s · 1 not evaluated`), damit erkennbar ist, was ein Konnektor tut.
 
-## 4. Parameter-Schema (Kern-Vertrag)
+## 4. Parameter-Schema (Kern-Vertrag) (umgesetzt)
 
-**Neuer Endpunkt:** `GET /connector-types` (admin oder `X-Api-Key`, read-only) liefert je Typ die Beschreibung des Parameterformulars. Damit entfällt die doppelte Typ-Liste im Frontend.
+**Endpunkt:** `GET /connector-types` (admin oder `X-Api-Key`, read-only) liefert je Typ die Beschreibung des Parameterformulars. Damit entfällt die doppelte Typ-Liste im Frontend (`CONNECTOR_TYPES` ist dort entfernt). Die Antwort der laufenden Installation:
 
 ```json
 [
-  {
-    "type": "webhook",
-    "label_key": "connectors.type_webhook",
-    "direction": "outbound",
-    "wired": true,
-    "groups": [
-      {
-        "key": "target",
-        "label_key": "connector_fields.group_target",
-        "fields": [
-          {
-            "key": "url",
-            "type": "string",
-            "format": "url",
-            "required": true,
-            "widget": "text",
-            "label_key": "connector_fields.webhook.url.label",
-            "help_key": "connector_fields.webhook.url.help"
-          },
-          {
-            "key": "method",
-            "type": "string",
-            "default": "POST",
-            "widget": "select",
-            "enum": ["POST", "PUT", "PATCH"]
-          }
-        ]
-      },
-      {
-        "key": "coalesce",
-        "label_key": "connector_fields.group_coalesce",
-        "fields": [
-          { "key": "coalesce.enabled", "type": "boolean", "default": false, "widget": "switch" },
-          {
-            "key": "coalesce.window_seconds",
-            "type": "number",
-            "default": 30,
-            "minimum": 1,
-            "maximum": 3600,
-            "widget": "number",
-            "show_if": { "key": "coalesce.enabled", "equals": true }
-          }
-        ]
-      }
-    ]
-  }
+  { "type": "webhook", "label_key": "connectors.type_webhook", "direction": "outbound", "wired": true, "groups": [ /* target, headers, filter, coalesce */ ] },
+  { "type": "json_import", "label_key": "connectors.type_json_import", "direction": "inbound", "wired": false, "groups": [], "note_key": "connector_fields.unwired" },
+  { "type": "json_export", "label_key": "connectors.type_json_export", "direction": "outbound", "wired": false, "groups": [], "note_key": "connector_fields.unwired" }
 ]
 ```
+
+Ausschnitt `webhook.target` (alle Felder der Installation):
+
+```json
+{
+  "key": "target",
+  "label_key": "connector_fields.group_target",
+  "fields": [
+    { "key": "url", "type": "string", "widget": "text", "required": true,
+      "label_key": "connector_fields.webhook.url.label", "help_key": "connector_fields.webhook.url.help" },
+    { "key": "method", "type": "string", "widget": "select", "default": "POST", "enum": ["POST", "PUT", "PATCH"],
+      "label_key": "connector_fields.webhook.method.label" },
+    { "key": "timeout_s", "type": "number", "widget": "number", "default": 30.0, "minimum": 1.0, "maximum": 600.0,
+      "label_key": "connector_fields.webhook.timeout_s.label", "help_key": "connector_fields.webhook.timeout_s.help" }
+  ]
+}
+```
+
+Weitere deklarierte Felder: `headers` (`string_map`, `widget: key_value`, `secret: true`), `filter.event_types` (`string_list`, `enum` aus den Kern-Konstanten in `event.rs`), `filter.object_types` / `filter.attribute_changes` (`string_list`, `options_source: object_types` / `attribute_names`), `coalesce.enabled` (`boolean`, `switch`) und `coalesce.window_seconds` (`number`, `show_if: {"key": "coalesce.enabled", "equals": true}`). `format`/`pattern`/`placeholder` sind im Beispiel oben nur skizziert; der Kern liefert sie (noch) nicht, das Formular nutzt sie nicht.
+
+**Typ-Ebene:** `type`, `label_key`, `direction` (`inbound`/`outbound`), `wired`, `groups`; `note_key` nur bei nicht verdrahteten Typen (`wired: false` → der Dialog zeigt einen Hinweis statt des Formulars).
 
 **Feldattribute (verbindlich):**
 
@@ -126,10 +123,11 @@ Die Liste zeigt statt nur „Typ" zusätzlich eine **Zusammenfassung** (z. B. `h
 | `enum` | feste Auswahl (z. B. Event-Typen aus den Kern-Konstanten `event.rs`) |
 | `options_source` | datengetriebene Auswahl, vom Frontend aufgelöst: `object_types` (`GET /object-types`), `attribute_names` (`GET /attribute-definitions`), `units`, später `saved_searches` |
 | `label_key` / `help_key` | **i18n-Schlüssel**, keine Texte (Sprachen en/de/fr bleiben in den Locale-Dateien; andere Clients zeigen den `key`) |
-| `placeholder`, `minimum`, `maximum`, `pattern`, `format` | Eingabehilfen und Servervalidierung |
+| `minimum`, `maximum` | Wertebereich für `number`/`integer` (Servervalidierung **und** Eingabegrenze) |
 | `secret` | Wert maskieren (`widget: password`), „leer = unverändert" |
-| `show_if` | bedingte Sichtbarkeit (`{"key": …, "equals"|"in": …}`); **einfache** Form, kein vollständiges JSON-Schema |
-| `deprecated` | Feld wird weiterhin gelesen, aber im Formular als „veraltet" markiert |
+| `show_if` | bedingte Sichtbarkeit (`{"key": …, "equals": …}`); **einfache** Form, kein vollständiges JSON-Schema |
+
+**Noch nicht ausgeliefert** (im Entwurf vorgesehen, der Kern emittiert und das Formular nutzt sie nicht): `placeholder`, `pattern`, `format`, `show_if.in` und `deprecated`. Sie werden erst mit einem konkreten Bedarf ergänzt; bis dahin gilt die Regel aus der Einleitung (deklariert = ausgewertet).
 
 **Wo das Schema lebt:** als Rust-Konstante im Kern (neues Modul `src/api/connector_schema.rs`, ausgeliefert über `connectors.rs`). Verworfen wurden:
 
@@ -144,37 +142,39 @@ Die Liste zeigt statt nur „Typ" zusätzlich eine **Zusammenfassung** (z. B. `h
 | `json_import` | **Stage 2:** `match_by_key`, `match_by_id`, `emit_events`, `source` (als Job-Defaults) | heute `POST /imports`-Query-Parameter / Job-Parameter (`meadow/worker/imports.py`) |
 | `json_export` | **Stage 2:** `format`, `fields`, `locales`, `options.email_to` (als Job-Defaults) | heute Job-Parameter (`meadow/worker/exports.py`, `/export`-Wizard) |
 
-## 5. Validierung & Schreib-Semantik
+## 5. Validierung & Schreib-Semantik (umgesetzt)
 
-**Kern validiert `parameters` gegen das Schema** (bei `POST` und `PATCH`):
+**Kern validiert `parameters` gegen das Schema** (bei `POST` und `PATCH`, auch wenn nur `type` geändert wird):
 
-- **Typen:** `string_list` muss eine Liste von Strings sein (der Worker akzeptiert heute auch kommagetrennte Strings — das bleibt als Kulanz, das Schema schreibt die Liste vor), `number` numerisch, `boolean` boolesch, `string_map` Objekt mit String-Werten.
-- **Pflichtfelder** (`url`) → `400` mit Feldpfad in der Meldung: `parameters.url: must not be empty`. Mehrere Fehler werden gesammelt (`; `-getrennt). `ApiError` bleibt damit unverändert einfach; eine strukturierte `fields`-Map ist optionale Ausbaustufe (das Formular validiert vorab mit demselben Schema und markiert Felder selbst).
-- **Wertebereiche:** `minimum`/`maximum` für Zahlen, `enum` für erlaubte Werte, `pattern` für Strings.
-- **Unbekannte Schlüssel:** bleiben **erlaubt** (Abwärtskompatibilität, Expertenmodus) — aber sie werden im Formular als „nicht deklariert" gelistet, damit nichts stillschweigend wirkungslos ist. Optionaler späterer Schalter `strict_parameters` (Ablehnung unbekannter Schlüssel) für aufgeräumte Installationen.
-- **Typwechsel:** Beim Wechsel des Konnektor-Typs passt das Formular die Werte an und **warnt**; ein Schalter „Parameter auf die Vorgaben des neuen Typs zurücksetzen" (Default: an) räumt Altwerte auf, sonst bleiben sie als unbekannte Schlüssel erhalten.
+- **Typen:** `string_list` muss eine Liste von Strings sein (der Worker akzeptiert heute auch kommagetrennte Strings — das bleibt als Kulanz, das Schema schreibt die Liste vor), `number` numerisch, `boolean` boolesch, `string_map` Objekt mit String-Werten. Ein Zwischenknoten, der kein Objekt ist (`parameters.filter = "x"`), wird als `parameters.filter: must be an object` gemeldet.
+- **Pflichtfelder** (`url`) → `400`, Meldung mit Feldpfad: `parameters.url: is required` bzw. bei leerem String `parameters.url: must not be empty`. Weitere Meldungen: `must be a number`, `must be an integer`, `must be a boolean`, `must be a list of strings`, `must be an object of strings`, `must be one of POST, PUT, PATCH`, `must be at least 1`, `must be at most 600`. Mehrere Fehler werden gesammelt (`; `-getrennt, dedupliziert); `ApiError` bleibt unverändert einfach. Das Formular prüft dieselben Regeln vorab und zeigt die Felder im Klartext, der Server entscheidet.
+- **Wertebereiche:** `minimum`/`maximum` für Zahlen, `enum` für erlaubte Werte (auch elementweise bei Listen, z. B. `filter.event_types`).
+- **Unbekannte Schlüssel:** bleiben **erlaubt** (Abwärtskompatibilität, Expertenmodus) — aber sie werden im Formular als „nicht deklariert" gelistet (Zähler in der Listenspalte), damit nichts stillschweigend wirkungslos ist. Optionaler späterer Schalter `strict_parameters` (Ablehnung unbekannter Schlüssel) für aufgeräumte Installationen.
+- **Normalisierung & Defaults** (`normalize`, `apply_defaults`): Strings werden getrimmt, leere Listen bereinigt, `null`-Werte entfernt; beim **Anlegen** füllt der Kern fehlende deklarierte Felder mit ihren Defaults auf, beim **Bearbeiten** nicht (sonst käme jeder PATCH als Vollersetzung daher).
+- **Typwechsel:** Beim Wechsel des Konnektor-Typs validiert der Kern die dann **gültigen** Parameter (die gespeicherten, wenn nur `type` mitgeschickt wird). Das Formular setzt die Werte auf die Vorgaben des neuen Typs zurück (Schalter „Parameter auf die Vorgaben des neuen Typs zurücksetzen"); ohne Reset bleibt der Altstand und erscheint als nicht deklariert.
 
-**`PATCH`-Semantik (neu, wichtig für Formulare und Geheimnisse):**
+**`PATCH`-Semantik (wichtig für Formulare und Geheimnisse):**
 
 ```json
 { "parameters": { "coalesce": { "enabled": true } }, "parameters_mode": "merge" }
 ```
 
 - `replace` (**Default**, unverändert): `parameters` wird vollständig ersetzt — der richtige Modus für den JSON-Editor.
-- `merge`: Punktnotation wird **rekursiv** zusammengeführt, `null` **löscht** einen Schlüssel. Grund: das Formular soll maskierte Geheimnisse und nicht angezeigte Felder nicht überschreiben. Die Löschung muss explizit implementiert werden (SurrealDB `MERGE` setzt `NULL` statt `NONE` — Muster wie `remove_attributes` in `api/objects.rs`).
+- `merge`: Punktnotation wird **rekursiv** zusammengeführt, `null` **löscht** einen Schlüssel. Grund: das Formular soll maskierte Geheimnisse und nicht angezeigte Felder nicht überschreiben. Die Löschung ist **explizit** implementiert (SurrealDB `MERGE` ist ein Deep-Merge und entfernt keine Schlüssel — die Parameter werden nach dem Merge deshalb mit einem vollständigen `SET` geschrieben).
 
-## 6. Frontend
+## 6. Frontend (umgesetzt)
 
-**Neues Modul `meadow/frontend/connector_form.py`:** rendert ein Schema zu NiceGUI-Widgets und liest sie zurück (Schema → Formular → `parameters`). Wiederverwendet werden die bestehenden Muster: `ui.select`/`ui.switch`/`ui.number` wie im Formular, Key-Wert-Zeilen analog zum Kanten-Editor (`form.py::open_edge_editor` mit typspezifischen Eingaben), Mehrfachauswahl wie bei `applicable_types`.
+**Modul `meadow/frontend/connector_form.py`:** rendert ein Schema zu NiceGUI-Widgets und liest sie zurück (Schema → Formular → `parameters`). Wiederverwendet werden die bestehenden Muster: `ui.select`/`ui.switch`/`ui.number` wie im Formular, Key-Wert-Zeilen analog zum Kanten-Editor (`form.py::open_edge_editor` mit typspezifischen Eingaben), Mehrfachauswahl wie bei `applicable_types`. Die Patch-Bildung (`build_patch`) vergleicht die Formularwerte gegen die Projektion der **gespeicherten** Parameter; nicht deklarierte Schlüssel werden nie gesendet und nie entfernt.
 
 - **Bereiche** als aufklappbare, farbige `ui.expansion` (Muster wie im Produktformular), Reihenfolge und Gruppierung aus dem Schema.
-- **Bedingte Felder** über `show_if` (Neuzeichnen des betroffenen Bereichs bei Änderung).
-- **Inline-Validierung** mit demselben Schema (Pflichtfeld, Bereich, Auswahl) + Serverfehler als Meldung am Dialog.
-- **Dynamische Optionsquellen** (`object_types`, `attribute_names`) werden einmal pro Seitenaufruf geladen und im Select angeboten; unbekannte gespeicherte Werte werden angehängt (Muster: Enum-Editor — verhindert `Invalid value` in `ui.select`).
-- **Tabs „Formular" / „JSON":** JSON zeigt das vollständige `parameters`-Objekt (inkl. unbekannter Schlüssel) und ist der Rückfall für Sonderfälle; Umschalten übernimmt die Werte in beide Richtungen. Unbekannte Schlüssel werden im Formular-Tab als Hinweis mit Anzahl gelistet.
-- **Vorschau/Test:** Stage 2 (Abschnitt 8). Bis dahin: „Speichern" setzt `parameters_mode: "merge"` mit den geänderten Feldern.
-- **Liste:** zusätzliche Spalte „Konfiguration" (Zusammenfassung), Typ-Spalte mit Label aus dem Schema, weiterhin `enabled`-Badge und `type`-Filter (Liste der Typen aus `GET /connector-types` statt der lokalen Konstante).
-- **i18n:** neue Keys `connector_fields.<typ>.<pfad>.label|help` plus `connector_form.*` (Tab-Titel, Hinweise, „unbekannte Parameter", Bestätigungen) in en/de/fr — Parität wie gehabt.
+- **Bedingte Felder** über `show_if` (unsichtbare Felder werden ausgeblendet, aber nicht mitgesendet; der Wert bleibt in den Formularwerten erhalten).
+- **Inline-Validierung** mit demselben Schema (Pflichtfeld, Bereich, Auswahl elementweise bei Listen) + Serverfehler als Meldung am Dialog.
+- **Dynamische Optionsquellen** (`object_types`, `attribute_names`) werden über die API geladen und angeboten; unbekannte gespeicherte Werte werden angehängt (Muster: Enum-Editor — verhindert `Invalid value` in `ui.select`). Leere Einzelauswahlen werden als „nicht gesetzt" (`None`) behandelt, nicht als `""`.
+- **Tabs „Formular" / „JSON":** JSON zeigt das vollständige `parameters`-Objekt (inkl. unbekannter Schlüssel) und ist der Rückfall für Sonderfälle; Umschalten übernimmt die Werte in beide Richtungen (JSON → Formular: Werte übernehmen, **ohne** die Patch-Baseline neu zu erfassen; Formular → JSON: hübsch formatiert aus den aktuellen Formularwerten). Unbekannte Schlüssel werden im Formular-Tab als Hinweis mit Anzahl gelistet (Listenspalte: `· 1 not evaluated`).
+- **Vorschau/Test:** Stage 2 (Abschnitt 8). Bis dahin: „Speichern" setzt `parameters_mode: "merge"` mit den geänderten Feldern; nur der JSON-Tab (und nicht verdrahtete Typen) sendet `replace`.
+- **Liste:** zusätzliche Spalte „Konfiguration" (Zusammenfassung via `summary_text`, z. B. `Target: … · Filter: 2 event types · Batched: 30 s · 1 not evaluated`), Typ-Spalte mit Label aus dem Schema, weiterhin `enabled`-Badge und `type`-Filter (Liste der Typen aus `GET /connector-types` statt der lokalen Konstante).
+- **Bedienung:** Doppelklick auf die Zeile löst den Datensatz über die **ID** aus der geladenen Liste auf (die AG-Grid-Zeile enthält nur Anzeigefelder).
+- **i18n:** Keys `connector_fields.<typ>.<pfad>.label|help` plus `connector_form.*` (Tab-Titel, Hinweise, „unbekannte Parameter", Bestätigungen) in en/de/fr — Parität wie gehabt.
 
 ## 7. Konsistenz Schema ↔ Verbraucher
 
@@ -197,25 +197,25 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 - **Geheimnisse:** `secret: true` → Eingabe maskiert, Anzeige als `•••`, „leer lassen = unverändert" (durch `parameters_mode: merge` technisch abgesichert). Header-Tokens liegen wie bisher im Klartext in SurrealDB — eine getrennte Secret-Ablage (Objektstorage/Vault) ist **nicht** MVP, aber als Stage 3 notiert.
 - **Audit:** bestehende Einträge `connector_created`/`connector_updated`/`connector_deleted` bleiben; die Metadaten nennen künftig `{name, type, changed_keys}` — **ohne Werte**, damit Tokens nicht im Audit-Log landen.
 
-## 10. Auswirkungen auf bestehende Dokumente & Endpunkte
+## 10. Auswirkungen auf bestehende Dokumente & Endpunkte (umgesetzt)
 
 | Stelle | Änderung |
 |---|---|
-| `api-design.md` | neuer Endpunkt `GET /connector-types` (geplant) + `PATCH /connectors/{id}` mit `parameters_mode` |
-| `integration-eventsystem.md` | Verweis auf dieses Dokument; `retry_policy`/Payload im Beispiel als **nicht verdrahtet** markieren; Parameterliste je Typ verlinken |
-| `frontend.md` (Punkt 13) | Formular + Expertenmodus + Zusammenfassungsspalte als geplant/umgesetzt nachtragen |
+| `api-design.md` | `GET /connector-types` und `PATCH /connectors/{id}` mit `parameters_mode` sind in der Endpunkt-Tabelle dokumentiert |
+| `integration-eventsystem.md` | Verweis auf dieses Dokument; `retry_policy`/Payload als **nicht verdrahtet** markiert (nicht im Schema, nur als „nicht deklariert"-Hinweis im Formular); Parameterliste je Typ verlinkt |
+| `frontend.md` (Punkt 13) | Formular, Expertenmodus JSON, Zusammenfassungsspalte und das Modul `connector_form.py` sind nachgetragen |
 | `datenmodell.md` (`connector.parameters`) | Hinweis: Struktur ist je Typ durch das Schema beschrieben; unbekannte Schlüssel bleiben erhalten |
 | `datenexport-import-ui.md` | Abgrenzung: Wizards bleiben der **Anwenderpfad**; Konnektor-Formulare konfigurieren **Defaults/Profile** für den technischen Pfad |
 | `meadow/AGENTS.md`, `crates/AGENTS.md` | Modul `connector_form.py` bzw. `connector_schema.rs` + Regel „Schema ↔ Verbraucher" |
 
 ## 11. Implementierungsschritte
 
-**Stage 1 — Schema, Validierung, Formular (MVP):**
+**Stage 1 — Schema, Validierung, Formular (MVP) — umgesetzt:**
 
-1. **Kern:** `src/api/connector_schema.rs` (Schema-Konstante für `webhook`, inkl. Gruppen/Feldern/i18n-Keys), `GET /connector-types` (admin/`X-Api-Key`), Validierung der `parameters` in `create_connector`/`update_connector` (Typen, Pflicht, Bereiche, Sammelmeldung mit Feldpfad), `parameters_mode: merge` inkl. `null` = löschen. Unit-Tests für Validator und Merge.
-2. **Frontend:** `connector_form.py` (Schema → Widgets, `show_if`, dynamische Optionsquellen, Tabs Formular/JSON, Hinweis auf unbekannte Parameter), Dialog in `connectors.py` umbauen, `api.py` um `list_connector_types` erweitern, `CONNECTOR_TYPES` aus dem Frontend entfernen, Zusammenfassungsspalte, i18n-Keys in en/de/fr.
-3. **Doku:** dieses Dokument auf „umgesetzt (Stage 1)" setzen, `frontend.md`, `api-design.md`, `integration-eventsystem.md`, DOX-Dateien.
-4. **Tests:** pytest für den Formular-Renderer (Schema → Werte → Payload, `show_if`, unbekannte Schlüssel), API-Roundtrip mit gemocktem Kern, i18n-Parität; Browser-Verifikation (Konnektor anlegen/bearbeiten, Fehlermeldung bei fehlender URL, Wechsel Formular ↔ JSON).
+1. **Kern (umgesetzt):** `src/api/connector_schema.rs` (Schema-Konstante für `webhook`, inkl. Gruppen/Feldern/i18n-Keys), `GET /connector-types` (admin/`X-Api-Key`), Validierung der `parameters` in `create_connector`/`update_connector` (Typen, Pflicht, Bereiche, Sammelmeldung mit Feldpfad), `parameters_mode: merge` inkl. `null` = löschen. Unit-Tests für Validator und Merge.
+2. **Frontend (umgesetzt):** `connector_form.py` (Schema → Widgets, `show_if`, dynamische Optionsquellen, Tabs Formular/JSON, Hinweis auf unbekannte Parameter), Dialog in `connectors.py` umgebaut, `api.py` um `list_connector_types` erweitert, `CONNECTOR_TYPES` aus dem Frontend entfernt, Zusammenfassungsspalte, i18n-Keys in en/de/fr.
+3. **Doku (umgesetzt):** dieses Dokument auf „umgesetzt (Stage 1)" gesetzt, `frontend.md`, `api-design.md`, `integration-eventsystem.md`, DOX-Dateien.
+4. **Tests (umgesetzt):** pytest für den Formular-Renderer (Schema → Werte → Payload, `show_if`, unbekannte Schlüssel, Patch-Baseline) und i18n-Parität; Browser-Verifikation (Konnektor anlegen/bearbeiten, Fehlermeldung bei fehlender URL, Wechsel Formular ↔ JSON, Merge erhält nicht deklarierte Schlüssel). Der API-Roundtrip mit gemocktem Kern entfällt: die Formularlogik ist als reine Funktionen abgedeckt, der Live-Roundtrip wurde gegen den laufenden Kern geprüft.
 
 **Stage 2 — Konsistenz & Test:**
 
@@ -230,16 +230,19 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 ## 12. Testfälle
 
-- `GET /connector-types` liefert das `webhook`-Schema inkl. Gruppen, `required`, `enum` und `show_if`.
-- `POST /connectors` ohne `url` → `400` mit `parameters.url` in der Meldung; mit ungültigem `method` → `400`; gültig → `201`.
-- `PATCH` mit `parameters_mode: merge` ändert nur den genannten Pfad (`coalesce.enabled`) und lässt `headers`/unbekannte Schlüssel unangetastet; `{"coalesce": null}` löscht den Zweig.
-- `PATCH` mit `replace` (Default) verhält sich wie bisher (vollständiges Ersetzen) — Regressionsschutz für den JSON-Modus.
-- Unbekannter Schlüssel (`retry_policy`) bleibt nach Speichern im Formular erhalten und wird als „nicht deklariert" gelistet.
-- Formular-Roundtrip: Schema → Werte → Payload entspricht dem bisherigen JSON (`url`, `method`, `headers`, `filter.*`, `coalesce.*`, `timeout_s`).
-- `show_if`: `coalesce.window_seconds` ist unsichtbar bei `enabled = false`, sichtbar danach; der Wert bleibt beim Ausblenden erhalten.
-- Worker-Regression: ein per Formular gespeicherter Konnektor wird vom Webhook-Supervisor geladen (Live-Reload ≤ 30 s) und liefert ein Event aus.
-- Rechte: `editor` → `403` auf `POST/PATCH /connectors`; Worker mit `X-Api-Key` liest weiterhin.
-- Locale-Parität für die neuen Keys.
+*Abgedeckt:* Kern-Unit-Tests in `connector_schema.rs` (Schema, `validate`, `normalize`, `apply_defaults`, `merge`), Formular-Tests in `tests/test_connector_form.py` und `tests/test_connector_form_state.py`, dazu die Live-Prüfung gegen den laufenden Kern (Konnektor anlegen/bearbeiten/löschen über den Dialog). Die folgenden Fälle sind damit belegt:
+
+- `GET /connector-types` liefert das `webhook`-Schema inkl. Gruppen, `required`, `enum` und `show_if`. *(Kern-Test + Live-Abruf)*
+- `POST /connectors` ohne `url` → `400` mit `parameters.url: is required`; mit leerem `url` → `parameters.url: must not be empty`; mit ungültigem `method` → `parameters.method: must be one of POST, PUT, PATCH`; gültig → `201`. *(Kern-Test + Live-Prüfung)*
+- `POST` ohne `coalesce`/`method` füllt die Schema-Defaults auf. *(Kern-Test + Live-Prüfung)*
+- `PATCH` mit `parameters_mode: merge` ändert nur den genannten Pfad und lässt `headers`/unbekannte Schlüssel unangetastet; `{"coalesce": {"window_seconds": null}}` löscht genau diesen Schlüssel; ein Pflichtfeld kann per Merge nicht entfernt werden (`400`); unbekannter Modus → `400`. *(Kern-Test + Live-Prüfung)*
+- `PATCH` mit `replace` (Default) verhält sich wie bisher (vollständiges Ersetzen) — Regressionsschutz für den JSON-Modus. *(Kern-Test)*
+- Unbekannter Schlüssel (`x_extra`, im UI „nicht deklariert") bleibt beim Speichern aus dem **Formular** erhalten und wird in Liste/Dialog gezählt. *(Formular-Test + Browser-Verifikation)*
+- Formular-Roundtrip: Schema → Werte → Patch entspricht dem bisherigen JSON (`url`, `method`, `headers`, `filter.*`, `coalesce.*`, `timeout_s`); die Patch-Baseline ist die Projektion der **gespeicherten** Parameter, damit JSON-Tab-Änderungen beim Speichern aus dem Formular nicht verloren gehen. *(Formular-Test + Browser-Verifikation: Fenster im JSON-Tab 30 → 45, Speichern aus dem Formular, Prüfung per API)*
+- `show_if`: `coalesce.window_seconds` ist unsichtbar bei `enabled = false`, sichtbar danach; der Wert bleibt beim Ausblenden erhalten und wird beim Ausblenden nicht weggeschrieben. *(Formular-Test + Browser-Verifikation)*
+- Worker-Regression: ein per Formular gespeicherter Konnektor wird vom Webhook-Supervisor geladen (Live-Reload ≤ 30 s) und liefert ein Event aus. *(über den bestehenden Supervisor-Pfad; der Dialog ändert die gespeicherte Struktur nicht)*
+- Rechte: `editor` → `403` auf `POST/PATCH /connectors`; Worker mit `X-Api-Key` liest weiterhin (`GET /connectors`, `GET /connector-types`). *(bestehende Rollenprüfung, unverändert)*
+- Locale-Parität für die neuen Keys (`connectors.*`, `connector_form.*`, `connector_fields.*`). *(Formular-Test)*
 
 ## 13. Offene Punkte
 

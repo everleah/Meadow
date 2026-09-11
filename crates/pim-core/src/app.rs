@@ -224,6 +224,10 @@ pub fn router(state: AppState) -> Router {
             get(api::connectors::list_connectors).post(api::connectors::create_connector),
         )
         .route(
+            "/connector-types",
+            get(api::connectors::list_connector_types),
+        )
+        .route(
             "/connectors/{id}",
             get(api::connectors::get_connector)
                 .patch(api::connectors::update_connector)

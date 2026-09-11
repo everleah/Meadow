@@ -1718,6 +1718,21 @@ class CoreClient:
             return response.json()
 
     # --- Connectors --------------------------------------------------------
+    async def list_connector_types(self, token: str) -> list[dict]:
+        """Loads the parameter schema of every connector type (``GET /connector-types``).
+
+        The schema describes groups, fields, types, defaults, enums, conditional
+        visibility and i18n keys; the admin UI renders its configuration form
+        from it and the core validates the parameters against it.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/connector-types",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def list_connectors(
         self,
         token: str,
@@ -1786,9 +1801,15 @@ class CoreClient:
         name: str | None = None,
         connector_type: str | None = None,
         parameters: dict | None = None,
+        parameters_mode: str | None = None,
         enabled: bool | None = None,
     ) -> dict:
-        """Partially updates a connector (``PATCH /connectors/{id}``, admin)."""
+        """Partially updates a connector (``PATCH /connectors/{id}``, admin).
+
+        `parameters_mode` is `replace` (default, whole object) or `merge`
+        (recursive, `null` deletes a key) — the guided form sends only the
+        changed fields with `merge`.
+        """
         payload: dict[str, object] = {}
         if name is not None:
             payload["name"] = name
@@ -1796,6 +1817,8 @@ class CoreClient:
             payload["type"] = connector_type
         if parameters is not None:
             payload["parameters"] = parameters
+        if parameters_mode is not None:
+            payload["parameters_mode"] = parameters_mode
         if enabled is not None:
             payload["enabled"] = enabled
         async with _api_client() as client:

@@ -2,26 +2,48 @@
 
 Lists persisted inbound/outbound connectors (``GET /connectors``) and provides
 create/edit (``POST``/``PATCH /connectors``), enable/disable (``PATCH`` with
-``enabled``) and delete (``DELETE /connectors/{id}``). The ``parameters`` field
-is free-form JSON (URL, method, headers, filter, retry_policy, coalesce,
-match_by_key, …) and is edited as a JSON textarea.
+``enabled``) and delete (``DELETE /connectors/{id}``).
+
+Parameters are configured in two ways (Stage 1, ``plan/detail/
+konnektor-konfiguration.md``):
+
+* **Formular** — the field set, grouped sections, defaults, enums and
+  conditional fields come from the core's parameter schema
+  (``GET /connector-types``); the form sends only the changed fields with
+  ``parameters_mode=merge`` so undeclared keys (and masked secrets) survive.
+* **JSON** — the expert tab edits the raw ``parameters`` object and sends it as
+  a full replacement. Undeclared keys are listed as a hint, never removed.
 """
 
 from __future__ import annotations
 
+import copy
 import json as _json
 from datetime import datetime
+from typing import Any
 
 from nicegui import app, ui
 
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.connector_form import (
+    apply_patch,
+    build_patch,
+    default_values,
+    nest,
+    project_fields,
+    render_parameter_form,
+    summary_text,
+    unknown_keys,
+    validate_values,
+)
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
-#: Known connector types (matches the core's VALID_CONNECTOR_TYPES).
-CONNECTOR_TYPES = ("webhook", "json_import", "json_export")
+#: Connector types used only when the schema endpoint is unreachable (the schema
+#: from `GET /connector-types` is the source of truth for types and labels).
+_FALLBACK_TYPES = ("webhook", "json_import", "json_export")
 
 
 def _type_label(connector_type: str) -> str:
@@ -91,6 +113,41 @@ async def connectors_page() -> None:
         ui.label(t("connectors.load_failed")).classes("text-subtitle1 text-negative")
         return
 
+    # Parameter schema per connector type (source of truth for the form) plus the
+    # dynamic option sources it references (`object_types`, `attribute_names`).
+    schemas: dict[str, dict] = {}
+    type_labels: dict[str, str] = {}
+    try:
+        for entry in await client.list_connector_types(token):
+            key = str(entry.get("type") or "")
+            if not key:
+                continue
+            schemas[key] = entry
+            type_labels[key] = t(str(entry.get("label_key") or key))
+    except Exception:  # noqa: BLE001 - degrade to the fallback type list
+        schemas = {}
+        type_labels = {}
+    if not type_labels:
+        type_labels = {
+            connector_type: _type_label(connector_type) for connector_type in _FALLBACK_TYPES
+        }
+
+    option_sources: dict[str, list[str]] = {"object_types": [], "attribute_names": []}
+    try:
+        object_types = await client.list_object_types(token, limit=1000)
+        option_sources["object_types"] = [
+            str(item.get("name")) for item in object_types if item.get("name")
+        ]
+    except Exception:  # noqa: BLE001 - the picker then only offers entered values
+        pass
+    try:
+        definitions = await client.list_attribute_definitions(token, limit=1000)
+        option_sources["attribute_names"] = [
+            str(item.get("name")) for item in definitions if item.get("name")
+        ]
+    except Exception:  # noqa: BLE001 - the picker then only offers entered values
+        pass
+
     with ui.column().classes("w-full p-6"):
         ui.label(t("connectors.title")).classes("text-h4")
         ui.label(t("connectors.subtitle")).classes("text-subtitle1")
@@ -111,7 +168,8 @@ async def connectors_page() -> None:
                 {
                     "id": str(c.get("id")),
                     "name": str(c.get("name") or ""),
-                    "type": _type_label(str(c.get("type") or "")),
+                    "type": type_labels.get(str(c.get("type")), str(c.get("type") or "")),
+                    "config": summary_text(schemas.get(str(c.get("type"))), c.get("parameters")),
                     "enabled": _enabled_badge(c.get("enabled")),
                     "updated": _fmt_dt(c.get("updated_at")),
                     "updated_by": str(c.get("updated_by") or "").split(":")[-1],
@@ -129,7 +187,7 @@ async def connectors_page() -> None:
                 .on_value_change(lambda e: _set_filter("name", str(e.value)))
             )
             ui.select(
-                {typ: _type_label(typ) for typ in CONNECTOR_TYPES},
+                type_labels,
                 label=t("connectors.filter_type"),
                 value=None,
             ).props("filled dense").classes("w-44").on_value_change(
@@ -154,14 +212,15 @@ async def connectors_page() -> None:
             _apply_filters()
 
         column_defs = [
-            {"headerName": t("connectors.col_name"), "field": "name", "width": 220},
-            {"headerName": t("connectors.col_type"), "field": "type", "width": 150},
-            {"headerName": t("connectors.col_enabled"), "field": "enabled", "width": 120},
-            {"headerName": t("connectors.col_updated"), "field": "updated", "width": 190},
+            {"headerName": t("connectors.col_name"), "field": "name", "width": 200},
+            {"headerName": t("connectors.col_type"), "field": "type", "width": 130},
+            {"headerName": t("connectors.col_config"), "field": "config", "width": 380},
+            {"headerName": t("connectors.col_enabled"), "field": "enabled", "width": 110},
+            {"headerName": t("connectors.col_updated"), "field": "updated", "width": 180},
             {
                 "headerName": t("connectors.col_updated_by"),
                 "field": "updated_by",
-                "width": 120,
+                "width": 110,
             },
         ]
         grid = ui.aggrid(
@@ -196,7 +255,10 @@ async def connectors_page() -> None:
             )
 
         editor_dialog = ui.dialog()
-        with editor_dialog, ui.card().classes("w-[42rem] max-w-[94vw]"):
+        with (
+            editor_dialog,
+            ui.card().classes("w-[46rem] max-w-[94vw] max-h-[88vh] overflow-y-auto"),
+        ):
             editor_title = ui.label("").classes("text-h6")
             with ui.column().classes("w-full mt-2 gap-2"):
                 with ui.row().classes("w-full gap-2"):
@@ -205,21 +267,36 @@ async def connectors_page() -> None:
                     )
                     type_select = (
                         ui.select(
-                            {typ: _type_label(typ) for typ in CONNECTOR_TYPES},
+                            type_labels,
                             label=t("connectors.field_type"),
-                            value="webhook",
+                            value=next(iter(type_labels)),
                         )
                         .props("filled dense")
                         .classes("w-56")
                     )
                 enabled_switch = ui.switch(t("connectors.field_enabled"), value=True)
-                ui.label(t("connectors.field_parameters")).classes("text-subtitle2")
-                parameters_area = (
-                    ui.textarea(t("connectors.field_parameters"))
-                    .props("filled dense")
-                    .classes("w-full font-mono text-sm")
+                unwired_hint = ui.label(t("connectors.unwired_hint")).classes(
+                    "text-caption text-warning"
                 )
-                ui.label(t("connectors.parameters_hint")).classes("text-caption text-gray-500")
+                with ui.tabs().classes("w-full") as tabs:
+                    form_tab = ui.tab("form", t("connectors.tab_form"))
+                    json_tab = ui.tab("json", t("connectors.tab_json"))
+                with ui.tab_panels(tabs, value=form_tab).classes("w-full"):
+                    with ui.tab_panel(form_tab).classes("p-0"):
+                        form_host = ui.column().classes("w-full gap-2")
+                        unknown_hint = ui.label("").classes("text-caption text-gray-500")
+                        reset_switch = ui.switch(t("connectors.reset_parameters")).tooltip(
+                            t("connectors.reset_parameters_hint")
+                        )
+                    with ui.tab_panel(json_tab).classes("p-0"):
+                        parameters_area = (
+                            ui.textarea(t("connectors.field_parameters"))
+                            .props("filled dense")
+                            .classes("w-full font-mono text-sm")
+                        )
+                        ui.label(t("connectors.parameters_hint")).classes(
+                            "text-caption text-gray-500"
+                        )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=editor_dialog.close).props("flat")
                 ui.button(
@@ -228,32 +305,159 @@ async def connectors_page() -> None:
                     on_click=lambda: save_connector(),
                 ).props("flat")
 
+        # --- Editor state -----------------------------------------------------
+        # `stored` is what the core currently has (baseline for the change
+        # detection), `values` the working copy of the dialog and `initial` the
+        # form projection of `stored` (so a save sends only real changes).
+        editor_state: dict[str, Any] = {
+            "id": None,
+            "type": str(next(iter(type_labels))),
+            "tab": "form",
+            "stored": {},
+            "values": {},
+            "initial": {},
+            "form": None,
+        }
+
+        def _form_values() -> dict[str, Any]:
+            """Current form values as a flat `{path: value}` map."""
+            form = editor_state["form"]
+            return dict(form.values()) if form is not None else {}
+
+        def _current_parameters() -> dict:
+            """The parameters the editor currently represents (form or JSON tab)."""
+            if editor_state["tab"] == "json":
+                parsed = _parse_parameters(parameters_area.value)
+                return parsed if parsed is not None else dict(editor_state["values"])
+            if editor_state["form"] is None:
+                return dict(editor_state["values"])
+            return apply_patch(editor_state["values"], nest(_form_values()))
+
+        def _update_hints() -> None:
+            """Shows the undeclared parameters of the current configuration."""
+            schema = schemas.get(str(editor_state["type"])) or {}
+            if not schema.get("wired"):
+                unknown_hint.set_visibility(False)
+                return
+            names = unknown_keys(schema, _current_parameters())
+            if names:
+                unknown_hint.set_text(
+                    t("connectors.unknown_parameters").format(names=", ".join(names))
+                )
+            unknown_hint.set_visibility(bool(names))
+
+        def _refresh_visibility() -> None:
+            form = editor_state["form"]
+            if form is not None:
+                form.refresh_visibility()
+            _update_hints()
+
+        def _render_form() -> None:
+            """(Re)renders the guided form for the selected connector type."""
+            schema = schemas.get(str(editor_state["type"])) or {}
+            wired = bool(schema.get("wired")) and bool(schema.get("groups"))
+            form_host.clear()
+            editor_state["form"] = None
+            unwired_hint.set_visibility(not wired)
+            reset_switch.set_visibility(wired)
+            with form_host:
+                if wired:
+                    editor_state["form"] = render_parameter_form(
+                        schema,
+                        editor_state["values"],
+                        option_sources=option_sources,
+                        on_change=_refresh_visibility,
+                    )
+            # Baseline: what the *stored* parameters look like in this form, so
+            # every difference (form or JSON tab) becomes part of the patch.
+            editor_state["initial"] = project_fields(schema, editor_state["stored"])
+            if not wired:
+                tabs.set_value("json")
+                editor_state["tab"] = "json"
+            _update_hints()
+
+        def _on_tab_change(event) -> None:
+            """Keeps both tabs in sync (form values ↔ JSON object)."""
+            target = str(event.value or "")
+            if target == editor_state["tab"]:
+                return
+            if target == "json":
+                parameters_area.set_value(_json_pretty(_current_parameters()))
+            else:
+                parsed = _parse_parameters(parameters_area.value)
+                if parsed is None:
+                    tabs.set_value("json")
+                    return
+                editor_state["values"] = parsed
+                form = editor_state["form"]
+                if form is not None:
+                    form.set_values(parsed)
+            editor_state["tab"] = target
+            _update_hints()
+
+        tabs.on_value_change(_on_tab_change)
+
+        def _on_type_change() -> None:
+            editor_state["type"] = str(type_select.value or editor_state["type"])
+            editor_state["values"] = _current_parameters()
+            _render_form()
+
+        type_select.on_value_change(lambda _event: _on_type_change())
+
         def _fill_editor(connector: dict | None) -> None:
             editing = connector is not None
             editor_title.set_text(t("connectors.edit") if editing else t("connectors.new"))
-            save_connector.editing_id = connector.get("id") if connector else None  # type: ignore[attr-defined]
+            editor_state["id"] = str(connector.get("id")) if editing else None
             name_input.set_value(str(connector.get("name") or "") if editing else "")
-            current_type = str(connector.get("type") or "webhook") if editing else "webhook"
-            type_select.set_value(current_type)
+            editor_state["type"] = (
+                str(connector.get("type") or next(iter(type_labels)))
+                if editing
+                else next(iter(type_labels))
+            )
+            type_select.set_value(editor_state["type"])
             enabled_switch.set_value(bool(connector.get("enabled")) if editing else True)
-            params = connector.get("parameters") if editing else None
-            parameters_area.set_value(_json_pretty(params) if params is not None else "{}")
+            parameters = (connector.get("parameters") if editing else None) or {}
+            editor_state["stored"] = copy.deepcopy(parameters)
+            editor_state["values"] = copy.deepcopy(parameters)
+            parameters_area.set_value(_json_pretty(parameters))
+            reset_switch.set_value(False)
+            editor_state["tab"] = "form"
+            _render_form()
 
         def open_editor(connector: dict | None) -> None:
             _fill_editor(connector)
             editor_dialog.open()
 
         async def save_connector() -> None:
-            editing_id = getattr(save_connector, "editing_id", None)
+            editing_id = editor_state["id"]
             name = (name_input.value or "").strip()
             if not name:
                 ui.notify(t("connectors.name_required"), color="warning")
                 return
-            parameters = _parse_parameters(parameters_area.value)
-            if parameters is None:
-                return
-            connector_type = type_select.value or "webhook"
+            connector_type = str(type_select.value or editor_state["type"])
+            schema = schemas.get(connector_type) or {}
             enabled = bool(enabled_switch.value)
+            parameters: dict | None = None
+            parameters_mode: str | None = None
+            if editor_state["tab"] == "json" or editor_state["form"] is None:
+                parsed = _parse_parameters(parameters_area.value)
+                if parsed is None:
+                    return
+                parameters, parameters_mode = parsed, "replace"
+            else:
+                problems = validate_values(schema, _form_values())
+                if problems:
+                    ui.notify(" · ".join(problems), color="warning")
+                    return
+                if bool(reset_switch.value):
+                    # Drop everything the previous type declared: start from the
+                    # new type's defaults and keep what the form shows.
+                    parameters = apply_patch(default_values(schema), nest(_form_values()))
+                    parameters_mode = "replace"
+                else:
+                    patch = build_patch(editor_state["initial"], _form_values())
+                    if patch:
+                        parameters, parameters_mode = patch, "merge"
             try:
                 if editing_id:
                     await client.update_connector(
@@ -262,6 +466,7 @@ async def connectors_page() -> None:
                         name=name,
                         connector_type=connector_type,
                         parameters=parameters,
+                        parameters_mode=parameters_mode,
                         enabled=enabled,
                     )
                 else:
@@ -269,7 +474,7 @@ async def connectors_page() -> None:
                         token,
                         name=name,
                         connector_type=connector_type,
-                        parameters=parameters,
+                        parameters=nest(_form_values()) if parameters is None else parameters,
                         enabled=enabled,
                     )
             except CoreError as error:
@@ -350,10 +555,15 @@ async def connectors_page() -> None:
             ui.notify(t("connectors.deleted"), color="positive")
 
         def _connector_for(data: object) -> dict | None:
-            """Resolves a double-click payload to a connector row."""
-            if isinstance(data, dict):
-                return data
-            return next((c for c in connectors if str(c.get("id")) == str(data)), None)
+            """Resolves a double-click payload to the full connector record.
+
+            The grid row only carries display fields (label as `type`, no
+            `parameters`), so the record is looked up in the loaded list.
+            """
+            identifier = data.get("id") if isinstance(data, dict) else data
+            if identifier is None:
+                return None
+            return next((c for c in connectors if str(c.get("id")) == str(identifier)), None)
 
         grid.on(
             "cellDoubleClicked",

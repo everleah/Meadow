@@ -148,9 +148,9 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
 
 **Konfiguration (als `job_definition` oder Konnektor-Konfiguration):**
 
-> **Formular statt JSON:** Die Konnektor-Parameter sind je Typ schema-beschrieben und werden über ein **Konfigurationsformular** gepflegt (`GET /connector-types`, Expertenmodus JSON bleibt); Parameterliste je Typ, Validierung und Test-Button: [konnektor-konfiguration.md](konnektor-konfiguration.md).
+> **Formular statt JSON:** Die Konnektor-Parameter sind je Typ schema-beschrieben und werden über ein **Konfigurationsformular** gepflegt (`GET /connector-types`, Expertenmodus JSON bleibt); Parameterliste je Typ, Validierung und Test-Button: [konnektor-konfiguration.md](konnektor-konfiguration.md). **Umgesetzt (Stage 1):** Die im Schema deklarierten Felder (`url`, `method`, `headers`, `timeout_s`, `filter.*`, `coalesce.*`) validiert der Kern bei `POST`/`PATCH` (`400` mit Feldpfad), das Formular speichert nur geänderte Felder (``parameters_mode: "merge"``); nicht deklarierte Schlüssel bleiben erhalten. Das JSON-Beispiel unten nennt deshalb nur deklarierte Felder plus den nicht verdrahteten `retry_policy`.
 
-> **Hinweis (Ist-Stand):** `retry_policy` und ein wählbarer Payload („gefiltertes Event oder vollständiges Objekt") sind **dokumentiert, aber nicht verdrahtet** — der Worker nutzt feste Retry-Werte (NATS-Redelivery, 5 Versuche, 5 s) und sendet immer das Event. Ebenso werden Konnektoren vom Typ `json_import`/`json_export` derzeit von niemandem geladen (Import/Export nehmen ihre Parameter aus dem Job). Beides ist in [konnektor-konfiguration.md](konnektor-konfiguration.md) als Stage 2 vorgemerkt.
+> **Hinweis (Ist-Stand):** `retry_policy` und ein wählbarer Payload („gefiltertes Event oder vollständiges Objekt") sind **dokumentiert, aber nicht verdrahtet** — der Worker nutzt feste Retry-Werte (NATS-Redelivery, 5 Versuche, 5 s) und sendet immer das Event; die Felder stehen deshalb **nicht** im Schema und erscheinen im Formular nur als „nicht deklariert"-Hinweis. Ebenso werden Konnektoren vom Typ `json_import`/`json_export` derzeit von niemandem geladen (Import/Export nehmen ihre Parameter aus dem Job); das Schema markiert sie `wired: false`. Beides ist in [konnektor-konfiguration.md](konnektor-konfiguration.md) als Stage 2 vorgemerkt.
 
 ```json
 {
