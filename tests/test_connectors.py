@@ -27,6 +27,7 @@ def test_row_to_webhook_config() -> None:
                 "attribute_changes": ["price", "status"],
             },
             "coalesce": {"enabled": True, "window_seconds": 15},
+            "retry_policy": {"max_attempts": 3, "backoff_seconds": 45},
             "timeout_s": 10.0,
         },
     }
@@ -41,6 +42,8 @@ def test_row_to_webhook_config() -> None:
     assert config.filter.attribute_changes == ["price", "status"]
     assert config.coalesce.enabled is True
     assert config.coalesce.window_seconds == 15
+    assert config.retry.max_attempts == 3
+    assert config.retry.backoff_seconds == 45
     assert config.timeout_s == 10.0
 
 
@@ -56,6 +59,9 @@ def test_row_with_defaults() -> None:
     assert config.method == "POST"
     assert config.filter.event_types == []
     assert config.coalesce.enabled is False
+    # Connectors stored before the retry policy existed keep the old behaviour.
+    assert config.retry.max_attempts == 5
+    assert config.retry.backoff_seconds == 5.0
 
 
 def test_string_list_normalizes() -> None:

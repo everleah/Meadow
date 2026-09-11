@@ -285,6 +285,30 @@ fn webhook_spec() -> TypeSpec {
                         .show_if("coalesce.enabled", json!(true)),
                 ],
             },
+            Group {
+                key: "retry",
+                label_key: "connector_fields.group_retry",
+                fields: vec![
+                    Field::new(
+                        "retry_policy.max_attempts",
+                        FieldKind::Integer,
+                        Widget::Number,
+                    )
+                    .label("connector_fields.webhook.retry_max_attempts.label")
+                    .help("connector_fields.webhook.retry_max_attempts.help")
+                    .range(1.0, 10.0)
+                    .default(json!(5)),
+                    Field::new(
+                        "retry_policy.backoff_seconds",
+                        FieldKind::Number,
+                        Widget::Number,
+                    )
+                    .label("connector_fields.webhook.retry_backoff_seconds.label")
+                    .help("connector_fields.webhook.retry_backoff_seconds.help")
+                    .range(1.0, 3600.0)
+                    .default(json!(5.0)),
+                ],
+            },
         ],
     }
 }
@@ -626,6 +650,8 @@ mod tests {
         assert!(keys.contains(&"url"));
         assert!(keys.contains(&"filter.event_types"));
         assert!(keys.contains(&"coalesce.window_seconds"));
+        assert!(keys.contains(&"retry_policy.max_attempts"));
+        assert!(keys.contains(&"retry_policy.backoff_seconds"));
 
         // Unwired types declare nothing: their parameters stay free JSON.
         let import = spec("json_import").expect("import spec");
@@ -757,9 +783,37 @@ mod tests {
                 "headers": {},
                 "timeout_s": 30.0,
                 "filter": {"event_types": [], "object_types": [], "attribute_changes": []},
-                "coalesce": {"enabled": false, "window_seconds": 30.0}
+                "coalesce": {"enabled": false, "window_seconds": 30.0},
+                "retry_policy": {"max_attempts": 5, "backoff_seconds": 5.0}
             })
         );
+    }
+
+    #[test]
+    fn retry_policy_range_is_enforced() {
+        let errors = validate(
+            "webhook",
+            &object(json!({
+                "url": "https://x.example",
+                "retry_policy": {"max_attempts": 0, "backoff_seconds": 7200}
+            })),
+        );
+        assert_eq!(
+            errors,
+            vec![
+                "parameters.retry_policy.max_attempts: must be at least 1".to_owned(),
+                "parameters.retry_policy.backoff_seconds: must be at most 3600".to_owned(),
+            ]
+        );
+
+        let errors = validate(
+            "webhook",
+            &object(json!({
+                "url": "https://x.example",
+                "retry_policy": {"max_attempts": 3, "backoff_seconds": 15}
+            })),
+        );
+        assert!(errors.is_empty());
     }
 
     #[test]

@@ -178,10 +178,11 @@ Weitere deklarierte Felder: `headers` (`string_map`, `widget: key_value`, `secre
 
 ## 7. Konsistenz Schema ↔ Verbraucher
 
-Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld wird ausgewertet, jedes ausgewertete Feld ist deklariert**. Zwei offene Stellen im Ist-Stand:
+Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld wird ausgewertet, jedes ausgewertete Feld ist deklariert**. Offene Stellen im Ist-Stand:
 
-1. **`retry_policy` & Payload-Modus:** in [integration-eventsystem.md](integration-eventsystem.md) dokumentiert (und im UI-Hinweis genannt), im Worker nicht implementiert. Stage 2 macht sie **entweder** wirksam (`retry_policy.max_attempts`/`backoff_seconds` → `WEBHOOK_MAX_DELIVER`/Nak-Delay pro Konnektor; `payload.mode = event|object` → vollständiges Objekt per `GET /objects/{id}?resolve_inheritance=`) **oder** sie fliegen aus Doku/Schema.
-2. **`json_import` / `json_export`-Konnektoren** werden von niemandem geladen. Stage 2 koppelt sie als **Defaults** an den Job-Pfad: `POST /imports` ohne explizite Parameter zieht `match_by_key`/`match_by_id`/`emit_events`/`source` des Typ-Konnektors (Kern oder Worker), der Export-Job entsprechend `format`/`fields`/`locales`/`options`. Vorher gibt es für diese Typen **kein** Formular (das Schema markiert sie `wired: false`, die UI zeigt einen Hinweis „Parameter werden noch nicht ausgewertet").
+1. **`retry_policy` — umgesetzt (Stage 2a):** Der Webhook-Worker liest `retry_policy.max_attempts` (1–10, Default 5) und `retry_policy.backoff_seconds` (1–3600, Default 5) **je Konnektor** (`meadow/worker/webhooks.py::WebhookRetry`): `max_attempts` bestimmt, wann ein Event in die Dead-Letter-Queue wandert (vorher global `WEBHOOK_MAX_DELIVER = 5`), `backoff_seconds` ist die Wartezeit vor dem nächsten Versuch (vorher global 5 s). Der JetStream-Consumer bekommt als `max_deliver` den **Schema-Höchstwert** (10), damit der Worker zuerst dead-lettert und nicht JetStream. Weil eine Nachricht an mehrere Konnektoren verteilt wird, gilt: das **strengste** Limit gewinnt (jede terminale Zustellung beendet die Nachricht) und beim erneuten Zustellen gewinnt die **längste** angeforderte Wartezeit. Verifiziert: `attempt 1/2 → 2/2` (dann DLQ) mit `max_attempts: 2` bzw. `1/3 → 2/3 → 3/3` mit `max_attempts: 3`, und mit `backoff_seconds: 1` liefen alle drei Versuche innerhalb von ~2 s (vorher hätte der Default 5 s gebraucht), Log-Zeile jetzt `attempt n/max`.
+2. **Payload-Modus (`payload.mode = event|object`):** weiterhin **nicht** verdrahtet und deshalb nicht im Schema (der Worker sendet immer das Event). Entscheidung: erst umsetzen, wenn die Middleware es braucht.
+3. **`json_import` / `json_export`-Konnektoren** werden von niemandem geladen. Stage 2b koppelt sie als **Defaults** an den Job-Pfad: `POST /imports` ohne explizite Parameter zieht `match_by_key`/`match_by_id`/`emit_events`/`source` des Typ-Konnektors (Kern oder Worker), der Export-Job entsprechend `format`/`fields`/`locales`/`options`. Vorher gibt es für diese Typen **kein** Formular (das Schema markiert sie `wired: false`, die UI zeigt einen Hinweis „Parameter werden noch nicht ausgewertet").
 
 ## 8. Test-Button (Stage 2)
 
@@ -202,7 +203,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 | Stelle | Änderung |
 |---|---|
 | `api-design.md` | `GET /connector-types` und `PATCH /connectors/{id}` mit `parameters_mode` sind in der Endpunkt-Tabelle dokumentiert |
-| `integration-eventsystem.md` | Verweis auf dieses Dokument; `retry_policy`/Payload als **nicht verdrahtet** markiert (nicht im Schema, nur als „nicht deklariert"-Hinweis im Formular); Parameterliste je Typ verlinkt |
+| `integration-eventsystem.md` | Verweis auf dieses Dokument; `retry_policy` als **umgesetzt** dokumentiert (je Konnektor), Payload-Modus als **nicht verdrahtet** (nicht im Schema) |
 | `frontend.md` (Punkt 13) | Formular, Expertenmodus JSON, Zusammenfassungsspalte und das Modul `connector_form.py` sind nachgetragen |
 | `datenmodell.md` (`connector.parameters`) | Hinweis: Struktur ist je Typ durch das Schema beschrieben; unbekannte Schlüssel bleiben erhalten |
 | `datenexport-import-ui.md` | Abgrenzung: Wizards bleiben der **Anwenderpfad**; Konnektor-Formulare konfigurieren **Defaults/Profile** für den technischen Pfad |
@@ -219,18 +220,24 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 **Stage 2 — Konsistenz & Test:**
 
-5. `retry_policy`/Payload-Modus: wirksam machen **oder** entfernen (Entscheidung s. u.); `json_import`/`json_export` als Job-Defaults verdrahten und im Schema `wired: true` setzen.
-6. Job-Typ `connector_test` + Worker-Testversand + „Verbindung testen"-Dialog mit Ergebnis.
+**Stage 2a — Wiederholungsrichtlinie je Konnektor — umgesetzt:**
+
+5. `retry_policy.max_attempts`/`backoff_seconds` sind im Schema deklariert (Gruppe „Wiederholung"), werden je Konnektor im Worker angewandt und sind live verifiziert (Abschnitt 7); der Payload-Modus bleibt bewusst entfernt. `crates/AGENTS.md`, `meadow/AGENTS.md`, `integration-eventsystem.md` und dieses Dokument sind angepasst.
+
+**Stage 2b/2c — offen:**
+
+6. `json_import`/`json_export` als Job-Defaults verdrahten und im Schema `wired: true` setzen (Abschnitt 7, Punkt 3).
+7. Job-Typ `connector_test` + Worker-Testversand + „Verbindung testen"-Dialog mit Ergebnis (Abschnitt 8).
 
 **Stage 3 — Ausbau (optional):**
 
-7. Eigene Konnektor-Typen als DB-Records (Plugin-Registry im Worker), Secret-Ablage, Konnektor-Profile als MCF-Sektion (Export/Import), Verbindungstest automatisch nach dem Speichern.
+8. Eigene Konnektor-Typen als DB-Records (Plugin-Registry im Worker), Secret-Ablage, Konnektor-Profile als MCF-Sektion (Export/Import), Verbindungstest automatisch nach dem Speichern.
 
 **Nicht-Ziele:** keine Plugin-Laufzeit im MVP, keine neuen Rollen, kein Ersatz der Import-/Export-Wizards, keine Migration bestehender Parameter (Altdaten bleiben gültig und sichtbar).
 
 ## 12. Testfälle
 
-*Abgedeckt:* Kern-Unit-Tests in `connector_schema.rs` (Schema, `validate`, `normalize`, `apply_defaults`, `merge`), Formular-Tests in `tests/test_connector_form.py` und `tests/test_connector_form_state.py`, dazu die Live-Prüfung gegen den laufenden Kern (Konnektor anlegen/bearbeiten/löschen über den Dialog). Die folgenden Fälle sind damit belegt:
+*Abgedeckt:* Kern-Unit-Tests in `connector_schema.rs` (Schema, `validate`, `normalize`, `apply_defaults`, `merge`), Formular-Tests in `tests/test_connector_form.py` und `tests/test_connector_form_state.py`, Worker-Tests in `tests/test_webhooks.py`/`tests/test_connectors.py` (Wiederholungsrichtlinie), dazu die Live-Prüfung gegen den laufenden Kern (Konnektor anlegen/bearbeiten/löschen über den Dialog) und gegen den laufenden Worker. Die folgenden Fälle sind damit belegt:
 
 - `GET /connector-types` liefert das `webhook`-Schema inkl. Gruppen, `required`, `enum` und `show_if`. *(Kern-Test + Live-Abruf)*
 - `POST /connectors` ohne `url` → `400` mit `parameters.url: is required`; mit leerem `url` → `parameters.url: must not be empty`; mit ungültigem `method` → `parameters.method: must be one of POST, PUT, PATCH`; gültig → `201`. *(Kern-Test + Live-Prüfung)*
@@ -240,6 +247,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 - Unbekannter Schlüssel (`x_extra`, im UI „nicht deklariert") bleibt beim Speichern aus dem **Formular** erhalten und wird in Liste/Dialog gezählt. *(Formular-Test + Browser-Verifikation)*
 - Formular-Roundtrip: Schema → Werte → Patch entspricht dem bisherigen JSON (`url`, `method`, `headers`, `filter.*`, `coalesce.*`, `timeout_s`); die Patch-Baseline ist die Projektion der **gespeicherten** Parameter, damit JSON-Tab-Änderungen beim Speichern aus dem Formular nicht verloren gehen. *(Formular-Test + Browser-Verifikation: Fenster im JSON-Tab 30 → 45, Speichern aus dem Formular, Prüfung per API)*
 - `show_if`: `coalesce.window_seconds` ist unsichtbar bei `enabled = false`, sichtbar danach; der Wert bleibt beim Ausblenden erhalten und wird beim Ausblenden nicht weggeschrieben. *(Formular-Test + Browser-Verifikation)*
+- Wiederholungsrichtlinie: `retry_policy.max_attempts` begrenzt die Versuche je Konnektor (Dead-Letter danach), `retry_policy.backoff_seconds` ist die Wartezeit vor dem nächsten Versuch, Wertebereiche werden vom Kern geprüft, fehlende Richtlinien behalten das alte Verhalten (5 Versuche, 5 s). *(Kern-Test, Worker-Tests + Live-Prüfung: `attempt 1/2 → 2/2` bzw. `1/3 → 3/3`, bei `backoff_seconds: 1` lagen alle drei Versuche in ~2 s)*
 - Worker-Regression: ein per Formular gespeicherter Konnektor wird vom Webhook-Supervisor geladen (Live-Reload ≤ 30 s) und liefert ein Event aus. *(über den bestehenden Supervisor-Pfad; der Dialog ändert die gespeicherte Struktur nicht)*
 - Rechte: `editor` → `403` auf `POST/PATCH /connectors`; Worker mit `X-Api-Key` liest weiterhin (`GET /connectors`, `GET /connector-types`). *(bestehende Rollenprüfung, unverändert)*
 - Locale-Parität für die neuen Keys (`connectors.*`, `connector_form.*`, `connector_fields.*`). *(Formular-Test)*
@@ -248,9 +256,10 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 | Frage | Vorschlag |
 |---|---|
-| `retry_policy` wirksam machen statt entfernen? | **Wirksam machen** (max. Versuche + Backoff pro Konnektor) — es ist das Feld, das im Betrieb am häufigsten gebraucht wird; sonst aus Doku/UI entfernen (Stage 2). |
+| `retry_policy` wirksam machen statt entfernen? | **Umgesetzt (Stage 2a):** wirksam gemacht — max. Versuche + Wartezeit je Konnektor (Abschnitt 7). |
+| Einzelne Backoff-Werte je Versuch (`[30, 60, 120, 300]`)? | **Offen.** Umgesetzt ist eine konstante Wartezeit (ein Zahlenfeld, auch für Nicht-Techniker verständlich). Eine Liste bräuchte eine neue Feldart (`number_list`) in Schema, Formular und Tests; der Worker akzeptiert eine gespeicherte Liste bereits defensiv (letzter Wert gewinnt). |
 | Payload-Modus (Event vs. vollständiges Objekt)? | **Nicht** in Stage 1/2; erst wenn die Middleware es braucht (heute sendet der Worker immer das Event). |
-| `json_import`/`json_export` als Job-Defaults verdrahten? | **Ja (Stage 2)** — sonst bleibt das Formular für diese Typen wirkungslos. |
+| `json_import`/`json_export` als Job-Defaults verdrahten? | **Ja (Stage 2b)** — sonst bleibt das Formular für diese Typen wirkungslos. |
 | Unbekannte Schlüssel ablehnen? | Nein, nur melden; optionaler Schalter `strict_parameters` später. |
 | Strukturierte Feldfehler (`{"error": …, "fields": {…}}`)? | Erst wenn das Formular Feldmarkierungen braucht; Stage 1 kommt mit Pfad in der Meldung aus. |
 | Schema als JSON-Schema ausliefern (statt eigenem Format)? | Nein — das eigene, kleinere Format genügt (kein vollständiger Validator nötig) und bleibt ohne Zusatzabhängigkeit. Mehrfachauswahl (`string_list`) und Key-Wert-Tabellen sind in JSON Schema umständlicher als hier. |

@@ -4,7 +4,9 @@ Subscribes to `events.crud` (stream `EVENTS`), filters events, and fans matching
 events out to every configured webhook endpoint with **at-least-once**
 semantics: delivery failures are retried via NATS redelivery (negative-ack) and
 finally dead-lettered to a dedicated DLQ stream (manual cleanup, like the job
-queue). The middleware must deduplicate on `event_id` (redelivery is normal).
+queue). The retry policy is **per connector** (`parameters.retry_policy`:
+`max_attempts` + constant `backoff_seconds`); the middleware must deduplicate on
+`event_id` (redelivery is normal).
 
 When coalescing is enabled, events are buffered per connector, `object_id` and
 `event_type` within a fixed window and only the **last** event is sent (with
@@ -30,7 +32,7 @@ from typing import Any
 import httpx
 import nats
 import nats.js.api as jsapi
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from meadow.worker.log_sender import LogSender
 
@@ -46,9 +48,14 @@ EVENTS_DLQ_SUBJECT = "events.dlq.webhook"
 
 #: Ack-wait window before JetStream redelivers an unacked event.
 WEBHOOK_ACK_WAIT_S = 300.0
-#: Maximum delivery attempts before dead-lettering.
-WEBHOOK_MAX_DELIVER = 5
-#: Delay before a failed event is redelivered after a negative ack.
+#: Ceiling for the per-connector attempt count, passed to the JetStream consumer
+#: as `max_deliver`. It must be the highest attempt count any connector may
+#: declare (`retry_policy.max_attempts` in the core schema), otherwise JetStream
+#: would terminate a message before the worker can dead-letter it.
+WEBHOOK_MAX_DELIVER = 10
+#: Default attempt count for connectors without a declared retry policy.
+WEBHOOK_DEFAULT_MAX_ATTEMPTS = 5
+#: Default delay before a failed event is redelivered after a negative ack.
 WEBHOOK_NAK_DELAY_S = 5.0
 #: Interval between connector-config reloads (live reload).
 WEBHOOK_RELOAD_INTERVAL_S = 30.0
@@ -69,6 +76,41 @@ class WebhookCoalesce(BaseModel):
     window_seconds: float = 30.0
 
 
+class WebhookRetry(BaseModel):
+    """Per-connector retry policy (`parameters.retry_policy`).
+
+    `max_attempts` caps the delivery attempts before the event is dead-lettered
+    to `EVENTS_DLQ`; `backoff_seconds` is the wait time before every further
+    attempt. A message is only terminated once the **strictest** matching
+    connector gave up (a terminal settlement of any connector terminates it).
+    """
+
+    max_attempts: int = WEBHOOK_DEFAULT_MAX_ATTEMPTS
+    backoff_seconds: float = WEBHOOK_NAK_DELAY_S
+
+    @field_validator("max_attempts")
+    @classmethod
+    def _clamp_attempts(cls, value: int) -> int:
+        return max(1, min(int(value), WEBHOOK_MAX_DELIVER))
+
+    @field_validator("backoff_seconds", mode="before")
+    @classmethod
+    def _accept_legacy_backoff_list(cls, value: object) -> object:
+        """Accepts the previously documented list form (`[30, 60, 120]`).
+
+        The schema declares a single number now; a stored list would otherwise
+        disable the connector, so the last entry is used as the constant delay.
+        """
+        if isinstance(value, (list, tuple)) and value:
+            return value[-1]
+        return value
+
+    @field_validator("backoff_seconds")
+    @classmethod
+    def _clamp_backoff(cls, value: float) -> float:
+        return max(float(value), 0.1)
+
+
 class WebhookConfig(BaseModel):
     """Configuration of one webhook endpoint."""
 
@@ -79,6 +121,7 @@ class WebhookConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     filter: WebhookFilter = Field(default_factory=WebhookFilter)
     coalesce: WebhookCoalesce = Field(default_factory=WebhookCoalesce)
+    retry: WebhookRetry = Field(default_factory=WebhookRetry)
     timeout_s: float = 30.0
 
 
@@ -165,7 +208,7 @@ class _DeliveryTracker:
 
     def __init__(self, nak_delay: float) -> None:
         self._nak_delay = nak_delay
-        self._pending: dict[int, dict[str, int | bool]] = {}
+        self._pending: dict[int, dict[str, float | int | bool]] = {}
         self._lock = asyncio.Lock()
 
     async def open(self, msg: Any, total: int) -> None:
@@ -177,26 +220,45 @@ class _DeliveryTracker:
             await msg.ack()
             return
         async with self._lock:
-            self._pending[id(msg)] = {"remaining": total, "terminal": False, "retry": False}
+            self._pending[id(msg)] = {
+                "remaining": total,
+                "terminal": False,
+                "retry": False,
+                "delay": 0.0,
+            }
 
-    async def settle(self, msg: Any, *, terminal: bool = False, retry: bool = False) -> None:
-        """Records one settled connector path and finalizes on the last one."""
+    async def settle(
+        self,
+        msg: Any,
+        *,
+        terminal: bool = False,
+        retry: bool = False,
+        retry_delay: float | None = None,
+    ) -> None:
+        """Records one settled connector path and finalizes on the last one.
+
+        `retry_delay` is the connector's own backoff; when several connectors
+        ask for a redelivery, the longest delay wins (the message is shared).
+        """
         async with self._lock:
             entry = self._pending.get(id(msg))
             if entry is None:
                 return
             entry["terminal"] = bool(entry["terminal"]) or terminal
             entry["retry"] = bool(entry["retry"]) or retry
+            if retry_delay is not None:
+                entry["delay"] = max(float(entry["delay"]), float(retry_delay))
             entry["remaining"] = int(entry["remaining"]) - 1
             if int(entry["remaining"]) > 0:
                 return
             del self._pending[id(msg)]
             terminal = bool(entry["terminal"])
             retry = bool(entry["retry"])
+            delay = float(entry["delay"]) or self._nak_delay
         if terminal:
             await msg.term()
         elif retry:
-            await msg.nak(delay=self._nak_delay)
+            await msg.nak(delay=delay)
         else:
             await msg.ack()
 
@@ -242,39 +304,45 @@ async def _deliver(
     response.raise_for_status()
 
 
+def _retry_delay(config: WebhookConfig) -> float:
+    """The connector's own wait time before the next delivery attempt."""
+    return max(config.retry.backoff_seconds, 0.1)
+
+
 async def _deliver_immediate(
     client: httpx.AsyncClient,
     js,
     connector: _Connector,
     msg: Any,
     event: dict[str, Any],
-    max_deliver: int,
     tracker: _DeliveryTracker,
 ) -> None:
     """Delivers one event to a non-coalesced connector; settles the shared message."""
     num_delivered = _num_delivered(msg)
+    max_attempts = connector.config.retry.max_attempts
     try:
         await _deliver(client, connector.config, event)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
-            "webhook delivery failed for %s (connector %s, attempt %d): %s",
+            "webhook delivery failed for %s (connector %s, attempt %d/%d): %s",
             event.get("event_id"),
             connector.config.key,
             num_delivered,
+            max_attempts,
             exc,
         )
-        if num_delivered >= max_deliver:
+        if num_delivered >= max_attempts:
             try:
                 await _dead_letter(
                     js, event, str(exc), num_delivered, connector=connector.config.key
                 )
             except Exception:  # noqa: BLE001 - fall back to a retry
                 logger.exception("webhook dead-letter publish failed")
-                await tracker.settle(msg, retry=True)
+                await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
                 return
             await tracker.settle(msg, terminal=True)
         else:
-            await tracker.settle(msg, retry=True)
+            await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
     else:
         await tracker.settle(msg)
 
@@ -284,7 +352,6 @@ async def _deliver_coalesced(
     js,
     connector: _Connector,
     entry: dict[str, Any],
-    max_deliver: int,
     tracker: _DeliveryTracker,
 ) -> None:
     """Delivers the latest buffered event and settles all messages for its key."""
@@ -294,17 +361,19 @@ async def _deliver_coalesced(
     latest["bundled_count"] = len(msgs)
 
     num_delivered = _num_delivered(msgs[-1])
+    max_attempts = connector.config.retry.max_attempts
     try:
         await _deliver(client, connector.config, latest)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
-            "webhook coalesced delivery failed for %s (connector %s, attempt %d): %s",
+            "webhook coalesced delivery failed for %s (connector %s, attempt %d/%d): %s",
             latest.get("event_id"),
             connector.config.key,
             num_delivered,
+            max_attempts,
             exc,
         )
-        if num_delivered >= max_deliver:
+        if num_delivered >= max_attempts:
             try:
                 await _dead_letter(
                     js, latest, str(exc), num_delivered, connector=connector.config.key
@@ -312,13 +381,15 @@ async def _deliver_coalesced(
             except Exception:  # noqa: BLE001 - fall back to a retry
                 logger.exception("webhook dead-letter publish failed")
                 for msg in msgs:
-                    await tracker.settle(msg, retry=True)
+                    await tracker.settle(
+                        msg, retry=True, retry_delay=_retry_delay(connector.config)
+                    )
                 return
             for msg in msgs:
                 await tracker.settle(msg, terminal=True)
         else:
             for msg in msgs:
-                await tracker.settle(msg, retry=True)
+                await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
         return
 
     for msg in msgs:
@@ -330,7 +401,6 @@ async def _flush_loop(
     js,
     connector: _Connector,
     buffer: _CoalesceBuffer,
-    max_deliver: int,
     tracker: _DeliveryTracker,
 ) -> None:
     """Periodically delivers the buffered coalesced events."""
@@ -338,7 +408,7 @@ async def _flush_loop(
     while True:
         await asyncio.sleep(window)
         for entry in await buffer.drain():
-            await _deliver_coalesced(client, js, connector, entry, max_deliver, tracker)
+            await _deliver_coalesced(client, js, connector, entry, tracker)
 
 
 async def serve_webhooks(
@@ -357,7 +427,8 @@ async def serve_webhooks(
 
     Runs until cancelled; intended to be started as a separate asyncio task so
     long webhook deliveries never block job processing. One JetStream consumer
-    feeds all connectors.
+    feeds all connectors; the attempt count and backoff are per connector
+    (`retry_policy`), so `max_deliver` is only the consumer ceiling.
     """
     connectors = [
         _Connector(config=config, buffer=_CoalesceBuffer() if config.coalesce.enabled else None)
@@ -396,7 +467,7 @@ async def serve_webhooks(
             if connector.buffer is not None:
                 flushers.append(
                     asyncio.create_task(
-                        _flush_loop(client, js, connector, connector.buffer, max_deliver, tracker)
+                        _flush_loop(client, js, connector, connector.buffer, tracker)
                     )
                 )
         try:
@@ -406,7 +477,7 @@ async def serve_webhooks(
                 except TimeoutError:
                     continue
                 for msg in msgs:
-                    await _handle_message(client, js, connectors, msg, max_deliver, tracker)
+                    await _handle_message(client, js, connectors, msg, tracker)
         finally:
             for flusher in flushers:
                 flusher.cancel()
@@ -491,7 +562,6 @@ async def _handle_message(
     js,
     connectors: list[_Connector],
     msg: Any,
-    max_deliver: int,
     tracker: _DeliveryTracker,
 ) -> None:
     """Handles one event message: filter, buffer (coalesce) or fan out."""
@@ -514,7 +584,7 @@ async def _handle_message(
 
     await tracker.open(msg, len(immediate) + len(buffered))
     for connector in immediate:
-        await _deliver_immediate(client, js, connector, msg, event, max_deliver, tracker)
+        await _deliver_immediate(client, js, connector, msg, event, tracker)
 
 
 __all__ = [
@@ -527,6 +597,7 @@ __all__ = [
     "WebhookCoalesce",
     "WebhookConfig",
     "WebhookFilter",
+    "WebhookRetry",
     "matches_filter",
     "serve_webhooks",
     "serve_webhooks_dynamic",

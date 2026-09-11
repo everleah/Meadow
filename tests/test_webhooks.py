@@ -10,6 +10,7 @@ import nats
 
 from meadow.worker.webhooks import (
     WebhookConfig,
+    WebhookRetry,
     _CoalesceBuffer,
     _config_signature,
     _Connector,
@@ -120,7 +121,7 @@ async def test_deliver_success_acks() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), [connector()], msg, 5, tracker())
+    await _handle_message(client, _FakeJs(), [connector()], msg, tracker())
     await client.aclose()
     assert msg.acked is True
     assert msg.nakked is False
@@ -136,7 +137,7 @@ async def test_filtered_out_event_is_acked_without_delivery() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     cfg = config(filter={"event_types": ["object.created"]})
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], msg, 5, tracker())
+    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], msg, tracker())
     await client.aclose()
     assert msg.acked is True
     assert delivered == []
@@ -148,7 +149,7 @@ async def test_delivery_failure_naks_for_retry() -> None:
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), [connector()], msg, 5, tracker())
+    await _handle_message(client, _FakeJs(), [connector()], msg, tracker())
     await client.aclose()
     assert msg.nakked is True
     assert msg.acked is False
@@ -161,7 +162,7 @@ async def test_final_delivery_failure_dead_letters_and_terminates() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
     js = _FakeJs()
     msg = _FakeMsg(json.dumps(event()).encode(), num_delivered=5)
-    await _handle_message(client, js, [connector()], msg, 5, tracker())
+    await _handle_message(client, js, [connector()], msg, tracker())
     await client.aclose()
     assert msg.terminated is True
     assert msg.nakked is False
@@ -184,7 +185,7 @@ async def test_fan_out_delivers_to_all_matching_connectors() -> None:
     one = connector(url="https://one.example/events")
     two = connector(url="https://two.example/events")
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), [one, two], msg, 5, tracker())
+    await _handle_message(client, _FakeJs(), [one, two], msg, tracker())
     await client.aclose()
 
     assert [str(request.url) for request in delivered] == [
@@ -221,7 +222,7 @@ async def test_handle_message_buffers_when_coalescing() -> None:
         buffer=_CoalesceBuffer(),
     )
     msg = _FakeMsg(json.dumps(event()).encode())
-    await _handle_message(client, _FakeJs(), [coalesced], msg, 5, tracker())
+    await _handle_message(client, _FakeJs(), [coalesced], msg, tracker())
     await client.aclose()
 
     assert delivered == []
@@ -247,7 +248,7 @@ async def test_deliver_coalesced_sends_latest_with_flags_and_acks_all() -> None:
     tr = tracker()
     await tr.open(msg1, 1)
     await tr.open(msg2, 1)
-    await _deliver_coalesced(client, _FakeJs(), coalesced, entry, 5, tr)
+    await _deliver_coalesced(client, _FakeJs(), coalesced, entry, tr)
     await client.aclose()
 
     assert len(delivered) == 1
@@ -269,3 +270,97 @@ def test_config_signature_changes_on_reconfiguration() -> None:
     original = config(url="https://one.example", key="one")
     changed = config(url="https://one.example/changed", key="one")
     assert _config_signature([original]) != _config_signature([changed])
+
+
+def test_config_signature_covers_the_retry_policy() -> None:
+    original = config(url="https://one.example", key="one")
+    changed = config(url="https://one.example", key="one", retry={"max_attempts": 2})
+    assert _config_signature([original]) != _config_signature([changed])
+
+
+def test_retry_policy_defaults_and_clamping() -> None:
+    assert config().retry.max_attempts == 5
+    assert config().retry.backoff_seconds == 5.0
+    assert config(retry={"max_attempts": 0}).retry.max_attempts == 1
+    assert config(retry={"max_attempts": 99}).retry.max_attempts == 10
+    assert config(retry={"backoff_seconds": 0}).retry.backoff_seconds == 0.1
+
+
+def test_retry_policy_accepts_the_legacy_backoff_list() -> None:
+    """A stored list (`[30, 60, 120]`, the old documentation) must not break."""
+    retry = WebhookRetry.model_validate({"max_attempts": 3, "backoff_seconds": [30, 60, 120]})
+    assert retry.backoff_seconds == 120
+
+
+async def test_connector_attempt_limit_governs_dead_lettering() -> None:
+    """A connector with `max_attempts: 5` dead-letters on the fifth attempt."""
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    js = _FakeJs()
+    msg = _FakeMsg(json.dumps(event()).encode(), num_delivered=5)
+    await _handle_message(client, js, [connector(retry={"max_attempts": 5})], msg, tracker())
+    await client.aclose()
+    assert msg.terminated is True
+    assert len(js.published) == 1
+
+
+async def test_strict_connector_dead_letters_earlier() -> None:
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    js = _FakeJs()
+    msg = _FakeMsg(json.dumps(event()).encode(), num_delivered=2)
+    await _handle_message(client, js, [connector(retry={"max_attempts": 2})], msg, tracker())
+    await client.aclose()
+    assert msg.terminated is True
+    assert len(js.published) == 1
+
+
+async def test_connector_backoff_is_used_for_the_redelivery_delay() -> None:
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    cfg = config(retry={"max_attempts": 5, "backoff_seconds": 120})
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], msg, tracker())
+    await client.aclose()
+    assert msg.nakked is True
+    assert msg.nak_delay == 120
+
+
+async def test_shared_message_uses_the_longest_requested_backoff() -> None:
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    fast = connector(url="https://fast.example", retry={"backoff_seconds": 10})
+    slow = connector(url="https://slow.example", retry={"backoff_seconds": 90})
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(client, _FakeJs(), [fast, slow], msg, tracker())
+    await client.aclose()
+    assert msg.nakked is True
+    assert msg.nak_delay == 90
+
+
+async def test_coalesced_delivery_uses_the_connector_attempt_limit() -> None:
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    js = _FakeJs()
+    cramped = _Connector(
+        config=config(coalesce={"enabled": True}, retry={"max_attempts": 1}),
+    )
+    msg = _FakeMsg(json.dumps(event()).encode())
+    entry = {"event": event(), "msgs": [msg]}
+    tr = tracker()
+    await tr.open(msg, 1)
+    await _deliver_coalesced(client, js, cramped, entry, tr)
+    await client.aclose()
+    assert msg.terminated is True
+    assert len(js.published) == 1

@@ -148,9 +148,11 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
 
 **Konfiguration (als `job_definition` oder Konnektor-Konfiguration):**
 
-> **Formular statt JSON:** Die Konnektor-Parameter sind je Typ schema-beschrieben und werden über ein **Konfigurationsformular** gepflegt (`GET /connector-types`, Expertenmodus JSON bleibt); Parameterliste je Typ, Validierung und Test-Button: [konnektor-konfiguration.md](konnektor-konfiguration.md). **Umgesetzt (Stage 1):** Die im Schema deklarierten Felder (`url`, `method`, `headers`, `timeout_s`, `filter.*`, `coalesce.*`) validiert der Kern bei `POST`/`PATCH` (`400` mit Feldpfad), das Formular speichert nur geänderte Felder (``parameters_mode: "merge"``); nicht deklarierte Schlüssel bleiben erhalten. Das JSON-Beispiel unten nennt deshalb nur deklarierte Felder plus den nicht verdrahteten `retry_policy`.
+> **Formular statt JSON:** Die Konnektor-Parameter sind je Typ schema-beschrieben und werden über ein **Konfigurationsformular** gepflegt (`GET /connector-types`, Expertenmodus JSON bleibt); Parameterliste je Typ, Validierung und Test-Button: [konnektor-konfiguration.md](konnektor-konfiguration.md). **Umgesetzt (Stage 1):** Die im Schema deklarierten Felder (`url`, `method`, `headers`, `timeout_s`, `filter.*`, `coalesce.*`, `retry_policy.*`) validiert der Kern bei `POST`/`PATCH` (`400` mit Feldpfad), das Formular speichert nur geänderte Felder (``parameters_mode: "merge"``); nicht deklarierte Schlüssel bleiben erhalten.
 
-> **Hinweis (Ist-Stand):** `retry_policy` und ein wählbarer Payload („gefiltertes Event oder vollständiges Objekt") sind **dokumentiert, aber nicht verdrahtet** — der Worker nutzt feste Retry-Werte (NATS-Redelivery, 5 Versuche, 5 s) und sendet immer das Event; die Felder stehen deshalb **nicht** im Schema und erscheinen im Formular nur als „nicht deklariert"-Hinweis. Ebenso werden Konnektoren vom Typ `json_import`/`json_export` derzeit von niemandem geladen (Import/Export nehmen ihre Parameter aus dem Job); das Schema markiert sie `wired: false`. Beides ist in [konnektor-konfiguration.md](konnektor-konfiguration.md) als Stage 2 vorgemerkt.
+> **Wiederholung je Konnektor (Stage 2a, umgesetzt):** `retry_policy.max_attempts` (1–10, Default 5) bestimmt, wann ein Event in die DLQ wandert, `retry_policy.backoff_seconds` (1–3600, Default 5) die Wartezeit vor dem nächsten Versuch — vorher waren beide Werte global (`WEBHOOK_MAX_DELIVER`/`WEBHOOK_NAK_DELAY_S`). Ein Konnektor ohne gespeicherte Richtlinie behält das alte Verhalten. Der JetStream-Consumer läuft mit `max_deliver = 10` (Schema-Höchstwert), damit der Worker vor JetStream dead-lettert; das **strengste** Limit der beteiligten Konnektoren gewinnt, die **längste** angeforderte Wartezeit wird verwendet.
+
+> **Hinweis (Ist-Stand):** Ein wählbarer Payload („gefiltertes Event oder vollständiges Objekt") ist **dokumentiert, aber nicht verdrahtet** — der Worker sendet immer das Event; das Feld steht deshalb **nicht** im Schema und erscheint im Formular nur als „nicht deklariert"-Hinweis. Ebenso werden Konnektoren vom Typ `json_import`/`json_export` derzeit von niemandem geladen (Import/Export nehmen ihre Parameter aus dem Job); das Schema markiert sie `wired: false`. Beides ist in [konnektor-konfiguration.md](konnektor-konfiguration.md) als Stage 2b/2c vorgemerkt.
 
 ```json
 {
@@ -171,7 +173,7 @@ Der Webhook-Outbound-Konnektor ist der primäre Kanal, um Änderungen an die bes
     },
     "retry_policy": {
       "max_attempts": 5,
-      "backoff_seconds": [30, 60, 120, 300]
+      "backoff_seconds": 30
     },
     "coalesce": {
       "enabled": true,

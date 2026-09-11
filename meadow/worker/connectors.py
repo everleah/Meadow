@@ -106,6 +106,9 @@ def _webhook_config_from_row(row: dict[str, Any]) -> WebhookConfig | None:
     coalesce_params = parameters.get("coalesce")
     if not isinstance(coalesce_params, dict):
         coalesce_params = {}
+    retry_params = parameters.get("retry_policy")
+    if not isinstance(retry_params, dict):
+        retry_params = {}
 
     payload: dict[str, Any] = {
         "key": key,
@@ -121,6 +124,7 @@ def _webhook_config_from_row(row: dict[str, Any]) -> WebhookConfig | None:
             "enabled": bool(coalesce_params.get("enabled", False)),
             "window_seconds": coalesce_params.get("window_seconds", 30.0),
         },
+        "retry": retry_params,
         "timeout_s": parameters.get("timeout_s", 30.0),
     }
     try:
