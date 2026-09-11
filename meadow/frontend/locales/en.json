@@ -742,12 +742,18 @@
   "grid.op_change_status": "Change status",
   "grid.op_add_category": "Add category",
   "grid.op_remove_category": "Remove category",
+  "grid.op_add_relation": "Assign relation",
+  "grid.op_remove_relation": "Remove relation",
   "grid.op_change_parent": "Re-parent",
   "grid.op_delete": "Delete",
   "grid.bulk_attribute": "Attribute",
   "grid.bulk_value": "Value",
   "grid.bulk_status": "Status: {status}",
   "grid.bulk_category": "Category",
+  "grid.bulk_relation": "Relation type",
+  "grid.bulk_relation_target": "Target object",
+  "grid.bulk_relation_hint": "The relation is created from every selected object to the target.",
+  "grid.bulk_areas_hint": "Ordered by area: attribute · status · category · relation · structure",
   "grid.bulk_nothing_picked": "No target picked yet",
   "grid.bulk_pick_label": "Pick {label}",
   "grid.bulk_parent": "Parent",
@@ -967,5 +973,6 @@
   "consolidate.reason.interrupted": "a child value is deliberately empty",
   "consolidate.reason.conflict_child_values": "the children have different values",
   "consolidate.reason.conflict_parent": "the node already has a different value",
-  "consolidate.reason.not_inheritable": "attribute is not inheritable"
+  "consolidate.reason.not_inheritable": "attribute is not inheritable",
+  "grid.relation_summary": "Relations changed: {relations} · unchanged: {skipped}"
 }

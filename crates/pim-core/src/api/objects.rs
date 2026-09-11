@@ -1398,7 +1398,8 @@ pub async fn batch_update_objects(
 pub struct BulkObjectRequest {
     /// Operation key: `set_attribute` | `clear_attribute` | `change_status` |
     /// `send_for_approval` | `add_category` | `remove_category` |
-    /// `change_parent` | `replace_text` | `consolidate_inheritance` | `delete`.
+    /// `add_relation` | `remove_relation` | `change_parent` | `replace_text` |
+    /// `consolidate_inheritance` | `delete`.
     pub op: String,
     /// Explicit object ids (full record ids) the operation applies to. The
     /// frontend resolves the selection (all filter hits / page / checked rows)
@@ -1410,13 +1411,15 @@ pub struct BulkObjectRequest {
     pub parameters: Value,
 }
 
-const BULK_OPS: [&str; 10] = [
+const BULK_OPS: [&str; 12] = [
     "set_attribute",
     "clear_attribute",
     "change_status",
     "send_for_approval",
     "add_category",
     "remove_category",
+    "add_relation",
+    "remove_relation",
     "change_parent",
     "replace_text",
     "consolidate_inheritance",

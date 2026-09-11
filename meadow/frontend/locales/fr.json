@@ -742,12 +742,18 @@
   "grid.op_change_status": "Changer statut",
   "grid.op_add_category": "Ajouter catégorie",
   "grid.op_remove_category": "Retirer catégorie",
+  "grid.op_add_relation": "Attribuer une relation",
+  "grid.op_remove_relation": "Supprimer une relation",
   "grid.op_change_parent": "Réassigner parent",
   "grid.op_delete": "Supprimer",
   "grid.bulk_attribute": "Attribut",
   "grid.bulk_value": "Valeur",
   "grid.bulk_status": "Statut : {status}",
   "grid.bulk_category": "Catégorie",
+  "grid.bulk_relation": "Type de relation",
+  "grid.bulk_relation_target": "Objet cible",
+  "grid.bulk_relation_hint": "La relation est créée de chaque objet sélectionné vers la cible.",
+  "grid.bulk_areas_hint": "Trié par domaine : attribut · statut · catégorie · relation · structure",
   "grid.bulk_nothing_picked": "Aucune cible choisie",
   "grid.bulk_pick_label": "Choisir {label}",
   "grid.bulk_parent": "Parent",
@@ -967,5 +973,6 @@
   "consolidate.reason.interrupted": "une valeur d’enfant est volontairement vide",
   "consolidate.reason.conflict_child_values": "les enfants ont des valeurs différentes",
   "consolidate.reason.conflict_parent": "le nœud a déjà une valeur différente",
-  "consolidate.reason.not_inheritable": "l’attribut n’est pas héritable"
+  "consolidate.reason.not_inheritable": "l’attribut n’est pas héritable",
+  "grid.relation_summary": "Relations modifiées : {relations} · inchangées : {skipped}"
 }

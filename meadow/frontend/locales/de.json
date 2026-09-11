@@ -742,12 +742,18 @@
   "grid.op_change_status": "Status ändern",
   "grid.op_add_category": "Kategorie hinzufügen",
   "grid.op_remove_category": "Kategorie entfernen",
+  "grid.op_add_relation": "Relation zuweisen",
+  "grid.op_remove_relation": "Relation entfernen",
   "grid.op_change_parent": "Elternobjekt ändern",
   "grid.op_delete": "Löschen",
   "grid.bulk_attribute": "Attribut",
   "grid.bulk_value": "Wert",
   "grid.bulk_status": "Status: {status}",
   "grid.bulk_category": "Kategorie",
+  "grid.bulk_relation": "Relationstyp",
+  "grid.bulk_relation_target": "Zielobjekt",
+  "grid.bulk_relation_hint": "Die Zuordnung wird von den ausgewählten Objekten zum Ziel angelegt.",
+  "grid.bulk_areas_hint": "Nach Bereichen geordnet: Attribut · Status · Kategorie · Relation · Struktur",
   "grid.bulk_nothing_picked": "Noch kein Ziel gewählt",
   "grid.bulk_pick_label": "{label} wählen",
   "grid.bulk_parent": "Elternobjekt",
@@ -967,5 +973,6 @@
   "consolidate.reason.interrupted": "ein Kindwert ist bewusst leer",
   "consolidate.reason.conflict_child_values": "die Kinder haben unterschiedliche Werte",
   "consolidate.reason.conflict_parent": "der Knoten hat bereits einen anderen Wert",
-  "consolidate.reason.not_inheritable": "Attribut ist nicht vererbbar"
+  "consolidate.reason.not_inheritable": "Attribut ist nicht vererbbar",
+  "grid.relation_summary": "Zuordnungen geändert: {relations} · unverändert: {skipped}"
 }

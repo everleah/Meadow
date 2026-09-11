@@ -60,8 +60,14 @@ _APPROVAL_MODIFIER_OPS = (
     "clear_attribute",
     "add_category",
     "remove_category",
+    "add_relation",
+    "remove_relation",
     "change_parent",
 )
+# Relation types that have a dedicated bulk operation and are therefore hidden in
+# the generic relation selection: composition (`change_parent`), category
+# assignment (`add_category`/`remove_category`).
+_DEDICATED_RELATION_DEFS = ("rel_depends_on", "rel_category_member")
 # Field of the per-row inheritance markers (`{field: "inherited from …"}`) and
 # the AG Grid column options that render them: NiceGUI converts `:`-prefixed
 # keys into real JavaScript functions on the client (`convertDynamicProperties`),
@@ -1250,6 +1256,7 @@ async def products_page(request: Request) -> None:
 
         # Reference picker (modal): display + add/remove an object's references.
         relation_options: dict[str, str] = {}
+        relation_def_by_key: dict[str, dict] = {}
         try:
             for definition in await client.list_relation_definitions(token):
                 if str(definition.get("kind")) != "aggregation":
@@ -1259,11 +1266,21 @@ async def products_page(request: Request) -> None:
                 # `relation_definition:rel_category_member`), not the full id or
                 # the display `name` (which differs, e.g. `category_member`).
                 def_key = str(definition["id"]).split(":", 1)[-1]
+                relation_def_by_key[def_key] = definition
                 relation_options[def_key] = (
                     resolve_value(definition.get("label"), locale) or def_key
                 )
         except Exception:  # noqa: BLE001 - degrade to an empty picker
             relation_options = {}
+            relation_def_by_key = {}
+
+        # The bulk wizard assigns relations generically; types with a dedicated
+        # operation (parent, categories) are hidden there to avoid duplicates.
+        bulk_relation_options = {
+            key: label
+            for key, label in relation_options.items()
+            if key not in _DEDICATED_RELATION_DEFS
+        }
 
         current_ref_object: dict = {"id": None}
 
@@ -1474,7 +1491,7 @@ async def products_page(request: Request) -> None:
         bulk_fields: dict[str, ui.element] = {}
 
         bulk_dialog = ui.dialog()
-        with bulk_dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
+        with bulk_dialog, ui.card().classes("w-[44rem] max-w-[94vw] max-h-[85vh] overflow-y-auto"):
             ui.label(t("grid.bulk_title")).classes("text-h6")
             ui.label(t("grid.bulk_selection")).classes("text-caption text-gray-600")
             bulk_scope = (
@@ -1505,6 +1522,8 @@ async def products_page(request: Request) -> None:
                         "send_for_approval": t("grid.op_send_for_approval"),
                         "add_category": t("grid.op_add_category"),
                         "remove_category": t("grid.op_remove_category"),
+                        "add_relation": t("grid.op_add_relation"),
+                        "remove_relation": t("grid.op_remove_relation"),
                         "change_parent": t("grid.op_change_parent"),
                         "delete": t("grid.op_delete"),
                     },
@@ -1514,6 +1533,7 @@ async def products_page(request: Request) -> None:
                 .props("filled dense")
                 .classes("w-full")
             )
+            ui.label(t("grid.bulk_areas_hint")).classes("text-caption text-gray-400")
             config_area = ui.column().classes("w-full mt-2 gap-2")
 
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
@@ -1589,6 +1609,51 @@ async def products_page(request: Request) -> None:
                         ui.button(icon="account_tree", on_click=choose_target).props(
                             "outline dense"
                         ).tooltip(t("grid.bulk_pick_label").format(label=t(label_key)))
+                elif op in ("add_relation", "remove_relation"):
+                    relation = (
+                        ui.select(
+                            bulk_relation_options,
+                            value=None,
+                            label=t("grid.bulk_relation"),
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["relation"] = relation
+
+                    async def choose_relation_target():
+                        """Picks the target object the relation points to."""
+                        definition = relation_def_by_key.get(str(relation.value or "")) or {}
+
+                        async def on_pick(hit: dict) -> None:
+                            bulk_picked["relation_target"] = hit
+                            relation_label.set_text(f"{hit.get('label')} · {hit.get('type')}")
+
+                        await open_object_picker(
+                            client=client,
+                            token=token,
+                            locale=locale,
+                            title=t("form.pick_target"),
+                            on_pick=on_pick,
+                            target_types=(definition.get("target_types") or []) or None,
+                        )
+
+                    def reset_relation_target() -> None:
+                        """A different relation type needs a new target object."""
+                        bulk_picked.pop("relation_target", None)
+                        relation_label.set_text(t("grid.bulk_nothing_picked"))
+
+                    relation.on_value_change(lambda _event: reset_relation_target())
+                    with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
+                        relation_label = ui.label(t("grid.bulk_nothing_picked")).classes(
+                            "grow text-caption text-gray-500"
+                        )
+                        ui.button(icon="account_tree", on_click=choose_relation_target).props(
+                            "outline dense"
+                        ).tooltip(
+                            t("grid.bulk_pick_label").format(label=t("grid.bulk_relation_target"))
+                        )
+                    ui.label(t("grid.bulk_relation_hint")).classes("text-caption text-gray-400")
                 elif op == "delete":
                     ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
                 if op in _APPROVAL_MODIFIER_OPS:
@@ -1645,6 +1710,11 @@ async def products_page(request: Request) -> None:
             elif op == "change_parent":
                 parent = bulk_picked.get("parent")
                 parameters["parent"] = parent.get("id") if parent else None
+            elif op in ("add_relation", "remove_relation"):
+                relation = bulk_fields.get("relation")
+                parameters["definition_id"] = relation.value if relation else None
+                target = bulk_picked.get("relation_target")
+                parameters["target"] = target.get("id") if target else None
 
             if op in _APPROVAL_MODIFIER_OPS:
                 approval = bulk_fields.get("send_for_approval")
@@ -1718,6 +1788,13 @@ async def products_page(request: Request) -> None:
                     ui.label(
                         t("grid.replace_summary").format(
                             replacements=result.get("replacements", 0),
+                            skipped=result.get("skipped", 0),
+                        )
+                    ).classes("text-caption")
+                if result.get("op") in ("add_relation", "remove_relation"):
+                    ui.label(
+                        t("grid.relation_summary").format(
+                            relations=result.get("relations", 0),
                             skipped=result.get("skipped", 0),
                         )
                     ).classes("text-caption")

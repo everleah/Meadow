@@ -30,6 +30,13 @@ level. `parameters.dry_run = true` computes the full proposal without writing
 anything; `parameters.attributes` restricts the run to a set of attribute names
 and `parameters.min_children` (default 2) requires a minimum number of children
 before a value is moved.
+
+`add_relation` / `remove_relation` assign a **relation** of the selection to one
+target object (`parameters.definition_id` + `parameters.target`): the edge is
+created from every selected object to the target (the stored direction is
+`in` = source, `out` = target). Both are **idempotent** – an existing edge (or a
+collection membership created by the `/collections/{id}/members` endpoint, which
+also maintains `rank`/`added_at`) is reported as `skipped` instead of duplicated.
 """
 
 from __future__ import annotations
@@ -55,6 +62,15 @@ DEFAULT_APPROVAL_STATUS = "in_review"
 
 #: Operations that must not get an extra approval transition afterwards.
 _NO_APPROVAL_OPS = frozenset({"change_status", "send_for_approval", "delete"})
+
+#: Operations that report "nothing to do" for an object as `skipped` (they
+#: return `changed: 0` in that case).
+_SKIPPABLE_OPS = frozenset({"replace_text", "add_relation", "remove_relation"})
+
+#: Relation type of a collection membership: it is created through
+#: `POST /collections/{id}/members` (which maintains `rank`/`added_at`) instead
+#: of the generic `POST /references`.
+COLLECTION_MEMBER_DEF = "rel_collection_member"
 
 #: Default minimum number of children before a value is pushed up (see the
 #: consolidation plan: with a single child there is no maintenance gain).
@@ -118,6 +134,7 @@ def build_bulk_handler(
         skipped = 0
         replacements = 0
         approvals = 0
+        relations = 0
         # Opt-in approval transition appended to a data-changing operation.
         wants_approval = bool(op_params.get("send_for_approval")) and op not in _NO_APPROVAL_OPS
         approval_status = str(op_params.get("approval_status") or DEFAULT_APPROVAL_STATUS)
@@ -131,8 +148,8 @@ def build_bulk_handler(
                     # `changed: 0` means the operation wrote nothing (no match).
                     approval = await request_approval(active, core_url, str(oid), approval_status)
                     detail = {**detail, **approval}
-                if op == "replace_text" and not detail.get("changed"):
-                    # No match in this object: report it as skipped, not as a change.
+                if not detail.get("changed") and op in _SKIPPABLE_OPS:
+                    # Nothing changed for this object: report it as skipped.
                     record.update(detail)
                     skipped += 1
                 else:
@@ -141,6 +158,7 @@ def build_bulk_handler(
                         record.update(detail)
                     succeeded += 1
                     replacements += int(detail.get("replacements") or 0)
+                    relations += int(detail.get("added") or 0) + int(detail.get("removed") or 0)
                     approvals += 1 if detail.get("approval") else 0
             except Exception as exc:  # noqa: BLE001 - isolate per-object failures
                 record["status"] = "error"
@@ -149,11 +167,13 @@ def build_bulk_handler(
             results.append(record)
 
         logger.info(
-            "bulk_operation %s: %d ok, %d skipped, %d failed, %d approvals of %d objects",
+            "bulk_operation %s: %d ok, %d skipped, %d failed, %d relations, "
+            "%d approvals of %d objects",
             op,
             succeeded,
             skipped,
             failed,
+            relations,
             approvals,
             len(object_ids),
         )
@@ -164,6 +184,7 @@ def build_bulk_handler(
             "skipped": skipped,
             "failed": failed,
             "replacements": replacements,
+            "relations": relations,
             "approvals": approvals,
             "results": results,
         }
@@ -213,6 +234,15 @@ async def _apply(
 
     if op == "replace_text":
         return await _replace_text(active, core_url, object_id, params, cache or {})
+
+    if op in ("add_relation", "remove_relation"):
+        definition_id = str(params.get("definition_id") or "")
+        target = str(params.get("target") or "")
+        if not definition_id or not target:
+            raise RuntimeError("`parameters.definition_id` and `parameters.target` are required")
+        if op == "add_relation":
+            return await _add_relation(active, core_url, object_id, definition_id, target)
+        return await _remove_relation(active, core_url, object_id, definition_id, target)
 
     if op == "change_status":
         status = str(params.get("status") or "")
@@ -303,13 +333,98 @@ async def _find_category_member(
     category: str,
 ) -> str | None:
     """Returns the `category_member` reference id linking object <-> category."""
-    refs = (await active.get(f"{core_url}/objects/{object_id}/references")).json()
-    for ref in refs:
-        if ref.get("definition_id") != "rel_category_member":
-            continue
-        if ref.get("out") == category or ref.get("in") == category:
-            return ref.get("id")
+    for reference_id in await _reference_ids(
+        active, core_url, object_id, "rel_category_member", category
+    ):
+        return reference_id
     return None
+
+
+async def _add_relation(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    definition_id: str,
+    target: str,
+) -> dict[str, Any]:
+    """Links `object_id` to `target` with `definition_id` (idempotent).
+
+    Reports `changed: 0` when the link already exists, so the caller counts the
+    object as skipped instead of writing a duplicate edge.
+    """
+    if definition_id == COLLECTION_MEMBER_DEF:
+        # Collection membership goes through the collections endpoint: it creates
+        # the edge in the stored direction (member -> collection) and maintains
+        # `rank`/`added_at`.
+        response = await active.post(
+            f"{core_url}/collections/{target}/members", json={"object_ids": [object_id]}
+        )
+        response.raise_for_status()
+        added = int(response.json().get("added") or 0)
+        return {
+            "relation": definition_id,
+            "target": target,
+            "added": added,
+            "changed": added,
+        }
+    if await _reference_ids(active, core_url, object_id, definition_id, target):
+        return {"relation": definition_id, "target": target, "added": 0, "changed": 0}
+    response = await active.post(
+        f"{core_url}/references",
+        json={"source": object_id, "target": target, "definition_id": definition_id},
+    )
+    response.raise_for_status()
+    return {"relation": definition_id, "target": target, "added": 1, "changed": 1}
+
+
+async def _remove_relation(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    definition_id: str,
+    target: str,
+) -> dict[str, Any]:
+    """Removes the relation between `object_id` and `target` (idempotent)."""
+    reference_ids = await _reference_ids(active, core_url, object_id, definition_id, target)
+    for reference_id in reference_ids:
+        response = await active.delete(f"{core_url}/references/{reference_id}")
+        response.raise_for_status()
+    return {
+        "relation": definition_id,
+        "target": target,
+        "removed": len(reference_ids),
+        "changed": len(reference_ids),
+    }
+
+
+async def _reference_ids(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    definition_id: str,
+    other_id: str,
+) -> list[str]:
+    """Ids of the edges between two objects of one relation type.
+
+    Both directions are matched: the stored direction is `in` = source and
+    `out` = target, but a symmetric relation may exist the other way round.
+    """
+    response = await active.get(f"{core_url}/objects/{object_id}/references")
+    response.raise_for_status()
+    references = response.json()
+    if not isinstance(references, list):
+        # An error payload would otherwise fail with a cryptic attribute error.
+        raise RuntimeError(f"unexpected references response for `{object_id}`")
+    found: list[str] = []
+    for reference in references:
+        if str(reference.get("definition_id") or "") != definition_id:
+            continue
+        other = str(
+            reference.get("out") if reference.get("in") == object_id else reference.get("in")
+        )
+        if other == other_id:
+            found.append(str(reference.get("id")))
+    return found
 
 
 async def _replace_text(

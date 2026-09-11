@@ -789,14 +789,12 @@ pub struct ReferenceListParams {
     )
 )]
 pub async fn list_object_references(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<ReferenceListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let key = parse_object_key(&id)?;
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
@@ -877,13 +875,11 @@ pub async fn list_object_references(
     )
 )]
 pub async fn delete_reference(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let (table, key) = id
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request(format!("invalid reference id `{id}`")))?;
