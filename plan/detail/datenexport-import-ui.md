@@ -43,7 +43,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 | Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; Checkbox-Auswahltabelle mit Spalten-Reihenfolge / „alle auswählen" |
 | Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) |
 | Sprache | Eine oder **mehrere** Locales (Fallback-Kette); pro Sprache eine Spalte `<attribut>_<code>` |
-| Optionen | Header-Zeile, Trennzeichen (`;`/`,`), quantifizierte Werte als `{value, unit}` in Anzeigeeinheit, `include_system` |
+| Optionen | Header-Zeile, Trennzeichen (`;`/`,`), quantifizierte Werte als `{value, unit}` in Anzeigeeinheit, `include_system`, **`resolve_inheritance` („Auch vererbte Werte exportieren", umgesetzt 2026-09-11)** |
 
 **Ausgabe:** Vorschau (Beispielzeilen) + Download (klein) oder Hintergrundjob + Report/Download-Link (groß).
 
@@ -72,7 +72,7 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
   "fields": ["sku", "title", "price", "status"],
   "format": "csv" | "xlsx" | "json",
   "locales": ["de", "en"],
-  "options": { "header": true, "separator": ",", "include_system": false }
+  "options": { "header": true, "separator": ",", "include_system": false, "resolve_inheritance": false }
 }
 ```
 
@@ -92,7 +92,7 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
 
 Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 
-1. Quelle auflösen → Objekt-IDs (siehe oben), Objekte über `GET /objects[...]` mit `?locale=<std>&resolve_inheritance=true` laden.
+1. Quelle auflösen → Objekt-IDs (siehe oben), Objekte über `GET /objects[...]` mit `?locale=<std>&resolve_inheritance=true` laden. **Umgesetzt (2026-09-11):** `options.resolve_inheritance` steuert dies – ohne die Option werden nur die **eigenen** Werte exportiert (Standard), mit der Option die **effektiven** Werte inkl. vererbter Attribute.
 2. **Spalten** bauen: `["id", "type", "status", …]` + Attributnamen (je Locale erweitert); Reihenfolge = `fields`.
 3. **Zeilen** bauen: je Objekt je Spalte den Wert extrahieren — Basis-Felder direkt, Attributwerte via Locale-Fallback (`language::resolve`-Konvention), mehrsprachig je Spalte. Quantifizierte Werte → `{"value","unit"}` in der Anzeigeeinheit über `GET /units/convert`.
 4. **Ergebnis** in `job_run.result`:

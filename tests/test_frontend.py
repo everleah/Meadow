@@ -7,6 +7,7 @@ import importlib
 from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
 from meadow.frontend.edit_queue import next_object_id, position_of
 from meadow.frontend.grid import (
+    INHERITED_FIELD,
     MAX_CONTENT_CHARS,
     attribute_column_specs,
     attribute_columns,
@@ -19,6 +20,7 @@ from meadow.frontend.grid import (
     enrich_tree_nodes,
     export_fields,
     filter_tree_nodes,
+    inherited_cells,
     is_editable_definition,
     language_cells,
     language_field,
@@ -526,3 +528,35 @@ def test_core_error_carries_message_and_status() -> None:
     error = CoreError("validation failed: sku: SKU is required (required)", status=400)
     assert str(error) == "validation failed: sku: SKU is required (required)"
     assert error.status == 400
+
+
+def test_inherited_cells_maps_attribute_fields_to_the_source() -> None:
+    object_ = {
+        "id": "object:1",
+        "attributes": {"brand": "Acme", "supplier": "Acme GmbH"},
+        "inherited": {
+            "brand": {"from": "object:parent", "label": "Product X"},
+            "supplier": {"from": "object:parent"},
+        },
+    }
+    markers = inherited_cells(object_, "en")[INHERITED_FIELD]
+    assert set(markers) == {"attr_brand", "attr_supplier"}
+    assert markers["attr_brand"] == "Inherited from Product X"
+    # Without a label the source id is the best we have.
+    assert markers["attr_supplier"] == "Inherited from object:parent"
+    assert t("grid.inherited_cell", locale="de", label="Product X") == "Vererbt von Product X"
+
+
+def test_inherited_cells_without_sources_is_empty() -> None:
+    assert inherited_cells({"id": "object:1", "attributes": {}}, "en") == {INHERITED_FIELD: {}}
+    # A malformed marker block must not break the rows.
+    assert inherited_cells({"inherited": "nope"}, "en") == {INHERITED_FIELD: {}}
+
+
+def test_inheritance_i18n_keys_translate() -> None:
+    assert t("form.inherited_from", locale="de", label="Bench") == "Vererbt von Bench"
+    assert t("form.inherited_from", locale="en", label="Bench") == "Inherited from Bench"
+    assert t("form.reset_inherited", locale="de") == "Auf vererbt zur\u00fccksetzen"
+    assert t("form.clear_value", locale="en").startswith("Set empty")
+    assert "unterbrochen" in t("form.interrupted", locale="de")
+    assert t("export.resolve_inheritance", locale="de") == "Auch vererbte Werte exportieren"

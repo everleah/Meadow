@@ -100,21 +100,33 @@ async def _resolve_objects(
     active: httpx.AsyncClient,
     core_url: str,
     source: dict[str, Any],
+    *,
+    resolve_inheritance: bool = False,
 ) -> list[dict[str, Any]]:
-    """Resolves the export source to a list of full object records."""
+    """Resolves the export source to a list of full object records.
+
+    With ``resolve_inheritance`` the objects are requested with
+    `?resolve_inheritance=true`, so attributes maintained on an ancestor are
+    exported with the child's effective value.
+    """
+    extra: dict[str, str] = {"resolve_inheritance": "true"} if resolve_inheritance else {}
     kind = source.get("kind")
     if kind == "type":
         object_type = source.get("type")
         if not object_type:
             raise RuntimeError("`source.kind='type'` requires `type`")
-        resp = await active.get(f"{core_url}/objects", params={"type": object_type, "limit": 1000})
+        resp = await active.get(
+            f"{core_url}/objects", params={"type": object_type, "limit": 1000, **extra}
+        )
         resp.raise_for_status()
         return resp.json()
     if kind == "category":
         category = source.get("category")
         if not category:
             raise RuntimeError("`source.kind='category'` requires `category`")
-        resp = await active.get(f"{core_url}/objects", params={"category": category, "limit": 1000})
+        resp = await active.get(
+            f"{core_url}/objects", params={"category": category, "limit": 1000, **extra}
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -143,7 +155,9 @@ async def _resolve_objects(
 
     if not ids:
         return []
-    resp = await active.get(f"{core_url}/objects", params={"ids": ",".join(ids), "limit": 1000})
+    resp = await active.get(
+        f"{core_url}/objects", params={"ids": ",".join(ids), "limit": 1000, **extra}
+    )
     resp.raise_for_status()
     return resp.json()
 
@@ -381,12 +395,16 @@ async def _structured_export(
     options = parameters.get("options") or {}
     header = bool(options.get("header", True))
     separator = str(options.get("separator") or ",")
+    # "Also export inherited values": fills attributes maintained on an ancestor.
+    resolve_inheritance = bool(options.get("resolve_inheritance"))
 
     multilingual, quantified = await _load_multilingual(active, core_url)
     fallback = await _load_languages(active, core_url)
 
     # Resolve objects (synchronously for the requested source).
-    objects = await _resolve_objects(active, core_url, source)
+    objects = await _resolve_objects(
+        active, core_url, source, resolve_inheritance=resolve_inheritance
+    )
 
     if format_ == "json":
         unit_map = await _load_unit_map(active, core_url)

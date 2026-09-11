@@ -936,5 +936,14 @@
   "grid.op_send_for_approval": "Send for approval",
   "grid.approval_status": "Target status",
   "grid.bulk_send_for_approval": "Send for approval afterwards",
-  "grid.bulk_approval_blocked": "{count} object(s): approval blocked"
+  "grid.bulk_approval_blocked": "{count} object(s): approval blocked",
+  "form.inherited_from": "Inherited from {label}",
+  "form.interrupted": "Inheritance interrupted (explicitly set empty)",
+  "form.value_actions": "Value actions",
+  "form.clear_value": "Set empty (interrupt inheritance)",
+  "form.reset_inherited": "Reset to inherited",
+  "form.inherit_failed": "The action could not be applied.",
+  "grid.inherited_cell": "Inherited from {label}",
+  "export.resolve_inheritance": "Also export inherited values",
+  "export.resolve_inheritance_hint": "Fills attributes that are not maintained on the object itself with the value inherited from its parent."
 }

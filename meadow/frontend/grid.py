@@ -62,6 +62,40 @@ _APPROVAL_MODIFIER_OPS = (
     "remove_category",
     "change_parent",
 )
+# Field of the per-row inheritance markers (`{field: "inherited from …"}`) and
+# the AG Grid column options that render them: NiceGUI converts `:`-prefixed
+# keys into real JavaScript functions on the client (`convertDynamicProperties`),
+# so an inherited cell is dimmed/italic and carries the source as browser tooltip.
+INHERITED_FIELD = "_inherited"
+INHERITED_CELL_STYLE = (
+    "(params) => (params.data && params.data._inherited"
+    " && params.data._inherited[params.colDef.field])"
+    " ? {opacity: 0.55, fontStyle: 'italic'} : null"
+)
+INHERITED_CELL_TOOLTIP = (
+    "(params) => (params.data && params.data._inherited"
+    " && params.data._inherited[params.colDef.field]) || ''"
+)
+
+
+def inherited_cells(object_: dict, locale: str) -> dict:
+    """Builds the per-row map of inherited attribute fields → tooltip text.
+
+    The core reports the origin of every inherited value in `inherited`
+    (`{name: {from, label}}`); the grid marks those cells (dimmed + tooltip)
+    via the `:cellStyle`/`:tooltipValueGetter` column options. The tooltip is
+    built here, where the locale and the translations are available.
+    """
+    sources = object_.get("inherited")
+    if not isinstance(sources, dict) or not sources:
+        return {INHERITED_FIELD: {}}
+    markers: dict[str, str] = {}
+    for name, source in sources.items():
+        if not isinstance(source, dict):
+            continue
+        label = str(source.get("label") or source.get("from") or "")
+        markers[attribute_field(str(name))] = t("grid.inherited_cell", locale=locale, label=label)
+    return {INHERITED_FIELD: markers}
 
 
 def with_header_tooltips(column_defs: list[dict]) -> list[dict]:
@@ -673,6 +707,7 @@ async def products_page(request: Request) -> None:
                     ids=ids,
                     missing_required=bool(active["incomplete"]),
                     locale=locale,
+                    resolve_inheritance=True,
                     limit=SEARCH_LIMIT,
                 )
             return await client.list_objects(
@@ -684,6 +719,7 @@ async def products_page(request: Request) -> None:
                 uncategorized=bool(active["uncategorized"]),
                 missing_required=bool(active["incomplete"]),
                 locale=locale,
+                resolve_inheritance=True,
                 limit=1000 if has_filter() else 100,
             )
 
@@ -781,6 +817,13 @@ async def products_page(request: Request) -> None:
         attribute_column_defs, attribute_language_fields = attribute_column_specs(
             definitions, locale, active_languages, enum_resolvers
         )
+        # The working-language attribute columns carry the inheritance marker
+        # (dimmed + source tooltip) for values resolved from an ancestor.
+        for column in attribute_column_defs:
+            field = column.get("field")
+            if isinstance(field, str) and LANG_SEPARATOR not in field:
+                column[":cellStyle"] = INHERITED_CELL_STYLE
+                column[":tooltipValueGetter"] = INHERITED_CELL_TOOLTIP
         language_fields = {**name_language_fields, **attribute_language_fields}
         column_defs = with_header_tooltips(
             [
@@ -825,6 +868,7 @@ async def products_page(request: Request) -> None:
                     language_prefixes,
                     enum_resolvers_by_language,
                 )
+                | inherited_cells(object_, locale)
                 for object_ in selected_objects
             ]
 

@@ -131,6 +131,7 @@ Durch das Ein-Eltern-Modell existiert **genau eine** Vererbungsquelle pro Objekt
 
 - Die einzige Überschreibungsmöglichkeit ist ein **expliziter Wert am Kind** (inkl. leerem Wert zur Unterbrechung).
 - Die UI zeigt bei vererbten Werten an, **von welchem Vorfahren** der Wert stammt (`from_object` in der aufgelösten Antwort), damit die Herkunft nachvollziehbar bleibt.
+- **Konsolidierung (geplant, Phase 9):** Umgekehrt lassen sich identisch gepflegte Kinderwerte wieder auf den Elternknoten hochschieben („Vererbung reparieren") – Regeln, Algorithmus und UI in [vererbung-konsolidierung.md](vererbung-konsolidierung.md).
 - Wird ein Objekt umgehängt (Re-Parenting, siehe [relationen.md](relationen.md)), lösen sich die Werte des Teilbaums ab sofort gegen die **neuen** Vorfahren auf – dynamisch, ohne Datenkopie.
 
 Durch diesen Ansatz bleibt die Vererbung einfach, transparent und beherrschbar.

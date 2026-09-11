@@ -160,6 +160,7 @@ class CoreClient:
         missing_required: bool = False,
         ids: list[str] | None = None,
         locale: str | None = None,
+        resolve_inheritance: bool = False,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
@@ -194,6 +195,8 @@ class CoreClient:
             params["ids"] = ",".join(ids)
         if locale:
             params["locale"] = locale
+        if resolve_inheritance:
+            params["resolve_inheritance"] = "true"
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects",
@@ -427,8 +430,13 @@ class CoreClient:
         attributes: dict | None = None,
         status: str | None = None,
         locale: str | None = None,
+        remove_attributes: list[str] | None = None,
     ) -> dict:
-        """Applies a partial object update (attributes and/or status)."""
+        """Applies a partial object update (attributes and/or status).
+
+        ``remove_attributes`` deletes those attribute keys from the object, so
+        the value is inherited again ("back to inherited").
+        """
         params: dict[str, str] = {}
         if locale:
             params["locale"] = locale
@@ -437,6 +445,8 @@ class CoreClient:
             payload["attributes"] = attributes
         if status is not None:
             payload["status"] = status
+        if remove_attributes:
+            payload["remove_attributes"] = list(remove_attributes)
         async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/objects/{object_id}",

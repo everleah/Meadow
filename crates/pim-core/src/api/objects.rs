@@ -58,6 +58,10 @@ pub struct UpdateObject {
     /// Change the workflow status.
     #[serde(default)]
     pub status: Option<String>,
+    /// Attribute names whose keys are **removed** from the object, so the value
+    /// is inherited again ("back to inherited"). Applied after `attributes`.
+    #[serde(default)]
+    pub remove_attributes: Vec<String>,
 }
 
 /// Query parameters for reading a single object.
@@ -121,6 +125,11 @@ pub struct ListObjects {
     /// Working language code (e.g. `en-US`); when set, each object gets a
     /// `completeness` value for this language.
     pub locale: Option<String>,
+    /// Fill inheritable attributes that are missing locally from the nearest
+    /// ancestor and report their origin in an `inherited` field per object
+    /// (`?resolve_inheritance=true`, one edge query per hierarchy level).
+    #[serde(default)]
+    pub resolve_inheritance: Option<bool>,
     /// Maximum number of results (capped at 1000).
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -475,7 +484,7 @@ pub async fn get_object(
                 .await?;
         }
         if params.resolve_inheritance == Some(true) {
-            crate::inheritance::resolve_inheritance(
+            let inherited = crate::inheritance::resolve_inheritance(
                 &state.cache,
                 &state.db,
                 key,
@@ -483,6 +492,9 @@ pub async fn get_object(
                 attributes,
             )
             .await?;
+            // `from`/`label` per inherited attribute, so the UI can mark the
+            // origin of a value ("inherited from …").
+            object["inherited"] = Value::Object(inherited);
         }
     }
 
@@ -740,6 +752,43 @@ pub async fn list_objects(
             .skip(start.max(0) as usize)
             .take(limit.max(0) as usize)
             .collect();
+    }
+
+    // Optionally fill inherited values for the whole page (one query per level)
+    // and mark each object's inherited attributes with their source.
+    if params.resolve_inheritance == Some(true) && !objects.is_empty() {
+        let mut items: Vec<(String, serde_json::Map<String, Value>)> = objects
+            .iter()
+            .map(|object| {
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let attributes = object
+                    .get("attributes")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                (id, attributes)
+            })
+            .collect();
+        let inherited = crate::inheritance::resolve_inheritance_batch(
+            &state.cache,
+            &state.db,
+            locale.as_deref(),
+            &mut items,
+        )
+        .await?;
+        for (index, object) in objects.iter_mut().enumerate() {
+            let (id, attributes) = &items[index];
+            object["attributes"] = Value::Object(attributes.clone());
+            let sources = inherited
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            object["inherited"] = sources;
+        }
     }
 
     Ok(Json(objects))
@@ -1005,8 +1054,19 @@ async fn apply_object_update(
         changes.insert("status".to_owned(), Value::String(status));
         changed_fields.push("status");
     }
+    // Keys removed from the object ("back to inherited"): applied after the
+    // merge by the SQL below and mirrored into the evaluation view here.
+    let remove_attributes: Vec<String> = body
+        .remove_attributes
+        .into_iter()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if !remove_attributes.is_empty() && !changed_fields.contains(&"attributes") {
+        changed_fields.push("attributes");
+    }
 
-    if changes.is_empty() {
+    if changes.is_empty() && remove_attributes.is_empty() {
         return Ok(current);
     }
 
@@ -1019,7 +1079,7 @@ async fn apply_object_update(
     let emit_events = params.emit_events.unwrap_or(true);
 
     // Own attributes to persist (pending changes applied).
-    let own_attributes = changes
+    let mut own_attributes = changes
         .get("attributes")
         .and_then(Value::as_object)
         .cloned()
@@ -1030,6 +1090,11 @@ async fn apply_object_update(
                 .cloned()
                 .unwrap_or_default()
         });
+    // Removed keys must not appear in the evaluated view either: dropping them
+    // lets the value fall back to the inherited one.
+    for name in &remove_attributes {
+        own_attributes.remove(name.as_str());
+    }
 
     // Resolved view for rule evaluation: own + language-resolved + inherited.
     let mut eval_attributes = own_attributes.clone();
@@ -1107,28 +1172,36 @@ async fn apply_object_update(
     });
 
     // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
-    // [CREATE outbox(4)], SELECT(4|5), COMMIT(5|6).
-    let sql = if emit_events {
-        "
-        BEGIN TRANSACTION;
-        LET $obj = type::record('object', $key);
-        UPDATE $obj MERGE $changes;
-        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
-        CREATE outbox_event CONTENT $outbox;
-        SELECT * FROM $obj;
-        COMMIT TRANSACTION;
-        "
-        .to_owned()
+    // [UPDATE remove attributes(4)], [CREATE outbox], SELECT, COMMIT.
+    let remove_stmt = if remove_attributes.is_empty() {
+        String::new()
     } else {
-        "
+        "UPDATE $obj SET attributes = object::from_entries(array::filter(object::entries(attributes), |$e| !($e[0] IN $remove)));\n"
+            .to_owned()
+    };
+    let sql = if emit_events {
+        format!(
+            "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', $key);
         UPDATE $obj MERGE $changes;
         UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        {remove_stmt}CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
         "
-        .to_owned()
+        )
+    } else {
+        format!(
+            "
+        BEGIN TRANSACTION;
+        LET $obj = type::record('object', $key);
+        UPDATE $obj MERGE $changes;
+        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        {remove_stmt}SELECT * FROM $obj;
+        COMMIT TRANSACTION;
+        "
+        )
     };
     let mut response = state
         .db
@@ -1137,10 +1210,17 @@ async fn apply_object_update(
         .bind(("key", key))
         .bind(("changes", Value::Object(changes)))
         .bind(("user", user_id.clone()))
+        .bind(("remove", remove_attributes.clone()))
         .bind(("outbox", outbox))
         .await?
         .check()?;
-    let select_index = if emit_events { 5 } else { 4 };
+    let select_index = if remove_attributes.is_empty() {
+        if emit_events { 5 } else { 4 }
+    } else if emit_events {
+        6
+    } else {
+        5
+    };
     let objects: Vec<Value> = response.take(select_index)?;
     let object = objects
         .into_iter()
@@ -1283,6 +1363,9 @@ pub async fn batch_update_objects(
         let body = UpdateObject {
             attributes: item.attributes,
             status: item.status,
+            // Inline grid edits never remove keys (the form uses the single
+            // object endpoint for "back to inherited").
+            remove_attributes: Vec::new(),
         };
         match apply_object_update(&state, &headers, &item.object_id, body, params.clone()).await {
             Ok(object) => {

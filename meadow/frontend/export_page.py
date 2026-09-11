@@ -345,6 +345,9 @@ async def export_page(request: Request) -> None:
                     .classes("w-56")
                 )
                 include_system_switch = ui.switch(t("export.include_system"))
+                inherit_switch = ui.switch(t("export.resolve_inheritance")).tooltip(
+                    t("export.resolve_inheritance_hint")
+                )
 
             email_input = (
                 ui.input(t("export.email_to")).props("outlined dense").classes("w-full mt-3")
@@ -411,6 +414,7 @@ async def export_page(request: Request) -> None:
                 "header": bool(header_switch.value),
                 "separator": str(separator_select.value or ","),
                 "include_system": bool(include_system_switch.value),
+                "resolve_inheritance": bool(inherit_switch.value),
             }
             recipients = _email_recipients()
             if recipients:
@@ -658,6 +662,7 @@ async def export_page(request: Request) -> None:
                         "header": bool(header_switch.value),
                         "separator": str(separator_select.value or ","),
                         "include_system": bool(include_system_switch.value),
+                        "resolve_inheritance": bool(inherit_switch.value),
                     },
                 }
                 recipients = _email_recipients()

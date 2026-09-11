@@ -936,5 +936,14 @@
   "grid.op_send_for_approval": "Zur Freigabe senden",
   "grid.approval_status": "Zielstatus",
   "grid.bulk_send_for_approval": "Anschließend zur Freigabe senden",
-  "grid.bulk_approval_blocked": "{count} Objekt(e): Freigabe blockiert"
+  "grid.bulk_approval_blocked": "{count} Objekt(e): Freigabe blockiert",
+  "form.inherited_from": "Vererbt von {label}",
+  "form.interrupted": "Vererbung unterbrochen (explizit leer gesetzt)",
+  "form.value_actions": "Wertaktionen",
+  "form.clear_value": "Leer setzen (Vererbung unterbrechen)",
+  "form.reset_inherited": "Auf vererbt zurücksetzen",
+  "form.inherit_failed": "Die Aktion konnte nicht ausgeführt werden.",
+  "grid.inherited_cell": "Vererbt von {label}",
+  "export.resolve_inheritance": "Auch vererbte Werte exportieren",
+  "export.resolve_inheritance_hint": "Füllt Attribute, die am Objekt selbst nicht gepflegt sind, mit dem vom Elternteil geerbten Wert."
 }

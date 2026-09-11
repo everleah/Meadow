@@ -168,6 +168,9 @@ async def product_form(object_id: str) -> None:
         object_type = str(resolved.get("type", ""))
         raw_attributes = dict(raw.get("attributes") or {})
         resolved_attributes = dict(resolved.get("attributes") or {})
+        # Origin of every inherited value (`{attr: {from, label}}`), reported by
+        # the core for `?resolve_inheritance=true`.
+        inherited_sources = dict(resolved.get("inherited") or {})
         name = resolve_value(resolved_attributes.get("name"), locale) or object_type
         missing = resolved.get("missing_required") or []
         completeness = (resolved.get("completeness") or {}).get(locale, 0)
@@ -180,6 +183,68 @@ async def product_form(object_id: str) -> None:
         data_lang_codes = [str(lang.get("code")) for lang in all_langs]
         if edit_lang not in data_lang_codes:
             edit_lang = _base_lang(locale)
+
+        def is_inheritable(defn: dict | None) -> bool:
+            """Whether the attribute may inherit (the value-action menu needs that)."""
+            return bool((defn or {}).get("inheritable")) and not (defn or {}).get("computed")
+
+        def inherited_source(attr_name: str) -> dict | None:
+            """Returns the `{from, label}` origin of an inherited value."""
+            source = inherited_sources.get(attr_name)
+            return source if isinstance(source, dict) else None
+
+        def attr_state(attr_name: str, defn: dict | None, own: object) -> str:
+            """Classifies the value for the marker: own, inherited or interrupted."""
+            if own is None and inherited_source(attr_name) is not None:
+                return "inherited"
+            multilingual = bool(defn is None or (defn or {}).get("multilingual"))
+            if not multilingual and attr_name in edited and own in (None, ""):
+                # Key present but empty = the value deliberately interrupts
+                # inheritance ("leer gesetzt").
+                return "interrupted"
+            return "own"
+
+        def render_value_marker(attr_name: str, defn: dict | None, own: object) -> None:
+            """Adds the inheritance/interruption marker next to the label."""
+            state = attr_state(attr_name, defn, own)
+            if state == "inherited":
+                source = inherited_source(attr_name) or {}
+                origin = str(source.get("label") or source.get("from") or "")
+                ui.icon("swap_horiz").classes("text-gray-400 text-xs").tooltip(
+                    t("form.inherited_from", label=origin)
+                )
+            elif state == "interrupted":
+                ui.icon("link_off").classes("text-warning text-xs").tooltip(t("form.interrupted"))
+
+        async def apply_value_action(attr_name: str, *, remove: bool) -> None:
+            """Removes the own value (back to inherited) or sets it explicitly empty."""
+            try:
+                if remove:
+                    await client.update_object(
+                        token, object_id, remove_attributes=[attr_name], locale=locale
+                    )
+                else:
+                    await client.update_object(
+                        token, object_id, attributes={attr_name: None}, locale=locale
+                    )
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("form.inherit_failed"), color="negative")
+                return
+            ui.navigate.reload()
+
+        def render_value_actions(attr_name: str, defn: dict | None) -> None:
+            """Context menu for inheritance actions of an inheritable attribute."""
+            menu_button = ui.button(icon="more_vert").props("dense flat round")
+            menu_button.tooltip(t("form.value_actions"))
+            with menu_button, ui.menu():
+                ui.menu_item(
+                    t("form.reset_inherited"),
+                    on_click=lambda n=attr_name: apply_value_action(n, remove=True),
+                )
+                ui.menu_item(
+                    t("form.clear_value"),
+                    on_click=lambda n=attr_name: apply_value_action(n, remove=False),
+                )
 
         # --- Header: name, type, status, completeness. The current UI language
         # is the main edit language (no separate language selector). ----------
@@ -350,12 +415,14 @@ async def product_form(object_id: str) -> None:
             *,
             multilingual: bool,
             register_main: bool = True,
+            dim: bool = False,
         ) -> None:
             """Creates the inline value widget for the main-edit language.
 
             ``register_main=False`` is used by the pinned sidebar: the sidebar
             writes to the same working copy but must not own the inline widget
             handle (`main_widgets`), which the language dialog updates.
+            ``dim`` greys the field: the value is inherited, not maintained here.
             """
             atype = (defn or {}).get("type", "text")
 
@@ -404,6 +471,10 @@ async def product_form(object_id: str) -> None:
                     .on_value_change(on_change)
                 )
             field.classes("flex-1")
+            if dim:
+                # Dim the whole field: Quasar sets the input text color itself, so
+                # a color class would not reach the input element.
+                field.style("opacity: 0.65")
             if register_main:
                 main_widgets[attr_name] = field
 
@@ -442,7 +513,7 @@ async def product_form(object_id: str) -> None:
                 with ui.row().classes("items-center gap-2 w-full py-1 text-caption text-gray-500"):
                     ui.label(t("form.column_attr")).classes("w-56 shrink-0")
                     ui.label(t("form.column_value")).classes("flex-1")
-                    ui.label("").classes("w-20 shrink-0")
+                    ui.label("").classes("w-28 shrink-0")
                 for attr_name, defn in items:
                     multilingual = bool(defn is None or (defn or {}).get("multilingual"))
                     label = _label(defn, attr_name, locale)
@@ -451,6 +522,7 @@ async def product_form(object_id: str) -> None:
                     # visually revert unstaged edits.
                     own = _raw_value(edited, attr_name, edit_lang)
                     required = _is_required(defn, object_type)
+                    state = attr_state(attr_name, defn, own)
                     with ui.row().classes("items-center gap-2 w-full py-1"):
                         # Label cell (+ required marker, inherited marker).
                         with ui.row().classes("items-center gap-1 shrink-0 w-56"):
@@ -459,20 +531,23 @@ async def product_form(object_id: str) -> None:
                                 ui.label("*").classes("text-caption text-negative").tooltip(
                                     t("form.required")
                                 )
-                            if not multilingual and own is None:
-                                resolved_val = _raw_value(resolved_attributes, attr_name, edit_lang)
-                                if resolved_val is not None:
-                                    ui.icon("swap_horiz").classes("text-gray-400 text-xs").tooltip(
-                                        t("form.inherited")
-                                    )
+                            render_value_marker(attr_name, defn, own)
                         # Value cell in the main-edit language.
                         value = own
                         if value is None:
                             value = _raw_value(resolved_attributes, attr_name, edit_lang)
-                        build_value_widget(attr_name, defn, value, multilingual=multilingual)
-                        # Action cell: language editor (multilingual only) + pin
-                        # toggle (pinned attributes appear in the sidebar).
-                        with ui.row().classes("items-center gap-1 shrink-0 w-20 justify-end"):
+                        build_value_widget(
+                            attr_name,
+                            defn,
+                            value,
+                            multilingual=multilingual,
+                            dim=state == "inherited",
+                        )
+                        # Action cell: value actions (inheritable), language editor
+                        # (multilingual only) + pin toggle.
+                        with ui.row().classes("items-center gap-1 shrink-0 w-28 justify-end"):
+                            if is_inheritable(defn):
+                                render_value_actions(attr_name, defn)
                             if multilingual:
                                 ui.button(icon="translate").props("dense flat round").on_click(
                                     lambda n=attr_name, d=defn: open_lang_dialog(n, d)
@@ -1183,6 +1258,8 @@ async def product_form(object_id: str) -> None:
                 for attr_name in visible:
                     defn = pin_catalog[attr_name]
                     multilingual = bool(defn is None or defn.get("multilingual"))
+                    own = _raw_value(edited, attr_name, edit_lang)
+                    state = attr_state(attr_name, defn, own)
                     with ui.column().classes("w-full gap-1 border-t pt-1"):
                         with ui.row().classes("items-center gap-1 w-full"):
                             ui.label(_label(defn, attr_name, locale)).classes("text-caption")
@@ -1190,7 +1267,10 @@ async def product_form(object_id: str) -> None:
                                 ui.label("*").classes("text-caption text-negative").tooltip(
                                     t("form.required")
                                 )
+                            render_value_marker(attr_name, defn, own)
                             ui.space()
+                            if is_inheritable(defn):
+                                render_value_actions(attr_name, defn)
                             if multilingual:
                                 ui.button(icon="translate").props(
                                     "dense flat round size=sm"
@@ -1200,7 +1280,7 @@ async def product_form(object_id: str) -> None:
                             ui.button(icon="push_pin").props(
                                 "dense flat round size=sm color=primary"
                             ).on_click(lambda n=attr_name: toggle_pin(n)).tooltip(t("form.unpin"))
-                        value = _raw_value(edited, attr_name, edit_lang)
+                        value = own
                         if value is None:
                             value = _raw_value(resolved_attributes, attr_name, edit_lang)
                         build_value_widget(
@@ -1209,6 +1289,7 @@ async def product_form(object_id: str) -> None:
                             value,
                             multilingual=multilingual,
                             register_main=False,
+                            dim=state == "inherited",
                         )
 
         def on_missing_toggle(value: bool) -> None:

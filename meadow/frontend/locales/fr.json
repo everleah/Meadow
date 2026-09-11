@@ -936,5 +936,14 @@
   "grid.op_send_for_approval": "Envoyer pour validation",
   "grid.approval_status": "Statut cible",
   "grid.bulk_send_for_approval": "Envoyer ensuite pour validation",
-  "grid.bulk_approval_blocked": "{count} objet(s) : validation bloquée"
+  "grid.bulk_approval_blocked": "{count} objet(s) : validation bloquée",
+  "form.inherited_from": "Hérité de {label}",
+  "form.interrupted": "Héritage interrompu (défini explicitement vide)",
+  "form.value_actions": "Actions de valeur",
+  "form.clear_value": "Définir vide (interrompre l’héritage)",
+  "form.reset_inherited": "Rétablir l’héritage",
+  "form.inherit_failed": "L’action n’a pas pu être appliquée.",
+  "grid.inherited_cell": "Hérité de {label}",
+  "export.resolve_inheritance": "Exporter aussi les valeurs héritées",
+  "export.resolve_inheritance_hint": "Remplit les attributs non maintenus sur l’objet avec la valeur héritée du parent."
 }
