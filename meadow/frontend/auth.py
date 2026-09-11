@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+from urllib.parse import quote
+
 import httpx
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from nicegui import app, ui
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from meadow.frontend import config
+from meadow.frontend import api, config
 from meadow.frontend.api import CoreClient
 from meadow.frontend.i18n import best_locale, t
 from meadow.frontend.theme import LOGIN_BG_PNG, LOGIN_BG_WEBP, MEADOW_LOGO
@@ -74,8 +77,14 @@ def is_superadmin() -> bool:
 
 
 @ui.page("/login")
-def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
-    """Login page: exchanges credentials with the core and stores the JWT."""
+def login(
+    request: Request, redirect_to: str = "/", expired: bool = False
+) -> RedirectResponse | None:
+    """Login page: exchanges credentials with the core and stores the JWT.
+
+    `expired` is set by `handle_session_expired`, so a session that was lost
+    explains itself instead of just showing the form again.
+    """
     if is_authenticated():
         return RedirectResponse("/")
     if not app.storage.user.get("locale"):
@@ -118,6 +127,8 @@ def login(request: Request, redirect_to: str = "/") -> RedirectResponse | None:
     with ui.card().classes("absolute-center items-stretch w-96"):
         ui.image(MEADOW_LOGO).classes("w-32 self-center mb-2")
         ui.label(t("login.sign_in")).classes("text-subtitle1 self-center")
+        if expired:
+            ui.label(t("login.session_expired")).classes("text-caption text-warning self-center")
         username = (
             ui.input(t("login.username"))
             .props("autofocus")
@@ -147,6 +158,39 @@ def logout() -> None:
     ui.navigate.to("/login")
 
 
+def current_page_path() -> str:
+    """The route of the page the user is currently on (``/`` as fallback).
+
+    Used to send the user back to where they were after a re-login. Without a
+    client/slot context (e.g. a background task) there is no page route.
+    """
+    try:
+        path = ui.context.client.page.path
+    except Exception:  # noqa: BLE001 - no page context available
+        return "/"
+    return path if path and path != "/login" else "/"
+
+
+def handle_session_expired() -> None:
+    """Clears a lost session and returns the user to the login page.
+
+    Registered as the core client's session-expired callback, so **any** call
+    rejected with an invalid/expired token leads back to the login page instead
+    of leaving the page half-loaded (the login page remembers where the user
+    came from via `?redirect_to=`). On the login page itself (and for an
+    already cleaned session) nothing happens, so a failed login keeps showing
+    its error message. Without a client context (background task) there is
+    nothing to redirect.
+    """
+    with contextlib.suppress(RuntimeError):
+        if not is_authenticated() or current_page_path() == "/login":
+            return
+        redirect_to = current_page_path()
+        clear_session()
+        ui.navigate.to(f"/login?redirect_to={quote(redirect_to)}&expired=1")
+
+
 def register() -> None:
-    """Registers the authentication middleware."""
+    """Registers the authentication middleware and the expiry callback."""
     app.add_middleware(AuthMiddleware)
+    api.set_session_expired_handler(handle_session_expired)

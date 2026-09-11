@@ -146,6 +146,7 @@
   "login.password": "Mot de passe",
   "login.log_in": "Se connecter",
   "login.invalid_credentials": "Nom d'utilisateur ou mot de passe invalide",
+  "login.session_expired": "Votre session a expiré. Veuillez vous reconnecter.",
   "login.core_unreachable": "Cœur inaccessible",
   "password.title": "Changer le mot de passe",
   "password.hint": "Au moins {length} caractères ; le nouveau mot de passe doit différer de l'actuel.",

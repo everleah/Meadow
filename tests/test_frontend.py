@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import importlib
 
+import httpx
+
+from meadow.frontend import api
 from meadow.frontend.api import CoreError, LoginResponse, MeResponse, is_session_expired
+from meadow.frontend.auth import current_page_path
 from meadow.frontend.edit_queue import next_object_id, position_of
 from meadow.frontend.grid import (
     INHERITED_FIELD,
@@ -603,3 +607,45 @@ def test_consolidation_i18n_keys_translate() -> None:
         for reason in CONSOLIDATION_REASONS:
             key = f"consolidate.reason.{reason}"
             assert t(key, locale=locale) != key, (locale, key)
+
+
+def _core_response(status: int, payload: dict) -> httpx.Response:
+    """A core response as the shared client's hook sees it."""
+    return httpx.Response(
+        status, json=payload, request=httpx.Request("GET", "http://127.0.0.1:8080/objects")
+    )
+
+
+async def test_session_expiry_hook_reports_an_expired_token() -> None:
+    """Any call rejected with an expired token returns the user to the login page."""
+    calls: list[str] = []
+    api.set_session_expired_handler(lambda: calls.append("expired"))
+    try:
+        await api._watch_session(_core_response(401, {"error": "invalid or expired token"}))
+    finally:
+        api.set_session_expired_handler(None)
+    assert calls == ["expired"]
+
+
+async def test_session_expiry_hook_ignores_a_failed_login() -> None:
+    """A wrong password is also a 401 and must keep showing its own message."""
+    calls: list[str] = []
+    api.set_session_expired_handler(lambda: calls.append("expired"))
+    try:
+        await api._watch_session(_core_response(401, {"error": "invalid credentials"}))
+        await api._watch_session(_core_response(403, {"error": "invalid or expired token"}))
+        await api._watch_session(_core_response(200, {"items": []}))
+    finally:
+        api.set_session_expired_handler(None)
+    assert calls == []
+
+
+async def test_session_expiry_hook_without_a_registered_handler() -> None:
+    """Detection must not fail when no frontend is registered (worker/tests)."""
+    api.set_session_expired_handler(None)
+    await api._watch_session(_core_response(401, {"error": "invalid or expired token"}))
+
+
+def test_current_page_path_without_a_client_context() -> None:
+    """Without a page context (background task) the fallback is the start page."""
+    assert current_page_path() == "/"

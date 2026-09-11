@@ -21,7 +21,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config, edit_queue
 from meadow.frontend.api import CoreClient, is_session_expired
-from meadow.frontend.auth import clear_session
+from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -1163,8 +1163,7 @@ async def products_page(request: Request) -> None:
                 return
             if is_session_expired(results):
                 ui.notify(t("grid.session_expired"), color="warning")
-                clear_session()
-                ui.navigate.to("/login")
+                handle_session_expired()
                 return
             ok = sum(1 for result in results if result.get("success"))
             ui.notify(t("grid.saved_count").format(ok=ok, total=len(results)))

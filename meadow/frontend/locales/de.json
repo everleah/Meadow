@@ -146,6 +146,7 @@
   "login.password": "Passwort",
   "login.log_in": "Anmelden",
   "login.invalid_credentials": "Ungültiger Benutzername oder Passwort",
+  "login.session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
   "login.core_unreachable": "Kern nicht erreichbar",
   "password.title": "Passwort ändern",
   "password.hint": "Mindestens {length} Zeichen; das neue Passwort muss sich vom aktuellen unterscheiden.",

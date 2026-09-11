@@ -146,6 +146,7 @@
   "login.password": "Password",
   "login.log_in": "Log in",
   "login.invalid_credentials": "Invalid username or password",
+  "login.session_expired": "Your session has expired. Please sign in again.",
   "login.core_unreachable": "Core is unreachable",
   "password.title": "Change password",
   "password.hint": "At least {length} characters; the new password must differ from the current one.",

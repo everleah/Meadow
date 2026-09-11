@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 
 import httpx
 from pydantic import BaseModel
+
+#: Message the core returns when the bearer token is invalid or expired (as
+#: opposed to `invalid credentials`, which a failed login returns).
+SESSION_EXPIRED_MESSAGE = "invalid or expired token"
+
+#: Callback invoked when the core rejects a call because the session is gone;
+#: the frontend registers the redirect to the login page (`auth.register`).
+_session_expired_handler: Callable[[], None] | None = None
 
 #: Reused across every CoreClient call so the connection pool stays warm and
 #: no new `httpx.AsyncClient` is built per request (which was the main source
@@ -26,12 +35,43 @@ async def _api_client() -> httpx.AsyncClient:
     call sites unchanged (their indentation and body are untouched) while
     reusing a single long-lived connection pool. `trust_env=False` ignores
     proxy/`NO_PROXY` env vars that could otherwise be picked up during a
-    request on Windows.
+    request on Windows. The response hook watches for a lost session so every
+    page returns to the login page instead of failing half-loaded.
     """
     global _shared_client
     if _shared_client is None or _shared_client.is_closed:
-        _shared_client = httpx.AsyncClient(timeout=_SHARED_CLIENT_TIMEOUT, trust_env=False)
+        _shared_client = httpx.AsyncClient(
+            timeout=_SHARED_CLIENT_TIMEOUT,
+            trust_env=False,
+            event_hooks={"response": [_watch_session]},
+        )
     yield _shared_client
+
+
+def set_session_expired_handler(handler: Callable[[], None] | None) -> None:
+    """Registers (or with `None` clears) the callback that gets the user back
+    to the login page."""
+    global _session_expired_handler
+    _session_expired_handler = handler
+
+
+async def _watch_session(response: httpx.Response) -> None:
+    """Response hook: reports an invalid/expired token to the frontend.
+
+    A *failed login* also answers with 401 (`invalid credentials`), so the
+    message decides: only a lost session triggers the handler. The body is not
+    read yet at hook time, so it is awaited explicitly (httpx `aread`); only
+    401 responses are inspected, so no other download is buffered here.
+    """
+    if response.status_code != 401:
+        return
+    try:
+        await response.aread()
+        body = response.text
+    except Exception:  # noqa: BLE001 - a body that cannot be read carries no verdict
+        return
+    if SESSION_EXPIRED_MESSAGE in body and _session_expired_handler is not None:
+        _session_expired_handler()
 
 
 class CoreError(Exception):
