@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Datenmodell](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 1–3, 9
-- **Stand:** Entwurf
+- **Stand:** Entwurf (Komposition & Aggregation umgesetzt; Rollen-Klassifizierung `role` geplant, siehe unten)
 
 ## Grundprinzip
 
@@ -55,6 +55,7 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
   - `collection_member` → materialisierte Collections (Phase 9, siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md))
   - `related` → allgemeine Verknüpfung
 - Aggregationen haben **keine** Vererbungswirkung und **keine** Löschkaskade.
+- Die **Bedeutung** einer Aggregation ist über `role` klassifiziert (Kategorie/Sammlung/Verknüpfung, s. u.) – `kind` sagt nur „ohne Vererbung/Kaskade“.
 - Kanten-Metadaten bleiben möglich, z. B. `position` und `context` bei `category_member`.
 - **Benutzerdefinierte** Relationstypen sind **immer** Aggregationen (Phase 9) und können nie Komposition sein – dadurch bleibt die Ein-Eltern-Invariante strukturell garantiert.
 
@@ -64,7 +65,8 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 {
     "id": "rel_depends_on",
     "name": "depends_on",            // eindeutiger Name des Relationstyps
-    "kind": "composition",           // composition | aggregation
+    "kind": "composition",           // composition | aggregation (strukturell)
+    "role": "composition",           // composition | category | collection | link (Verwendung, geplant s. u.)
     "source_types": [],              // optional: erlaubte Quell-Objekttypen (leer = alle)
     "target_types": [],              // optional: erlaubte Ziel-Objekttypen (leer = alle)
     "label": { "de": "Abhängig von", "en": "Depends on" },
@@ -75,11 +77,57 @@ Der Relationstyp wird über die Tabelle `relation_definition` spezifiziert; jede
 }
 ```
 
-- `kind` bestimmt die Semantik (siehe oben). Es darf **genau eine** Definition mit `kind: "composition"` geben.
+- `kind` beschreibt die **Struktur** (Komposition vs. Aggregation); es darf **genau eine** Definition mit `kind: "composition"` geben. Welche **Bedeutung** eine Aggregation hat, sagt `role` (s. u.).
 - `source_types` / `target_types` schränken die erlaubten Objekttypen ein; **leer = alle Typen erlaubt**. Die Prüfung erfolgt **beim Anlegen jeder Relation** (Phase 1–2), nicht nur deklarativ.
 - `attributes` (Phase 9) ist die Liste der **Edge-Attribute** eines Relationstyps (Namen, die auf `attribute_definition` verweisen). Die zugehörigen Werte liegen auf der Kante in `reference.attributes[name]`; das Produkt-Formular rendert dafür typspezifische Eingabefelder.
 - `system: true` kennzeichnet eingebaute Typen (Seed in Phase 1–2): `depends_on` (Komposition) sowie `category_member`, `collection_member`, `related` (Aggregation).
+- `role` (geplant, s. u.) klassifiziert die **Verwendung** des Typs (`composition` | `category` | `collection` | `link`); Standard-Typen tragen ihre feste Rolle, neue benutzerdefinierte Typen starten als `link`.
 - Benutzerdefinierte Relationstypen (`system: false`, Phase 9) werden über die API angelegt (`POST /relation-definitions`) und sind immer Aggregationen; `PATCH /relation-definitions/{id}` ändert Label/Restriktionen/Attribute, `DELETE /relation-definitions/{id}` entfernt einen ungenutzten benutzerdefinierten Typ (400 für `system`-Typen, 409 solange Referenzen ihn nutzen).
+
+## Verwendung von Relationstypen (`role`) — Plan (2026-09-11)
+
+**Ausgangslage.** Alle Aggregationen sind technisch gleich (n:m-Kanten ohne Vererbung/Kaskade), haben aber schon heute **unterschiedliche Bedeutungen**: Kategorisierung (`category_member`), Sammlungs-Mitgliedschaft (`collection_member`) und allgemeine Verknüpfung (`related`). Diese Bedeutung steckt bisher nur in **hartkodierten IDs** – im Kern (`COMPOSITION_DEFINITION`, `category_member_keys`, `collection_member_keys`, `'rel_category_member'` in den Grid-Filtern), im Frontend (`form.py` blendet `rel_category_member` aus und behandelt `rel_depends_on` speziell, `grid.py::_DEDICATED_RELATION_DEFS`, Kategorien-/Collections-Sichten, Referenz-Modal) und im Worker (`bulk.py::COLLECTION_MEMBER_DEF` plus Sonder-Routing sowie `rel_category_member` für die Kategorie-Operationen).
+
+Sichtbare Folgen der fehlenden Klassifizierung:
+
+- Ein benutzerdefinierter Typ ist für Code und Anwender nicht von „Kategorie“ oder „Sammlung“ zu unterscheiden; jede Sonderbehandlung muss IDs kennen und sie an allen Stellen mitpflegen.
+- Die Bulk-Operation „Relation zuweisen/entfernen“ musste Standard-Typen per ID **ausschließen** (Komposition und Kategorien haben eigene Operationen) statt nach Bedeutung zu filtern.
+- Fehlkonfigurationen fallen erst spät auf: `rel_collection_member` mit `source_types: ["collection"]` (über die Relationstyp-Verwaltung gesetzt) lässt das generische Anlegen von Sammlungs-Kanten mit `400` scheitern – die Speicherrichtung ist Mitglied (`in`) → Sammlung (`out`), `source_types` prüft aber die **Quelle**. Die Rolle „Sammlung“ würde Richtung und Containertyp erzwingen.
+- In `/relation-types` ist nur `kind` sichtbar (`composition` | `aggregation`); die **Verwendung** fehlt.
+
+**Vorschlag: neues Feld `role`.** `role` beschreibt die **Verwendung** eines Relationstyps, `kind` bleibt der **strukturelle** Typ (Komposition vs. Aggregation):
+
+| `role` | Bedeutung | Erzwungene Struktur | Sichtbar/verwendet in |
+| --- | --- | --- | --- |
+| `composition` | Komposition (Vererbung, Kaskade, Baum) | `kind: composition`, genau **eine** Definition, `source_types`/`target_types` leer | Strukturbaum, Formular (Elternobjekt, Re-Parenting), Vollständigkeit, Löschkaskade |
+| `category` | Kategorisierung | `kind: aggregation`, genau **eine** Definition, Ziel **muss** ein `category`-Objekt sein | Formular-Abschnitt „Kategorien“, Kategorien-Baum/-Seite, Grid-Filter `?category=`/`?uncategorized=`, Mitgliederzähler, Bulk `add_category`/`remove_category` |
+| `collection` | Mitgliedschaft in einer materialisierten Sammlung | `kind: aggregation`, genau **eine** Definition, Ziel **muss** ein `collection`-Objekt sein, Kanten-Metadaten `rank`/`added_at` | Sammlungen-Seite/-Ansicht, `POST /collections/{id}/members`, Refresh-Job, Grid-Filter `?collection=`, Bulk `add_relation` (Routing über den Sammlungs-Endpunkt) |
+| `link` | allgemeine Verknüpfung (**Default**) | `kind: aggregation`, beliebig viele Definitionen | Relationen-Abschnitt im Formular, Referenz-Modal im Grid, Objekt-Picker, Bulk `add_relation`/`remove_relation`, MEF-Import (`type` → `rel_<name>`) |
+
+Regeln:
+
+- **Konsistenz:** `role == 'composition'` ⟺ `kind == 'composition'`; `kind` bleibt im Datenmodell (Traversal, Ein-Eltern-Invariante), wird aber aus der Rolle abgeleitet und ist in API/UI nicht separat zu pflegen.
+- **Singletons:** `composition`, `category` und `collection` sind **System-Rollen** – genau eine Definition je Rolle, `system: true`, Rolle **nicht** änderbar.
+- **Default:** Jeder neu angelegte Typ ist `link` ohne Sondermetadaten (kein `rank`/`added_at`, keine Sonder-UI) – also genau die erwartete „normale Verknüpfung“.
+- **Änderbar für Custom-Typen:** Eigene Typen dürfen ihre Rolle wechseln, sobald Sonderrollen mehrfach zugelassen sind (Stage 2). In **Stage 1** ist `link` die einzige zulässige Rolle für eigene Typen; im Dialog ist die Verwendung sichtbar und für `system`-Typen fest.
+- **Rollenprüfung im Kern:** `POST /references` prüft zusätzlich die Rolle – `category` ⇒ Zielobjekt vom Typ `category`, `collection` ⇒ Zielobjekt vom Typ `collection`, `composition` ⇒ bestehende Regeln (ein Elternteil, Zyklenschutz). Eine falsch konfigurierte Rolle wird damit sofort gemeldet statt später als Filter-Überraschung.
+- **Sichtbarkeit:** Die Relationstyp-Verwaltung und der Relationen-Abschnitt im Formular zeigen die Verwendung (Badge), damit „Verknüpfung vs. Kategorie vs. Sammlung“ ohne ID-Wissen erkennbar ist.
+
+**Umsetzungsschritte (Stage 1):**
+
+1. **Schema & Seed:** `role` an `relation_definition` (`schema.rs`), Seed setzt die vier Rollen. **Dabei mitzubeheben:** `seed::apply` schreibt System-Records bei **jedem** Kernstart per `UPSERT … CONTENT` und überschreibt damit Laufzeit-Änderungen (Relationstypen, Objekttypen, Einheiten, Sprachen) – der Seed darf nur fehlende Records anlegen bzw. nur Identitätsfelder (`name`, `kind`, `system`, `role`) setzen. Eine einmalige Migration füllt fehlende Rollen mit `link`.
+2. **Kern:** `role` in Response/DTO + Validierung (`POST`/`PATCH /relation-definitions`: Default `link`, `system` ⇒ Rolle unveränderlich, Singletons erzwungen), Rollenprüfung in `create_reference`.
+3. **Frontend/Worker:** Hartkodierte IDs durch Rollen-Lookups ersetzen (`relation_def_by_key` → `role`, Abschnitte in `form.py`, `grid.py::_DEDICATED_RELATION_DEFS` → „Rollen mit eigener Operation“, `worker/bulk.py`-Routing über die Rolle statt `COLLECTION_MEMBER_DEF`).
+4. **UI:** `/relation-types` zeigt die **Verwendung** (Spalte + Badge, Auswahl im Dialog, für `system` deaktiviert); der Bulk-Wizard bietet `link` und `collection` (mit korrektem Routing) und blendet `composition`/`category` aus; der Relationen-Abschnitt im Formular folgt derselben Regel.
+5. **Tests & Doku:** Rollen-Validierung (Core-Unit-Tests), Wizard-Filter und Worker-Routing (pytest), Doku-Nachzug (`kategorisierung.md`, `gespeicherte-suchen-collections.md`, `api-design.md`, DOX-Dateien).
+
+**Offene Entscheidungen (mit Vorschlag):**
+
+1. **Mehrere `category`/`collection`-Rollen zulassen (Stage 2)?** Dann müssen Kern und UI mit **Listen** statt Einzel-IDs arbeiten (Kategorien-Baum, `?category=` bräuchte eine `definition`-Angabe, Mitgliederzähler, Bulk-Operationen). **Vorschlag:** Stage 1 mit Singletons umsetzen, Stage 2 nur bei echtem Bedarf.
+2. **`kind` in `role` auflösen?** `kind` ist aus `role` ableitbar (weniger Redundanz), aber es ändert API- und Frontend-Stellen. **Vorschlag:** `kind` vorerst behalten, abgeleitet und schreibgeschützt.
+3. **Bezeichnung:** Feld `role`, UI „Verwendung“ (en: „Usage“). **Vorschlag:** so.
+
+**Nicht-Ziele:** keine Änderung an der Kanten-Speicherung (`reference.in`/`out`), keine Rolle außer den vier genannten, keine automatische Umklassifizierung bestehender Daten (nur Default `link`).
 
 ## Altlasten-Mapping (entfernt)
 
@@ -103,3 +151,5 @@ Das frühere Modell kannte weitere Typen und Kanten-Attribute, die durch das Rel
 4. Aggregationen kaskadieren nie und vererben nicht.
 5. Der Universal-Root ist unlöschbar und strukturell unveränderlich.
 6. Relationen werden beim Anlegen gegen die Typrestriktionen der `relation_definition` geprüft.
+7. `role` klassifiziert die Verwendung: genau eine Definition je System-Rolle (`composition`, `category`, `collection`), alle übrigen sind `link`; die Rolle ist bei `system`-Typen unveränderlich.
+8. Sonderbehandlungen (Vererbung/Kaskade, Kategorien, Sammlungen) hängen an der **Rolle**, nicht an Typ-IDs.

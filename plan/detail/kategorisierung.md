@@ -10,6 +10,7 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 - Eine **Kategorie** wird als Objekt mit `type: "category"` (oder einem frei wählbaren Typ wie `grouping` oder `folder`) angelegt.
 - Die Zuordnung eines Objekts zu einer Kategorie erfolgt über eine Relation vom Typ `category_member` – eine **Aggregation** (n:m) ohne Vererbungswirkung. Die Relationstypen sind in [relationen.md](relationen.md) spezifiziert.
+- Die Kategorie-Zuordnung ist die **Verwendung/Rolle `category`** eines Relationstyps (geplant: `relation_definition.role`, siehe Abschnitt „Verwendung von Relationstypen“ in [relationen.md](relationen.md)); künftig hängen Kategorien-Baum, Filter und Bulk-Operation an dieser Rolle statt an der Typ-ID.
 
   ```json
   {
