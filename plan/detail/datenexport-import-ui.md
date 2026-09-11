@@ -13,7 +13,7 @@
 
 ## 1. Zielsetzung & Abgrenzung
 
-Der technische Datenexport läuft heute über den `json_export`-Connector + `outbound_export`-Job: Konfiguration als freies JSON in `/connectors` (admin-only), Ergebnis als MEF-JSON in `job_run.result`. Das ist für technisch versierte Anwender sinnvoll und **bleibt erhalten**.
+Der technische Datenexport läuft heute über den `json_export`-Connector + `outbound_export`-Job: Konfiguration als freies JSON in `/connectors` (admin-only), Ergebnis als MEF-JSON in `job_run.result`. Das ist für technisch versierte Anwender sinnvoll und **bleibt erhalten**. Damit auch nicht-technische Admins Konnektoren konfigurieren können, ist zusätzlich ein **schema-getriebenes Konfigurationsformular** geplant ([konnektor-konfiguration.md](konnektor-konfiguration.md)); die hier beschriebenen Wizards bleiben der **Anwenderpfad** für Daten, die Konnektor-Formulare konfigurieren den **technischen Pfad** (Defaults/Profile).
 
 Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche konfigurieren lässt — analog zum MCF-Konfigurations-Export/Import (`/config`), aber für **Instanzdaten** (Objekte/Produkte):
 
