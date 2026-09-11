@@ -128,6 +128,7 @@ Regeln:
 - `GET /relation-definitions` ist mit dem Worker-API-Key lesbar (`api_key_or_role(..., ROLE_EDITOR)`), damit der Worker Rollen je Job-Lauf einmal auflösen kann (Fallback: eingebaute Rollen-Tabelle).
 - Der Worker adressiert Kategorie-Operationen über `parameters.definition_id` (Default `rel_category_member`) und gibt den verwendeten Typ im Ergebnisbericht mit aus.
 - `?definition_id=` wird auch ohne `category`/`uncategorized` validiert (`400`, wenn der Typ keine Kategorie-Rolle hat).
+- **Zieltypen gehören in jede Auswahl:** Jeder Objekt-Picker bekommt die **effektiven** Zieltypen (`target_types` der Definition, sonst der von der Rolle erzwungene Typ) – sonst bietet die Struktur-/Suchauswahl Objekte an, die der Kern mit `400` ablehnt (beobachtet bei „Collection-Zuordnung“). Zusätzlich filtert der Picker die Suche auf diese Typen und verwirft `exclude_ids`; das Formular zeigt den „Hinzufügen“-Knopf nur, wenn der Objekttyp als **Quelle** erlaubt ist, und das Referenz-Modal des Grids bietet nur Typen an, die den Zeilentyp als Quelle akzeptieren.
 
 **Offene Entscheidungen (mit Vorschlag):**
 

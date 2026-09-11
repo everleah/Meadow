@@ -40,8 +40,10 @@ from meadow.frontend.object_picker import open_object_picker, render_picker_hit
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     ROLE_CATEGORY,
+    allows_source,
     category_definitions,
     definition_key,
+    effective_target_types,
     role_of,
 )
 
@@ -925,7 +927,15 @@ async def product_form(object_id: str) -> None:
                     kind = rel_kind(dk)
                     rows = rows_by_dk.get(dk, [])
                     attr_names = [str(a) for a in (defn.get("attributes") or [])]
-                    target_types = (defn.get("target_types") or []) or None
+                    # A usage may fix the target type (`collection`, `category`);
+                    # the picker then greys out everything else instead of letting
+                    # the user pick an object the core rejects.
+                    target_types = effective_target_types(defn)
+                    # The current object must be an allowed source for the type;
+                    # a type it cannot use is hidden (existing edges still show).
+                    if not rows and not allows_source(defn, object_type):
+                        continue
+                    can_add = kind == "aggregation" and allows_source(defn, object_type)
                     bg = "bg-orange-1" if kind == "composition" else "bg-blue-1"
                     head_bg = "bg-orange-2" if kind == "composition" else "bg-blue-2"
                     with ui.column().classes(f"rounded w-full overflow-hidden mb-1 {bg}"):
@@ -936,12 +946,12 @@ async def product_form(object_id: str) -> None:
                             ui.html(kind_badge(dk))
                             ui.label(str(len(rows))).classes("text-caption text-gray-600")
                             ui.space()
-                            if kind == "aggregation":
+                            if can_add:
                                 ui.button(
                                     icon="add",
                                     on_click=lambda d=defn: open_relation_picker(
                                         rel_label(str(d.get("id", "")).split(":", 1)[-1]),
-                                        (d.get("target_types") or []) or None,
+                                        effective_target_types(d),
                                         lambda h, dd=d: on_add_ref(dd, h),
                                     ),
                                 ).props("dense flat round").tooltip(t("form.relation_add"))
@@ -1123,8 +1133,9 @@ async def product_form(object_id: str) -> None:
                         "type": str(obj.get("type") or "category"),
                     }
 
-        async def assign_categories(def_key: str) -> None:
+        async def assign_categories(definition: dict) -> None:
             """Adds category edges for the categories picked in the dialog."""
+            def_key = definition_key(definition)
             assigned = cat_ref_ids.setdefault(def_key, {})
 
             async def on_pick(hits: list[dict]) -> None:
@@ -1148,7 +1159,7 @@ async def product_form(object_id: str) -> None:
                 locale=locale,
                 title=t("form.categories_pick"),
                 on_pick=on_pick,
-                target_types=["category"],
+                target_types=effective_target_types(definition),
                 exclude_ids=[object_id],
                 multi=True,
             )
@@ -1195,7 +1206,7 @@ async def product_form(object_id: str) -> None:
                     ui.button(
                         t("form.categories_pick"),
                         icon="account_tree",
-                        on_click=lambda d=def_key: assign_categories(d),
+                        on_click=lambda d=definition: assign_categories(d),
                     ).props("flat")
                 if not assigned:
                     ui.label(t("form.categories_none")).classes("text-caption text-gray-500")

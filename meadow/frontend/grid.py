@@ -32,6 +32,8 @@ from meadow.frontend.relation_roles import (
     association_definitions,
     category_definitions,
     definition_key,
+    effective_target_types,
+    usable_definitions,
 )
 
 # Maximum hits the grid search pulls per query (picker + row load); the search
@@ -1297,7 +1299,12 @@ async def products_page(request: Request) -> None:
             for definition in category_definitions(relation_definitions)
         }
 
-        current_ref_object: dict = {"id": None}
+        current_ref_object: dict = {"id": None, "type": ""}
+
+        def ref_target_types() -> list[str] | None:
+            """Target types of the relation type currently chosen in the dialog."""
+            definition = relation_def_by_key.get(str(ref_definition.value or ""))
+            return effective_target_types(definition)
 
         ref_dialog = ui.dialog()
         with ref_dialog, ui.card().classes("w-[640px]"):
@@ -1319,6 +1326,7 @@ async def products_page(request: Request) -> None:
                     locale=locale,
                     title=t("form.pick_target"),
                     on_pick=add_reference,
+                    target_types=ref_target_types(),
                     exclude_ids=[str(current_ref_object["id"] or "")],
                 ),
             ).props("outline dense").tooltip(t("form.pick_in_structure"))
@@ -1417,17 +1425,42 @@ async def products_page(request: Request) -> None:
             if not q or not current_ref_object["id"]:
                 return
             try:
-                hits = await client.picker_search(token, q, locale=locale, limit=20)
+                hits = await client.picker_search(
+                    token,
+                    q,
+                    types=ref_target_types(),
+                    locale=locale,
+                    limit=20,
+                )
             except Exception:  # noqa: BLE001 - degrade to no hits
                 return
+            own_id = str(current_ref_object["id"])
             for hit in hits:
+                if str(hit.get("id")) == own_id:
+                    continue
                 with ref_hits:
                     render_picker_hit(hit, add_reference, locale)
 
-        async def open_references(object_id: str) -> None:
+        async def open_references(object_id: str, object_type: str = "") -> None:
+            """Opens the reference dialog for one row: only usable types are offered."""
             current_ref_object["id"] = object_id
+            current_ref_object["type"] = object_type
             ref_object_label.set_text(object_id)
-            ref_definition.value = next(iter(relation_options), None) if relation_options else None
+            # Relation types whose `source_types` do not accept this object would
+            # be rejected by the core (400), so they are not offered at all.
+            usable = usable_definitions(
+                [relation_def_by_key[key] for key in relation_options], object_type
+            )
+            if usable:
+                options = {
+                    definition_key(definition): relation_options[definition_key(definition)]
+                    for definition in usable
+                }
+                ref_definition.set_options(options)
+                ref_definition.value = next(iter(options))
+            else:
+                ref_definition.set_options(relation_options)
+                ref_definition.value = None
             ref_search.value = ""
             ref_hits.clear()
             await refresh_references()
@@ -1438,7 +1471,7 @@ async def products_page(request: Request) -> None:
             if args.get("colId") == "_refs":
                 data = args.get("data")
                 if data and data.get("_id"):
-                    await open_references(data["_id"])
+                    await open_references(data["_id"], str(data.get("_type") or ""))
 
         def handle_open_cell(e) -> None:
             """Opens the product form on a row double-click.
@@ -1670,7 +1703,7 @@ async def products_page(request: Request) -> None:
                             locale=locale,
                             title=t("form.pick_target"),
                             on_pick=on_pick,
-                            target_types=(definition.get("target_types") or []) or None,
+                            target_types=effective_target_types(definition),
                         )
 
                     def reset_relation_target() -> None:

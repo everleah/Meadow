@@ -65,6 +65,35 @@ def custom_role_options() -> dict[str, str]:
     return {role: role_label(role) for role in CUSTOM_ROLES}
 
 
+def effective_target_types(definition: dict | None) -> list[str] | None:
+    """Object types a relation type accepts on the target side.
+
+    An explicit `target_types` list wins; otherwise the usage decides
+    (`category` ⇒ `category`, `collection` ⇒ `collection`). `None` means every
+    object type may be the target — the picker then greys nothing out.
+    """
+    explicit = [str(name) for name in ((definition or {}).get("target_types") or []) if name]
+    if explicit:
+        return explicit
+    return role_target_types(role_of(definition or {})) or None
+
+
+def allows_source(definition: dict | None, object_type: str) -> bool:
+    """True when `object_type` may be the **source** of the relation.
+
+    An empty `source_types` list allows every type; the picker only renders an
+    add action for a relation type the core would accept (it rejects the rest
+    with 400).
+    """
+    source_types = [str(name) for name in ((definition or {}).get("source_types") or []) if name]
+    return not source_types or object_type in source_types
+
+
+def usable_definitions(definitions: Iterable[dict], object_type: str) -> list[dict]:
+    """Relation types whose source side accepts `object_type`."""
+    return [d for d in definitions if allows_source(d, object_type)]
+
+
 def category_definitions(definitions: Iterable[dict]) -> list[dict]:
     """Category relation types, the built-in primary type first."""
     categories = [d for d in definitions if role_of(d) == ROLE_CATEGORY]

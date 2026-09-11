@@ -13,12 +13,15 @@ from meadow.frontend.relation_roles import (
     ROLE_CATEGORY,
     ROLE_COMPOSITION,
     ROLE_LINK,
+    allows_source,
     association_definitions,
     category_definitions,
     definition_key,
+    effective_target_types,
     primary_category_key,
     role_of,
     role_target_types,
+    usable_definitions,
 )
 
 _DEFINITIONS = [
@@ -94,3 +97,36 @@ def test_association_definitions_exclude_composition_and_categorisation() -> Non
     # Collections and links stay generically assignable; categorisation and
     # composition have dedicated operations.
     assert keys == {"rel_related", "rel_collection_member"}
+
+
+def test_effective_target_types_prefers_an_explicit_list() -> None:
+    definition = {"role": ROLE_CATEGORY, "target_types": ["product"]}
+
+    assert effective_target_types(definition) == ["product"]
+
+
+def test_effective_target_types_falls_back_to_the_usage() -> None:
+    """The built-in types carry no `target_types`; the usage supplies them."""
+    assert effective_target_types({"role": "collection", "target_types": []}) == ["collection"]
+    assert effective_target_types({"role": ROLE_CATEGORY}) == ["category"]
+    # A plain link stays unrestricted (the picker greys nothing out).
+    assert effective_target_types({"role": ROLE_LINK}) is None
+    assert effective_target_types({}) is None
+
+
+def test_allows_source_checks_the_source_types() -> None:
+    assert allows_source({"source_types": []}, "product")
+    assert allows_source({"source_types": ["product"]}, "product")
+    assert not allows_source({"source_types": ["category"]}, "product")
+    assert allows_source(None, "product")
+
+
+def test_usable_definitions_filter_by_the_source_type() -> None:
+    definitions = [
+        _DEFINITIONS[0],
+        {"id": "relation_definition:rel_only_category", "source_types": ["category"]},
+    ]
+
+    keys = {definition_key(d) for d in usable_definitions(definitions, "product")}
+
+    assert keys == {"rel_related"}

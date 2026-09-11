@@ -252,9 +252,10 @@ async def open_object_picker(
     """Picks objects: search via ``GET /objects/picker``, tree via ``/objects/{id}/children``.
 
     ``target_types`` (empty/``None`` = all types allowed) restricts which nodes can
-    be selected and is forwarded to the search; ``exclude_ids`` are never
-    selectable (e.g. the current object). A hit is ``{id, label, type}`` plus a
-    ``completeness`` value for the working language.
+    be selected **and** which hits the search tab returns; ``exclude_ids`` are never
+    selectable (e.g. the current object) and are filtered out of the search hits too.
+    A hit is ``{id, label, type}`` plus a ``completeness`` value for the working
+    language.
     """
     allowed_types = {str(target) for target in (target_types or []) if target}
     excluded = {str(entry) for entry in exclude_ids if entry}
@@ -279,9 +280,21 @@ async def open_object_picker(
         return [node_for(child) for child in children]
 
     async def search(query: str) -> list[dict]:
-        return await client.picker_search(
+        """Search hits the caller may actually pick.
+
+        The core filters by the requested types, but a hit of an allowed type can
+        still be the excluded object itself (e.g. the object being edited) — such
+        hits are dropped so the search tab offers the same set as the tree.
+        """
+        found = await client.picker_search(
             token, query, types=sorted(allowed_types) or None, locale=locale, limit=20
         )
+        return [
+            hit
+            for hit in found
+            if str(hit.get("id") or "") not in excluded
+            and (not allowed_types or str(hit.get("type") or "") in allowed_types)
+        ]
 
     await open_structure_picker(
         title=title,
