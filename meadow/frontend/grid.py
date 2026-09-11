@@ -1301,6 +1301,7 @@ async def products_page(request: Request) -> None:
         bulk_selected_ids: set[str] = set()
         bulk_selected_label: ui.element | None = None
         bulk_scope: ui.select | None = None
+        replace_scope: ui.select | None = None
         bulk_dialog: ui.dialog | None = None
 
         def _row_id(row: object) -> str | None:
@@ -1329,6 +1330,8 @@ async def products_page(request: Request) -> None:
             )
             if bulk_scope is not None:
                 bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
+            if replace_scope is not None:
+                replace_scope.set_value("selected" if bulk_selected_ids else "filtered")
 
         # Bulk-wizard target selection uses the shared object picker (search +
         # structure tree); the chosen object per field key lives in `bulk_picked`.
@@ -1461,19 +1464,22 @@ async def products_page(request: Request) -> None:
             end = start + size
             return [oid for oid in (_row_id(r) for r in all_rows[start:end]) if oid]
 
+        async def _scope_ids(scope: str) -> list[str]:
+            """Resolves a selection scope (`filtered`/`page`/`selected`) to ids."""
+            if scope == "selected":
+                rows: list = await grid.get_selected_rows()
+            elif scope == "page":
+                return await _current_page_ids()
+            else:
+                rows = all_rows
+            return [oid for oid in (_row_id(row) for row in rows) if oid]
+
         async def start_bulk() -> None:
             op = bulk_op.value
             if not op:
                 ui.notify(t("grid.bulk_op_required"), color="warning")
                 return
-            if bulk_scope.value == "selected":
-                selected: list = await grid.get_selected_rows()
-                ids = [oid for oid in (_row_id(row) for row in selected) if oid]
-            elif bulk_scope.value == "page":
-                ids = await _current_page_ids()
-            else:
-                ids = [oid for oid in (_row_id(r) for r in all_rows) if oid]
-            ids = [oid for oid in ids if oid]
+            ids = await _scope_ids(str(bulk_scope.value or "filtered"))
             if not ids:
                 ui.notify(t("grid.bulk_no_objects"), color="warning")
                 return
@@ -1557,6 +1563,13 @@ async def products_page(request: Request) -> None:
                         processed=processed, succeeded=succeeded, failed=failed
                     )
                 ).classes("text-caption")
+                if result.get("op") == "replace_text":
+                    ui.label(
+                        t("grid.replace_summary").format(
+                            replacements=result.get("replacements", 0),
+                            skipped=result.get("skipped", 0),
+                        )
+                    ).classes("text-caption")
                 errors = [r for r in result.get("results", []) if r.get("status") == "error"]
                 if errors:
                     with ui.column().classes("w-full mt-2 gap-1"):
@@ -1567,6 +1580,85 @@ async def products_page(request: Request) -> None:
                 with ui.row().classes("w-full justify-end mt-2"):
                     ui.button(t("grid.close"), on_click=report_dialog.close).props("flat")
             report_dialog.open()
+
+        # --- Find & Replace (Phase 9) ---------------------------------------
+        # Replaces a literal text in the text attributes of the selection. It
+        # runs as the `replace_text` bulk operation (same scope/progress/report
+        # machinery as the wizard) so large selections are processed in the
+        # worker instead of blocking the page.
+        replace_attr_options: dict[str, str] = {"": t("grid.replace_all_attributes")}
+        replace_attr_options["name"] = t("grid.name")
+        for definition in definitions:
+            name = str(definition.get("name") or "")
+            if not name or definition.get("type") != "text" or definition.get("computed"):
+                continue
+            label = str(resolve_value(definition.get("label"), locale) or name)
+            replace_attr_options[name] = label if label == name else f"{label} ({name})"
+
+        replace_dialog = ui.dialog()
+        with replace_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
+            ui.label(t("grid.replace_title")).classes("text-h6")
+            ui.label(t("grid.replace_hint")).classes("text-caption text-gray-600")
+            ui.label(t("grid.bulk_selection")).classes("text-caption text-gray-600")
+            replace_scope = (
+                ui.select(
+                    {
+                        "filtered": t("grid.bulk_scope_filtered").format(count=len(all_rows)),
+                        "page": t("grid.bulk_scope_page"),
+                        "selected": t("grid.bulk_scope_selected"),
+                    },
+                    value="selected" if bulk_selected_ids else "filtered",
+                )
+                .props("filled dense")
+                .classes("w-full")
+            )
+            replace_attribute = (
+                ui.select(replace_attr_options, value="", label=t("grid.bulk_attribute"))
+                .props("filled dense")
+                .classes("w-full")
+            )
+            replace_search = (
+                ui.input(label=t("grid.replace_search")).props("filled dense").classes("w-full")
+            )
+            replace_with = (
+                ui.input(label=t("grid.replace_with")).props("filled dense").classes("w-full")
+            )
+            replace_case = ui.switch(t("grid.replace_case_sensitive"))
+            with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                ui.button(t("grid.close"), on_click=replace_dialog.close).props("flat")
+                ui.button(
+                    t("grid.replace_start"),
+                    icon="find_replace",
+                    on_click=lambda: start_replace(),
+                ).props("flat")
+
+        async def start_replace() -> None:
+            search = replace_search.value or ""
+            if not search:
+                ui.notify(t("grid.replace_search_required"), color="warning")
+                return
+            ids = await _scope_ids(str(replace_scope.value or "filtered"))
+            if not ids:
+                ui.notify(t("grid.bulk_no_objects"), color="warning")
+                return
+            parameters = {
+                "search": search,
+                "replace": replace_with.value or "",
+                "attribute": str(replace_attribute.value or ""),
+                "case_sensitive": bool(replace_case.value),
+            }
+            try:
+                run = await client.post_bulk(
+                    token, op="replace_text", object_ids=ids, parameters=parameters
+                )
+            except Exception:  # noqa: BLE001 - show a friendly message
+                ui.notify(t("grid.bulk_start_failed"), color="negative")
+                return
+            run_id = str(run.get("id") or "")
+            replace_dialog.close()
+            ui.notify(t("grid.bulk_started"), color="positive")
+            if run_id:
+                await poll_bulk(run_id)
 
         current_tree: dict = {"tree": None, "nodes": []}
         # Tracks the active left-panel view so the action button (collapse vs.
@@ -1824,6 +1916,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="fact_check", on_click=bulk_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.bulk_actions"))
+                    ui.button(icon="find_replace", on_click=replace_dialog.open).props(
+                        "outline"
+                    ).tooltip(t("grid.replace_actions"))
                     ui.button(icon="edit_note", on_click=start_sequential).props("outline").tooltip(
                         t("seq.start")
                     )

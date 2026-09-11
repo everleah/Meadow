@@ -922,5 +922,15 @@
   "seq.skip": "Skip",
   "seq.stop": "End sequential editing",
   "seq.finished": "Sequential editing finished ({count} objects).",
-  "seq.no_selection": "Select rows in the grid first."
+  "seq.no_selection": "Select rows in the grid first.",
+  "grid.replace_actions": "Find & Replace",
+  "grid.replace_title": "Find & Replace",
+  "grid.replace_hint": "Replaces the search text in the text attributes of the selection. The change runs as a background job and reports afterwards.",
+  "grid.replace_all_attributes": "All text attributes",
+  "grid.replace_search": "Search for",
+  "grid.replace_with": "Replace with (empty = delete)",
+  "grid.replace_case_sensitive": "Match case",
+  "grid.replace_start": "Replace",
+  "grid.replace_search_required": "Please enter the text to search for.",
+  "grid.replace_summary": "Replacements: {replacements} · Without match: {skipped}"
 }

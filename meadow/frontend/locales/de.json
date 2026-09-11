@@ -922,5 +922,15 @@
   "seq.skip": "Überspringen",
   "seq.stop": "Sequenzielles Bearbeiten beenden",
   "seq.finished": "Sequenzielles Bearbeiten beendet ({count} Objekte).",
-  "seq.no_selection": "Bitte zuerst Zeilen im Grid auswählen."
+  "seq.no_selection": "Bitte zuerst Zeilen im Grid auswählen.",
+  "grid.replace_actions": "Suchen & Ersetzen",
+  "grid.replace_title": "Suchen & Ersetzen",
+  "grid.replace_hint": "Ersetzt den Suchtext in den Textattributen der Auswahl. Die Änderung läuft als Hintergrundjob und meldet danach den Report.",
+  "grid.replace_all_attributes": "Alle Textattribute",
+  "grid.replace_search": "Suchen nach",
+  "grid.replace_with": "Ersetzen durch (leer = löschen)",
+  "grid.replace_case_sensitive": "Groß-/Kleinschreibung beachten",
+  "grid.replace_start": "Ersetzen",
+  "grid.replace_search_required": "Bitte den Suchtext angeben.",
+  "grid.replace_summary": "Ersetzungen: {replacements} · Ohne Treffer: {skipped}"
 }

@@ -922,5 +922,15 @@
   "seq.skip": "Ignorer",
   "seq.stop": "Terminer l'édition séquentielle",
   "seq.finished": "Édition séquentielle terminée ({count} objets).",
-  "seq.no_selection": "Sélectionnez d'abord des lignes dans la grille."
+  "seq.no_selection": "Sélectionnez d'abord des lignes dans la grille.",
+  "grid.replace_actions": "Rechercher et remplacer",
+  "grid.replace_title": "Rechercher et remplacer",
+  "grid.replace_hint": "Remplace le texte recherché dans les attributs texte de la sélection. La modification s’exécute comme tâche de fond et affiche ensuite le rapport.",
+  "grid.replace_all_attributes": "Tous les attributs texte",
+  "grid.replace_search": "Rechercher",
+  "grid.replace_with": "Remplacer par (vide = supprimer)",
+  "grid.replace_case_sensitive": "Respecter la casse",
+  "grid.replace_start": "Remplacer",
+  "grid.replace_search_required": "Veuillez saisir le texte à rechercher.",
+  "grid.replace_summary": "Remplacements : {replacements} · Sans résultat : {skipped}"
 }
