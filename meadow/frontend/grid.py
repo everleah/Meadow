@@ -36,6 +36,7 @@ from meadow.frontend.relation_roles import (
     effective_target_types,
     usable_definitions,
 )
+from meadow.frontend.url_values import media_kind, open_media_dialog
 
 # Maximum hits the grid search pulls per query (picker + row load); the search
 # is server-side, so the result set stays bounded regardless of dataset size.
@@ -82,6 +83,10 @@ _APPROVAL_MODIFIER_OPS = (
 # keys into real JavaScript functions on the client (`convertDynamicProperties`),
 # so an inherited cell is dimmed/italic and carries the source as browser tooltip.
 INHERITED_FIELD = "_inherited"
+#: Field of the per-row "media URL" markers (`{field: tooltip}`): the cell holds
+#: an image/video URL, so it is not rendered as a link and a click opens the
+#: preview dialog instead of a new tab.
+MEDIA_FIELD = "_media"
 #: Field of the per-row "explicitly empty" markers (`{field: tooltip}`): the key
 #: exists but carries no value, so the attribute does **not** inherit.
 INTERRUPTED_FIELD = "_interrupted"
@@ -139,6 +144,63 @@ INHERITED_CELL_RENDERER = (
     " return span;"
     "}"
 )
+
+
+#: Cell renderer for `url` attributes: renders the value as a link opening in a
+#: new tab, keeps the inheritance markers of `INHERITED_CELL_RENDERER` and turns
+#: image/video values into a clickable text (the `_media` marker map drives both
+#: the styling here and the preview dialog in `handle_cell_clicked`, so Python
+#: stays the single source of truth for "is this media?").
+URL_CELL_RENDERER = (
+    "(params) => {"
+    " const data = params.data || {};"
+    " const field = params.colDef.field;"
+    " const text = params.value === null || params.value === undefined ? '' : String(params.value);"
+    " const inherited = data._inherited && data._inherited[field];"
+    " const interrupted = data._interrupted && data._interrupted[field];"
+    " const marker = inherited || interrupted;"
+    " const media = (data._media && data._media[field]) || '';"
+    " const span = document.createElement('span');"
+    " if (marker) {"
+    "  const icon = document.createElement('i');"
+    "  icon.className = 'material-icons';"
+    "  icon.style.fontSize = '14px';"
+    "  icon.style.verticalAlign = '-2px';"
+    "  icon.style.marginRight = '2px';"
+    "  icon.style.fontStyle = 'normal';"
+    "  icon.style.color = inherited ? '#9e9e9e' : '#b45309';"
+    "  icon.textContent = inherited ? 'swap_horiz' : 'link_off';"
+    "  span.appendChild(icon);"
+    "  span.title = marker;"
+    " }"
+    " if (text && /^https?:\\/\\//i.test(text)) {"
+    "  const link = document.createElement(media ? 'span' : 'a');"
+    "  link.textContent = text;"
+    "  link.className = 'text-primary' + (media ? ' cursor-pointer' : '');"
+    "  if (media) {"
+    "   link.title = media;"
+    "  } else {"
+    "   link.href = text;"
+    "   link.target = '_blank';"
+    "   link.rel = 'noopener noreferrer';"
+    "  }"
+    "  span.appendChild(link);"
+    " } else {"
+    "  span.appendChild(document.createTextNode(text));"
+    " }"
+    " return span;"
+    "}"
+)
+
+
+def media_markers(row: dict, url_fields: set[str], hint: str) -> dict[str, str]:
+    """Marks the URL cells of a row whose value is an image or video.
+
+    Returns the `_media` map (`{field: tooltip}`) consumed by the cell renderer
+    and the page's click handler. The displayed value decides (the same string
+    the user sees), so multilingual columns are covered as well.
+    """
+    return {field: hint for field in url_fields if media_kind(row.get(field))}
 
 
 def inherited_cells(object_: dict, locale: str, inheritable_names: list[str] | None = None) -> dict:
@@ -313,7 +375,7 @@ def attribute_field(attribute_name: str) -> str:
 
 
 #: Attribute types that can be edited inline in the grid (working language).
-EDITABLE_TYPES = ("text", "number", "boolean", "enum", "date")
+EDITABLE_TYPES = ("text", "url", "number", "boolean", "enum", "date")
 
 
 def is_editable_definition(definition: dict) -> bool:
@@ -496,12 +558,18 @@ def attribute_column_specs(
         label = resolve_value(definition.get("label"), locale) or name
         column = {"headerName": label, "field": attribute_field(name), "width": 140, "hide": True}
         column.update(_editor_props(definition, (enum_labels or {}).get(name)))
+        # `url` values are rendered as links (image/video cells open a preview).
+        if str(definition.get("type") or "") == "url":
+            column[":cellRenderer"] = URL_CELL_RENDERER
         columns.append(column)
         if not definition.get("multilingual"):
             continue
         for language in languages or []:
             field = language_field(f"attr_{name}", language)
-            columns.append(_language_column(f"{label} · {language.upper()}", field))
+            language_column = _language_column(f"{label} · {language.upper()}", field)
+            if str(definition.get("type") or "") == "url":
+                language_column[":cellRenderer"] = URL_CELL_RENDERER
+            columns.append(language_column)
             language_fields[field] = name
     return columns, language_fields
 
@@ -915,13 +983,14 @@ async def products_page(request: Request) -> None:
             definitions, locale, active_languages, enum_resolvers
         )
         # The working-language attribute columns carry the inheritance marker
-        # (dimmed + source tooltip) for values resolved from an ancestor.
+        # (dimmed + source tooltip) for values resolved from an ancestor. The
+        # `url` renderer draws those markers itself, so it is not replaced.
         for column in attribute_column_defs:
             field = column.get("field")
             if isinstance(field, str) and LANG_SEPARATOR not in field:
                 column[":cellStyle"] = INHERITED_CELL_STYLE
                 column[":tooltipValueGetter"] = INHERITED_CELL_TOOLTIP
-                column[":cellRenderer"] = INHERITED_CELL_RENDERER
+                column.setdefault(":cellRenderer", INHERITED_CELL_RENDERER)
         language_fields = {**name_language_fields, **attribute_language_fields}
         column_defs = with_header_tooltips(
             [
@@ -955,9 +1024,21 @@ async def products_page(request: Request) -> None:
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
 
+        # `url` attributes: their cells are links (media cells open a preview),
+        # so the row carries a marker map for exactly the URL columns.
+        url_names = {
+            str(definition.get("name"))
+            for definition in definitions
+            if definition.get("name") and str(definition.get("type") or "") == "url"
+        }
+        url_fields = {attribute_field(name) for name in url_names} | {
+            field for field, name in language_fields.items() if name in url_names
+        }
+        url_hint = t("url.preview_hint")
+
         def make_rows(selected_objects: list[dict]) -> list[dict]:
             """Builds the grid rows: display values, typed editable cells, languages."""
-            return [
+            rows = [
                 row_data(object_, locale, attribute_names, enum_resolvers)
                 | editable_cells(object_, locale, editable_defs, enum_resolvers)
                 | language_cells(
@@ -969,6 +1050,9 @@ async def products_page(request: Request) -> None:
                 | inherited_cells(object_, locale, inheritable_names)
                 for object_ in selected_objects
             ]
+            for row in rows:
+                row[MEDIA_FIELD] = media_markers(row, url_fields, url_hint)
+            return rows
 
         all_rows = make_rows(objects)
         loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
@@ -1481,12 +1565,23 @@ async def products_page(request: Request) -> None:
             await refresh_references()
             ref_dialog.open()
 
-        async def handle_ref_cell_clicked(e) -> None:
+        async def handle_cell_clicked(e) -> None:
+            """Cell clicks with a side effect.
+
+            The `_refs` column opens the reference picker. A `url` cell that
+            holds an image or video opens the preview dialog — every other URL
+            cell is a real link and opens itself in a new tab, so the click
+            needs no server round-trip.
+            """
             args = e.args if isinstance(e.args, dict) else {}
-            if args.get("colId") == "_refs":
-                data = args.get("data")
+            col_id = str(args.get("colId") or "")
+            data = args.get("data") or {}
+            if col_id == "_refs":
                 if data and data.get("_id"):
                     await open_references(data["_id"], str(data.get("_type") or ""))
+                return
+            if (data.get(MEDIA_FIELD) or {}).get(col_id):
+                open_media_dialog(data.get(col_id))
 
         def handle_open_cell(e) -> None:
             """Opens the product form on a row double-click.
@@ -2545,7 +2640,7 @@ async def products_page(request: Request) -> None:
                     ],
                 ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data", "colId"])
-                grid.on("cellClicked", handle_ref_cell_clicked, ["data", "colId"])
+                grid.on("cellClicked", handle_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])
                 grid.on("selectionChanged", handle_selection, ["selectedRows"])
                 # Restore the column set the user had before (reload, browser-back

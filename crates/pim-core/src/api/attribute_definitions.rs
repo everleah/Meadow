@@ -917,9 +917,14 @@ pub async fn delete_attribute_definition(
         .unwrap_or_default()
         .to_owned();
 
-    // Count objects that already carry a value for this attribute.
-    let count_sql =
-        format!("SELECT count() FROM object WHERE attributes.{name} IS NOT NONE GROUP ALL;");
+    // Count objects that already carry a value for this attribute. Soft-deleted
+    // objects do not block the deletion — they are invisible everywhere else
+    // (object lists, completeness, enum usage) and keep their value only until
+    // the data is purged.
+    let count_sql = format!(
+        "SELECT count() FROM object WHERE deleted_at IS NONE \
+         AND attributes.{name} IS NOT NONE GROUP ALL;"
+    );
     let mut count_resp = state.db.inner().query(&count_sql).await?.check()?;
     let count_rows: Vec<Value> = count_resp.take(0)?;
     let used = count_rows

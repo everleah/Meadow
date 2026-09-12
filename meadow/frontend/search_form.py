@@ -289,6 +289,7 @@ def widget_kind(field: dict | None, operator: dict | None) -> str:
         "date": "date",
         "datetime": "date",
         "enum": "select",
+        "url": "text",
     }.get(value_type, "select" if (field or {}).get("options") else "text")
     if operator_arity(operator) == 2:
         return f"range-{base}"
@@ -727,6 +728,7 @@ def _check_scalar(value: Any, field: dict, path: str, errors: list[str]) -> None
             "date": "an ISO date string",
             "datetime": "an ISO date string",
             "enum": "an option code",
+            "url": "a URL",
         }.get(value_type, "a string")
         _push_once(errors, f"{path}.value: must be {hint}")
 

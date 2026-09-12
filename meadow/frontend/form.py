@@ -46,6 +46,7 @@ from meadow.frontend.relation_roles import (
     effective_target_types,
     role_of,
 )
+from meadow.frontend.url_values import is_valid_url, open_url
 
 #: Workflow statuses offered in the status selector. The core validates the
 #: actual transition via the workflow guard.
@@ -519,6 +520,26 @@ async def product_form(object_id: str) -> None:
                     .props("filled dense type=date")
                     .on_value_change(on_change)
                 )
+            elif atype == "url":
+                # A URL is edited as text and opened next to the field: images
+                # and videos in a dialog, anything else in a new tab.
+                field = (
+                    ui.input(value="" if value is None else str(value))
+                    .props("filled dense type=url")
+                    .on_value_change(on_change)
+                )
+                open_button = (
+                    ui.button(icon="open_in_new")
+                    .props("dense flat round")
+                    .tooltip(t("url.open"))
+                    .on_click(lambda: open_url(str(field.value or "")))
+                )
+                open_button.set_enabled(is_valid_url(value))
+
+                def refresh_open_button(event=None) -> None:
+                    open_button.set_enabled(is_valid_url(getattr(event, "value", None)))
+
+                field.on_value_change(refresh_open_button)
             else:
                 field = (
                     ui.input(value="" if value is None else str(value))

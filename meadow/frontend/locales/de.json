@@ -1178,5 +1178,10 @@
   "consolidate.reason.conflict_child_values": "die Kinder haben unterschiedliche Werte",
   "consolidate.reason.conflict_parent": "der Knoten hat bereits einen anderen Wert",
   "consolidate.reason.not_inheritable": "Attribut ist nicht vererbbar",
-  "grid.relation_summary": "Zuordnungen geändert: {relations} · unverändert: {skipped}"
+  "grid.relation_summary": "Zuordnungen geändert: {relations} · unverändert: {skipped}",
+  "url.open": "Link öffnen oder Vorschau",
+  "url.preview_hint": "Zum Vorschau-Anzeigen klicken",
+  "url.preview_title": "Vorschau",
+  "url.open_in_new_tab": "In neuem Tab öffnen",
+  "url.close": "Schließen"
 }

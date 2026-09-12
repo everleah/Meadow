@@ -215,6 +215,9 @@ pub async fn create_object(
     // type auto-registers it (label defaults to the type code).
     crate::api::object_types::ensure_registered(&state.db, &object_type).await?;
     keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
+    // Data-type rules (`url` values must be openable addresses).
+    crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
+        .await?;
 
     // Resolved view for rule evaluation. A new object has no inherited values
     // yet; multilingual own values are resolved to `locale`.
@@ -1101,6 +1104,8 @@ async fn apply_object_update(
             return Err(ApiError::bad_request("`attributes` must be an object"));
         };
         keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, Some(key)).await?;
+        crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
+            .await?;
         changes.insert("attributes".to_owned(), Value::Object(attributes));
         changed_fields.push("attributes");
     }

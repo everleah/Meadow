@@ -1,6 +1,6 @@
 //! In-memory cache for slow-changing metadata (Phase 3).
 //!
-//! Caches the attribute names marked `multilingual`/`inheritable` and the
+//! Caches the attribute names marked `multilingual`/`inheritable`/`url` and the
 //! language-tree fallback chains. These change only when attribute definitions
 //! or the language tree change, so the cache is invalidated explicitly by the
 //! corresponding write handlers. Redis remains optional for multi-instance
@@ -20,7 +20,15 @@ use crate::error::ApiError;
 pub struct MetaCache {
     multilingual_names: RwLock<Option<Arc<Vec<String>>>>,
     inheritable_names: RwLock<Option<Arc<Vec<String>>>>,
+    url_attributes: RwLock<Option<Arc<Vec<UrlAttribute>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
+}
+
+/// A `url` attribute: its name and whether it holds one value per language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlAttribute {
+    pub name: String,
+    pub multilingual: bool,
 }
 
 impl MetaCache {
@@ -44,6 +52,16 @@ impl MetaCache {
         Ok(names)
     }
 
+    /// `url` attributes (name + `multilingual`) of the data model (cached).
+    pub async fn url_attributes(&self, db: &Db) -> Result<Arc<Vec<UrlAttribute>>, ApiError> {
+        if let Some(attributes) = self.url_attributes.read().await.clone() {
+            return Ok(attributes);
+        }
+        let attributes = Arc::new(load_url_attributes(db).await?);
+        *self.url_attributes.write().await = Some(attributes.clone());
+        Ok(attributes)
+    }
+
     /// Fallback chain (ancestor codes ending at `root`) for a locale (cached).
     pub async fn fallback_chain(
         &self,
@@ -65,6 +83,7 @@ impl MetaCache {
     pub async fn invalidate_attribute_definitions(&self) {
         *self.multilingual_names.write().await = None;
         *self.inheritable_names.write().await = None;
+        *self.url_attributes.write().await = None;
     }
 
     /// Invalidates cached fallback chains after language-tree changes.
@@ -85,6 +104,23 @@ async fn load_inheritable_names(db: &Db) -> Result<Vec<String>, ApiError> {
     let mut response = db.inner().query(sql).await?.check()?;
     let names: Vec<String> = response.take(0)?;
     Ok(names)
+}
+
+async fn load_url_attributes(db: &Db) -> Result<Vec<UrlAttribute>, ApiError> {
+    let sql = "SELECT name, multilingual FROM attribute_definition WHERE type = 'url'";
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let name = row.get("name")?.as_str()?.to_owned();
+            let multilingual = row
+                .get("multilingual")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some(UrlAttribute { name, multilingual })
+        })
+        .collect())
 }
 
 async fn load_fallback_chain(db: &Db, locale: &str) -> Result<Vec<String>, ApiError> {

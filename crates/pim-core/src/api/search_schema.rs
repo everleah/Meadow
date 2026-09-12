@@ -42,6 +42,8 @@ pub const DEFAULT_LIMIT: u32 = 1000;
 /// ISO-8601 strings, so lexicographic comparison is chronological). `DateTime`
 /// marks real datetime columns (`created_at`/`updated_at`); the executor wraps
 /// those operands in `type::datetime(…)` so they are compared as timestamps.
+/// `Url` is text as well, but the value must be an absolute `http(s)` URL
+/// (enforced on write, see `crate::attribute_values`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueType {
@@ -51,6 +53,7 @@ pub enum ValueType {
     Date,
     DateTime,
     Enum,
+    Url,
 }
 
 /// Widget the admin UI renders for the value.
@@ -205,6 +208,18 @@ pub fn operators_for(value_type: ValueType) -> &'static [&'static str] {
             "not_contains",
             "starts_with",
             "ends_with",
+            "not_empty",
+            "is_null",
+        ],
+        ValueType::Url => &[
+            "eq",
+            "ne",
+            "contains",
+            "not_contains",
+            "starts_with",
+            "ends_with",
+            "in",
+            "not_in",
             "not_empty",
             "is_null",
         ],
@@ -595,6 +610,7 @@ fn sort_key(row: &Value) -> String {
 fn attribute_widget(attribute_type: &str) -> Option<(ValueType, Widget)> {
     match attribute_type {
         "text" => Some((ValueType::String, Widget::Text)),
+        "url" => Some((ValueType::Url, Widget::Text)),
         "number" => Some((ValueType::Number, Widget::Number)),
         "boolean" => Some((ValueType::Boolean, Widget::Switch)),
         "date" => Some((ValueType::Date, Widget::Date)),
@@ -937,9 +953,11 @@ fn check_value(
 
 fn check_scalar(value: &Value, field: &SearchField, path: &str, errors: &mut Vec<String>) {
     let ok = match field.value_type {
-        ValueType::String | ValueType::Enum | ValueType::Date | ValueType::DateTime => {
-            value.is_string()
-        }
+        ValueType::String
+        | ValueType::Enum
+        | ValueType::Date
+        | ValueType::DateTime
+        | ValueType::Url => value.is_string(),
         ValueType::Number => value.is_number(),
         ValueType::Boolean => value.is_boolean(),
     };
@@ -961,6 +979,7 @@ fn value_type_hint(value_type: ValueType) -> &'static str {
         ValueType::Boolean => "a boolean",
         ValueType::Date | ValueType::DateTime => "an ISO date string",
         ValueType::Enum => "an option code",
+        ValueType::Url => "a URL",
     }
 }
 
@@ -1368,6 +1387,7 @@ mod tests {
                 json!({"name": "active", "label": {"en": "Active"}, "type": "boolean"}),
                 json!({"name": "brand", "label": {"en": "Brand"}, "type": "enum", "enum_set_id": "enum_set:brand"}),
                 json!({"name": "link", "label": {"en": "Link"}, "type": "reference"}),
+                json!({"name": "homepage", "label": {"en": "Homepage"}, "type": "url", "multilingual": true}),
             ],
             enum_sets: vec![json!({"id": "enum_set:brand", "options": ["enum_option:acme"]})],
             enum_options: vec![
@@ -1892,6 +1912,40 @@ mod tests {
                 .any(|error| error.contains("at most 6 levels")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn url_attributes_are_filterable_text_fields() {
+        let catalog = build_catalog(&sources());
+        let homepage = catalog.field("attributes.homepage").unwrap();
+        assert_eq!(homepage.value_type, ValueType::Url);
+        assert_eq!(homepage.widget, Widget::Text);
+        assert!(homepage.multilingual);
+        for operator in [
+            "eq",
+            "ne",
+            "contains",
+            "starts_with",
+            "in",
+            "not_empty",
+            "is_null",
+        ] {
+            assert!(
+                homepage.operators.contains(&operator),
+                "expected `{operator}` for a url field"
+            );
+        }
+        // Ordering operators make no sense for an address.
+        for operator in ["gt", "between", "not_between"] {
+            assert!(
+                !homepage.operators.contains(&operator),
+                "`{operator}` must not be offered for a url field"
+            );
+        }
+        // The value must be a string (the type hint names the URL).
+        let invalid = query(Some(leaf("attributes.homepage", "eq", json!(42))));
+        let errors = validate_query(&invalid, &catalog);
+        assert_eq!(errors, vec!["query.where.value: must be a URL".to_owned()]);
     }
 
     #[test]

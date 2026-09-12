@@ -1178,5 +1178,10 @@
   "consolidate.reason.conflict_child_values": "les enfants ont des valeurs différentes",
   "consolidate.reason.conflict_parent": "le nœud a déjà une valeur différente",
   "consolidate.reason.not_inheritable": "l’attribut n’est pas héritable",
-  "grid.relation_summary": "Relations modifiées : {relations} · inchangées : {skipped}"
+  "grid.relation_summary": "Relations modifiées : {relations} · inchangées : {skipped}",
+  "url.open": "Ouvrir le lien ou l'aperçu",
+  "url.preview_hint": "Cliquer pour l'aperçu",
+  "url.preview_title": "Aperçu",
+  "url.open_in_new_tab": "Ouvrir dans un nouvel onglet",
+  "url.close": "Fermer"
 }

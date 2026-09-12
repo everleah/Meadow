@@ -1178,5 +1178,10 @@
   "consolidate.reason.conflict_child_values": "the children have different values",
   "consolidate.reason.conflict_parent": "the node already has a different value",
   "consolidate.reason.not_inheritable": "attribute is not inheritable",
-  "grid.relation_summary": "Relations changed: {relations} · unchanged: {skipped}"
+  "grid.relation_summary": "Relations changed: {relations} · unchanged: {skipped}",
+  "url.open": "Open link or preview",
+  "url.preview_hint": "Click to preview",
+  "url.preview_title": "Preview",
+  "url.open_in_new_tab": "Open in new tab",
+  "url.close": "Close"
 }

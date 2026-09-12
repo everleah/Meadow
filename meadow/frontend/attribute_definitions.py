@@ -17,7 +17,7 @@ from meadow.frontend.layout import build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 #: Supported attribute data types (extensible; existing types are never renamed).
-ATTR_TYPES = ("text", "number", "boolean", "date", "enum", "reference")
+ATTR_TYPES = ("text", "url", "number", "boolean", "date", "enum", "reference")
 
 
 @ui.page("/attribute-definitions", response_timeout=15)
