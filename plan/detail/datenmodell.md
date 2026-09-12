@@ -131,35 +131,77 @@ Ein `url`-Attribut speichert eine **Webadresse** — Website, Produktseite, Date
 
 ## Datentypwechsel
 
+> **Stand:** umgesetzt (Phase 9) — Endpunkt `POST /attribute-definitions/{id}/type-change` (Dry-Run + Anwendung), Migration der Werte in einer Transaktion, Audit + Event, Dialog im Frontend.
+
 Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate. **`url`** ist die erste Ausnahme bei der Schreibvalidierung: der Kern akzeptiert nur absolute `http(s)`-URLs (siehe [URL-Attribute](#url-attribute)).
 
-**Grundsatz:** Der Datentyp ist eine **Eigenschaft der Definition, nicht der gespeicherten Werte**. Ein Wechsel des Datentyps (inkl. Umstellung aller vorhandenen Werte) ist daher konzeptionell möglich, wird aber in der ersten Version **nicht** unterstützt und ist als spätere Ausbaustufe (Phase 9) vorgesehen.
+**Grundsatz:** Der Datentyp ist eine **Eigenschaft der Definition, nicht der gespeicherten Werte**. Genau deshalb ist ein Wechsel möglich — aber nur **mit Migration aller vorhandenen Werte**, geprüft gegen die Kompatibilitätsmatrix.
 
-**Entwurfsregeln (verbindlich – damit ein späterer Wechsel möglich und nicht erschwert wird):**
+**Entwurfsregeln (verbindlich):**
 
 1. Werte werden **roh und umkehrbar** als JSON gespeichert: Zahl als Zahl, Text als String, Mehrsprachig als Sprachobjekt, Einheitenbehaftet als kanonische SI-Zahl. Keine Stringifizierung von Zahlen, keine Auflösung des Sprachobjekts auf eine Einzelsprache beim Speichern.
 2. Der Typ wird **ausschließlich** in der `attribute_definition` geführt und nirgends redundant am Wert „festgeschrieben“.
 3. Validierung und Umrechnung erfolgen **zur Lese-/Schreibzeit** anhand der Definition; die gespeicherten Rohwerte bleiben dabei erhalten bzw. normalisiert, aber umkehrbar.
 4. Die `type`-Werteliste ist **offen und erweiterbar**: Neue Typen dürfen ergänzt, bestehende Typen nicht umbenannt werden (Stabilität für bestehende Daten, Exporte und Events).
 
-**Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Ein späterer Wechsel (Phase 9) umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und die Prüfung gegen die folgende Matrix:
+**Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Umgesetzt ist die folgende Matrix; jeder Wechsel umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und ein Event.
 
 | von \ nach  | `text`                         | `url`                                  | `number`               | `boolean`                             | `date`                            | `enum`                            | `reference`                  |
 | ----------- | ------------------------------ | -------------------------------------- | ---------------------- | ------------------------------------- | --------------------------------- | --------------------------------- | ---------------------------- |
-| `text`      | —                              | ⚠️ nur gültige `http(s)`-URLs          | ✅ nur parsebare Werte | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-parsebare Werte   | ⚠️ nur Werte aus der Werteliste   | ⚠️ nur gültige Objekt-IDs    |
+| `text`      | —                              | ⚠️ nur gültige `http(s)`-URLs          | ⚠️ nur parsebare Zahlen | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-Datum (`JJJJ-MM-TT`) | ⚠️ nur Codes der Optionsliste   | ⚠️ nur `object:<key>`-IDs    |
 | `url`       | ✅ verlustfrei                 | —                                      | ❌                     | ❌                                    | ❌                                | ❌                                | ❌                           |
-| `number`    | ✅ verlustfrei                 | ❌                                     | —                      | ❌                                    | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `boolean`   | ✅ verlustfrei                 | ❌                                     | ❌                     | —                                     | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                                     | ❌                     | ❌                                    | —                                 | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `enum`      | ✅ verlustfrei                 | ❌                                     | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
+| `number`    | ✅ verlustfrei (kanonisch)     | ❌                                     | —                      | ❌                                    | ❌                                | ❌                                | ❌                           |
+| `boolean`   | ✅ verlustfrei (`true`/`false`) | ❌                                     | ❌                     | —                                     | ❌                                | ❌                                | ❌                           |
+| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                                     | ❌                     | ❌                                    | —                                 | ❌                                | ❌                           |
+| `enum`      | ✅ verlustfrei (Code)          | ❌                                     | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
 | `reference` | ✅ verlustfrei (als ID-String) | ❌                                     | ❌                     | ❌                                    | ❌                                | ❌                                | —                            |
 
-- ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (bei nicht konformen Werten Ablehnung oder Teilmigration mit Löschung); ❌ = nicht sinnvoll / nicht unterstützt.
+- ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (nicht konforme Werte → Ablehnung oder, mit `drop_incompatible`, Löschung dieser Werte); ❌ = nicht sinnvoll/unzulässig (bleibt die Antwort auf den Wechsel eine `400` mit Liste der erlaubten Ziel-Typen).
+- **Nur Text-Ziele sind Sammelziele** (`text`): alles ist vertextbar, weil nur die Darstellung wechselt. Zahlen sind bewusst **nicht** aus `boolean`/`date`/`enum` ableitbar (keine stillen Interpretationen).
+- **Mehrsprachigkeit** (`multilingual`) ist **nicht** Teil des Wechsels: sie ändert die Wertstruktur (String ↔ Sprachobjekt) und braucht eine eigene, verlustentscheidende Migration (Auswahl einer Ausgangs-/Zielsprache). Sie bleibt eine eigene Ausbaustufe; der Wechselendpunkt lehnt eine gleichzeitige Änderung nicht ab, weil er sie gar nicht annimmt (nur `type` + Ziel-Modifikatoren).
+- **Modifikatoren:** Beim Verlassen von `enum` wird `enum_set_id` (und die Legacy-Liste `constraints.enum_values`) **geleert**; beim Verlassen von `number` werden `unit_id`/`display_unit_id` **geleert**. Beim Wechsel **nach** `enum` ist ein `enum_set_id` Pflicht (Auswahl im Request), nach `number` dürfen Einheiten mitgegeben werden.
 
-**Modifikatoren gelten als Teil des Typs:**
+### Ablauf & API
 
-- **Mehrsprachigkeit** (`multilingual`): An- bzw. Abschalten ändert die **Wertstruktur** (String ↔ Sprachobjekt) und zählt daher als Datentypwechsel. `text → text (multilingual)` erfordert das Einpacken der Werte in ein Sprachobjekt (z. B. unter `root`); der Rückweg erfordert die Auswahl genau einer Sprache und ist für die übrigen Sprachen verlustbehaftet.
-- **Einheit** (`unit_id`/`display_unit_id`): `number → number (mit Einheit)` interpretiert die vorhandenen Zahlen als kanonische SI-Werte der gewählten Dimension (verlustfrei, sofern die Dimension passt); `number (mit Einheit) → number` entfernt die Einheits-Information aus der Definition, die Werte bleiben als kanonische SI-Zahlen erhalten.
+`POST /attribute-definitions/{id}/type-change` (`admin`/`superadmin`), Query `?dry_run=true|false`, Body:
+
+```json
+{
+  "type": "number",
+  "enum_set_id": "enum_set:colors",
+  "unit_id": "unit_m",
+  "display_unit_id": "unit_cm",
+  "drop_incompatible": false
+}
+```
+
+1. **Vorbedingungen:** Das Attribut darf nicht `computed` sein (der Wert gehört einer Regel – erst die Regel anpassen, dann der Typ; `409`). Ein `is_key`-Attribut bleibt nur dann Schlüssel, wenn das Ziel `text` ist, sonst `409` („erst `is_key` entfernen“). Ziel-Typ muss in der Matrix stehen (`400`); ein Ziel-`enum` braucht ein **existierendes** `enum_set_id` (Auswahl im Request), Einheiten werden wie beim Anlegen durchgereicht.
+2. **Prüfen (immer, auch beim Dry-Run):** Alle Objekte mit einem Wert für das Attribut werden geladen und **jeder** Wert mit `convert_value(from, to, value)` in den Ziel-Typ überführt. Nicht konforme Werte werden gesammelt. Das Ergebnis ist ein **Report** `{name, from, to, checked, convertible, incompatible, samples[], dropped, dry_run}` (`samples` = bis zu 10 `{object, value, reason}`).
+3. **Anwenden:** Nur wenn `incompatible == 0` **oder** `drop_incompatible: true` gesetzt ist. Dann passieren Definition-Update und Wertmigration in **einer Transaktion**: `UPDATE $def MERGE $changes` plus eine Schleife über die konvertierten Werte (`FOR $row IN $rows { UPDATE … SET attributes[$name] = $row.value; }`, wie beim Collection-Refresh). Nicht konforme Werte werden dabei **entfernt** (`attributes[$name] = NONE`), gezählt als `dropped`.
+4. **Nach dem Schreiben:** Audit `attribute_definition_type_changed` (`{name, from, to, converted, dropped}`), Outbox-Event `attribute_definition.updated`, Cache-Invalidierung (Feldkatalog, `url`- und `multilingual`-Caches) – damit ziehen Suche, Formular und Grid sofort nach.
+5. **Fehlerantworten:** `400` unzulässiger Ziel-Typ/fehlende Ziel-Modifikatoren, `404` unbekanntes Attribut, `409` `computed`/`is_key`-Konflikt oder nicht konforme Werte (mit `checked`/`convertible`/`incompatible` und Beispielen).
+
+**Konvertierung (rein, unit-getestet in `attribute_definition_types.rs`):**
+
+- **nach `text`:** Zahl → kanonische Dezimaldarstellung, Boolean → `true`/`false`, `date`/`enum`/`reference`/`url` → unverändert (sind schon Strings).
+- **`text` → `url`:** muss `is_valid_url` erfüllen (derselbe Prüfer wie beim Schreiben).
+- **`text` → `number`:** getrimmt parsebar als Zahl (Ganzzahl bleibt Ganzzahl, sonst Fließkomma).
+- **`text` → `boolean`:** exakt `true`/`false` (kein `1`/`0`/`yes`).
+- **`text` → `date`:** exaktes `JJJJ-MM-TT` mit gültigen Monats-/Tageswerten (gespeichert wird weiter der ISO-String, wie beim Typ `date` üblich).
+- **`text` → `enum`:** Wert muss ein Code der Optionsliste des Ziel-Sets sein.
+- **`text` → `reference`:** muss die Form `object:<key>` haben (Formprüfung; die referenzierte Existenz prüft der Wechsel bewusst nicht — Referenzen sind Aggregationen und dürfen temporär ins Leere zeigen).
+- **Mehrsprachige Attribute:** Die Konvertierung läuft **je Sprache** (jeder Eintrag der Sprachkarte einzeln); ein nicht konformer Eintrag macht nur diesen Eintrag zum Problem.
+
+**Beispiele (verifiziert):**
+
+| Ausgangswert | Wechsel | Ergebnis |
+|---|---|---|
+| `"12.5"`, `"7"` | `text → number` | `12.5`, `7` |
+| `"true"` | `text → boolean` | `true` |
+| `"2026-09-12"` | `text → date` | `"2026-09-12"` (unverändert) |
+| `"red"` | `text → enum` (Set mit `red`) | `"red"` |
+| `"example.com"` | `text → url` | `409` (kein absolutes `http(s)`-Ziel) |
+| `12.5` | `number → text` | `"12.5"` |
 
 ## Tabellen in SurrealDB
 
