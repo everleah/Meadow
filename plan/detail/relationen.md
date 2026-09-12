@@ -146,7 +146,7 @@ Regeln:
 
 **Leitplanken:**
 
-- `role: category` darf **mehrfach** vorkommen: genau **ein** Typ ist **primär** = der System-Typ (`system: true`, `rel_category_member`) und bleibt die feste Taxonomie (Baum, Zähler, „Nicht kategorisiert“). Weitere Typen sind **Zusatz-Kategorisierungen** (`system: false`).
+- `role: category` darf **mehrfach** vorkommen: genau **ein** Typ ist **primär** = der System-Typ (`system: true`, `rel_category_member`) und ist die **Default-Dimension** der Kategorie-Ansichten. Weitere Typen sind **Zusatz-Kategorisierungen** (`system: false`) und in denselben Ansichten per Umschalter wählbar; der Baum selbst (die Kategorie-Objekte und ihre Hierarchie) ist für alle Dimensionen derselbe. Zähler und „Nicht kategorisiert“ folgen der gewählten Dimension. Siehe „Dimensionen“ in [kategorisierung.md](kategorisierung.md).
 - Die Rolle **erzwingt** die Struktur: `kind: aggregation`, `target_types = ["category"]` (Ziel ist immer ein Kategorie-Objekt), Richtung Objekt → Kategorie. `source_types` beschränkt weiterhin die **Mitglieder** (leer = alle). Damit ist die beobachtete Fehlkonfiguration (falsche Richtung/Restriktion) strukturell unmöglich.
 - `composition` und `collection` bleiben **Singletons** (Rollen reserviert). Mehrere Sammlungen entstehen über mehrere `collection`-**Objekte**, nicht über mehrere Kantentypen.
 - Eigene Typen starten als `link`; die Umstellung auf `category` ist ein bewusster Schritt in der Relationstyp-Verwaltung (nur bei `system: false`) und setzt `target_types` automatisch auf `["category"]`. Eine Rückstufung auf `link` ist erlaubt, solange keine Kanten des Typs existieren.
@@ -155,7 +155,7 @@ Regeln:
 
 - `category_member_keys(db, category_id, definition_id)` – Default = primärer Typ, sonst der angegebene; die Helfer werden auf eine Definitionsliste (`definition_id IN $defs`) erweitert.
 - `GET /objects?category=<id>[&definition_id=<rel_…>]` und `?uncategorized=true[&definition_id=<rel_…>]` reichen den Typ durch (Default: primärer Typ, abwärtskompatibel).
-- `?count_members=true` zählt weiterhin den **primären** Typ (Zähler der festen Taxonomie).
+- `?count_members=true` zählt den Typ aus `&definition_id=<rel_…>` (Default: primärer Typ) – je Dimension ein eigener Zähler.
 - `POST /references` prüft die Rolle (Ziel `category`) und validiert Kanten-Attribute gegen das Template **des jeweiligen Typs**.
 - `POST /relation-definitions`: `role: category` für eigene Typen erlaubt (mehrfach), `target_types` wird auf `["category"]` normalisiert.
 
@@ -164,7 +164,7 @@ Regeln:
 - **Formular:** Der Abschnitt **„Kategorien“** rendert **je Kategorie-Typ einen Block** (primärer Typ zuerst, danach Zusatz-Typen alphabetisch): Picker auf `category` beschränkt, Chips wie heute, ✕ entfernt die Kante des jeweiligen Typs; Kanten-Attribute über den vorhandenen Editor (Stift). Damit sind „Zuordnungen differenzieren + Attribute je Relation“ abgedeckt.
 - `/relation-types`: Verwendung `category` wählbar (nur `system: false`), Anzeige unterscheidet „Kategorie (primär, System)“ und „Kategorie (Zusatz)“; `target_types` ist für Kategorie-Rollen schreibgeschützt.
 - **Bulk-Wizard:** `add_category`/`remove_category` bekommen ein **Typ-Feld** (Default: primärer Typ). Alternativ kann die Operation „Relation zuweisen/entfernen“ weiterhin jeden Kategorie-Typ bedienen (Picker bereits auf `category` beschränkt).
-- **Grid:** Baum, Zähler und „Nicht kategorisiert“ bleiben auf dem **primären** Typ (keine Verfälschung der bestehenden Ansichten). Optional (Stage 2b): Typ-Selektor im Kategorien-Panel, der `?category=…&definition_id=…` nutzt.
+- **Grid:** Baum und „Nicht kategorisiert“ sind für alle Dimensionen dieselben Kategorie-Objekte; das Kategorien-Panel hat einen **Dimensions-Umschalter** (`?category=…&definition_id=…`), der Zähler und Zeilen auf den gewählten Typ umstellt (Default: primärer Typ, URL dann ohne `definition_id`). `/categories` hat denselben Umschalter.
 
 **Nicht-Ziele:** keine Kategorie-**Hierarchie** je eigenem Typ (der Baum bleibt die feste Taxonomie), kein zweiter Kategorie-Objekttyp, keine Mehrfachrolle für `collection`/`composition`.
 

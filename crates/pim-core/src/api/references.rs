@@ -1083,9 +1083,14 @@ pub struct ChildrenListParams {
     #[serde(default)]
     pub offset: u32,
     /// When true, each returned category child carries a `memberCount` (number
-    /// of objects assigned via `category_member`, including subcategories).
+    /// of objects assigned to the category subtree, including subcategories).
     #[serde(default)]
     pub count_members: bool,
+    /// Category relation type whose members are counted with `count_members`
+    /// (default: the built-in primary type). Must have the usage `category`;
+    /// an unknown or non-category type is rejected with `400`.
+    #[serde(default)]
+    pub definition_id: Option<String>,
 }
 
 /// Lists the direct composition children of an object.
@@ -1094,7 +1099,9 @@ pub struct ChildrenListParams {
 /// a `hasChildren` flag so the structure tree can show the expand arrow without
 /// loading the whole subtree (lazy loading); `?limit`/`?offset` paginate nodes
 /// with many direct children. With `?count_members=true`, category children also
-/// carry a `memberCount` for the category tree's counter.
+/// carry a `memberCount` for the category tree's counter — counting the members
+/// of the category relation type given by `?definition_id` (default: the
+/// built-in primary type), so additional categorisations have their own counter.
 ///
 /// Accepts an editor JWT or the `X-Api-Key` service account (the bulk worker
 /// walks the tree for `consolidate_inheritance`).
@@ -1198,15 +1205,16 @@ pub async fn list_object_children(
         })
         .collect();
     if params.count_members {
-        // Category children: add the number of objects assigned via the primary
-        // category type to the category subtree (category tree counter).
-        // Additional category relations are deliberately not counted here.
+        // Category children: add the number of objects assigned through the
+        // requested category relation type (default: the primary type) to the
+        // category subtree (category tree counter).
+        let definition =
+            resolve_category_definition(&state.db, params.definition_id.as_deref()).await?;
         let mut counted: Vec<Value> = Vec::new();
         for mut value in result {
             if value.get("type").and_then(Value::as_str) == Some("category") {
                 let cid = value.get("id").and_then(Value::as_str).unwrap_or("");
-                let keys =
-                    category_member_keys(&state.db, cid, PRIMARY_CATEGORY_DEFINITION).await?;
+                let keys = category_member_keys(&state.db, cid, &definition).await?;
                 value["memberCount"] = json!(keys.len());
             }
             counted.push(value);

@@ -824,13 +824,15 @@ class CoreClient:
         limit: int | None = None,
         offset: int = 0,
         count_members: bool = False,
+        definition_id: str | None = None,
     ) -> list[dict]:
         """Lists an object's composition children (``rel_depends_on``).
 
         Each child carries ``hasChildren`` so the tree can show the expand arrow
         without loading the whole subtree; ``limit``/``offset`` paginate nodes
         with many direct children. With ``count_members``, category children also
-        carry a ``memberCount`` (objects assigned via ``category_member``).
+        carry a ``memberCount`` (objects assigned through the category relation
+        type given by ``definition_id``; default: the primary type).
         """
         params: dict[str, str] = {}
         if limit is not None:
@@ -839,6 +841,8 @@ class CoreClient:
             params["offset"] = str(offset)
         if count_members:
             params["count_members"] = "true"
+        if definition_id:
+            params["definition_id"] = definition_id
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/children",

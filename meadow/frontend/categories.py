@@ -1,8 +1,16 @@
 """Admin page for categories & relations (admin/superadmin only).
 
 Categories are ordinary objects of type ``category``. This page manages the
-category trees: create, hierarchise (re-parent), edit and delete categories, and
-assign/remove the objects that belong to them (``category_member`` aggregation).
+category trees: create, hierarchise (re-parent), edit and delete categories.
+The **assignment** of objects is product-centric (see the product form) and runs
+over the category relation types of a type's *usage* ``category``.
+
+A page has **dimensions**: the built-in primary taxonomy plus every custom
+relation type with the usage `category` ("additional categorisations", e.g.
+"Brand"). The tree itself is shared — every dimension uses the same category
+objects (the role contract fixes the target type to `category`) — the selected
+dimension only decides whose members are counted in the tree and which relation
+the "show in grid" link filters by.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
+from meadow.frontend.display import dimension_options
 from meadow.frontend.grid import (
     filter_tree_nodes,
     resolve_value,
@@ -21,6 +30,7 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
+from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_category_key
 
 ROOT_ID = OBJECT_ROOT_ID
 
@@ -34,9 +44,17 @@ async def _category_objects(client: CoreClient, token: str, locale: str) -> dict
     return {str(o.get("id")): o for o in objects if isinstance(o, dict) and o.get("id")}
 
 
-async def _category_roots(client: CoreClient, token: str, locale: str) -> list[dict]:
-    """Returns the top-level category nodes (children of the universal root)."""
-    top = await client.list_object_children(token, ROOT_ID, limit=100, count_members=True)
+async def _category_roots(
+    client: CoreClient, token: str, locale: str, definition_id: str
+) -> list[dict]:
+    """Returns the top-level category nodes (children of the universal root).
+
+    ``definition_id`` selects the category relation type whose members are
+    counted (`memberCount`); the tree itself is shared by all dimensions.
+    """
+    top = await client.list_object_children(
+        token, ROOT_ID, limit=100, count_members=True, definition_id=definition_id
+    )
     return [
         tree_node_from_object(child, locale) for child in top if child.get("type") == "category"
     ]
@@ -54,13 +72,25 @@ async def categories_page() -> None:
         ui.label(t("categories.subtitle")).classes("text-subtitle1")
 
         try:
-            category_roots = await _category_roots(client, token, locale)
+            category_roots = await _category_roots(client, token, locale, PRIMARY_CATEGORY_DEF)
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("categories.load_failed")).classes("text-subtitle1 text-negative")
             return
         category_objects = await _category_objects(client, token, locale)
 
+        # Category dimensions: the primary taxonomy plus every custom category
+        # relation type. The tree is shared; the dimension drives the counters
+        # and the relation used by "show in grid".
+        try:
+            relation_definitions = await client.list_relation_definitions(token)
+        except Exception:  # noqa: BLE001 - degrade to the primary taxonomy only
+            relation_definitions = []
+        dimensions = dimension_options(
+            relation_definitions, locale, primary_label=t("categories.dimension_primary")
+        )
+
         # --- state -----------------------------------------------------------
+        dimension: dict = {"key": primary_category_key(relation_definitions)}
         selected_category: dict = {"id": None, "label": "", "type": "", "status": ""}
         selected_tree: dict = {"id": None}
         current_tree: dict = {"tree": None, "nodes": []}
@@ -128,7 +158,11 @@ async def categories_page() -> None:
         # --- tree helpers ----------------------------------------------------
         async def load_category_children(node_id: str) -> list[dict]:
             children = await client.list_object_children(
-                token, node_id, limit=100, count_members=True
+                token,
+                node_id,
+                limit=100,
+                count_members=True,
+                definition_id=dimension["key"],
             )
             return [
                 tree_node_from_object(child, locale)
@@ -200,7 +234,7 @@ async def categories_page() -> None:
         async def reload_tree() -> None:
             nonlocal category_roots
             try:
-                category_roots = await _category_roots(client, token, locale)
+                category_roots = await _category_roots(client, token, locale, dimension["key"])
             except Exception:  # noqa: BLE001 - keep the cached roots on failure
                 category_roots = category_roots
             tree_select.options = {
@@ -210,7 +244,27 @@ async def categories_page() -> None:
             tree_select.update()
             render_tree()
 
+        async def change_dimension(value: str) -> None:
+            """Switches the counted category relation type and re-renders the tree."""
+            key = str(value or PRIMARY_CATEGORY_DEF)
+            if key == dimension["key"]:
+                return
+            dimension["key"] = key
+            await reload_tree()
+            await render_detail()
+
         # --- detail panel -----------------------------------------------------
+        def grid_url() -> str:
+            """Grid link for the selected category in the current dimension.
+
+            The extra categorisation is passed along, so the grid shows (and
+            counts) the members of the very same relation type.
+            """
+            url = f"/products?category={selected_category['id']}"
+            if dimension["key"] != PRIMARY_CATEGORY_DEF:
+                url += f"&definition_id={dimension['key']}"
+            return url
+
         async def render_detail() -> None:
             detail_host.clear()
             category_id = selected_category["id"]
@@ -252,9 +306,7 @@ async def categories_page() -> None:
                     ui.button(
                         t("categories.view_in_grid"),
                         icon="open_in_new",
-                        on_click=lambda: ui.navigate.to(
-                            f"/products?category={selected_category['id']}"
-                        ),
+                        on_click=lambda: ui.navigate.to(grid_url()),
                     ).props("outline")
                     ui.label(t("categories.view_in_grid_hint")).classes(
                         "text-caption text-gray-500"
@@ -517,6 +569,20 @@ async def categories_page() -> None:
                         render_tree()
 
                     tree_select.on_value_change(lambda e: on_tree_select(e.value))  # type: ignore
+                with ui.row().classes("items-center gap-2 w-full px-2").style("flex-wrap: nowrap"):
+                    dimension_select = (
+                        ui.select(
+                            dimensions,
+                            value=dimension["key"],
+                            label=t("categories.dimension"),
+                        )
+                        .props("outline dense")
+                        .classes("grow")
+                    )
+                    ui.button(icon="help_outline").props("flat dense shrink-0").tooltip(
+                        t("categories.dimension_hint")
+                    )
+                    dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
                 with ui.row().classes("items-center gap-2 w-full px-2").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     ui.button(icon="unfold_less", on_click=collapse_all).props(

@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import html
 
+from meadow.frontend.relation_roles import (
+    PRIMARY_CATEGORY_DEF,
+    category_definitions,
+    definition_key,
+)
+
 #: States offered for a channel release. The vocabulary is the object status
 #: state machine (the core accepts any string; `workflow_guard` rules own the
 #: transitions) — kept in sync with `form.py`'s status selector.
@@ -97,3 +103,28 @@ def channel_options(channels: list[dict], locale: str) -> dict[str, str]:
         for channel in channels
         if channel.get("code")
     }
+
+
+def dimension_options(
+    definitions: list[dict], locale: str, *, primary_label: str
+) -> dict[str, str]:
+    """Select options `relation key -> label` for the category dimensions.
+
+    A dimension is the built-in primary taxonomy plus every custom relation type
+    with the usage `category` ("additional categorisations", e.g. "Brand"). All
+    dimensions share the same category objects (the role contract fixes the
+    target type to `category`); the dimension only decides whose members are
+    counted/filtered. The primary type gets the caller's label (the pages pass
+    the translated key, keeping this helper free of page/i18n state); without
+    known definitions it alone is offered, so the switcher is never empty.
+    """
+    options: dict[str, str] = {}
+    for definition in category_definitions(definitions):
+        key = definition_key(definition)
+        if key == PRIMARY_CATEGORY_DEF:
+            options[key] = primary_label
+        else:
+            options[key] = resolve_value(definition.get("label"), locale) or str(
+                definition.get("name") or key
+            )
+    return options or {PRIMARY_CATEGORY_DEF: primary_label}

@@ -27,6 +27,7 @@ from meadow.frontend.display import (
     DEFAULT_RELEASE_STATUS,
     channel_options,
     completeness_badge,
+    dimension_options,
     release_badges,
     resolve_value,
     status_badge,
@@ -815,6 +816,9 @@ async def products_page(request: Request) -> None:
         "type": request.query_params.get("type") or None,
         "ancestor": request.query_params.get("ancestor") or None,
         "category": request.query_params.get("category") or None,
+        # Category dimension: the category relation type used by the `category`
+        # and `uncategorized` filters (empty = built-in primary taxonomy).
+        "definition_id": request.query_params.get("definition_id") or None,
         "collection": request.query_params.get("collection") or None,
         "uncategorized": request.query_params.get("uncategorized") == "1",
         # Channel-specific releases: `?released_for=<code>` = released for that channel.
@@ -857,6 +861,13 @@ async def products_page(request: Request) -> None:
             channels = []
         channel_labels = channel_options(channels, locale)
 
+        # Relation definitions (page-wide catalog): the category dimensions, the
+        # reference picker and the bulk wizard all read from it.
+        try:
+            relation_definitions: list[dict] = await client.list_relation_definitions(token)
+        except Exception:  # noqa: BLE001 - degrade to "no custom relation types"
+            relation_definitions = []
+
         async def fetch_filtered() -> list[dict]:
             """Loads the objects matching the active filters (see `active`)."""
             if not has_filter():
@@ -888,6 +899,13 @@ async def products_page(request: Request) -> None:
                 object_type=active["type"],
                 ancestor=active["ancestor"],
                 category=active["category"],
+                # The dimension only matters for the category filters; sending it
+                # for other views would be validated but ignored by the core.
+                definition_id=(
+                    active["definition_id"]
+                    if active["category"] or active["uncategorized"]
+                    else None
+                ),
                 collection=active["collection"],
                 uncategorized=bool(active["uncategorized"]),
                 released_for=active["released_for"],
@@ -1096,12 +1114,16 @@ async def products_page(request: Request) -> None:
                 parts.append(f"ancestor={quote(str(active['ancestor']))}")
             if active["category"]:
                 parts.append(f"category={quote(str(active['category']))}")
+                if active["definition_id"] and active["definition_id"] != PRIMARY_CATEGORY_DEF:
+                    parts.append(f"definition_id={quote(str(active['definition_id']))}")
             if active["collection"]:
                 parts.append(f"collection={quote(str(active['collection']))}")
             if active["released_for"]:
                 parts.append(f"released_for={quote(str(active['released_for']))}")
             if active["uncategorized"]:
                 parts.append("uncategorized=1")
+                if active["definition_id"] and active["definition_id"] != PRIMARY_CATEGORY_DEF:
+                    parts.append(f"definition_id={quote(str(active['definition_id']))}")
             if active["q"]:
                 parts.append(f"q={quote(str(active['q']))}")
             if active["where"]:
@@ -1172,7 +1194,11 @@ async def products_page(request: Request) -> None:
 
         async def load_category_children(node_id: str) -> list[dict]:
             children = await client.list_object_children(
-                token, node_id, limit=100, count_members=True
+                token,
+                node_id,
+                limit=100,
+                count_members=True,
+                definition_id=active["definition_id"],
             )
             return [
                 tree_node_from_object(child, locale)
@@ -1180,17 +1206,53 @@ async def products_page(request: Request) -> None:
                 if child.get("type") == "category"
             ]
 
-        try:
-            top_children = await client.list_object_children(
-                token, root_id, limit=100, count_members=True
-            )
-            category_roots = [
+        async def load_category_roots() -> list[dict]:
+            """Loads the category tree roots with the member counts of the dimension."""
+            try:
+                top_children = await client.list_object_children(
+                    token,
+                    root_id,
+                    limit=100,
+                    count_members=True,
+                    definition_id=active["definition_id"],
+                )
+            except Exception:  # noqa: BLE001 - degrade to a structure-only panel
+                return []
+            return [
                 tree_node_from_object(child, locale)
                 for child in top_children
                 if child.get("type") == "category"
             ]
-        except Exception:  # noqa: BLE001 - degrade to a structure-only panel
-            category_roots = []
+
+        category_roots = await load_category_roots()
+
+        # Category dimension: the category relation type whose members are counted
+        # in the tree and filtered by `?category=`/`?uncategorized=`. The tree and
+        # its category objects are shared by all dimensions (the role contract
+        # fixes the target type to `category`) — only the counters and the filter
+        # follow the selection. Empty = the built-in primary taxonomy.
+        dimension: dict = {"key": active["definition_id"] or PRIMARY_CATEGORY_DEF}
+        dimensions = dimension_options(
+            relation_definitions, locale, primary_label=t("categories.dimension_primary")
+        )
+
+        async def change_dimension(value: str) -> None:
+            """Switches the counted/filtered category dimension and reloads the view."""
+            nonlocal category_roots
+            key = str(value or PRIMARY_CATEGORY_DEF)
+            if key == dimension["key"]:
+                return
+            dimension["key"] = key
+            active["definition_id"] = None if key == PRIMARY_CATEGORY_DEF else key
+            category_roots = await load_category_roots()
+            tree_select.options = {
+                "all": t("grid.all_trees"),
+                **{r["id"]: r["label"] for r in category_roots},
+            }
+            tree_select.update()
+            render_tree("category")
+            if active["category"] or active["uncategorized"]:
+                await reload_grid()
 
         async def handle_category_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
@@ -1401,25 +1463,16 @@ async def products_page(request: Request) -> None:
         # Reference picker (modal): display + add/remove an object's references.
         relation_options: dict[str, str] = {}
         relation_def_by_key: dict[str, dict] = {}
-        relation_definitions: list[dict] = []
-        try:
-            relation_definitions = await client.list_relation_definitions(token)
-            for definition in relation_definitions:
-                if str(definition.get("kind")) != "aggregation":
-                    continue
-                # The core's `create_reference` expects the definition's short
-                # record key (e.g. `rel_category_member`, from the record id
-                # `relation_definition:rel_category_member`), not the full id or
-                # the display `name` (which differs, e.g. `category_member`).
-                def_key = definition_key(definition)
-                relation_def_by_key[def_key] = definition
-                relation_options[def_key] = (
-                    resolve_value(definition.get("label"), locale) or def_key
-                )
-        except Exception:  # noqa: BLE001 - degrade to an empty picker
-            relation_options = {}
-            relation_def_by_key = {}
-            relation_definitions = []
+        for definition in relation_definitions:
+            if str(definition.get("kind")) != "aggregation":
+                continue
+            # The core's `create_reference` expects the definition's short
+            # record key (e.g. `rel_category_member`, from the record id
+            # `relation_definition:rel_category_member`), not the full id or
+            # the display `name` (which differs, e.g. `category_member`).
+            def_key = definition_key(definition)
+            relation_def_by_key[def_key] = definition
+            relation_options[def_key] = resolve_value(definition.get("label"), locale) or def_key
 
         # The bulk wizard assigns relations generically; types with a dedicated
         # operation (composition parent, categorisation) are hidden there to
@@ -2333,6 +2386,7 @@ async def products_page(request: Request) -> None:
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
                     tree_select.set_visibility(view == "category")
+                    dimension_select.set_visibility(view == "category")
                     collapse_btn.set_visibility(
                         view != "collection" and bool(tree_nodes or category_roots)
                     )
@@ -2370,6 +2424,16 @@ async def products_page(request: Request) -> None:
                         render_tree("category")
 
                     tree_select.on_value_change(lambda e: on_tree_select(e.value))
+                    dimension_select = (
+                        ui.select(
+                            dimensions,
+                            value=dimension["key"],
+                            label=t("grid.category_dimension"),
+                        )
+                        .props("outline dense")
+                        .classes("shrink-0")
+                    ).tooltip(t("grid.category_dimension_hint"))
+                    dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
                 # Line 2: filter + action button (collapse for structure/category,
                 # collection reload for the flat Collections view).
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):

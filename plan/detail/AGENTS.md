@@ -9,12 +9,12 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
 - Owns all files under `plan/detail/`.
 - Owned documents, one per main-document section:
   - `datenmodell.md` — data model (section 4)
-  - `relationen.md` — relations model: composition & aggregation, plus the planned usage classification (`role`) (section 4)
+  - `relationen.md` — relations model: composition & aggregation, plus the usage classification (`role`) and additional categorisations (section 4)
   - `einheiten.md` — units & measurement units (section 4)
   - `sprachbaum-mehrsprachigkeit.md` — language tree & multilingual data (section 4)
   - `datenwertvererbung.md` — data value inheritance & conflict resolution (section 4)
   - `vererbung-konsolidierung.md` — consolidating inheritance (pushing identical child values up to the parent, implemented Phase 9)
-  - `kategorisierung.md` — categorization & grouping (section 4)
+  - `kategorisierung.md` — categorization & grouping, including the category dimensions (per-relation-type counters & filters) (section 4)
   - `api-design.md` — REST API design (section 5)
   - `jobs-scheduler.md` — background jobs & scheduler (section 6)
   - `integration-eventsystem.md` — integration & event system (section 7)
