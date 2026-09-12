@@ -172,8 +172,8 @@ def _leaf(field: str, operator: str, value: object) -> dict:
 
 
 def test_field_lookup_resolves_multilingual_variants() -> None:
-    assert search_form.field_by_key(CATALOG, "attributes.name")["key"] == "attributes.name"
-    assert search_form.field_by_key(CATALOG, "attributes.name.de")["key"] == "attributes.name"
+    assert search_form.field_by_key(CATALOG, "attributes.name")["key"] == "attributes.name"  # type: ignore
+    assert search_form.field_by_key(CATALOG, "attributes.name.de")["key"] == "attributes.name"  # type: ignore
     assert search_form.field_by_key(CATALOG, "attributes.name.zz") is None
     assert search_form.field_by_key(CATALOG, "attributes.nope") is None
     assert search_form.split_language(CATALOG, "attributes.name.de") == "de"
@@ -352,9 +352,9 @@ def test_clean_tree_drops_values_of_valueless_operators() -> None:
         ],
     }
     cleaned = search_form.clean_tree(tree, CATALOG)
-    assert "value" not in cleaned["conditions"][0]
-    assert cleaned["conditions"][1]["value"] is None
-    assert cleaned["conditions"][2]["value"] == [1, 2]
+    assert "value" not in cleaned["conditions"][0]  # type: ignore
+    assert cleaned["conditions"][1]["value"] is None  # type: ignore
+    assert cleaned["conditions"][2]["value"] == [1, 2]  # type: ignore
 
     state = search_form.default_state(CATALOG)
     state["where"] = tree

@@ -1217,7 +1217,7 @@ class _ReferenceSection:
                     )
                     ui.button(
                         icon="account_tree",
-                        on_click=lambda row=row: self._pick(row),
+                        on_click=lambda row=row: self._pick(row),  # type: ignore
                     ).props("flat dense").tooltip(t("search_form.reference_pick"))
                     ui.select(
                         {
@@ -1228,7 +1228,7 @@ class _ReferenceSection:
                         label=t("search_form.reference_direction"),
                         on_change=lambda event, row=row: self._set_direction(row, str(event.value)),
                     ).props("dense filled").classes("w-56")
-                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(
+                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(  # type: ignore
                         "flat dense color=negative"
                     )
 
@@ -1318,7 +1318,7 @@ class _SortSection:
                             row, str(event.value or "asc")
                         ),
                     ).props("dense filled").classes("w-40")
-                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(
+                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(  # type: ignore
                         "flat dense color=negative"
                     )
 
