@@ -159,7 +159,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 |---|---|---|
 | `name` | string | Attributname (stabiler Schlüssel) |
 | `label` | object | Mehrsprachiges Label |
-| `type` | string | `text`\|`number`\|`boolean`\|`date`\|`enum`\|`reference` |
+| `type` | string | `text`\|`url`\|`number`\|`boolean`\|`date`\|`enum`\|`reference` |
 | `group_ids` | string[] | Gruppen-Namen |
 | `inheritable` | bool | Vererbbar |
 | `is_key` | bool | Marker (autoritativ: `object_type.key_attributes`) |

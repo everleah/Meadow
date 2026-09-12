@@ -105,9 +105,31 @@ Ein **Business-Schlüssel** (z. B. SKU) dient dem Anwender als fachliche Kennung
 
 > **Hinweis:** Der Datentypwechsel-Abschnitt unten gilt auch für Schlüsselattribute: Ein Wechsel von `is_key` oder des Typs ist eine spätere Ausbaustufe (Phase 9) und erfordert eine Migration vorhandener Werte.
 
+## URL-Attribute
+
+> **Stand:** umgesetzt (Phase 9) — Typ `url` in `attribute_definition.type`, Validierung im Kern (`attribute_values.rs`), Link-Darstellung in Grid und Formular (`meadow/frontend/url_values.py`).
+
+Ein `url`-Attribut speichert eine **Webadresse** — Website, Produktseite, Datenblatt, Bild- oder Videolink. Es verhält sich wie `text` (auch `multilingual`, `inheritable`, `default_value` und `constraints` sind erlaubt), wird aber **validiert** und in der UI als **Link** dargestellt.
+
+**Regeln (Kern, verbindlich):**
+
+1. **Nur echte URLs:** Akzeptiert wird ausschließlich eine absolute Adresse mit Schema `http` oder `https` **und** Host — geprüft mit dem WHATWG-URL-Parser (`url`-Crate, `attribute_values::is_valid_url`). Abgelehnt werden u. a. `example.com` (relativ), `ftp:`/`mailto:`/`javascript:`/`data:` (anderes Schema), `https://` (ohne Host) und unparsbarer Text.
+2. **Geprüft wird beim Schreiben:** `POST /objects`, `PATCH /objects/{id}` und `POST /objects/batch-update` antworten mit **400** und Pfad im Attribut, z. B. `` `attributes.homepage`: must be an absolute http(s) URL `` (mehrsprachig: `` `attributes.homepage.de`: … ``). Die Prüfung sitzt vor den Business Rules und deckt damit auch Worker-Schreibpfade (Bulk, Import) ab.
+3. **Kein Wert ist erlaubt:** `null` und der leere String löschen den Wert bzw. brechen die Vererbung (wie bei jedem anderen Typ); `{ "de": null }` bleibt gültig.
+4. **Werte in Maps:** Bei `multilingual` liegt `{ sprache: URL }` vor; jede Sprache wird einzeln geprüft, Nicht-Strings werden abgelehnt.
+5. **Kein Schlüssel:** `is_key` bleibt `text` vorbehalten (unverändert).
+6. **Speicherung unverändert:** Der Wert bleibt der rohe String (kein Normalisieren, kein Umschreiben), damit Import/Export und MEF-Roundtrips verlustfrei bleiben.
+
+**Darstellung (UI):**
+
+- **Grid:** Die Spalte eines `url`-Attributs (auch je Sprache) rendert den Wert als **Link** (`<a target="_blank" rel="noopener noreferrer">`); die Zelle bleibt inline editierbar (Text).
+- **Bild/Video:** Endet die Adresse auf eine Bild- bzw. Video-Endung, wird sie **nicht** verlinkt, sondern als klickbare Zelle dargestellt — ein Klick öffnet den **NiceGUI-Vorschau-Dialog** (Bild eingebettet, Video mit Player, plus „In neuem Tab öffnen“). Die Entscheidung trifft Python (`url_values.media_kind`), das Zell-Rendering erhält sie über die Zeilenmarkierung `_media` — eine Quelle der Wahrheit.
+- **Formular:** Feld mit `type=url` und Button „Öffnen“ (Bild/Video → Dialog, sonst neuer Tab); der Button ist deaktiviert, solange kein gültiger Wert im Feld steht.
+- **Suche:** `url`-Felder sind filterbar wie Text (`GET /search-fields` meldet `value_type: "url"` mit den Text-Operatoren plus `in`/`not_in`).
+
 ## Datentypwechsel
 
-Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `number`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate.
+Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate. **`url`** ist die erste Ausnahme bei der Schreibvalidierung: der Kern akzeptiert nur absolute `http(s)`-URLs (siehe [URL-Attribute](#url-attribute)).
 
 **Grundsatz:** Der Datentyp ist eine **Eigenschaft der Definition, nicht der gespeicherten Werte**. Ein Wechsel des Datentyps (inkl. Umstellung aller vorhandenen Werte) ist daher konzeptionell möglich, wird aber in der ersten Version **nicht** unterstützt und ist als spätere Ausbaustufe (Phase 9) vorgesehen.
 
@@ -120,14 +142,15 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
 
 **Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Ein späterer Wechsel (Phase 9) umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und die Prüfung gegen die folgende Matrix:
 
-| von \ nach  | `text`                         | `number`               | `boolean`                             | `date`                            | `enum`                            | `reference`                  |
-| ----------- | ------------------------------ | ---------------------- | ------------------------------------- | --------------------------------- | --------------------------------- | ---------------------------- |
-| `text`      | —                              | ✅ nur parsebare Werte | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-parsebare Werte   | ⚠️ nur Werte aus der Werteliste   | ⚠️ nur gültige Objekt-IDs    |
-| `number`    | ✅ verlustfrei                 | —                      | ❌                                    | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `boolean`   | ✅ verlustfrei                 | ❌                     | —                                     | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                     | ❌                                    | —                                 | ⚠️ nur Werte aus der Werteliste   | ❌                           |
-| `enum`      | ✅ verlustfrei                 | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
-| `reference` | ✅ verlustfrei (als ID-String) | ❌                     | ❌                                    | ❌                                | ❌                                | —                            |
+| von \ nach  | `text`                         | `url`                                  | `number`               | `boolean`                             | `date`                            | `enum`                            | `reference`                  |
+| ----------- | ------------------------------ | -------------------------------------- | ---------------------- | ------------------------------------- | --------------------------------- | --------------------------------- | ---------------------------- |
+| `text`      | —                              | ⚠️ nur gültige `http(s)`-URLs          | ✅ nur parsebare Werte | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-parsebare Werte   | ⚠️ nur Werte aus der Werteliste   | ⚠️ nur gültige Objekt-IDs    |
+| `url`       | ✅ verlustfrei                 | —                                      | ❌                     | ❌                                    | ❌                                | ❌                                | ❌                           |
+| `number`    | ✅ verlustfrei                 | ❌                                     | —                      | ❌                                    | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `boolean`   | ✅ verlustfrei                 | ❌                                     | ❌                     | —                                     | ❌                                | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                                     | ❌                     | ❌                                    | —                                 | ⚠️ nur Werte aus der Werteliste   | ❌                           |
+| `enum`      | ✅ verlustfrei                 | ❌                                     | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
+| `reference` | ✅ verlustfrei (als ID-String) | ❌                                     | ❌                     | ❌                                    | ❌                                | ❌                                | —                            |
 
 - ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (bei nicht konformen Werten Ablehnung oder Teilmigration mit Löschung); ❌ = nicht sinnvoll / nicht unterstützt.
 
@@ -176,7 +199,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
     "id": "attr_def_001",
     "name": "price",
     "label": { "de": "Preis", "en": "Price" },
-    "type": "number",                // text, number, boolean, date, enum, reference, ...
+    "type": "number",                // text, url, number, boolean, date, enum, reference, ...
     "group_ids": ["attr_group_01"],  // viele-zu-viele: Attribut kann in mehreren Gruppen sein
     "inheritable": true,             // true: Wert kann über Vererbung bezogen werden
     "is_key": false,                 // true: Business-Schlüssel (z. B. SKU), eindeutig pro Typ
@@ -199,7 +222,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 }
 ```
 
-- `type` bestimmt den Datentyp (`text`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
+- `type` bestimmt den Datentyp (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
 - `group_ids` (viele-zu-viele): Ein Attribut kann in **mehreren** Attributgruppen erscheinen; die Zuordnung wird als **Inline-Array der Group-Keys** direkt am `attribute_definition`-Datensatz gespeichert (keine separate Join-Tabelle). Am Objekt instanziert ist es **dasselbe** Attribut (ein Feld, mehrere UI-Gruppen). Ist `group_ids` leer/`[]`, gehört das Attribut keiner Gruppe („Attribute ohne Gruppe“). *Schema-Detail:* der Feldtyp ist `option<array>` – Datensätze, die vor der Gruppen-Erzwingung angelegt wurden, können das Feld noch nicht tragen (im Code als `group_ids ?? []` behandelt, d. h. fehlend == `[]`).*
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp (anwendungsseitig beim Schreiben erzwungen, konzeptionell `(type, attributes.<name>)`). Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
@@ -207,7 +230,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 - `required_types` bestimmt, für welche Objekttypen das Attribut ein Pflichtfeld ist und damit in die **Vollständigkeit** (Completeness, pro Typ × Sprache) eingeht (siehe [frontend-arbeitsflaechen.md](frontend-arbeitsflaechen.md#4-vollständigkeit-completeness)).
 - `computed`/`computed_rule`/`dependencies`/`computed_reads_inherited` kennzeichnen **berechnete Attribute** (Abschnitt 8 / [business-rules.md](business-rules.md)): Der Wert wird beim Schreiben **synchron** von einer `computed`-Regel berechnet und gespeichert (stored-first, kein On-Read-Modus); `dependencies` deklarieren die Eingaben der Formel (Grundlage der Recompute-Kaskade; async bei `computed_reads_inherited`).
 - Weitere optionale Felder: `multilingual`, `default_value`, `unit_id`, `display_unit_id`, `description`; die geschlossene Werteliste `enum_values` liegt optional in `constraints` (siehe Beispiel). Die Felder `unit_id`/`display_unit_id` gelten für numerische Werte mit Einheit (siehe [einheiten.md](einheiten.md)).
-- **Löschen:** `DELETE /attribute-definitions/{id}` entfernt die Definition und ihre `attribute_group_member`-Links. Sind bereits Objekt-Attributwerte vorhanden, wird die Löschung mit HTTP 409 verweigert; `?force=true` entfernt die Werte asynchron als Hintergrundjob (Massenoperation, [jobs-scheduler.md](jobs-scheduler.md)).
+- **Löschen:** `DELETE /attribute-definitions/{id}` entfernt die Definition und ihre `attribute_group_member`-Links. Sind bereits Objekt-Attributwerte **aktiver** Objekte vorhanden, wird die Löschung mit HTTP 409 verweigert (soft-gelöschte Objekte zählen nicht — sie sind überall unsichtbar); `?force=true` entfernt die Werte asynchron als Hintergrundjob (Massenoperation, [jobs-scheduler.md](jobs-scheduler.md)).
 
 ### Enum-Sets (Reference Data)
 
