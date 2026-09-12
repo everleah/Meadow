@@ -56,7 +56,7 @@ Die Palette sind **Startwerte**; sie werden später über eine zentrale Theme-Ko
 
 Die Weboberfläche von Meadow PIM wird von Beginn an **mehrsprachig konzipiert**. Dies betrifft ausschließlich die **UI-Texte** (Navigation, Buttons, Meldungen, Hilfe) – nicht die fachlichen Daten. Die Mehrsprachigkeit der Datenobjekte ist bereits über die flexiblen Metadaten gelöst und bleibt davon unabhängig.
 
-**Geplante Sprachen:**
+**Sprachen (Englisch, Deutsch und Französisch umgesetzt; weitere nach Bedarf):**
 
 1. **Englisch** (Startsprache, internationaler Standard)
 2. **Deutsch** (zweite Sprache, für den DACH-Markt)
