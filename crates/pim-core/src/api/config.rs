@@ -324,6 +324,10 @@ async fn object_types_section(
                 as_string_array(&object_type, "key_attributes").into_iter().map(Value::from).collect()
             ),
             "label_attribute": object_type.get("label_attribute").cloned().unwrap_or(Value::Null),
+            // Taxonomy node types (`plan/detail/kategorisierung.md`, Stufe A) must
+            // travel with the model: without the flag a categorisation into the
+            // imported type would be rejected in the target environment.
+            "taxonomy": as_bool(&object_type, "taxonomy"),
             "system": as_bool(&object_type, "system"),
         }));
     }
@@ -1615,6 +1619,16 @@ async fn apply_object_types(
                 .unwrap_or_else(|| json!([])),
         );
         content.insert("system".to_owned(), Value::Bool(system));
+        // Only when the document carries the key: an older MCF file without
+        // `taxonomy` must not silently clear the flag of an existing type.
+        if let Some(taxonomy) = entry.get("taxonomy")
+            && !taxonomy.is_null()
+        {
+            content.insert(
+                "taxonomy".to_owned(),
+                Value::Bool(as_bool(entry, "taxonomy")),
+            );
+        }
         if let Some(description) = entry.get("description")
             && !description.is_null()
         {

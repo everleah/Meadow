@@ -166,6 +166,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 | `description` | string? | Beschreibung |
 | `key_attributes` | string[] | Business-Schlüssel-Attributnamen |
 | `label_attribute` | string? | Anzeigename-Attribut |
+| `taxonomy` | bool | **Taxonomie-Knotentyp** (`object_type.taxonomy`, s. [kategorisierung.md](kategorisierung.md), Stufe A): Objekte dieses Typs sind Kategorie-/Klassifikationsknoten. Wird nur gesetzt, wenn das Dokument den Schlüssel enthält — eine ältere Datei ohne `taxonomy` **löscht** das Flag eines bestehenden Typs nicht. |
 | `system` | bool | Systemtyp (nicht überschreibbar/löschbar) |
 
 ### 4.6 Sektion `attribute_definitions`
