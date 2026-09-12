@@ -200,6 +200,7 @@ class CoreClient:
         completeness_lt: int | None = None,
         missing_required: bool = False,
         ids: list[str] | None = None,
+        where: str | None = None,
         locale: str | None = None,
         resolve_inheritance: bool = False,
         limit: int = 100,
@@ -214,10 +215,12 @@ class CoreClient:
         ``collection`` to objects that are members of the materialized collection
         (flat, no hierarchy); with ``uncategorized`` to objects with no category
         assignment; with ``ids`` to exactly those objects
-        (used by the grid search). With ``locale``, each object carries a
-        ``completeness`` value for that language (computed in the core); with
-        ``completeness_lt``/``missing_required`` the core only returns incomplete
-        objects (filtered before ``start``/``limit`` apply).
+        (used by the grid search). With ``where`` (a compact JSON document of the
+        query DSL — the grid's advanced search) the core renders the condition
+        tree server-side against the search field catalog. With ``locale``, each
+        object carries a ``completeness`` value for that language (computed in the
+        core); with ``completeness_lt``/``missing_required`` the core only returns
+        incomplete objects (filtered before ``start``/``limit`` apply).
         """
         params: dict[str, str] = {"limit": str(limit), "start": str(start)}
         if object_type:
@@ -238,6 +241,8 @@ class CoreClient:
             params["missing_required"] = "true"
         if ids:
             params["ids"] = ",".join(ids)
+        if where:
+            params["where"] = where
         if locale:
             params["locale"] = locale
         if resolve_inheritance:

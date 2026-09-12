@@ -38,12 +38,13 @@ FALLBACK_QUERY: dict = {"where": {"op": "and", "conditions": []}, "limit": 1000}
 
 
 def _parse_query(raw: str | None) -> dict | None:
-    """Parses the JSON tab; ``None`` when the text is not a JSON object."""
-    try:
-        parsed = _json.loads(raw or "{}")
-    except _json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    """Parses the JSON tab; ``None`` when the text is not a JSON object.
+
+    An empty editor counts as "no restriction" (not as an error).
+    """
+    if not str(raw or "").strip():
+        return {}
+    return search_form.parse_json(raw)
 
 
 def _fmt_dt(value: str | None) -> str:

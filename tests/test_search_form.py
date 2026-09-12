@@ -182,6 +182,17 @@ def test_field_lookup_resolves_multilingual_variants() -> None:
     assert search_form.with_language("attributes.name", "") == "attributes.name"
 
 
+def test_json_helpers_round_trip() -> None:
+    assert search_form.parse_json(None) is None
+    assert search_form.parse_json("{oops") is None
+    assert search_form.parse_json("[1, 2]") is None
+    query = {"where": {"op": "and", "conditions": []}, "limit": 500}
+    compact = search_form.compact_json(query)
+    assert " " not in compact
+    assert search_form.parse_json(compact) == query
+    assert search_form.compact_json(None) == "{}"
+
+
 def test_widget_kind_follows_field_and_operator() -> None:
     name = search_form.field_by_key(CATALOG, "attributes.name")
     price = search_form.field_by_key(CATALOG, "attributes.price")
@@ -331,6 +342,41 @@ def test_incomplete_rows_are_reported_and_untouched_rows_dropped() -> None:
     assert "sort" not in search_form.query_from_state(state, CATALOG, {})
 
 
+def test_clean_tree_drops_values_of_valueless_operators() -> None:
+    tree = {
+        "op": "and",
+        "conditions": [
+            {"field": "attributes.name", "operator": "not_empty", "value": None},
+            {"field": "attributes.name", "operator": "eq", "value": None},
+            {"field": "attributes.price", "operator": "between", "value": [1, 2]},
+        ],
+    }
+    cleaned = search_form.clean_tree(tree, CATALOG)
+    assert "value" not in cleaned["conditions"][0]
+    assert cleaned["conditions"][1]["value"] is None
+    assert cleaned["conditions"][2]["value"] == [1, 2]
+
+    state = search_form.default_state(CATALOG)
+    state["where"] = tree
+    query = search_form.query_from_state(state, CATALOG, {})
+    assert "value" not in query["where"]["conditions"][0]
+
+
+def test_object_filter_keeps_only_what_the_object_list_uses() -> None:
+    query = {
+        "where": {"op": "and", "conditions": []},
+        "references": [{"type": "category_member", "out": "object:cat"}],
+        "fulltext": {"query": "Test"},
+        "sort": [{"field": "type", "order": "asc"}],
+        "start": 10,
+        "limit": 500,
+        "custom": 1,
+    }
+    filtered = search_form.object_filter(query)
+    assert set(filtered) == {"where", "references", "fulltext", "custom"}
+    assert search_form.object_filter({}) == {}
+
+
 def test_validate_state_accepts_a_valid_tree() -> None:
     state = {
         "where": {
@@ -388,12 +434,27 @@ def test_summary_text_counts_conditions_and_groups() -> None:
         )
         in text
     )
-    assert t("search_form.summary_groups", locale="en", count=1) in text
+    assert t("search_form.summary_groups_one", locale="en", count=1) in text
     assert t("search_form.summary_fulltext", locale="en", text="Edelstahl") in text
     assert t("search_form.summary_limit", locale="en", limit=500) in text
     assert search_form.summary_text({}, CATALOG, locale="en") == t(
         "search_form.summary_empty", locale="en"
     )
+
+
+def test_summary_text_uses_singular_counts() -> None:
+    query = {
+        "where": {"op": "and", "conditions": [_leaf("type", "eq", "product")]},
+        "references": [{"reference_type": "category_member", "out": "object:cat_1"}],
+        "sort": [{"field": "updated_at", "order": "desc"}],
+    }
+    text = search_form.summary_text(query, CATALOG, locale="en")
+    assert t("search_form.summary_conditions_one", locale="en", count=1, operand="and") in text
+    assert t("search_form.summary_references_one", locale="en", count=1) in text
+    assert t("search_form.summary_sort_one", locale="en", count=1) in text
+    assert "1 conditions" not in text
+    assert "1 references" not in text
+    assert "1 sorts" not in text
 
 
 def test_language_and_field_choices_fall_back_to_unknown() -> None:
@@ -425,6 +486,7 @@ def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
                 "lt",
                 "lte",
                 "between",
+                "not_between",
                 "contains",
                 "not_contains",
                 "starts_with",
@@ -496,6 +558,19 @@ def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
         "saved_searches.col_summary",
         "saved_searches.field_query",
         "saved_searches.query_hint",
+        "grid.advanced_open",
+        "grid.advanced_title",
+        "grid.advanced_hint",
+        "grid.advanced_active",
+        "grid.advanced_apply",
+        "grid.advanced_clear",
+        "grid.advanced_load",
+        "grid.advanced_save",
+        "grid.advanced_save_button",
+        "grid.advanced_saved",
+        "grid.advanced_save_name_required",
+        "grid.advanced_save_failed",
+        "grid.advanced_failed",
         "status.draft",
         "status.in_review",
         "status.published",

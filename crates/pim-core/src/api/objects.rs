@@ -116,6 +116,13 @@ pub struct ListObjects {
     /// return; used for grid selections and saved-search results.
     #[serde(default)]
     pub ids: Option<String>,
+    /// **Advanced search filter** (the grid's condition dialog): a Query DSL
+    /// document as JSON (`{"where": {…}, "references": […], "fulltext": {…}}`),
+    /// validated against the search field catalog (`GET /search-fields`) and
+    /// rendered by the same filter renderer as saved searches.
+    #[serde(default, rename = "where")]
+    #[param(rename = "where")]
+    pub where_: Option<String>,
     /// Only return objects that are NOT assigned to any category (no reference
     /// of the category relation as member, see `definition_id`); the
     /// "Nicht kategorisiert" entry.
@@ -678,6 +685,23 @@ pub async fn list_objects(
                 .push("id IN array::map($object_ids, |$k| type::record('object', $k))".to_owned());
         }
     }
+    // Advanced search (`?where=`): the same condition tree the search form
+    // produces, validated against the catalog and rendered by the shared
+    // filter renderer (see `plan/detail/suche-formular.md`).
+    let mut filter_params: Vec<(String, Value)> = Vec::new();
+    if let Some(raw) = &params.where_ {
+        let mut advanced: crate::api::saved_searches::SavedSearchQuery = serde_json::from_str(raw)
+            .map_err(|error| ApiError::bad_request(format!("invalid `where`: {error}")))?;
+        let catalog = crate::api::search_schema::load(&state.db).await?;
+        crate::api::search_schema::normalize_query(&mut advanced);
+        let errors = crate::api::search_schema::validate_query(&advanced, &catalog);
+        if !errors.is_empty() {
+            return Err(ApiError::bad_request(errors.join("; ")));
+        }
+        let rendered = crate::api::search_schema::render_query(&advanced, &catalog)?;
+        conditions.extend(rendered.clauses);
+        filter_params = rendered.params;
+    }
     let where_clause = if conditions.is_empty() {
         String::new()
     } else {
@@ -712,6 +736,9 @@ pub async fn list_objects(
     }
     if !object_ids.is_empty() {
         query = query.bind(("object_ids", object_ids));
+    }
+    for (key, value) in &filter_params {
+        query = query.bind((key.as_str(), value.clone()));
     }
     let mut response = query
         .bind(("limit", scan_limit))

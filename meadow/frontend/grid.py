@@ -11,6 +11,7 @@ per-language column for every multilingual attribute (Sprach-Spalten).
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 import re
 import tempfile
@@ -19,7 +20,7 @@ from urllib.parse import quote
 from fastapi import Request
 from nicegui import app, ui
 
-from meadow.frontend import config, edit_queue
+from meadow.frontend import config, edit_queue, search_form
 from meadow.frontend.api import CoreClient, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.display import completeness_badge, resolve_value, status_badge
@@ -673,6 +674,13 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     return node
 
 
+def _saved_search_name(entry: dict) -> str:
+    """Display name of a saved search (grid row or full object)."""
+    attributes = entry.get("attributes") or {}
+    name = entry.get("name") or attributes.get("name")
+    return str(name or entry.get("id") or "")
+
+
 def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
     """Builds a batch-update item for an edited name value.
 
@@ -735,6 +743,8 @@ async def products_page(request: Request) -> None:
         "collection": request.query_params.get("collection") or None,
         "uncategorized": request.query_params.get("uncategorized") == "1",
         "q": request.query_params.get("q") or None,
+        # Advanced search (the condition dialog): a compact Query DSL document.
+        "where": request.query_params.get("where") or None,
     }
     # Monotonic reload counter: a slow reload never overwrites a newer result.
     load_seq = {"value": 0}
@@ -749,6 +759,7 @@ async def products_page(request: Request) -> None:
             or active["collection"]
             or active["uncategorized"]
             or active["q"]
+            or active["where"]
         )
 
     with ui.column().classes("w-full p-6"):
@@ -781,6 +792,7 @@ async def products_page(request: Request) -> None:
                     token,
                     ids=ids,
                     missing_required=bool(active["incomplete"]),
+                    where=active["where"],
                     locale=locale,
                     resolve_inheritance=True,
                     limit=SEARCH_LIMIT,
@@ -793,6 +805,7 @@ async def products_page(request: Request) -> None:
                 collection=active["collection"],
                 uncategorized=bool(active["uncategorized"]),
                 missing_required=bool(active["incomplete"]),
+                where=active["where"],
                 locale=locale,
                 resolve_inheritance=True,
                 limit=1000 if has_filter() else 100,
@@ -977,6 +990,8 @@ async def products_page(request: Request) -> None:
                 parts.append("uncategorized=1")
             if active["q"]:
                 parts.append(f"q={quote(str(active['q']))}")
+            if active["where"]:
+                parts.append(f"where={quote(str(active['where']))}")
             return "&".join(parts)
 
         def current_url() -> str:
@@ -2295,14 +2310,184 @@ async def products_page(request: Request) -> None:
 
                 async def reset_filters() -> None:
                     """Clears the filter bar; the tree/category/collection stays."""
-                    active.update(incomplete=False, q=None)
+                    active.update(incomplete=False, q=None, where=None)
                     suppress_change["value"] = True
                     try:
                         incomplete_switch.value = False
                         search_input.value = ""
                     finally:
                         suppress_change["value"] = False
+                    update_where_chip()
                     await reload_grid()
+
+                # --- Advanced search (Query DSL) ------------------------------
+                # The same field catalog and the same condition form as the saved
+                # searches; the query travels to the core as `?where=<json>` and is
+                # validated there against the catalog.
+                where_state: dict = {"form": None, "stored": {}, "catalog": {}, "saved": []}
+
+                def where_summary() -> str:
+                    """Human-readable summary of the active condition tree."""
+                    query = search_form.parse_json(active["where"]) or {}
+                    return search_form.summary_text(query, where_state["catalog"])
+
+                def update_where_chip() -> None:
+                    """Shows/updates the chip of the active advanced search."""
+                    is_active = bool(active["where"])
+                    where_chip.set_text(
+                        t("grid.advanced_active", summary=where_summary()) if is_active else ""
+                    )
+                    where_chip.set_visibility(is_active)
+
+                def current_where_query() -> dict:
+                    """The query the dialog currently represents."""
+                    form = where_state["form"]
+                    if form is None:
+                        return dict(where_state["stored"])
+                    return search_form.query_from_state(
+                        form.read_state(), where_state["catalog"], where_state["stored"]
+                    )
+
+                def has_advanced_conditions(query: dict) -> bool:
+                    """Whether a query restricts anything (empty = no filter)."""
+                    return bool(
+                        query.get("where")
+                        or query.get("references")
+                        or str((query.get("fulltext") or {}).get("query") or "").strip()
+                    )
+
+                def ensure_where_form() -> search_form.SearchForm:
+                    """Renders the condition form once (after the catalog loaded)."""
+                    if where_state["form"] is None:
+                        where_host.clear()
+                        with where_host:
+                            where_state["form"] = search_form.SearchForm(
+                                where_state["catalog"],
+                                sections=("conditions", "references", "fulltext"),
+                                client=client,
+                                token=token,
+                            )
+                    return where_state["form"]
+
+                def _fill_where_dialog() -> None:
+                    """Fills the dialog from the active filter (or the last edit)."""
+                    stored = search_form.parse_json(active["where"]) or where_state["stored"]
+                    where_state["stored"] = copy.deepcopy(stored)
+                    form = ensure_where_form()
+                    form.set_state(search_form.state_from_query(stored, where_state["catalog"]))
+
+                async def open_advanced() -> None:
+                    """Opens the advanced-search dialog (loads catalog + saved searches)."""
+                    try:
+                        where_state["catalog"] = await client.list_search_fields(token)
+                    except Exception:  # noqa: BLE001 - without a catalog there is no form
+                        ui.notify(t("grid.advanced_failed"), color="negative")
+                        return
+                    try:
+                        saved = await client.list_saved_searches(token, limit=1000)
+                    except Exception:  # noqa: BLE001 - the picker is optional
+                        saved = []
+                    where_state["saved"] = saved
+                    saved_select.set_options(
+                        {str(s.get("id")): _saved_search_name(s) for s in saved}
+                    )
+                    _fill_where_dialog()
+                    where_dialog.open()
+
+                async def apply_advanced() -> None:
+                    """Applies the condition tree as a server-side filter."""
+                    query = current_where_query()
+                    errors = search_form.validate_state(
+                        search_form.state_from_query(query, where_state["catalog"]),
+                        where_state["catalog"],
+                    )
+                    if errors:
+                        ui.notify("; ".join(errors), color="warning")
+                        return
+                    active["where"] = (
+                        search_form.compact_json(search_form.object_filter(query))
+                        if has_advanced_conditions(query)
+                        else None
+                    )
+                    update_where_chip()
+                    where_dialog.close()
+                    await reload_grid()
+
+                async def clear_advanced() -> None:
+                    """Drops the advanced-search filter."""
+                    active["where"] = None
+                    where_state["stored"] = {}
+                    form = where_state["form"]
+                    if form is not None:
+                        form.set_state(search_form.default_state(where_state["catalog"]))
+                    update_where_chip()
+                    where_dialog.close()
+                    await reload_grid()
+
+                async def load_saved_search() -> None:
+                    """Loads the picked saved search into the dialog."""
+                    search_id = str(saved_select.value or "")
+                    entry = next(
+                        (s for s in where_state["saved"] if str(s.get("id")) == search_id), None
+                    )
+                    if entry is None:
+                        return
+                    query = dict(entry.get("attributes", {}).get("query") or {})
+                    where_state["stored"] = copy.deepcopy(query)
+                    form = where_state["form"]
+                    if form is not None:
+                        form.set_state(search_form.state_from_query(query, where_state["catalog"]))
+
+                async def save_as_search() -> None:
+                    """Creates a saved search from the current condition tree."""
+                    name = (save_name_input.value or "").strip()
+                    if not name:
+                        ui.notify(t("grid.advanced_save_name_required"), color="warning")
+                        return
+                    try:
+                        await client.create_saved_search(
+                            token, name=name, query=current_where_query()
+                        )
+                    except Exception as error:  # noqa: BLE001 - report the core message
+                        ui.notify(f"{t('grid.advanced_save_failed')}: {error}", color="negative")
+                        return
+                    save_name_input.value = ""
+                    ui.notify(t("grid.advanced_saved", name=name), color="positive")
+
+                where_host: ui.column | None = None
+                where_dialog = ui.dialog()
+                with where_dialog, ui.card().classes("w-[52rem] max-w-[96vw]"):
+                    ui.label(t("grid.advanced_title")).classes("text-h6")
+                    ui.label(t("grid.advanced_hint")).classes("text-caption text-gray-500")
+                    with ui.row().classes("w-full items-center gap-2"):
+                        saved_select = (
+                            ui.select({}, label=t("grid.advanced_load"), with_input=False)
+                            .props("dense filled clearable")
+                            .classes("grow")
+                        )
+                        saved_select.on_value_change(lambda _: load_saved_search())
+                    where_host = ui.column().classes("w-full gap-1")
+                    with ui.row().classes("w-full items-center gap-2"):
+                        save_name_input = (
+                            ui.input(label=t("grid.advanced_save"))
+                            .props("dense filled")
+                            .classes("grow")
+                        )
+                        ui.button(
+                            t("grid.advanced_save_button"),
+                            icon="bookmark_add",
+                            on_click=lambda: save_as_search(),
+                        ).props("flat dense")
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button(
+                            t("grid.advanced_clear"), on_click=lambda: clear_advanced()
+                        ).props("flat")
+                        ui.button(t("grid.close"), on_click=where_dialog.close).props("flat")
+                        ui.button(
+                            t("grid.advanced_apply"),
+                            icon="check",
+                            on_click=lambda: apply_advanced(),
+                        ).props("flat")
 
                 with ui.row().classes("items-center gap-2 w-full pb-1").style("flex-wrap: nowrap"):
                     search_input = (
@@ -2321,6 +2506,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="filter_alt_off", on_click=reset_filters).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.filter_reset"))
+                    ui.button(icon="filter_alt", on_click=lambda: open_advanced()).props(
+                        "flat dense shrink-0"
+                    ).tooltip(t("grid.advanced_open"))
                     # Column sizing: fit the columns into the available width, or
                     # widen every column so its content fits (capped at 30 chars).
                     ui.button(icon="fit_screen", on_click=fit_to_view).props(
@@ -2329,6 +2517,15 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="straighten", on_click=fit_to_content).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.fit_to_content"))
+                # Active advanced search: a clickable summary line below the bar.
+                where_chip = (
+                    ui.button("", on_click=lambda: open_advanced())
+                    .props("flat dense no-caps")
+                    .classes("text-caption text-primary pb-1")
+                    .tooltip(t("grid.advanced_open"))
+                )
+                where_chip.set_visibility(False)
+                update_where_chip()
 
                 grid = ui.aggrid(
                     {

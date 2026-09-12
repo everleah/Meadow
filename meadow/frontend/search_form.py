@@ -20,7 +20,8 @@ The JSON expert tab stays available in the page; this module is the guided path
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from nicegui import ui
@@ -30,6 +31,15 @@ from meadow.frontend.i18n import current_locale, t
 
 #: Value of the "no language chosen" option of a multilingual field.
 BASE_LANGUAGE = ""
+
+#: Sections a `SearchForm` can render (in display order).
+ALL_SECTIONS = ("conditions", "fulltext", "references", "sort", "limits")
+
+#: Keys of the query DSL (everything else is passed through untouched).
+KNOWN_KEYS = ("where", "fulltext", "references", "sort", "start", "limit")
+
+#: Keys the object-list filter (`GET /objects?where=`) evaluates.
+OBJECT_LIST_KEYS = ("where", "references", "fulltext")
 
 #: Fallback nesting depth when the catalog is empty.
 DEFAULT_MAX_DEPTH = 4
@@ -376,9 +386,64 @@ def prune(node: dict | None) -> dict | None:
     return {"op": str(node.get("op") or "and"), "conditions": children}
 
 
+def clean_tree(node: dict | None, catalog: dict | None) -> dict | None:
+    """Drops the `value` of operators that do not take one (`not_empty`).
+
+    `eq null`/`ne null` keep their `null` — that is the "has no value" spelling
+    of the DSL.
+    """
+    if not node:
+        return None
+    if is_group(node):
+        return {
+            "op": str(node.get("op") or "and"),
+            "conditions": [
+                cleaned
+                for child in node.get("conditions") or []
+                if (cleaned := clean_tree(child, catalog)) is not None
+            ],
+        }
+    cleaned = copy.deepcopy(node)
+    operator = operator_of(catalog, str(cleaned.get("operator") or ""))
+    if operator is not None and not needs_value(operator):
+        cleaned.pop("value", None)
+    return cleaned
+
+
+def object_filter(query: dict | None) -> dict:
+    """Keeps only the parts `GET /objects?where=` evaluates.
+
+    The grid pages and sorts itself, so `sort`/`start`/`limit` are not part of the
+    filter; unknown keys are passed through untouched.
+    """
+    query = query if isinstance(query, dict) else {}
+    return {
+        key: value
+        for key, value in query.items()
+        if key in OBJECT_LIST_KEYS or key not in KNOWN_KEYS
+    }
+
+
 # ---------------------------------------------------------------------------
 # State <-> DSL
 # ---------------------------------------------------------------------------
+def parse_json(text: str | None) -> dict | None:
+    """Parses a query document (JSON tab, `?where=`); `None` when not an object."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def compact_json(query: dict | None) -> str:
+    """Serializes a query for a URL/`?where=` parameter (stable, no spaces)."""
+    return json.dumps(query or {}, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+
+
 def default_state(catalog: dict | None) -> dict:
     """The state of a new search: one empty AND-group with an object-type row."""
     field = fields_of(catalog)
@@ -448,7 +513,7 @@ def query_from_state(state: dict, catalog: dict | None, baseline: dict | None = 
         if key not in {"where", "fulltext", "references", "sort", "start", "limit"}:
             query[key] = copy.deepcopy(value)
 
-    where = prune(state.get("where"))
+    where = clean_tree(prune(state.get("where")), catalog)
     if where:
         query["where"] = where
 
@@ -674,6 +739,11 @@ def _push_once(errors: list[str], message: str) -> None:
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+def _count_text(key: str, count: int, *, locale: str | None = None, **extra: object) -> str:
+    """Translates a count with a singular variant when the count is exactly one."""
+    return t(f"{key}_one" if count == 1 else key, locale=locale, count=count, **extra)
+
+
 def summary_text(
     query: dict | None, catalog: dict | None = None, *, locale: str | None = None
 ) -> str:
@@ -688,24 +758,21 @@ def summary_text(
             "search_form.op_or" if str(where.get("op")) == "or" else "search_form.op_and",
             locale=locale,
         )
-        text = t(
-            "search_form.summary_conditions",
-            locale=locale,
-            count=conditions,
-            operand=operand,
+        text = _count_text(
+            "search_form.summary_conditions", conditions, locale=locale, operand=operand
         )
         if groups:
-            text += " · " + t("search_form.summary_groups", locale=locale, count=groups)
+            text += " · " + _count_text("search_form.summary_groups", groups, locale=locale)
         parts.append(text)
     fulltext = str((query.get("fulltext") or {}).get("query") or "")
     if fulltext:
         parts.append(t("search_form.summary_fulltext", locale=locale, text=fulltext))
-    if query.get("references"):
-        parts.append(
-            t("search_form.summary_references", locale=locale, count=len(query["references"]))
-        )
-    if query.get("sort"):
-        parts.append(t("search_form.summary_sort", locale=locale, count=len(query["sort"])))
+    references = query.get("references") or []
+    if references:
+        parts.append(_count_text("search_form.summary_references", len(references), locale=locale))
+    sorts = query.get("sort") or []
+    if sorts:
+        parts.append(_count_text("search_form.summary_sort", len(sorts), locale=locale))
     if query.get("limit"):
         parts.append(t("search_form.summary_limit", locale=locale, limit=int(query["limit"])))
     return " · ".join(parts) if parts else t("search_form.summary_empty", locale=locale)
@@ -724,85 +791,108 @@ class SearchForm:
         on_change: Callable[[], None] | None = None,
         client: Any = None,
         token: str = "",
+        sections: Iterable[str] | None = None,
     ) -> None:
         self.catalog = catalog
         self._on_change = on_change or (lambda: None)
         self._client = client
         self._token = token
-        with (
-            ui.expansion(t("search_form.section_conditions"), value=True).classes("w-full"),
-            ui.column().classes("w-full gap-2 p-2"),
-        ):
-            self._root = _GroupEditor(self, new_group(), depth=1)
-        with (
-            ui.expansion(t("search_form.section_fulltext")).classes("w-full"),
-            ui.column().classes("w-full gap-1 p-2"),
-        ):
-            self._fulltext = (
-                ui.input(label=t("search_form.fulltext"), on_change=lambda _: self.changed())
-                .props("filled dense clearable")
-                .classes("w-full")
-                .tooltip(t("search_form.fulltext_hint"))
-            )
-        with (
-            ui.expansion(t("search_form.section_references")).classes("w-full"),
-            ui.column().classes("w-full gap-1 p-2"),
-        ):
-            self._references = _ReferenceSection(self)
-        with (
-            ui.expansion(t("search_form.section_sort")).classes("w-full"),
-            ui.column().classes("w-full gap-1 p-2"),
-        ):
-            self._sort = _SortSection(self)
-        with (
-            ui.expansion(t("search_form.section_limits"), value=True).classes("w-full"),
-            ui.row().classes("w-full items-center gap-4 p-2"),
-        ):
-            self._limit = (
-                ui.number(
-                    label=t("search_form.limit"),
-                    min=limit_bounds(catalog)[0],
-                    max=limit_bounds(catalog)[1],
-                    step=1,
-                    value=default_limit(catalog),
-                    on_change=lambda _: self.changed(),
+        self.sections = set(sections) if sections else set(ALL_SECTIONS)
+        self._root: _GroupEditor | None = None
+        self._fulltext: Any = None
+        self._limit: Any = None
+        self._start: Any = None
+        self._references: _ReferenceSection | None = None
+        self._sort: _SortSection | None = None
+        if "conditions" in self.sections:
+            with (
+                ui.expansion(t("search_form.section_conditions"), value=True).classes("w-full"),
+                ui.column().classes("w-full gap-2 p-2"),
+            ):
+                self._root = _GroupEditor(self, new_group(), depth=1)
+        if "fulltext" in self.sections:
+            with (
+                ui.expansion(t("search_form.section_fulltext")).classes("w-full"),
+                ui.column().classes("w-full gap-1 p-2"),
+            ):
+                self._fulltext = (
+                    ui.input(label=t("search_form.fulltext"), on_change=lambda _: self.changed())
+                    .props("filled dense clearable")
+                    .classes("w-full")
+                    .tooltip(t("search_form.fulltext_hint"))
                 )
-                .props("filled dense")
-                .classes("w-40")
-            )
-            self._start = (
-                ui.number(
-                    label=t("search_form.start"),
-                    min=0,
-                    step=1,
-                    value=0,
-                    on_change=lambda _: self.changed(),
+        if "references" in self.sections:
+            with (
+                ui.expansion(t("search_form.section_references")).classes("w-full"),
+                ui.column().classes("w-full gap-1 p-2"),
+            ):
+                self._references = _ReferenceSection(self)
+        if "sort" in self.sections:
+            with (
+                ui.expansion(t("search_form.section_sort")).classes("w-full"),
+                ui.column().classes("w-full gap-1 p-2"),
+            ):
+                self._sort = _SortSection(self)
+        if "limits" in self.sections:
+            with (
+                ui.expansion(t("search_form.section_limits"), value=True).classes("w-full"),
+                ui.row().classes("w-full items-center gap-4 p-2"),
+            ):
+                self._limit = (
+                    ui.number(
+                        label=t("search_form.limit"),
+                        min=limit_bounds(catalog)[0],
+                        max=limit_bounds(catalog)[1],
+                        step=1,
+                        value=default_limit(catalog),
+                        on_change=lambda _: self.changed(),
+                    )
+                    .props("filled dense")
+                    .classes("w-40")
                 )
-                .props("filled dense")
-                .classes("w-40")
-            )
+                self._start = (
+                    ui.number(
+                        label=t("search_form.start"),
+                        min=0,
+                        step=1,
+                        value=0,
+                        on_change=lambda _: self.changed(),
+                    )
+                    .props("filled dense")
+                    .classes("w-40")
+                )
 
     # -- state -------------------------------------------------------------
     def read_state(self) -> dict:
-        """The current form state."""
+        """The current form state (sections that are not rendered stay empty)."""
         return {
-            "where": self._root.read(),
-            "fulltext": self._fulltext.value,
-            "references": self._references.read(),
-            "sort": self._sort.read(),
-            "start": int(self._start.value or 0),
-            "limit": int(self._limit.value or default_limit(self.catalog)),
+            "where": self._root.read() if self._root is not None else new_group(),
+            "fulltext": self._fulltext.value if self._fulltext is not None else "",
+            "references": self._references.read() if self._references is not None else [],
+            "sort": self._sort.read() if self._sort is not None else [],
+            "start": int(self._start.value or 0) if self._start is not None else 0,
+            "limit": (
+                int(self._limit.value or default_limit(self.catalog))
+                if self._limit is not None
+                else default_limit(self.catalog)
+            ),
         }
 
     def set_state(self, state: dict) -> None:
         """Fills the form from form state (e.g. after JSON edits)."""
-        self._root.node = copy.deepcopy(state.get("where") or new_group())
-        self._root.render()
-        self._fulltext.value = str(state.get("fulltext") or "")
-        self._references.set_rows(state.get("references") or [])
-        self._sort.set_rows(state.get("sort") or [])
-        self._start.value = int(state.get("start") or 0)
-        self._limit.value = int(state.get("limit") or default_limit(self.catalog))
+        if self._root is not None:
+            self._root.node = copy.deepcopy(state.get("where") or new_group())
+            self._root.render()
+        if self._fulltext is not None:
+            self._fulltext.value = str(state.get("fulltext") or "")
+        if self._references is not None:
+            self._references.set_rows(state.get("references") or [])
+        if self._sort is not None:
+            self._sort.set_rows(state.get("sort") or [])
+        if self._start is not None:
+            self._start.value = int(state.get("start") or 0)
+        if self._limit is not None:
+            self._limit.value = int(state.get("limit") or default_limit(self.catalog))
 
     def changed(self) -> None:
         """Notifies the page that a value changed."""

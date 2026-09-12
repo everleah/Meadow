@@ -248,165 +248,6 @@ async fn fetch_object(db: &Db, id: &str) -> Result<Option<Value>, ApiError> {
     Ok(rows.into_iter().next())
 }
 
-/// Validates a filter/sort field reference against a strict whitelist.
-fn sanitize_field(field: &str) -> Result<String, ApiError> {
-    // System fields offered by `GET /search-fields` (`search_schema`).
-    if matches!(
-        field,
-        "type" | "status" | "id" | "created_at" | "updated_at" | "source"
-    ) {
-        return Ok(field.to_owned());
-    }
-    if let Some(rest) = field.strip_prefix("attributes.") {
-        let segments: Vec<&str> = rest.split('.').collect();
-        if segments.len() > 2 || segments.iter().any(|s| s.is_empty()) {
-            return Err(ApiError::bad_request(format!(
-                "unsupported filter field `{field}`"
-            )));
-        }
-        for segment in &segments {
-            if !segment
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
-            {
-                return Err(ApiError::bad_request(format!(
-                    "unsupported filter field `{field}`"
-                )));
-            }
-        }
-        return Ok(field.to_owned());
-    }
-    Err(ApiError::bad_request(format!(
-        "unsupported filter field `{field}`"
-    )))
-}
-
-/// Binds a value and returns its `$name` reference (names are counted across
-/// the whole tree so nested groups cannot collide).
-fn push_param(params: &mut Vec<(String, Value)>, counter: &mut usize, value: Value) -> String {
-    let name = format!("f{}", *counter);
-    *counter += 1;
-    params.push((name.clone(), value));
-    format!("${name}")
-}
-
-/// Binds an operand of a condition.
-///
-/// System timestamps (`created_at`/`updated_at`) are real datetime columns, so
-/// their operand is wrapped in `type::datetime(…)`; attribute values are stored
-/// as given (usually ISO strings) and compared literally.
-fn push_operand(
-    catalog: &search_schema::Catalog,
-    field_key: &str,
-    value: Value,
-    params: &mut Vec<(String, Value)>,
-    counter: &mut usize,
-) -> String {
-    let name = push_param(params, counter, value);
-    let is_datetime = catalog
-        .field(field_key)
-        .is_some_and(|field| field.value_type == search_schema::ValueType::DateTime);
-    if is_datetime {
-        format!("type::datetime({name})")
-    } else {
-        name
-    }
-}
-
-/// Renders one node of the condition tree into a SurrealQL predicate.
-fn render_condition(
-    condition: &QueryCondition,
-    params: &mut Vec<(String, Value)>,
-    counter: &mut usize,
-    catalog: &search_schema::Catalog,
-) -> Result<String, ApiError> {
-    let Some(children) = &condition.conditions else {
-        return render_filter(condition, params, counter, catalog);
-    };
-    if children.is_empty() {
-        return Ok("true".to_owned());
-    }
-    let separator = match condition.op.as_deref().unwrap_or("and") {
-        "or" => " OR ",
-        _ => " AND ",
-    };
-    let mut rendered: Vec<String> = Vec::with_capacity(children.len());
-    for child in children {
-        rendered.push(render_condition(child, params, counter, catalog)?);
-    }
-    Ok(format!("({})", rendered.join(separator)))
-}
-
-/// Translates a single condition into a SurrealQL clause.
-///
-/// Composite clauses (`between`, `not_empty`, `is_null`) are parenthesized:
-/// inside a group they are joined with `AND`/`OR`, and `AND` binds tighter.
-fn render_filter(
-    condition: &QueryCondition,
-    params: &mut Vec<(String, Value)>,
-    counter: &mut usize,
-    catalog: &search_schema::Catalog,
-) -> Result<String, ApiError> {
-    let field_key = condition.field.as_deref().unwrap_or_default();
-    let field = sanitize_field(field_key)?;
-    let operator = condition.operator.as_deref().unwrap_or_default();
-    let value = condition.value.clone();
-    let null_value = value.as_ref().is_some_and(Value::is_null);
-    let operand = |params: &mut Vec<(String, Value)>, counter: &mut usize| {
-        push_operand(
-            catalog,
-            field_key,
-            value.clone().unwrap_or(Value::Null),
-            params,
-            counter,
-        )
-    };
-    let clause = match operator {
-        "eq" if null_value => format!("{field} IS NONE"),
-        "ne" if null_value => format!("{field} IS NOT NONE"),
-        "eq" => format!("{field} = {}", operand(params, counter)),
-        "ne" => format!("{field} != {}", operand(params, counter)),
-        "gt" => format!("{field} > {}", operand(params, counter)),
-        "gte" => format!("{field} >= {}", operand(params, counter)),
-        "lt" => format!("{field} < {}", operand(params, counter)),
-        "lte" => format!("{field} <= {}", operand(params, counter)),
-        "between" => {
-            let items = value.as_ref().and_then(Value::as_array);
-            let low = items
-                .and_then(|items| items.first())
-                .cloned()
-                .unwrap_or(Value::Null);
-            let high = items
-                .and_then(|items| items.get(1))
-                .cloned()
-                .unwrap_or(Value::Null);
-            let low_param = push_operand(catalog, field_key, low, params, counter);
-            let high_param = push_operand(catalog, field_key, high, params, counter);
-            format!("({field} >= {low_param} AND {field} <= {high_param})")
-        }
-        "in" => format!("{field} IN {}", operand(params, counter)),
-        "not_in" => format!("{field} NOT IN {}", operand(params, counter)),
-        "contains" => format!("{field} CONTAINS {}", operand(params, counter)),
-        "not_contains" => format!("{field} NOT CONTAINS {}", operand(params, counter)),
-        "starts_with" => {
-            let param = operand(params, counter);
-            format!("string::startsWith(string::lower({field}), string::lower({param}))")
-        }
-        "ends_with" => {
-            let param = operand(params, counter);
-            format!("string::endsWith(string::lower({field}), string::lower({param}))")
-        }
-        "not_empty" => format!("({field} IS NOT NONE AND {field} != NULL)"),
-        "is_null" => format!("({field} IS NONE OR {field} = NULL)"),
-        op => {
-            return Err(ApiError::bad_request(format!(
-                "unsupported filter operator `{op}`"
-            )));
-        }
-    };
-    Ok(clause)
-}
-
 /// Normalizes and validates a query against the field catalog.
 ///
 /// Returns the catalog so the caller can execute the normalized query without
@@ -431,50 +272,17 @@ async fn execute_query(
     catalog: &search_schema::Catalog,
 ) -> Result<Vec<String>, ApiError> {
     let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
-    let mut params: Vec<(String, Value)> = Vec::new();
     let mut order: Vec<String> = Vec::new();
-    let mut counter: usize = 0;
 
-    if let Some(root) = &query.where_ {
-        let rendered = render_condition(root, &mut params, &mut counter, catalog)?;
-        if rendered != "true" {
-            conditions.push(rendered);
-        }
-    }
-
-    if let Some(fulltext) = &query.fulltext {
-        let text = fulltext.query.trim().to_owned();
-        if !text.is_empty() {
-            conditions.push("attributes @@ $q".to_owned());
-            params.push(("q".to_owned(), Value::String(text)));
-        }
-    }
-
-    for (idx, reference) in query.references.iter().enumerate() {
-        let def = format!("rel_{}", reference.reference_type);
-        let out_key = reference.out.rsplit(':').next().unwrap_or(&reference.out);
-        let out_param = format!("ref_out{idx}");
-        let incoming = reference
-            .direction
-            .as_deref()
-            .map(|d| d != "outgoing")
-            .unwrap_or(true);
-        if incoming {
-            conditions.push(format!(
-                "id IN (SELECT VALUE in FROM reference WHERE definition_id = $ref_def{idx} AND out = type::record('object', ${out_param}))"
-            ));
-        } else {
-            conditions.push(format!(
-                "id IN (SELECT VALUE out FROM reference WHERE definition_id = $ref_def{idx} AND in = type::record('object', ${out_param}))"
-            ));
-        }
-        params.push((format!("ref_def{idx}"), Value::String(def)));
-        params.push((out_param, Value::String(out_key.to_owned())));
-    }
+    // `where`, `fulltext` and `references` are rendered by the shared filter
+    // renderer (the object list filter uses exactly the same code).
+    let filter = search_schema::render_query(query, catalog)?;
+    let params = filter.params;
+    conditions.extend(filter.clauses);
 
     let mut select: Vec<String> = vec!["id".to_owned()];
     for (index, sort) in query.sort.iter().enumerate() {
-        let field = sanitize_field(&sort.field)?;
+        let field = search_schema::sanitize_field(&sort.field)?;
         let alias = format!("_sort_{index}");
         let direction = if sort.order.eq_ignore_ascii_case("desc") {
             "DESC"
@@ -487,7 +295,9 @@ async fn execute_query(
         order.push(format!("{alias} {direction}"));
     }
 
-    let limit = query.limit.clamp(1, 10_000) as i64;
+    let limit = query
+        .limit
+        .clamp(search_schema::MIN_LIMIT, search_schema::MAX_LIMIT) as i64;
     let start = query.start as i64;
 
     let where_clause = conditions.join(" AND ");
@@ -1560,151 +1370,4 @@ pub async fn list_collection_members(
         }));
     }
     Ok(Json(members))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn leaf(field: &str, operator: &str, value: Value) -> QueryCondition {
-        QueryCondition {
-            field: Some(field.to_owned()),
-            operator: Some(operator.to_owned()),
-            value: Some(value),
-            ..Default::default()
-        }
-    }
-
-    fn group(op: &str, conditions: Vec<QueryCondition>) -> QueryCondition {
-        QueryCondition {
-            op: Some(op.to_owned()),
-            conditions: Some(conditions),
-            ..Default::default()
-        }
-    }
-
-    fn catalog() -> search_schema::Catalog {
-        search_schema::build_catalog(&search_schema::CatalogSources::default())
-    }
-
-    fn render(condition: &QueryCondition) -> (String, Vec<(String, Value)>) {
-        let catalog = catalog();
-        let mut params: Vec<(String, Value)> = Vec::new();
-        let mut counter = 0usize;
-        let sql =
-            render_condition(condition, &mut params, &mut counter, &catalog).expect("renders");
-        (sql, params)
-    }
-
-    #[test]
-    fn groups_keep_their_parentheses_and_parameters_stay_unique() {
-        let tree = group(
-            "and",
-            vec![
-                leaf("type", "eq", json!("product")),
-                group(
-                    "or",
-                    vec![
-                        leaf("status", "eq", json!("published")),
-                        group("and", vec![leaf("attributes.price", "gt", json!(10))]),
-                    ],
-                ),
-            ],
-        );
-        let (sql, params) = render(&tree);
-        assert_eq!(
-            sql,
-            "(type = $f0 AND (status = $f1 OR (attributes.price > $f2)))"
-        );
-        let names: Vec<&str> = params.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(names, vec!["f0", "f1", "f2"]);
-    }
-
-    #[test]
-    fn composite_clauses_are_parenthesized() {
-        let (sql, params) = render(&leaf("attributes.price", "between", json!([10, 50])));
-        assert_eq!(sql, "(attributes.price >= $f0 AND attributes.price <= $f1)");
-        assert_eq!(params.len(), 2);
-
-        let (sql, params) = render(&leaf("attributes.name", "is_null", Value::Null));
-        assert_eq!(sql, "(attributes.name IS NONE OR attributes.name = NULL)");
-        assert!(params.is_empty());
-
-        let (sql, params) = render(&leaf("attributes.name", "not_empty", Value::Null));
-        assert_eq!(
-            sql,
-            "(attributes.name IS NOT NONE AND attributes.name != NULL)"
-        );
-        assert!(params.is_empty());
-    }
-
-    #[test]
-    fn null_comparisons_render_is_none() {
-        let (sql, params) = render(&leaf("attributes.price", "eq", Value::Null));
-        assert_eq!(sql, "attributes.price IS NONE");
-        assert!(params.is_empty());
-
-        let (sql, _) = render(&leaf("attributes.price", "ne", Value::Null));
-        assert_eq!(sql, "attributes.price IS NOT NONE");
-    }
-
-    #[test]
-    fn text_operators_and_multilingual_fields_render() {
-        let (sql, params) = render(&leaf("attributes.name.de", "starts_with", json!("Edel")));
-        assert_eq!(
-            sql,
-            "string::startsWith(string::lower(attributes.name.de), string::lower($f0))"
-        );
-        assert_eq!(params[0].1, json!("Edel"));
-
-        let (sql, params) = render(&leaf("status", "in", json!(["published", "draft"])));
-        assert_eq!(sql, "status IN $f0");
-        assert_eq!(params[0].1, json!(["published", "draft"]));
-    }
-
-    #[test]
-    fn unsupported_fields_and_operators_are_rejected() {
-        let catalog = catalog();
-        let mut params: Vec<(String, Value)> = Vec::new();
-        let mut counter = 0usize;
-        assert!(
-            render_filter(
-                &leaf("attributes.name`; DROP", "eq", json!("x")),
-                &mut params,
-                &mut counter,
-                &catalog
-            )
-            .is_err()
-        );
-        assert!(
-            render_filter(
-                &leaf("type", "matches", json!("x")),
-                &mut params,
-                &mut counter,
-                &catalog
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn datetime_system_fields_are_wrapped() {
-        let (sql, params) = render(&leaf("created_at", "gte", json!("2026-01-01")));
-        assert_eq!(sql, "created_at >= type::datetime($f0)");
-        assert_eq!(params.len(), 1);
-        assert_eq!(params[0].1, json!("2026-01-01"));
-
-        let (sql, _) = render(&leaf(
-            "updated_at",
-            "between",
-            json!(["2026-01-01", "2026-02-01"]),
-        ));
-        assert_eq!(
-            sql,
-            "(updated_at >= type::datetime($f0) AND updated_at <= type::datetime($f1))"
-        );
-
-        let (sql, _) = render(&leaf("attributes.price", "gte", json!(1)));
-        assert_eq!(sql, "attributes.price >= $f0");
-    }
 }
