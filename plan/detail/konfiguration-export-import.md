@@ -84,7 +84,8 @@ JSON, passend zum Datenexport (MEF), mit eigenem Kopf und Sektionen.
       { "name": "colors", "label": { "de": "Farbe", "en": "Color" }, "position": 0, "options": [ { "code": "red", "labels": { "de": "Rot", "en": "Red" }, "active": true, "position": 0 } ] }
     ],
     "object_types": [
-      { "name": "product", "label": { "de": "Produkt", "en": "Product" }, "description": "", "key_attributes": ["sku"], "label_attribute": "name", "system": false }
+      { "name": "product", "label": { "de": "Produkt", "en": "Product" }, "description": "", "key_attributes": ["sku"], "label_attribute": "name", "taxonomy": false, "system": false },
+      { "name": "etim_class", "label": { "de": "ETIM-Klasse", "en": "ETIM class" }, "description": "", "key_attributes": ["etim_code"], "label_attribute": "name", "taxonomy": true, "system": false }
     ],
     "attribute_definitions": [
       { "name": "sku", "label": { "de": "SKU", "en": "SKU" }, "type": "text", "group_ids": ["technical"], "multilingual": false, "inheritable": false, "is_key": true, "applicable_types": ["product"], "required_types": ["product"], "computed": false }
@@ -94,6 +95,9 @@ JSON, passend zum Datenexport (MEF), mit eigenem Kopf und Sektionen.
     ],
     "business_rules": [
       { "name": "calc_gross", "type": "computed", "state": "disabled", "applies_to": ["product"], "script": "def run(obj, ctx, result):\n    ..." }
+    ],
+    "category_attributes": [
+      { "class": "EC000123", "class_key": "etim_code", "class_id": "object:01M...", "features": [ { "attribute": "power", "required": true, "position": 0 } ] }
     ]
   }
 }
@@ -215,6 +219,22 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 | `script` | string | Python-Quelltext |
 | `state` | string | `draft`\|`active`\|`disabled` |
 
+### 4.9 Sektion `category_attributes` (Klassen-Merkmale)
+
+Die Merkmale der Taxonomie-Klassen ([kategorisierung.md](kategorisierung.md), Stufe B) – **Konfiguration an Daten**: die Merkmals-Zeilen hängen an Kategorie-Objekten, und Objekte sind (MEF-)Daten und **nicht** Teil des MCF. Deshalb referenziert die Sektion eine Klasse über ihren **stabilen Business-Key** und nicht über eine lokale ULID.
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `class` | string | Stabiler Key-Wert des Klassenknotens (z. B. die ETIM-Klassennummer) — Wert des **ersten** `key_attributes`-Eintrags des Knoten-Objekttyps (Business-Keys sind `text` und nicht mehrsprachig). Leer, wenn der Knoten keinen Key hat. |
+| `class_key` | string? | Attributname, der den Key geliefert hat (für die Auflösung im Ziel) |
+| `class_id` | string | Lokale Knoten-ID (`object:…`) — **Fallback** für dieselbe Umgebung, nicht portabel |
+| `features` | object[] | Je Merkmal `{attribute, required, position}`; `attribute` ist der Name der Attributdefinition |
+
+- **Auflösung beim Import:** zuerst über `class` + `class_key` (Suche über alle Typen mit `taxonomy: true`), dann über `class_id`. Nicht auflösbare Klassen werden als **Fehler** im Report geführt („import the taxonomy data first") — die Taxonomie-**Daten** müssen also vorher importiert werden (MEF/`references` oder der geplante Standard-Import).
+- **Semantik:** Die `features`-Liste einer **genannten** Klasse ist maßgeblich (nicht genannte Merkmale der Klasse werden beim Anwenden entfernt); Klassen, die das Dokument nicht nennt, bleiben unverändert. `required` speist die Vollständigkeit und `ctx.missing_features`.
+- **Reihenfolge:** bewusst **am Ende** der Abhängigkeitskette — die Sektion setzt Attributdefinitionen (Konfiguration) **und** die Klassenknoten (Daten) voraus.
+- Unbekannte Attributnamen werden als Fehler gemeldet und nicht angewendet (kein stiller Dangling-Verweis).
+
 ## 5. API-Kontrakt
 
 ### `GET /config/export` (admin/superadmin)
@@ -262,7 +282,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 
 **Vorbedingungen:** admin/superadmin; `format_version` unterstützt; Dokument-Validierung ok.
 
-1. **Abhängigkeits-Reihenfolge:** `languages → channels → units → attribute_groups → enum_sets → object_types → attribute_definitions → relation_definitions → business_rules`. Die **Kanäle** stehen wie die Sprachen früh, weil sie keine Abhängigkeiten haben; die **Freigaben selbst sind Daten** (`release`) und gehören nicht ins MCF.
+1. **Abhängigkeits-Reihenfolge:** `languages → channels → units → attribute_groups → enum_sets → object_types → attribute_definitions → relation_definitions → business_rules → category_attributes` (die Klassen-Merkmale zuletzt: sie setzen Attributdefinitionen **und** die Klassenknoten = Daten voraus). Die **Kanäle** stehen wie die Sprachen früh, weil sie keine Abhängigkeiten haben; die **Freigaben selbst sind Daten** (`release`) und gehören nicht ins MCF.
 2. **Zweiphasig:**
    - **Phase 1 (Erzeugen/Aktualisieren nach stabilem Schlüssel):** je Sektion je Eintrag den stabilen Schlüssel im Ziel auflösen → `find` oder `create`. Referenzen auf noch nicht angelegte Entitäten (Forward-Referenzen: `object_type.key_attributes`/`label_attribute`, `attribute_definition.computed_rule`, `relation_definition.attributes`, `business_rule.dependencies`) werden als **ausstehend** registriert.
    - **Phase 2 (Querverweis-Auflösung):** Nachdem alle Entitäten existieren, werden die ausstehenden Referenzen auf die Ziel-IDs gemappt und an den Datensätzen aktualisiert.

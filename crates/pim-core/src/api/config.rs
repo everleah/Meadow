@@ -21,6 +21,11 @@ use crate::app::AppState;
 use crate::auth::{AuthUser, ROLE_ADMIN, api_key_or_role};
 use crate::error::ApiError;
 
+// The class-feature section lives in its own file (ConfigReport/Mode and the
+// section helpers stay private to this module, so the file sits inside `config/`).
+mod category_attributes;
+use category_attributes::{apply_category_attributes, category_attributes_section};
+
 /// Query parameters for `GET /config/export`.
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -46,6 +51,7 @@ const SECTIONS: &[&str] = &[
     "attribute_definitions",
     "relation_definitions",
     "business_rules",
+    "category_attributes",
 ];
 
 fn parse_sections(raw: Option<&str>) -> Result<Vec<String>, ApiError> {
@@ -479,6 +485,7 @@ pub async fn export_config(
                 relation_definitions_section(&state.db, include_system).await?
             }
             "business_rules" => business_rules_section(&state.db).await?,
+            "category_attributes" => category_attributes_section(&state.db).await?,
             _ => unreachable!("sections were validated by parse_sections"),
         };
         out.insert(section.clone(), Value::Array(value));
@@ -895,13 +902,14 @@ const VOLATILE: &[&str] = &[
 
 // -- replace (target-only cleanup) ------------------------------------------
 
-/// The stable-key field per section. `languages` uses `code`, `units` uses
-/// `symbol`, everything else uses `name`.
+/// The stable-key field per section. `languages`/`channels` use `code`, `units`
+/// uses `symbol`, `category_attributes` its class key, everything else `name`.
 fn key_field(section: &str) -> &'static str {
     match section {
         "languages" => "code",
         "channels" => "code",
         "units" => "symbol",
+        "category_attributes" => "class",
         _ => "name",
     }
 }
@@ -1971,6 +1979,9 @@ async fn apply_document(
                 apply_relation_definitions(db, mode, &entries, &mut report).await?
             }
             "business_rules" => apply_business_rules(db, mode, &entries, &mut report).await?,
+            "category_attributes" => {
+                apply_category_attributes(db, mode, &entries, &mut report).await?
+            }
             _ => {}
         }
     }
