@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 2, 9
-- **Stand:** Entwurf
+- **Stand:** Kern umgesetzt (Taxonomie-Typen Stufe A + Dimensionen); Klassifizierungsstandards bewertet, Stufe B offen
 
 Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, ohne dafür neue technische Entitäten einzuführen. Kategorien sind ganz normale Objekte, die über Relationen mit den zugeordneten Objekten verbunden werden. Dadurch bleibt das Datenmodell schlank und nutzt die bereits vorhandenen Graph-Fähigkeiten.
 
@@ -49,7 +49,7 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 1. **Navigationsstruktur** für den Webshop: Kategorien wie „Neuheiten“, „Sale“, „Zubehör“.
 2. **Fachliche Gliederung** unabhängig von der technischen Ablage: z. B. Produkte nach Zielgruppe oder Saison.
-3. **Vorbereitung für Standards (z. B. ETIM):** Kategorien können später um ein Attribut `standard_code` ergänzt werden, um externe Klassifikationssysteme abzubilden. Die Zuordnung erfolgt dann weiterhin über Relationen, zusätzlich könnte ein Mapping auf Standardklassen entstehen. Dies ist bewusst nicht Teil der ersten Version, aber das Modell ist dafür offen.
+3. **Externe Klassifikationsstandards (z. B. ETIM):** eine eigene **Taxonomie** (eigener Knotentyp, s. unten) mit Klassenknoten und Mapping auf die eigene Navigation; siehe „Klassifizierungsstandards“ am Ende.
 
 **Anforderungen an die Implementierung:**
 
@@ -70,3 +70,42 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 - In späteren Versionen können Kategorien mit externen Klassifikationssystemen verknüpft werden, z. B. durch ein eigenes Objekt `classification_system` und Relationen `maps_to`.
 - Für ETIM ließe sich die Kategorie um ein Attribut `etim_class` erweitern und die Zuordnung automatisiert überprüfen.
 - Die Architektur ist so gewählt, dass solche Erweiterungen ohne Bruch des Kernmodells möglich sind.
+
+## Taxonomie-Typen (eigene Knoten-Objekttypen) — umgesetzt (Stufe A, 2026-09-12)
+
+**Motivation.** Eine Taxonomie braucht nicht nur andere *Zuordnungen* (das leisten die Dimensionen/Aussagen oben), sondern ggf. andere **Knoten**: eine Klassifikationshierarchie (ETIM/BMEcat) oder eine zweite Gliederung hat eigene Attribute, ein eigenes Key-/Label-Attribut, eigene Import/Export-Wege und darf die Marketing-Navigation nicht verwässern.
+
+**Modell (zwei unabhängige Achsen):**
+
+| Achse | Was sie bestimmt | Umsetzung |
+| --- | --- | --- |
+| **Taxonomie** (Knoten-Objekttyp) | *welche Objekte* die Knoten sind | `object_type.taxonomy = true` (Default `false`); genau der System-Typ `category` ist eine System-Taxonomie |
+| **Dimension** (Kategorie-Relationstyp) | *welche Zuordnungen* gezählt/gefiltert werden | `relation_definition.role = category`; der Relationstyp trägt optional `target_types` |
+
+- Eine Kategorisierung (`role: category`) darf auf **jeden** Typ mit `taxonomy: true` zeigen; ohne explizite `target_types` gilt die Regel zur Schreibzeit (also auch für später ergänzte Taxonomie-Typen). Mit expliziter Liste (`target_types: ["etim_class"]`) bleibt die Zuordnung auf eine Taxonomie beschränkt — eine alte Liste wie `["category"]` muss dafür bewusst erweitert werden.
+- `memberCount` (`?count_members=true`) gibt es für **jeden** Taxonomie-Knotentyp (Name des Typs, nicht mehr hart `category`).
+- `?uncategorized=true` schließt **alle** Taxonomie-Typen (plus `root`) aus: „nicht kategorisiert“ heißt „an keinen Knoten einer Taxonomie gehängt“.
+- **Kein** zweiter Kategorie-*Objekttyp* im Sinne eines neuen Konzepts: Knoten bleiben normale Objekte mit Attributen/Vererbung/Audit; nur die erlaubte Typmenge wächst. Die früher angedachte Idee „frei wählbarer Typ wie `grouping`/`folder`“ ist damit in geordneter Form umgesetzt.
+
+**UI:**
+
+- `/object-types`: Spalte **Taxonomie** (Badge) und Schalter **Taxonomie-Knotentyp** im Dialog (für `system`-Typen deaktiviert/`400`).
+- `/categories`: **Taxonomie**-Umschalter (Knotentyp; Anlegen/Verschieben folgt ihm, ein Knoten bleibt in seiner Taxonomie) **und** **Dimension**-Umschalter (Relationstyp; Zähler + „Im Grid anzeigen“).
+- Grid/Formular/Bulk-Wizard/Export-Quelle „Kategorie“ nutzen die Taxonomie-Typen als erlaubte Ziele bzw. als Knotenmenge.
+
+**Grenze von Stufe A:** Knoten einer Klassifikation können eigene Attribute tragen (`applicable_types` des Typs), aber sie schreiben den **zugeordneten Objekten keine Merkmale vor**. Der wertschöpfende Teil eines Standards — Merkmale je Klasse mit erlaubten Werten, Prüfung und Export-Mapping — ist **Stufe B** (unten) und hängt nicht am Knotentyp.
+
+## Klassifizierungsstandards (Bewertung, 2026-09-12)
+
+**Recherche (verifiziert):** PIMcore trennt drei Konzepte — *Data Object Classes* (custom Objekttypen mit eigenem Attributset/Layout), *Categories* (Navigation) und den *Classification Store* (Stores → Groups → Keys, lokalisiert, vererbbar, mehrere je Objekt, Gruppen je Klasse einschränkbar, Pflicht-Keys je Gruppe). ETIM ist ein eigenständiger Klassifikationsstandard für technische Produkte: Klassen + technische Merkmale je Klasse, mehrsprachig, Auslieferung über JSON-API und BMEcat/xChange-Validierung — ausdrücklich keine Shop-Taxonomie. *(Akeneo-/Stibo-Doku war nicht erreichbar; als Muster daher nicht belegt.)*
+
+**Schlussfolgerung:** Ein Standard braucht beides — die **eigene, versionierte Hierarchie** (Stufe A, erledigt) **und** die **klassen-spezifischen Merkmale** (Stufe B, offen). Ohne Stufe B bleibt ein ETIM-Baum eine Hierarchie mit Handpflege.
+
+**Stufe B — Skizze (nicht umgesetzt):**
+
+1. **Merkmale je Kategorieknoten:** eine Zuordnung `attribute_definition` ↔ Kategorieknoten (Pflicht/optional + erlaubte Werte). Passt zu `attribute_definition.applicable_types` als zweiter Dimension (z. B. `required_for_categories`/`attributes_for_category`), ohne die Kategorien-Kanten zu vererbenden Kanten zu machen.
+2. **Wirkung:** Formular zeigt die Merkmale der gewählten Klasse; Vollständigkeit rechnet je Klasse; eine Business Rule kann die Zuordnung prüfen (ähnlich `workflow_guard`).
+3. **Standard-Metadaten:** eigener Knotentyp (z. B. `etim_class`) mit `code`/`version`/`source`, Import über MCF/Connector, Mapping eigene Kategorie → Standardklasse als `link`-Relation (`target_types` beschränkt), Read-only-Kennzeichnung.
+4. **Export:** BMEcat/xChange-Mapping im Export-Wizard (Folgearbeit).
+
+**Nicht-Ziele:** kein Klassifikations-Modul außerhalb des Objekt-/Relationsmodells, keine automatische Umklassifizierung, kein vererbender Kategorie-Baum.

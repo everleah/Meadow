@@ -7,6 +7,14 @@
 //! type may declare `key_attributes` (the unique + mandatory business-key
 //! attribute names for that type; empty = no key) and an optional
 //! `label_attribute` (the attribute used as the display name).
+//!
+//! **Taxonomy types.** A type with `taxonomy: true` is a **node type**: its
+//! objects are categories/classification nodes. They may be the target of a
+//! categorisation relation (`role: category`), carry member counters in the
+//! category trees and are excluded from `?uncategorized`. Exactly the built-in
+//! `category` type is a system taxonomy; additional taxonomy types are custom
+//! (e.g. a classification standard's class hierarchy) and are managed here.
+//! See `plan/detail/kategorisierung.md`.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -51,6 +59,12 @@ pub struct CreateObjectType {
     /// Attribute name used as the display label.
     #[serde(default)]
     pub label_attribute: Option<String>,
+    /// Marks the type as a **taxonomy** node type (default `false`): objects of
+    /// such a type are categories/classification nodes, may be the target of a
+    /// categorisation relation (`role: category`) and carry member counters in
+    /// the category trees. The built-in `category` type is a taxonomy type.
+    #[serde(default)]
+    pub taxonomy: bool,
 }
 
 /// Payload for updating an object type.
@@ -64,7 +78,16 @@ pub struct UpdateObjectType {
     pub key_attributes: Option<Vec<String>>,
     #[serde(default)]
     pub label_attribute: Option<Option<String>>,
+    /// Marks/unmarks the type as a **taxonomy** node type. Only custom types can
+    /// be toggled (`system` types keep the flag the seed owns).
+    #[serde(default)]
+    pub taxonomy: Option<bool>,
 }
+
+/// Built-in taxonomy object type: the single **system** taxonomy whose nodes are
+/// the product categories (`object_type:category`, `taxonomy: true`). Additional
+/// taxonomy types are custom (e.g. a classification standard's class hierarchy).
+pub(crate) const PRIMARY_TAXONOMY_TYPE: &str = "category";
 
 /// Loads a single object-type record by name.
 pub(crate) async fn fetch_type(db: &Db, name: &str) -> Result<Option<Value>, ApiError> {
@@ -97,6 +120,27 @@ pub(crate) async fn key_attributes_for(
                 .collect()
         })
         .unwrap_or_default())
+}
+
+/// True when the type is registered as a **taxonomy** node type (a category or
+/// classification node). Unregistered types are not taxonomies.
+pub(crate) async fn is_taxonomy_type(db: &Db, object_type: &str) -> Result<bool, ApiError> {
+    Ok(fetch_type(db, object_type)
+        .await?
+        .and_then(|record| record.get("taxonomy").and_then(Value::as_bool))
+        .unwrap_or(false))
+}
+
+/// Names of every registered **taxonomy** type, sorted (used by the tree
+/// loaders, the `memberCount` counter and the `?uncategorized` filter).
+pub(crate) async fn taxonomy_types(db: &Db) -> Result<Vec<String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT VALUE name FROM object_type WHERE taxonomy = true ORDER BY name;")
+        .await?
+        .check()?;
+    let rows: Vec<String> = response.take(0)?;
+    Ok(rows)
 }
 
 /// Validates that a key/label attribute reference is `text` (and not
@@ -270,6 +314,7 @@ pub async fn create_object_type(
         ),
     );
     attributes.insert("system".to_owned(), Value::Bool(false));
+    attributes.insert("taxonomy".to_owned(), Value::Bool(body.taxonomy));
     if let Some(la) = label_attribute {
         attributes.insert("label_attribute".to_owned(), Value::String(la.to_owned()));
     }
@@ -371,6 +416,20 @@ pub async fn update_object_type(
                 content.remove("label_attribute");
             }
         }
+    }
+    if let Some(taxonomy) = body.taxonomy {
+        // The seed owns the flag of the built-in types (exactly one system
+        // taxonomy: `category`), custom types may be toggled freely.
+        if current
+            .get("system")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(ApiError::bad_request(format!(
+                "object type `{name}` is a system type: its taxonomy flag is fixed"
+            )));
+        }
+        content.insert("taxonomy".to_owned(), Value::Bool(taxonomy));
     }
 
     let mut response = state
@@ -507,6 +566,7 @@ pub(crate) async fn ensure_registered(db: &Db, object_type: &str) -> Result<(), 
                 "label": { "en": object_type },
                 "key_attributes": [],
                 "system": false,
+                "taxonomy": false,
             }),
         ))
         .await?

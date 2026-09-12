@@ -38,6 +38,7 @@ from meadow.frontend.display import (
     completeness_badge,
     resolve_value,
     status_badge,
+    taxonomy_type_names,
 )
 from meadow.frontend.enums import enum_options
 from meadow.frontend.i18n import current_locale, t
@@ -203,6 +204,14 @@ async def product_form(object_id: str) -> None:
                 channels = await client.list_channels(token, active=True)
             except Exception:  # noqa: BLE001 - no channel section without a catalog
                 channels = []
+            try:
+                # Taxonomy node types: the valid targets of a categorisation
+                # (built-in `category` plus custom `taxonomy: true` types).
+                taxonomy_types = taxonomy_type_names(
+                    await client.list_object_types(token, limit=1000)
+                )
+            except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+                taxonomy_types = taxonomy_type_names([])
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -1155,13 +1164,17 @@ async def product_form(object_id: str) -> None:
                     try:
                         obj = await client.get_object(token, cat_id, locale=locale)
                     except Exception:  # noqa: BLE001 - fall back to the raw id
-                        cat_state[cat_id] = {"id": cat_id, "label": cat_id, "type": "category"}
+                        cat_state[cat_id] = {
+                            "id": cat_id,
+                            "label": cat_id,
+                            "type": taxonomy_types[0],
+                        }
                         continue
                     cat_state[cat_id] = {
                         "id": cat_id,
                         "label": resolve_value((obj.get("attributes") or {}).get("name"), locale)
                         or cat_id,
-                        "type": str(obj.get("type") or "category"),
+                        "type": str(obj.get("type") or taxonomy_types[0]),
                     }
 
         async def assign_categories(definition: dict) -> None:
@@ -1190,7 +1203,7 @@ async def product_form(object_id: str) -> None:
                 locale=locale,
                 title=t("form.categories_pick"),
                 on_pick=on_pick,
-                target_types=effective_target_types(definition),
+                target_types=effective_target_types(definition, taxonomy_types),
                 exclude_ids=[object_id],
                 multi=True,
             )

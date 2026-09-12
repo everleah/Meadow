@@ -1,16 +1,20 @@
 """Admin page for categories & relations (admin/superadmin only).
 
-Categories are ordinary objects of type ``category``. This page manages the
-category trees: create, hierarchise (re-parent), edit and delete categories.
+Categories are ordinary objects of a **taxonomy** object type: the built-in
+`category` plus every custom type flagged with `taxonomy: true` (e.g. a
+classification standard's class hierarchy). This page manages the taxonomy
+trees: create, hierarchise (re-parent), edit and delete nodes.
 The **assignment** of objects is product-centric (see the product form) and runs
 over the category relation types of a type's *usage* ``category``.
 
-A page has **dimensions**: the built-in primary taxonomy plus every custom
-relation type with the usage `category` ("additional categorisations", e.g.
-"Brand"). The tree itself is shared — every dimension uses the same category
-objects (the role contract fixes the target type to `category`) — the selected
-dimension only decides whose members are counted in the tree and which relation
-the "show in grid" link filters by.
+The page has **two independent axes**:
+
+- **Taxonomy (node type)** — *which objects* are the nodes of the tree being
+  edited (`category`, `grouping`, …). Switching it re-loads the tree of that
+  type; new nodes are created with the selected type.
+- **Dimension (relation type)** — *which assignments* are counted in the tree and
+  used by "show in grid" (the built-in primary categorisation plus custom
+  category relation types). The tree itself is shared by all dimensions.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
-from meadow.frontend.display import dimension_options
+from meadow.frontend.display import dimension_options, taxonomy_options, taxonomy_type_names
 from meadow.frontend.grid import (
     filter_tree_nodes,
     resolve_value,
@@ -35,28 +39,33 @@ from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_categor
 ROOT_ID = OBJECT_ROOT_ID
 
 
-async def _category_objects(client: CoreClient, token: str, locale: str) -> dict[str, dict]:
-    """Returns every category object keyed by id (for the editor/move pickers)."""
-    try:
-        objects = await client.list_objects(token, object_type="category", limit=1000)
-    except Exception:  # noqa: BLE001 - degrade to an empty map
-        return {}
-    return {str(o.get("id")): o for o in objects if isinstance(o, dict) and o.get("id")}
+async def _category_objects(
+    client: CoreClient, token: str, locale: str, node_types: list[str]
+) -> dict[str, dict]:
+    """Returns every taxonomy node keyed by id (for the editor/move pickers)."""
+    objects: dict[str, dict] = {}
+    for node_type in node_types:
+        try:
+            rows = await client.list_objects(token, object_type=node_type, limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to the types that worked
+            continue
+        objects.update({str(o.get("id")): o for o in rows if isinstance(o, dict) and o.get("id")})
+    return objects
 
 
 async def _category_roots(
-    client: CoreClient, token: str, locale: str, definition_id: str
+    client: CoreClient, token: str, locale: str, definition_id: str, node_types: list[str]
 ) -> list[dict]:
-    """Returns the top-level category nodes (children of the universal root).
+    """Returns the top-level nodes (children of the universal root).
 
-    ``definition_id`` selects the category relation type whose members are
-    counted (`memberCount`); the tree itself is shared by all dimensions.
+    ``node_types`` selects which taxonomy types are shown, ``definition_id`` the
+    category relation type whose members are counted (`memberCount`).
     """
     top = await client.list_object_children(
         token, ROOT_ID, limit=100, count_members=True, definition_id=definition_id
     )
     return [
-        tree_node_from_object(child, locale) for child in top if child.get("type") == "category"
+        tree_node_from_object(child, locale) for child in top if child.get("type") in node_types
     ]
 
 
@@ -71,16 +80,29 @@ async def categories_page() -> None:
         ui.label(t("categories.title")).classes("text-h4")
         ui.label(t("categories.subtitle")).classes("text-subtitle1")
 
+        # Taxonomy node types: the built-in `category` plus every custom object
+        # type flagged `taxonomy: true`. They are the *nodes* of the trees.
         try:
-            category_roots = await _category_roots(client, token, locale, PRIMARY_CATEGORY_DEF)
+            object_types = await client.list_object_types(token, limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+            object_types = []
+        taxonomy_types = taxonomy_type_names(object_types)
+        # `all` feeds the node-id lookup (labels of every taxonomy), `key` is the
+        # taxonomy currently edited (the tree shows one taxonomy at a time).
+        nodes: dict = {"all": taxonomy_types, "key": taxonomy_types[0]}
+
+        try:
+            category_roots = await _category_roots(
+                client, token, locale, PRIMARY_CATEGORY_DEF, [nodes["key"]]
+            )
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("categories.load_failed")).classes("text-subtitle1 text-negative")
             return
-        category_objects = await _category_objects(client, token, locale)
+        category_objects = await _category_objects(client, token, locale, taxonomy_types)
 
-        # Category dimensions: the primary taxonomy plus every custom category
-        # relation type. The tree is shared; the dimension drives the counters
-        # and the relation used by "show in grid".
+        # Category dimensions: the built-in categorisation plus every custom
+        # category relation type. All dimensions share the taxonomy nodes; the
+        # dimension drives the counters and the relation used by "show in grid".
         try:
             relation_definitions = await client.list_relation_definitions(token)
         except Exception:  # noqa: BLE001 - degrade to the primary taxonomy only
@@ -88,6 +110,8 @@ async def categories_page() -> None:
         dimensions = dimension_options(
             relation_definitions, locale, primary_label=t("categories.dimension_primary")
         )
+        # Taxonomies shown/edited on this page (node types; switcher labels).
+        taxonomies = taxonomy_options(object_types, locale)
 
         # --- state -----------------------------------------------------------
         dimension: dict = {"key": primary_category_key(relation_definitions)}
@@ -167,7 +191,7 @@ async def categories_page() -> None:
             return [
                 tree_node_from_object(child, locale)
                 for child in children
-                if child.get("type") == "category"
+                if child.get("type") == nodes["key"]
             ]
 
         async def handle_category_select(e) -> None:
@@ -234,7 +258,9 @@ async def categories_page() -> None:
         async def reload_tree() -> None:
             nonlocal category_roots
             try:
-                category_roots = await _category_roots(client, token, locale, dimension["key"])
+                category_roots = await _category_roots(
+                    client, token, locale, dimension["key"], [nodes["key"]]
+                )
             except Exception:  # noqa: BLE001 - keep the cached roots on failure
                 category_roots = category_roots
             tree_select.options = {
@@ -243,6 +269,17 @@ async def categories_page() -> None:
             }
             tree_select.update()
             render_tree()
+
+        async def change_taxonomy(value: str) -> None:
+            """Switches the taxonomy **node type** and re-loads its tree."""
+            key = str(value or nodes["all"][0])
+            if key == nodes["key"]:
+                return
+            nodes["key"] = key
+            selected_category.update({"id": None, "label": "", "type": "", "status": ""})
+            selected_tree["id"] = None
+            await reload_tree()
+            await render_detail()
 
         async def change_dimension(value: str) -> None:
             """Switches the counted category relation type and re-renders the tree."""
@@ -433,7 +470,7 @@ async def categories_page() -> None:
             try:
                 created = await client.create_object(
                     token,
-                    object_type="category",
+                    object_type=nodes["key"],
                     attributes={"name": name},
                     status=str(edit_state.get("status") or "draft"),
                 )
@@ -446,7 +483,7 @@ async def categories_page() -> None:
                 return
             create_dialog.close()
             category_objects.clear()
-            category_objects.update(await _category_objects(client, token, locale))
+            category_objects.update(await _category_objects(client, token, locale, nodes["all"]))
             await reload_tree()
             ui.notify(t("categories.saved"), color="positive")
 
@@ -475,7 +512,9 @@ async def categories_page() -> None:
                     locale=locale,
                     title=t("categories.parent"),
                     on_pick=on_pick,
-                    target_types=["category"],
+                    # A node keeps its own taxonomy: only siblings/ancestors of
+                    # the same node type are valid parents.
+                    target_types=[selected_category.get("type") or nodes["key"]],
                     exclude_ids=[category_id or ""],
                 )
 
@@ -538,7 +577,7 @@ async def categories_page() -> None:
             delete_dialog.close()
             selected_category.update({"id": None, "label": "", "type": "", "status": ""})
             category_objects.clear()
-            category_objects.update(await _category_objects(client, token, locale))
+            category_objects.update(await _category_objects(client, token, locale, nodes["all"]))
             await reload_tree()
             await render_detail()
             ui.notify(t("categories.deleted"), color="positive")
@@ -548,6 +587,24 @@ async def categories_page() -> None:
             "w-full h-[calc(100vh-210px)]"
         ) as splitter:
             with splitter.before, ui.card().classes("w-full h-full p-0"):
+                with (
+                    ui.row()
+                    .classes("items-center gap-2 w-full px-2 py-1")
+                    .style("flex-wrap: nowrap")
+                ):
+                    taxonomy_select = (
+                        ui.select(
+                            taxonomies,
+                            value=nodes["key"],
+                            label=t("categories.taxonomy"),
+                        )
+                        .props("outline dense")
+                        .classes("grow")
+                    )
+                    ui.button(icon="help_outline").props("flat dense shrink-0").tooltip(
+                        t("categories.taxonomy_hint")
+                    )
+                    taxonomy_select.on_value_change(lambda e: change_taxonomy(e.value))  # type: ignore
                 with ui.row().classes("items-center gap-2 w-full p-2").style("flex-wrap: nowrap"):
                     ui.button(icon="add", on_click=lambda: open_create(None)).props(
                         "flat dense"

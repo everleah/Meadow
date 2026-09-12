@@ -147,7 +147,7 @@ Regeln:
 **Leitplanken:**
 
 - `role: category` darf **mehrfach** vorkommen: genau **ein** Typ ist **primär** = der System-Typ (`system: true`, `rel_category_member`) und ist die **Default-Dimension** der Kategorie-Ansichten. Weitere Typen sind **Zusatz-Kategorisierungen** (`system: false`) und in denselben Ansichten per Umschalter wählbar; der Baum selbst (die Kategorie-Objekte und ihre Hierarchie) ist für alle Dimensionen derselbe. Zähler und „Nicht kategorisiert“ folgen der gewählten Dimension. Siehe „Dimensionen“ in [kategorisierung.md](kategorisierung.md).
-- Die Rolle **erzwingt** die Struktur: `kind: aggregation`, `target_types = ["category"]` (Ziel ist immer ein Kategorie-Objekt), Richtung Objekt → Kategorie. `source_types` beschränkt weiterhin die **Mitglieder** (leer = alle). Damit ist die beobachtete Fehlkonfiguration (falsche Richtung/Restriktion) strukturell unmöglich.
+- Die Rolle **erzwingt** die Struktur: `kind: aggregation`, Ziel ist ein **Taxonomie-Knoten** (Objekttyp mit `taxonomy: true`; der System-Typ `category` ist die Default-Taxonomie), Richtung Objekt → Knoten. Eine explizite `target_types`-Liste einer Kategorie-Rolle darf nur Taxonomie-Typen nennen (sonst `400`); ohne Liste gilt die Regel zur Schreibzeit. `source_types` beschränkt weiterhin die **Mitglieder** (leer = alle). Damit ist die beobachtete Fehlkonfiguration (falsche Richtung/Restriktion) strukturell unmöglich.
 - `composition` und `collection` bleiben **Singletons** (Rollen reserviert). Mehrere Sammlungen entstehen über mehrere `collection`-**Objekte**, nicht über mehrere Kantentypen.
 - Eigene Typen starten als `link`; die Umstellung auf `category` ist ein bewusster Schritt in der Relationstyp-Verwaltung (nur bei `system: false`) und setzt `target_types` automatisch auf `["category"]`. Eine Rückstufung auf `link` ist erlaubt, solange keine Kanten des Typs existieren.
 
@@ -166,7 +166,7 @@ Regeln:
 - **Bulk-Wizard:** `add_category`/`remove_category` bekommen ein **Typ-Feld** (Default: primärer Typ). Alternativ kann die Operation „Relation zuweisen/entfernen“ weiterhin jeden Kategorie-Typ bedienen (Picker bereits auf `category` beschränkt).
 - **Grid:** Baum und „Nicht kategorisiert“ sind für alle Dimensionen dieselben Kategorie-Objekte; das Kategorien-Panel hat einen **Dimensions-Umschalter** (`?category=…&definition_id=…`), der Zähler und Zeilen auf den gewählten Typ umstellt (Default: primärer Typ, URL dann ohne `definition_id`). `/categories` hat denselben Umschalter.
 
-**Nicht-Ziele:** keine Kategorie-**Hierarchie** je eigenem Typ (der Baum bleibt die feste Taxonomie), kein zweiter Kategorie-Objekttyp, keine Mehrfachrolle für `collection`/`composition`.
+**Nicht-Ziele:** keine Kategorie-**Hierarchie** je eigenem Typ (der Baum bleibt pro Taxonomie-Typ: alle Knoten einer Taxonomie hängen an einem gemeinsamen Wurzelknoten; Taxonomien werden nicht gemischt), kein zweiter Kategorie-Objekttyp im Sinne eines neuen Konzepts (Knoten bleiben normale Objekte, s. `kategorisierung.md` „Taxonomie-Typen“), keine Mehrfachrolle für `collection`/`composition`.
 
 ## Altlasten-Mapping (entfernt)
 

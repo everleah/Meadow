@@ -55,6 +55,17 @@ def _system_badge(system: bool) -> str:
     )
 
 
+def _taxonomy_badge(taxonomy: bool) -> str:
+    """Badge for the taxonomy node types (categories/classification nodes)."""
+    if taxonomy:
+        return (
+            '<span class="px-2 py-0.5 rounded text-xs bg-primary text-white">'
+            + t("object_types.taxonomy_yes")
+            + "</span>"
+        )
+    return "—"
+
+
 @ui.page("/object-types", response_timeout=15)
 async def object_types_page() -> None:
     await build_shell(active="/object-types")
@@ -109,6 +120,7 @@ async def object_types_page() -> None:
                     "keys": _keys_of(r),
                     "label_attr": _label_attr_of(r),
                     "system": _system_badge(bool(r.get("system"))),
+                    "taxonomy": _taxonomy_badge(bool(r.get("taxonomy"))),
                     "updated": str(r.get("updated_at") or ""),
                 }
                 for r in types
@@ -133,6 +145,7 @@ async def object_types_page() -> None:
                 "width": 160,
             },
             {"headerName": t("object_types.col_system"), "field": "system", "width": 140},
+            {"headerName": t("object_types.col_taxonomy"), "field": "taxonomy", "width": 130},
             {"headerName": t("object_types.col_updated"), "field": "updated", "width": 200},
         ]
         grid = ui.aggrid(
@@ -141,7 +154,9 @@ async def object_types_page() -> None:
                 "rowData": _rows(),
                 "rowSelection": {"mode": "singleRow"},
             },
-            html_columns=[i for i, col in enumerate(column_defs) if col["field"] == "system"],
+            html_columns=[
+                i for i, col in enumerate(column_defs) if col["field"] in ("system", "taxonomy")
+            ],
         ).classes("w-full")
 
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
@@ -205,6 +220,8 @@ async def object_types_page() -> None:
                     .classes("w-full")
                 )
                 ui.label(t("object_types.key_hint")).classes("text-caption text-gray-500")
+                taxonomy_switch = ui.switch(t("object_types.field_taxonomy"))
+                ui.label(t("object_types.taxonomy_hint")).classes("text-caption text-gray-500")
             with (
                 ui.row().classes("w-full justify-between mt-2 gap-2"),
                 ui.row().classes("gap-2"),
@@ -229,6 +246,12 @@ async def object_types_page() -> None:
             description_area.set_value(str(record.get("description") or "") if editing else "")
             key_select.set_value(list(record.get("key_attributes") or []) if editing else [])
             label_attr_select.set_value(str(record.get("label_attribute")) if editing else None)
+            taxonomy_switch.set_value(bool(record.get("taxonomy")) if editing else False)
+            # The built-in types keep the flag the seed owns.
+            if editing and record.get("system"):
+                taxonomy_switch.disable()
+            else:
+                taxonomy_switch.enable()
 
         def open_editor(record: dict | None) -> None:
             _fill_editor(record)
@@ -243,8 +266,12 @@ async def object_types_page() -> None:
             description = (description_area.value or "").strip() or None
             keys = list(key_select.value or [])
             label_attr = (label_attr_select.value or "").strip() or None
+            taxonomy = bool(taxonomy_switch.value)
             try:
                 if _state["editing"]:
+                    current_type = next(
+                        (row for row in types if row.get("name") == _state["name"]), None
+                    )
                     await client.update_object_type(
                         token,
                         _state["name"],
@@ -252,6 +279,8 @@ async def object_types_page() -> None:
                         description=description,
                         key_attributes=keys if keys else None,
                         label_attribute=None if label_attr is None else label_attr,
+                        # A system type's flag is fixed; do not send it then.
+                        taxonomy=None if bool((current_type or {}).get("system")) else taxonomy,
                     )
                 else:
                     await client.create_object_type(
@@ -261,6 +290,7 @@ async def object_types_page() -> None:
                         description=description,
                         key_attributes=keys if keys else None,
                         label_attribute=label_attr,
+                        taxonomy=taxonomy,
                     )
             except CoreError as error:
                 ui.notify(f"{t('object_types.save_failed')}: {error}", color="negative")

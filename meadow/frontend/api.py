@@ -2682,6 +2682,7 @@ class CoreClient:
         description: str | None = None,
         key_attributes: list[str] | None = None,
         label_attribute: str | None = None,
+        taxonomy: bool = False,
     ) -> dict:
         """Creates an object type (``POST /object-types``, admin)."""
         payload: dict[str, object] = {"name": name}
@@ -2693,6 +2694,8 @@ class CoreClient:
             payload["key_attributes"] = key_attributes
         if label_attribute:
             payload["label_attribute"] = label_attribute
+        if taxonomy:
+            payload["taxonomy"] = True
         async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/object-types",
@@ -2712,6 +2715,7 @@ class CoreClient:
         description: str | None = None,
         key_attributes: list[str] | None = None,
         label_attribute: str | None | object = None,
+        taxonomy: bool | None = None,
     ) -> dict:
         """Partially updates an object type (``PATCH /object-types/{name}``, admin)."""
         payload: dict[str, object] = {}
@@ -2723,6 +2727,8 @@ class CoreClient:
             payload["key_attributes"] = key_attributes
         if label_attribute is not None:
             payload["label_attribute"] = label_attribute
+        if taxonomy is not None:
+            payload["taxonomy"] = taxonomy
         async with _api_client() as client:
             response = await client.patch(
                 f"{self.base_url}/object-types/{name}",

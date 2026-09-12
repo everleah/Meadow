@@ -31,6 +31,11 @@ DEFAULT_ROLE = ROLE_LINK
 #: Record key of the built-in primary categorisation.
 PRIMARY_CATEGORY_DEF = "rel_category_member"
 
+#: Built-in **taxonomy** object type: the single system taxonomy (product
+#: categories). Additional taxonomy types are custom object types flagged with
+#: `taxonomy: true` (e.g. a classification standard's class hierarchy).
+PRIMARY_CATEGORY_TYPE = "category"
+
 #: Usages a **custom** relation type may have (`composition`/`collection` are
 #: reserved for the built-in types).
 CUSTOM_ROLES = (ROLE_LINK, ROLE_CATEGORY)
@@ -52,9 +57,12 @@ def role_label(role: str) -> str:
 
 
 def role_target_types(role: str) -> list[str]:
-    """Object types a usage fixes on the target side (empty = free choice)."""
-    if role == ROLE_CATEGORY:
-        return ["category"]
+    """Object types a usage fixes on the target side **without** extra context.
+
+    Only `collection` is fixed to a built-in type. A categorisation points at
+    every **taxonomy** object type (`object_type.taxonomy`), which the caller
+    knows from the object-type catalog — pass it to `effective_target_types`.
+    """
     if role == ROLE_COLLECTION:
         return ["collection"]
     return []
@@ -65,17 +73,24 @@ def custom_role_options() -> dict[str, str]:
     return {role: role_label(role) for role in CUSTOM_ROLES}
 
 
-def effective_target_types(definition: dict | None) -> list[str] | None:
+def effective_target_types(
+    definition: dict | None, taxonomy_types: Iterable[str] | None = None
+) -> list[str] | None:
     """Object types a relation type accepts on the target side.
 
-    An explicit `target_types` list wins; otherwise the usage decides
-    (`category` ⇒ `category`, `collection` ⇒ `collection`). `None` means every
-    object type may be the target — the picker then greys nothing out.
+    An explicit `target_types` list wins; otherwise the usage decides. For a
+    categorisation (`category`) these are the taxonomy node types — passed in by
+    the caller (`taxonomy_types`, from `/object-types`); without that context the
+    built-in `category` type is assumed. `collection` stays fixed. `None` means
+    every object type may be the target — the picker then greys nothing out.
     """
     explicit = [str(name) for name in ((definition or {}).get("target_types") or []) if name]
     if explicit:
         return explicit
-    return role_target_types(role_of(definition or {})) or None
+    role = role_of(definition or {})
+    if role == ROLE_CATEGORY:
+        return list(taxonomy_types) if taxonomy_types else [PRIMARY_CATEGORY_TYPE]
+    return role_target_types(role) or None
 
 
 def allows_source(definition: dict | None, object_type: str) -> bool:

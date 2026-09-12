@@ -698,8 +698,11 @@ pub async fn list_objects(
         );
     }
     if params.uncategorized {
+        // "Nicht kategorisiert" is per taxonomy: every taxonomy node type is
+        // excluded (plus the universal root), so a classification hierarchy does
+        // not count as a categorisation.
         conditions.push(
-            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = $category_definition) AND type NOT IN ['category', 'root']"
+            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = $category_definition) AND type NOT IN $taxonomy_types"
                 .to_owned(),
         );
     }
@@ -771,6 +774,11 @@ pub async fn list_objects(
     }
     if let Some(definition) = &category_definition {
         query = query.bind(("category_definition", definition.clone()));
+    }
+    if params.uncategorized {
+        let mut taxonomy_types = crate::api::object_types::taxonomy_types(&state.db).await?;
+        taxonomy_types.push("root".to_owned());
+        query = query.bind(("taxonomy_types", taxonomy_types));
     }
     if let Some(collection) = &params.collection {
         let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;

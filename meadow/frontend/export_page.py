@@ -26,7 +26,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
-from meadow.frontend.display import channel_label
+from meadow.frontend.display import channel_label, taxonomy_type_names
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -78,7 +78,7 @@ async def export_page(request: Request) -> None:
     if initial_collection:
         initial_kind = "collection"
 
-    async def _safe(coro_type: str) -> list[dict]:
+    async def _safe(coro_type: str, taxonomy_types: list[str] | None = None) -> list[dict]:
         """Runs a reference-data loader and degrades to an empty list."""
         try:
             if coro_type == "object_types":
@@ -88,7 +88,14 @@ async def export_page(request: Request) -> None:
             if coro_type == "saved_searches":
                 return await client.list_saved_searches(token, limit=1000)
             if coro_type == "categories":
-                return await client.list_objects(token, object_type="category", limit=1000)
+                # Every taxonomy node type (built-in categories + custom types
+                # flagged `taxonomy: true`) can be an export source node.
+                nodes: list[dict] = []
+                for node_type in taxonomy_types or ["category"]:
+                    nodes.extend(
+                        await client.list_objects(token, object_type=node_type, limit=1000)
+                    )
+                return nodes
             if coro_type == "channels":
                 return await client.list_channels(token, active=True)
             if coro_type == "languages":
@@ -100,7 +107,7 @@ async def export_page(request: Request) -> None:
     object_types = await _safe("object_types")
     collections = await _safe("collections")
     saved_searches = await _safe("saved_searches")
-    categories = await _safe("categories")
+    categories = await _safe("categories", taxonomy_type_names(object_types))
     channels = await _safe("channels")
     languages = await _safe("languages")
     attribute_definitions = await _safe("attribute_definitions")

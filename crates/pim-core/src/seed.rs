@@ -75,6 +75,14 @@ INSERT INTO object_type (id, name, label, description, key_attributes, label_att
 INSERT INTO object_type (id, name, label, description, key_attributes, system, created_at, updated_at) VALUES (object_type:root, 'root', { de: 'Universal-Root', en: 'Universal root' }, 'Der übergeordnete Universal-Root', [], true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
 INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:saved_search, 'saved_search', { de: 'Gespeicherte Suche', en: 'Saved search' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
 INSERT INTO object_type (id, name, label, description, key_attributes, label_attribute, system, created_at, updated_at) VALUES (object_type:collection, 'collection', { de: 'Collection', en: 'Collection' }, '', [], 'name', true, time::now(), time::now()) ON DUPLICATE KEY UPDATE id = id;
+UPDATE object_type:category SET taxonomy = true;
+UPDATE object_type:product SET taxonomy = false;
+UPDATE object_type:asset SET taxonomy = false;
+UPDATE object_type:variant SET taxonomy = false;
+UPDATE object_type:root SET taxonomy = false;
+UPDATE object_type:saved_search SET taxonomy = false;
+UPDATE object_type:collection SET taxonomy = false;
+UPDATE object_type SET taxonomy = false WHERE taxonomy IS NONE;
 "#;
 
 /// Unit catalog covering the 13 dimensions documented in

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
+    PRIMARY_CATEGORY_TYPE,
     ROLE_CATEGORY,
+    ROLE_COLLECTION,
     ROLE_COMPOSITION,
     ROLE_LINK,
     allows_source,
@@ -74,8 +76,11 @@ def test_role_of_defaults_to_link() -> None:
     assert role_of({}) == ROLE_LINK
 
 
-def test_role_target_types_fixes_the_target_for_categorisation() -> None:
-    assert role_target_types(ROLE_CATEGORY) == ["category"]
+def test_role_target_types_fixes_only_the_collection_target() -> None:
+    # A categorisation may point at any taxonomy node type (resolved from the
+    # object-type catalog), so the role fixes nothing on its own.
+    assert role_target_types(ROLE_CATEGORY) == []
+    assert role_target_types(ROLE_COLLECTION) == ["collection"]
     assert role_target_types(ROLE_COMPOSITION) == []
     assert role_target_types(ROLE_LINK) == []
 
@@ -108,7 +113,14 @@ def test_effective_target_types_prefers_an_explicit_list() -> None:
 def test_effective_target_types_falls_back_to_the_usage() -> None:
     """The built-in types carry no `target_types`; the usage supplies them."""
     assert effective_target_types({"role": "collection", "target_types": []}) == ["collection"]
-    assert effective_target_types({"role": ROLE_CATEGORY}) == ["category"]
+    # A categorisation resolves against the taxonomy node types the caller knows.
+    assert effective_target_types({"role": ROLE_CATEGORY}, ["category", "etim_class"]) == [
+        "category",
+        "etim_class",
+    ]
+    # Without that catalog the built-in taxonomy type is assumed.
+    assert effective_target_types({"role": ROLE_CATEGORY}) == [PRIMARY_CATEGORY_TYPE]
+    assert effective_target_types({"role": ROLE_CATEGORY}, []) == [PRIMARY_CATEGORY_TYPE]
     # A plain link stays unrestricted (the picker greys nothing out).
     assert effective_target_types({"role": ROLE_LINK}) is None
     assert effective_target_types({}) is None

@@ -31,6 +31,7 @@ from meadow.frontend.display import (
     release_badges,
     resolve_value,
     status_badge,
+    taxonomy_type_names,
 )
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -867,6 +868,13 @@ async def products_page(request: Request) -> None:
             relation_definitions: list[dict] = await client.list_relation_definitions(token)
         except Exception:  # noqa: BLE001 - degrade to "no custom relation types"
             relation_definitions = []
+        # Taxonomy node types (the built-in `category` plus custom types flagged
+        # `taxonomy: true`): they are the nodes of the category/classification
+        # trees and the valid targets of a categorisation.
+        try:
+            taxonomy_types = taxonomy_type_names(await client.list_object_types(token, limit=1000))
+        except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+            taxonomy_types = taxonomy_type_names([])
 
         async def fetch_filtered() -> list[dict]:
             """Loads the objects matching the active filters (see `active`)."""
@@ -1203,7 +1211,7 @@ async def products_page(request: Request) -> None:
             return [
                 tree_node_from_object(child, locale)
                 for child in children
-                if child.get("type") == "category"
+                if child.get("type") in taxonomy_types
             ]
 
         async def load_category_roots() -> list[dict]:
@@ -1221,7 +1229,7 @@ async def products_page(request: Request) -> None:
             return [
                 tree_node_from_object(child, locale)
                 for child in top_children
-                if child.get("type") == "category"
+                if child.get("type") in taxonomy_types
             ]
 
         category_roots = await load_category_roots()
@@ -1837,7 +1845,7 @@ async def products_page(request: Request) -> None:
                     label_key = (
                         "grid.bulk_parent" if op == "change_parent" else "grid.bulk_category"
                     )
-                    target_types = ["category"] if op != "change_parent" else None
+                    target_types = taxonomy_types if op != "change_parent" else None
 
                     async def choose_target(field_key=field_key, target_types=target_types):
                         async def on_pick(hit: dict) -> None:

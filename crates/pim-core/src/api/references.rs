@@ -112,17 +112,61 @@ fn custom_role(raw: Option<&str>) -> Result<&str, ApiError> {
     )))
 }
 
-/// Object types a role fixes on the **target** side (empty = unrestricted).
+/// Target types a role fixes **independent of the registry** (empty = the role's
+/// target rule is data-driven). Only `collection` is fixed to a built-in type:
+/// a categorisation may point at *any* taxonomy object type
+/// (`object_type.taxonomy`), which is resolved at write time.
 fn role_target_types(role: &str) -> Vec<String> {
     match role {
-        ROLE_CATEGORY => vec!["category".to_owned()],
         ROLE_COLLECTION => vec!["collection".to_owned()],
         _ => Vec::new(),
     }
 }
 
+/// The object types a categorisation relation may point at: every registered
+/// taxonomy type, always including the built-in primary taxonomy (`category`).
+pub(crate) async fn category_target_types(db: &Db) -> Result<Vec<String>, ApiError> {
+    let mut types = crate::api::object_types::taxonomy_types(db).await?;
+    if !types
+        .iter()
+        .any(|name| name == crate::api::object_types::PRIMARY_TAXONOMY_TYPE)
+    {
+        types.insert(
+            0,
+            crate::api::object_types::PRIMARY_TAXONOMY_TYPE.to_owned(),
+        );
+    }
+    Ok(types)
+}
+
+/// Pure rule: an explicit target list of a `category` relation may only name
+/// registered taxonomy types.
+fn check_taxonomy_targets(requested: &[String], allowed: &[String]) -> Result<(), ApiError> {
+    if requested.is_empty() {
+        return Ok(());
+    }
+    for name in requested {
+        if !allowed.iter().any(|t| t == name) {
+            return Err(ApiError::bad_request(format!(
+                "role `{ROLE_CATEGORY}` may only point at taxonomy object types (allowed: {}); \
+                 `{name}` is not marked as a taxonomy type",
+                allowed.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Rejects an explicit target-type list that contradicts the role's rule.
-fn check_role_target_types(role: &str, requested: &[String]) -> Result<(), ApiError> {
+async fn check_role_target_types(
+    db: &Db,
+    role: &str,
+    requested: &[String],
+) -> Result<(), ApiError> {
+    if role == ROLE_CATEGORY {
+        let allowed = category_target_types(db).await?;
+        return check_taxonomy_targets(requested, &allowed);
+    }
     let enforced = role_target_types(role);
     if enforced.is_empty() || requested.is_empty() || requested == enforced.as_slice() {
         return Ok(());
@@ -454,16 +498,30 @@ pub async fn create_reference(
 
     check_type_restriction(&definition, source_type, target_type)?;
     // The usage decides which object the edge may point to (see `role`): a
-    // categorisation only points at categories, a collection membership only at
+    // categorisation only points at taxonomy objects (categories/classification
+    // nodes, `object_type.taxonomy`), a collection membership only at
     // collections. This makes a misconfigured role impossible to use silently.
     let role = role_of(&definition);
-    for required in role_target_types(role) {
-        if target_type != required {
+    if role == ROLE_CATEGORY {
+        if !crate::api::object_types::is_taxonomy_type(&state.db, target_type).await? {
+            let allowed = category_target_types(&state.db).await?;
             return Err(ApiError::bad_request(format!(
-                "relation type `{}` is a {} relation: the target must be an object of type `{required}`",
+                "relation type `{}` is a {} relation: the target must be an object of a taxonomy \
+                 type (allowed: {})",
                 definition_id_of(&definition, &body.definition_id),
-                role
+                role,
+                allowed.join(", ")
             )));
+        }
+    } else {
+        for required in role_target_types(role) {
+            if target_type != required {
+                return Err(ApiError::bad_request(format!(
+                    "relation type `{}` is a {} relation: the target must be an object of type `{required}`",
+                    definition_id_of(&definition, &body.definition_id),
+                    role
+                )));
+            }
         }
     }
     validate_edge_attributes(&state.db, &body.definition_id, &body.attributes).await?;
@@ -625,8 +683,10 @@ pub async fn create_relation_definition(
     let source_types = type_names_array(&body.source_types.unwrap_or_default());
     let role = custom_role(body.role.as_deref())?.to_owned();
     let requested_targets = body.target_types.clone().unwrap_or_default();
-    check_role_target_types(&role, &requested_targets)?;
-    // A role may fix the target type (e.g. `category` ⇒ `category` objects).
+    check_role_target_types(&state.db, &role, &requested_targets).await?;
+    // A role may fix the target type (e.g. `collection` ⇒ `collection` objects).
+    // A categorisation keeps its requested taxonomy types, or none at all — then
+    // every taxonomy type is accepted (resolved at reference creation).
     let enforced_targets = role_target_types(&role);
     let target_types = if enforced_targets.is_empty() {
         type_names_array(&requested_targets)
@@ -744,14 +804,34 @@ pub async fn update_relation_definition(
         content.insert("source_types".to_owned(), type_names_array(&source_types));
     }
     if let Some(target_types) = body.target_types {
-        check_role_target_types(&effective_role, &target_types)?;
+        check_role_target_types(&state.db, &effective_role, &target_types).await?;
         content.insert("target_types".to_owned(), type_names_array(&target_types));
     }
-    // A role change normalises the target type it fixes.
+    // A role change normalises the target types: `collection` is fixed to its
+    // built-in type, `category` keeps only taxonomy types (a stale list such as
+    // `["product"]` is dropped, otherwise the role rule could never be met).
     if body.role.is_some() {
         let enforced = role_target_types(&effective_role);
         if !enforced.is_empty() {
             content.insert("target_types".to_owned(), type_names_array(&enforced));
+        } else if effective_role == ROLE_CATEGORY {
+            let requested = content
+                .get("target_types")
+                .and_then(Value::as_array)
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let allowed = category_target_types(&state.db).await?;
+            let kept: Vec<String> = requested
+                .into_iter()
+                .filter(|name| allowed.iter().any(|t| t == name))
+                .collect();
+            content.insert("target_types".to_owned(), type_names_array(&kept));
         }
     }
     if let Some(attributes) = body.attributes {
@@ -1207,12 +1287,19 @@ pub async fn list_object_children(
     if params.count_members {
         // Category children: add the number of objects assigned through the
         // requested category relation type (default: the primary type) to the
-        // category subtree (category tree counter).
+        // category subtree (category tree counter). Every taxonomy node type
+        // (`object_type.taxonomy`) carries a counter, so additional
+        // categorisations and classification hierarchies show theirs too.
         let definition =
             resolve_category_definition(&state.db, params.definition_id.as_deref()).await?;
+        let taxonomy = crate::api::object_types::taxonomy_types(&state.db).await?;
         let mut counted: Vec<Value> = Vec::new();
         for mut value in result {
-            if value.get("type").and_then(Value::as_str) == Some("category") {
+            let node_type = value
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if taxonomy.iter().any(|t| t == node_type) {
                 let cid = value.get("id").and_then(Value::as_str).unwrap_or("");
                 let keys = category_member_keys(&state.db, cid, &definition).await?;
                 value["memberCount"] = json!(keys.len());
@@ -1520,22 +1607,26 @@ mod tests {
 
     #[test]
     fn role_target_types_fix_the_target_side() {
-        assert_eq!(
-            role_target_types(ROLE_CATEGORY),
-            vec!["category".to_owned()]
-        );
+        // Only `collection` is fixed to a built-in type; a categorisation may
+        // point at every taxonomy type (resolved at reference creation).
         assert_eq!(
             role_target_types(ROLE_COLLECTION),
             vec!["collection".to_owned()]
         );
+        assert!(role_target_types(ROLE_CATEGORY).is_empty());
         assert!(role_target_types(ROLE_LINK).is_empty());
     }
 
     #[test]
-    fn a_category_role_rejects_a_conflicting_target_type() {
-        assert!(check_role_target_types(ROLE_CATEGORY, &["category".to_owned()]).is_ok());
-        assert!(check_role_target_types(ROLE_CATEGORY, &[]).is_ok());
-        assert!(check_role_target_types(ROLE_CATEGORY, &["product".to_owned()]).is_err());
-        assert!(check_role_target_types(ROLE_LINK, &["product".to_owned()]).is_ok());
+    fn a_category_role_only_accepts_taxonomy_targets() {
+        let allowed = vec!["category".to_owned(), "etim_class".to_owned()];
+
+        assert!(check_taxonomy_targets(&[], &allowed).is_ok());
+        assert!(check_taxonomy_targets(&["etim_class".to_owned()], &allowed).is_ok());
+        assert!(check_taxonomy_targets(&["product".to_owned()], &allowed).is_err());
+        // A non-taxonomy type stays invalid even if the list is empty.
+        assert!(check_taxonomy_targets(&["product".to_owned()], &[]).is_err());
+        // Other roles keep the fixed-target rule.
+        assert!(check_taxonomy_targets(&["product".to_owned()], &allowed).is_err());
     }
 }

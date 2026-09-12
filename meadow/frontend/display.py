@@ -11,6 +11,7 @@ import html
 
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
+    PRIMARY_CATEGORY_TYPE,
     category_definitions,
     definition_key,
 )
@@ -110,13 +111,13 @@ def dimension_options(
 ) -> dict[str, str]:
     """Select options `relation key -> label` for the category dimensions.
 
-    A dimension is the built-in primary taxonomy plus every custom relation type
-    with the usage `category` ("additional categorisations", e.g. "Brand"). All
-    dimensions share the same category objects (the role contract fixes the
-    target type to `category`); the dimension only decides whose members are
-    counted/filtered. The primary type gets the caller's label (the pages pass
-    the translated key, keeping this helper free of page/i18n state); without
-    known definitions it alone is offered, so the switcher is never empty.
+    A dimension is the built-in primary categorisation plus every custom relation
+    type with the usage `category` ("additional categorisations", e.g. "Brand").
+    All dimensions share the same category objects (every categorisation points at
+    taxonomy node types); the dimension only decides whose members are
+    counted/filtered. The primary type gets the caller's label (the pages pass the
+    translated key, keeping this helper free of page/i18n state); without known
+    definitions it alone is offered, so the switcher is never empty.
     """
     options: dict[str, str] = {}
     for definition in category_definitions(definitions):
@@ -128,3 +129,31 @@ def dimension_options(
                 definition.get("name") or key
             )
     return options or {PRIMARY_CATEGORY_DEF: primary_label}
+
+
+def taxonomy_type_names(object_types: list[dict]) -> list[str]:
+    """Names of the object types flagged as **taxonomy** node types, sorted.
+
+    Taxonomy types are the node types of the category/classification trees: the
+    built-in `category` plus every custom type with `taxonomy: true`. Without a
+    catalog the built-in type alone is returned, so the views never break.
+    """
+    names = sorted(
+        {
+            str(entry.get("name"))
+            for entry in object_types
+            if isinstance(entry, dict) and entry.get("taxonomy") and entry.get("name")
+        }
+    )
+    return names or [PRIMARY_CATEGORY_TYPE]
+
+
+def taxonomy_options(object_types: list[dict], locale: str) -> dict[str, str]:
+    """Select options `type name -> label` for the taxonomy node types."""
+    options: dict[str, str] = {}
+    for entry in object_types:
+        if not isinstance(entry, dict) or not entry.get("taxonomy") or not entry.get("name"):
+            continue
+        name = str(entry["name"])
+        options[name] = resolve_value(entry.get("label"), locale) or name
+    return options or {PRIMARY_CATEGORY_TYPE: PRIMARY_CATEGORY_TYPE}
