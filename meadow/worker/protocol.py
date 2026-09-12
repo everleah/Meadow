@@ -43,6 +43,9 @@ class EvaluationRequest(BaseModel):
     mode: str = "save"  # save | import | transition | bulk
     language: str | None = None
     actor: str | None = None
+    # Channel-specific release transition (mode `transition`): see `Context`.
+    channel: str | None = None
+    release_status: str | None = None
 
 
 class EvaluationIssue(BaseModel):

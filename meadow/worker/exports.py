@@ -123,7 +123,9 @@ async def _resolve_objects(
 
     With ``resolve_inheritance`` the objects are requested with
     `?resolve_inheritance=true`, so attributes maintained on an ancestor are
-    exported with the child's effective value.
+    exported with the child's effective value. `source.kind='channel'` exports
+    the objects **released for that channel** (`?released_for=`, optionally with
+    `source.release_status`).
     """
     extra: dict[str, str] = {"resolve_inheritance": "true"} if resolve_inheritance else {}
     kind = source.get("kind")
@@ -143,6 +145,17 @@ async def _resolve_objects(
         resp = await active.get(
             f"{core_url}/objects", params={"category": category, "limit": 1000, **extra}
         )
+        resp.raise_for_status()
+        return resp.json()
+    if kind == "channel":
+        channel = source.get("channel")
+        if not channel:
+            raise RuntimeError("`source.kind='channel'` requires `channel`")
+        params = {"released_for": channel, "limit": 1000, **extra}
+        release_status = source.get("release_status")
+        if release_status:
+            params["release_status"] = str(release_status)
+        resp = await active.get(f"{core_url}/objects", params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -308,7 +321,10 @@ def _serialize_xlsx(
     links = url_columns or set()
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "Export"
+    if sheet is None:
+        sheet = workbook.create_sheet(title="Export")
+    else:
+        sheet.title = "Export"
     sheet.append(columns)
     for offset, row in enumerate(rows, start=2):
         for index, column in enumerate(columns, start=1):
@@ -477,7 +493,7 @@ async def _structured_export(
             "document": document,
         }
     else:
-        columns = _build_columns(fields, locales, multilingual)
+        columns = _build_columns(fields, locales, multilingual)  # type: ignore
         rows = _build_rows(objects, columns, locales, fallback, multilingual)
         if format_ == "xlsx":
             data = _serialize_xlsx(columns, rows, _url_columns(columns, flags.urls))

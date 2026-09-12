@@ -38,6 +38,7 @@ pub struct ConfigExportQuery {
 /// The supported MCF sections, in dependency order.
 const SECTIONS: &[&str] = &[
     "languages",
+    "channels",
     "units",
     "attribute_groups",
     "enum_sets",
@@ -212,6 +213,23 @@ async fn units_section(
         }));
     }
     Ok(result)
+}
+
+/// Serialises the channel catalog (stable key = `code`).
+async fn channels_section(db: &crate::db::Db) -> Result<Vec<Value>, ApiError> {
+    let rows = query_rows(db, "SELECT * FROM channel ORDER BY position, code;").await?;
+    Ok(rows
+        .into_iter()
+        .map(|channel| {
+            json!({
+                "code": as_str(&channel, "code").unwrap_or_default(),
+                "label": channel.get("label").cloned().unwrap_or_else(|| json!({})),
+                "description": channel.get("description").cloned().unwrap_or(Value::Null),
+                "active": channel.get("active").cloned().unwrap_or(json!(true)),
+                "position": channel.get("position").cloned().unwrap_or(json!(0)),
+            })
+        })
+        .collect())
 }
 
 async fn attribute_groups_section(db: &crate::db::Db) -> Result<Vec<Value>, ApiError> {
@@ -445,6 +463,7 @@ pub async fn export_config(
     for section in &sections {
         let value = match section.as_str() {
             "languages" => languages_section(&state.db).await?,
+            "channels" => channels_section(&state.db).await?,
             "units" => units_section(&state.db, include_system, &unit_map).await?,
             "attribute_groups" => attribute_groups_section(&state.db).await?,
             "enum_sets" => enum_sets_section(&state.db).await?,
@@ -877,6 +896,7 @@ const VOLATILE: &[&str] = &[
 fn key_field(section: &str) -> &'static str {
     match section {
         "languages" => "code",
+        "channels" => "code",
         "units" => "symbol",
         _ => "name",
     }
@@ -937,6 +957,17 @@ async fn record_in_use(db: &crate::db::Db, section: &str, row: &Value) -> Result
                 &[("key", key)],
             )
             .await?;
+            Ok(n > 0)
+        }
+        "channels" => {
+            // Releases reference the channel by its code.
+            let code = as_str(row, "code").unwrap_or_default();
+            let n = count_where!(
+                db,
+                "SELECT count() FROM release WHERE channel = $code;",
+                "code",
+                code
+            )?;
             Ok(n > 0)
         }
         "attribute_groups" => {
@@ -1044,6 +1075,7 @@ async fn replace_target_only(
 ) -> Result<(), ApiError> {
     let (table, system_filter) = match section {
         "languages" => ("language_tree", None),
+        "channels" => ("channel", None),
         "units" => ("unit", Some("system != 'default'")),
         "attribute_groups" => ("attribute_group", None),
         "enum_sets" => ("enum_set", None),
@@ -1274,6 +1306,77 @@ async fn apply_units(
                     let key = id_of(&rec, "unit");
                     resolve.unit.insert(symbol.clone(), key);
                     report.created("units", &symbol);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- channels ----------------------------------------------------------------
+
+/// Applies the channel catalog; the `code` is the record key (like object types).
+async fn apply_channels(
+    db: &crate::db::Db,
+    mode: Mode,
+    entries: &[Value],
+    report: &mut ConfigReport,
+) -> Result<(), ApiError> {
+    for entry in entries {
+        let Some(code) = as_str(entry, "code") else {
+            report.error("channels", "", "entry without `code`");
+            continue;
+        };
+        let code = code.to_owned();
+        let mut content = Map::new();
+        content.insert("code".to_owned(), Value::String(code.clone()));
+        content.insert(
+            "label".to_owned(),
+            entry
+                .get("label")
+                .cloned()
+                .unwrap_or_else(|| json!({ "en": code.clone() })),
+        );
+        // `option<string>`: an absent/`null` description is omitted instead of
+        // written as `null`.
+        if let Some(description) = as_str(entry, "description").map(str::trim)
+            && !description.is_empty()
+        {
+            content.insert(
+                "description".to_owned(),
+                Value::String(description.to_owned()),
+            );
+        }
+        content.insert(
+            "active".to_owned(),
+            entry.get("active").cloned().unwrap_or(json!(true)),
+        );
+        content.insert(
+            "position".to_owned(),
+            entry.get("position").cloned().unwrap_or(json!(0)),
+        );
+        let content = Value::Object(content);
+
+        match fetch_by_field(db, "channel", "code", &code).await? {
+            Some(existing) => {
+                let key = id_of(&existing, "channel");
+                if would_change(&existing, &content, VOLATILE) {
+                    if mode == Mode::DryRun {
+                        report.updated("channels", &code);
+                    } else {
+                        update_keyed(db, "channel", &key, content).await?;
+                        report.updated("channels", &code);
+                    }
+                } else {
+                    report.skipped("channels", &code);
+                }
+            }
+            None => {
+                if mode == Mode::DryRun {
+                    report.created("channels", &code);
+                } else {
+                    create_keyed(db, "channel", &code, content).await?;
+                    report.created("channels", &code);
                 }
             }
         }
@@ -1840,6 +1943,7 @@ async fn apply_document(
             .unwrap_or_default();
         match *section {
             "languages" => apply_languages(db, mode, &entries, &mut resolve, &mut report).await?,
+            "channels" => apply_channels(db, mode, &entries, &mut report).await?,
             "units" => apply_units(db, mode, &entries, &mut resolve, &mut report).await?,
             "attribute_groups" => {
                 apply_attribute_groups(db, mode, &entries, &mut resolve, &mut report).await?
@@ -2084,6 +2188,7 @@ mod tests {
     #[test]
     fn key_field_per_section() {
         assert_eq!(key_field("languages"), "code");
+        assert_eq!(key_field("channels"), "code");
         assert_eq!(key_field("units"), "symbol");
         assert_eq!(key_field("object_types"), "name");
         assert_eq!(key_field("attribute_definitions"), "name");

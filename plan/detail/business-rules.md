@@ -74,8 +74,7 @@ Ein Attribut wird als berechnet gekennzeichnet; die zugehörige Regel wird über
 Eine Regel ist **ein Skript mit einem Einstiegspunkt**:
 
 ```python
-def run(obj, ctx, result):
-    ...
+def run(obj, ctx, result): ...
 ```
 
 Die Interpretation des Ergebnisses hängt vom Regeltyp ab (gleiche Signatur, ein Mechanismus):
@@ -89,7 +88,7 @@ Die Interpretation des Ergebnisses hängt vom Regeltyp ab (gleiche Signatur, ein
 | Global                | Inhalt                                                                                                                                                                                                                                                                       |
 | --------------------- | -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `obj`                 | **Aufgelöste Sicht** des Objekts: eigene + vererbte + sprachlich aufgelöste Attributwerte (gemäß Sprachbaum), plus `id`, `type`, `status` und **read-only** Relationen. Für computed/normalization wird über `result.set_value` geschrieben, nicht durch Mutation von `obj`. |
-| `ctx`                 | Kontext:`rule_type`, `object_type`, `language(s)`, `mode` (`save` \| `import` \| `transition` \| `bulk`), `actor`                                                                                                                                                            |
+| `ctx`                 | Kontext:`rule_type`, `object_type`, `language(s)`, `mode` (`save` \| `import` \| `transition` \| `bulk`), `actor`; bei **Kanal-Freigaben** (`release`) zusätzlich `channel` (Kanalcode) und `release_status` (Zielzustand, beim Zurückziehen `withdrawn`) – `obj.status` bleibt dabei der **globale** Objektstatus ([workflow-freigaben.md](workflow-freigaben.md)) |
 | `result`              | Typisierte Helfer (siehe oben)                                                                                                                                                                                                                                               |
 | `log(message, level)` | Sicheres Logging (in Ergebnis/Audit sichtbar)                                                                                                                                                                                                                                |
 

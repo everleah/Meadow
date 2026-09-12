@@ -84,6 +84,24 @@ pub fn router(state: AppState) -> Router {
             "/objects/{id}/computed",
             axum::routing::patch(api::objects::update_computed),
         )
+        .route(
+            "/channels",
+            get(api::channels::list_channels).post(api::channels::create_channel),
+        )
+        .route(
+            "/channels/{id}",
+            get(api::channels::get_channel)
+                .patch(api::channels::update_channel)
+                .delete(api::channels::delete_channel),
+        )
+        .route(
+            "/objects/{id}/releases",
+            get(api::channels::list_object_releases).put(api::channels::set_object_release),
+        )
+        .route(
+            "/objects/{id}/releases/{channel}",
+            axum::routing::delete(api::channels::delete_object_release),
+        )
         .route("/references", post(api::references::create_reference))
         .route(
             "/references/{id}",

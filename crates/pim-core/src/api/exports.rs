@@ -23,9 +23,9 @@ use crate::auth::{ROLE_EDITOR, api_key_or_role};
 use crate::error::ApiError;
 
 /// The object source for an export.
-#[derive(Debug, Deserialize, serde::Serialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, ToSchema)]
 pub struct ExportSource {
-    /// `collection` | `type` | `category` | `saved_search` | `selection`.
+    /// `collection` | `type` | `category` | `saved_search` | `selection` | `channel`.
     pub kind: String,
     /// Collection or saved-search id (for `collection`/`saved_search`).
     #[serde(default)]
@@ -39,6 +39,13 @@ pub struct ExportSource {
     /// Object ids (for `selection`).
     #[serde(default)]
     pub object_ids: Option<Vec<String>>,
+    /// Channel code (for `channel` = "released for that channel"); empty in the
+    /// request falls back to the `channel` of the `json_export` profile.
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// State a release must have for `channel` (default `published`).
+    #[serde(default)]
+    pub release_status: Option<String>,
 }
 
 /// Serialization options.
@@ -142,10 +149,11 @@ pub async fn create_export(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let user_id = api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
 
-    let kind = req.source.kind.as_str();
+    let mut source = req.source.clone();
+    let kind = source.kind.as_str();
     if !matches!(
         kind,
-        "collection" | "type" | "category" | "saved_search" | "selection"
+        "collection" | "type" | "category" | "saved_search" | "selection" | "channel"
     ) {
         return Err(ApiError::bad_request(format!(
             "unsupported source kind `{kind}`"
@@ -185,30 +193,41 @@ pub async fn create_export(
         options.email_to =
             crate::api::connectors::default_string_list(&defaults, "options.email_to");
     }
+    // An export profile can be bound to a channel: a `channel` source without a
+    // code takes the profile's channel.
+    if kind == "channel"
+        && source
+            .channel
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    {
+        source.channel = crate::api::connectors::default_string(&defaults, "channel")
+            .filter(|value| !value.trim().is_empty());
+    }
     match kind {
-        "collection" | "saved_search" if req.source.id.is_none() => {
+        "collection" | "saved_search" if source.id.is_none() => {
             return Err(ApiError::bad_request(format!(
                 "source kind `{kind}` requires an `id`"
             )));
         }
-        "type" if req.source.object_type.is_none() => {
+        "type" if source.object_type.is_none() => {
             return Err(ApiError::bad_request(
                 "source kind `type` requires a `type`",
             ));
         }
-        "category" if req.source.category.is_none() => {
+        "category" if source.category.is_none() => {
             return Err(ApiError::bad_request(
                 "source kind `category` requires a `category`",
             ));
         }
-        "selection"
-            if req
-                .source
-                .object_ids
-                .as_deref()
-                .unwrap_or_default()
-                .is_empty() =>
-        {
+        "channel" if source.channel.is_none() => {
+            return Err(ApiError::bad_request(
+                "source kind `channel` requires a `channel`",
+            ));
+        }
+        "selection" if source.object_ids.as_deref().unwrap_or_default().is_empty() => {
             return Err(ApiError::bad_request(
                 "source kind `selection` requires `object_ids`",
             ));
@@ -216,8 +235,18 @@ pub async fn create_export(
         _ => {}
     }
 
+    // A channel source is validated against the catalog: the filter is by code.
+    if kind == "channel"
+        && let Some(channel) = source.channel.clone()
+    {
+        crate::api::channels::find_channel(&state.db, &channel)
+            .await?
+            .ok_or_else(|| ApiError::not_found(format!("channel `{channel}` not found")))?;
+        source.channel = Some(crate::api::channels::channel_code(&channel));
+    }
+
     let parameters = json!({
-        "source": req.source,
+        "source": source,
         "fields": fields,
         "format": format,
         "locales": locales,

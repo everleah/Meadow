@@ -23,7 +23,14 @@ from nicegui import app, ui
 from meadow.frontend import config, edit_queue, search_form
 from meadow.frontend.api import CoreClient, is_session_expired
 from meadow.frontend.auth import handle_session_expired
-from meadow.frontend.display import completeness_badge, resolve_value, status_badge
+from meadow.frontend.display import (
+    DEFAULT_RELEASE_STATUS,
+    channel_options,
+    completeness_badge,
+    release_badges,
+    resolve_value,
+    status_badge,
+)
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
@@ -617,7 +624,7 @@ def language_cells(
         value = attributes.get(name)
         for language in languages or []:
             resolver = (enum_resolvers or {}).get(language, {}).get(name)
-            field = language_field(language_prefixes[name], language)
+            field = language_field(language_prefixes[name], language)  # type: ignore
             cells[field] = _language_value(value, language, resolver)
     return cells
 
@@ -646,7 +653,7 @@ def export_fields(
         if field in _EXPORT_BASE_FIELDS:
             fields.append(_EXPORT_BASE_FIELDS[field])
         elif (language_fields or {}).get(field):
-            fields.append(language_fields[field])
+            fields.append(language_fields[field])  # type: ignore
         elif field.startswith("attr_"):
             fields.append(field[len("attr_") :])
     return list(dict.fromkeys(fields)) or ["id", "type", "status"]
@@ -810,6 +817,8 @@ async def products_page(request: Request) -> None:
         "category": request.query_params.get("category") or None,
         "collection": request.query_params.get("collection") or None,
         "uncategorized": request.query_params.get("uncategorized") == "1",
+        # Channel-specific releases: `?released_for=<code>` = released for that channel.
+        "released_for": request.query_params.get("released_for") or None,
         "q": request.query_params.get("q") or None,
         # Advanced search (the condition dialog): a compact Query DSL document.
         "where": request.query_params.get("where") or None,
@@ -826,6 +835,7 @@ async def products_page(request: Request) -> None:
             or active["category"]
             or active["collection"]
             or active["uncategorized"]
+            or active["released_for"]
             or active["q"]
             or active["where"]
         )
@@ -838,6 +848,14 @@ async def products_page(request: Request) -> None:
         )
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
+
+        # Channel catalog (channel-specific releases): the filter bar, the release
+        # column and the bulk wizard need it; without channels all three are hidden.
+        try:
+            channels = await client.list_channels(token, active=True)
+        except Exception:  # noqa: BLE001 - degrades to "no channels configured"
+            channels = []
+        channel_labels = channel_options(channels, locale)
 
         async def fetch_filtered() -> list[dict]:
             """Loads the objects matching the active filters (see `active`)."""
@@ -872,6 +890,8 @@ async def products_page(request: Request) -> None:
                 category=active["category"],
                 collection=active["collection"],
                 uncategorized=bool(active["uncategorized"]),
+                released_for=active["released_for"],
+                releases=bool(channels),
                 missing_required=bool(active["incomplete"]),
                 where=active["where"],
                 locale=locale,
@@ -992,6 +1012,12 @@ async def products_page(request: Request) -> None:
                 column[":tooltipValueGetter"] = INHERITED_CELL_TOOLTIP
                 column.setdefault(":cellRenderer", INHERITED_CELL_RENDERER)
         language_fields = {**name_language_fields, **attribute_language_fields}
+        # Channel releases: one badge per channel (only with a channel catalog).
+        release_columns = (
+            [{"headerName": t("grid.releases"), "field": "_releases", "width": 180}]
+            if channels
+            else []
+        )
         column_defs = with_header_tooltips(
             [
                 {"headerName": t("grid.id"), "field": "_id", "width": 100, "pinned": "left"},
@@ -1001,6 +1027,7 @@ async def products_page(request: Request) -> None:
                 {"headerName": t("grid.status"), "field": "_status", "width": 140},
                 {"headerName": t("grid.completeness"), "field": "_completeness", "width": 140},
             ]
+            + release_columns
             + attribute_column_defs
             + [
                 {"headerName": "", "field": "_refs", "width": 60, "pinned": "right"},
@@ -1050,8 +1077,9 @@ async def products_page(request: Request) -> None:
                 | inherited_cells(object_, locale, inheritable_names)
                 for object_ in selected_objects
             ]
-            for row in rows:
+            for row, object_ in zip(rows, selected_objects, strict=True):
                 row[MEDIA_FIELD] = media_markers(row, url_fields, url_hint)
+                row["_releases"] = release_badges(object_.get("releases"), channel_labels)
             return rows
 
         all_rows = make_rows(objects)
@@ -1070,6 +1098,8 @@ async def products_page(request: Request) -> None:
                 parts.append(f"category={quote(str(active['category']))}")
             if active["collection"]:
                 parts.append(f"collection={quote(str(active['collection']))}")
+            if active["released_for"]:
+                parts.append(f"released_for={quote(str(active['released_for']))}")
             if active["uncategorized"]:
                 parts.append("uncategorized=1")
             if active["q"]:
@@ -1281,7 +1311,15 @@ async def products_page(request: Request) -> None:
 
         # Personal views (step 4b): save/restore the visible column set per user.
         views = app.storage.user.get("views", {})
-        default_fields = {"_id", "_name", "_type", "_status", "_completeness", "_refs"}
+        default_fields = {
+            "_id",
+            "_name",
+            "_type",
+            "_status",
+            "_completeness",
+            "_releases",
+            "_refs",
+        }
         # The **current** column set is persisted as well, so it survives a
         # browser-back from the product form, a reload and a re-login (only the
         # authentication is cleared on logout, see `auth.clear_session`).
@@ -1683,6 +1721,8 @@ async def products_page(request: Request) -> None:
                         "add_relation": t("grid.op_add_relation"),
                         "remove_relation": t("grid.op_remove_relation"),
                         "change_parent": t("grid.op_change_parent"),
+                        "release_for_channel": t("grid.op_release_for_channel"),
+                        "withdraw_from_channel": t("grid.op_withdraw_from_channel"),
                         "delete": t("grid.op_delete"),
                     },
                     value=None,
@@ -1834,6 +1874,25 @@ async def products_page(request: Request) -> None:
                     ui.label(t("grid.bulk_relation_hint")).classes("text-caption text-gray-400")
                 elif op == "delete":
                     ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
+                elif op in ("release_for_channel", "withdraw_from_channel"):
+                    select = (
+                        ui.select(channel_labels, value=None, label=t("grid.bulk_channel"))
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    bulk_fields["channel"] = select
+                    if op == "release_for_channel":
+                        status_select = (
+                            ui.select(
+                                bulk_status_options,
+                                value=DEFAULT_RELEASE_STATUS,
+                                label=t("grid.release_status"),
+                            )
+                            .props("filled dense")
+                            .classes("w-full")
+                        )
+                        bulk_fields["release_status"] = status_select
+                    ui.label(t("grid.bulk_channel_hint")).classes("text-caption text-gray-400")
                 if op in _APPROVAL_MODIFIER_OPS:
                     bulk_fields["send_for_approval"] = ui.switch(
                         t("grid.bulk_send_for_approval")
@@ -1896,6 +1955,13 @@ async def products_page(request: Request) -> None:
                 parameters["definition_id"] = relation.value if relation else None
                 target = bulk_picked.get("relation_target")
                 parameters["target"] = target.get("id") if target else None
+            elif op in ("release_for_channel", "withdraw_from_channel"):
+                channel = bulk_fields.get("channel")
+                parameters["channel"] = channel.value if channel else None
+                if op == "release_for_channel":
+                    status_select = bulk_fields.get("release_status")
+                    if status_select is not None and status_select.value:
+                        parameters["release_status"] = str(status_select.value)
 
             if op in _APPROVAL_MODIFIER_OPS:
                 approval = bulk_fields.get("send_for_approval")
@@ -2405,13 +2471,23 @@ async def products_page(request: Request) -> None:
                     active["incomplete"] = bool(event.value)
                     await reload_grid()
 
+                async def on_channel_change(event) -> None:
+                    """Filters the grid to the objects released for one channel."""
+                    value = str(event.value or "")
+                    if value == (active["released_for"] or ""):
+                        return
+                    active["released_for"] = value or None
+                    await reload_grid()
+
                 async def reset_filters() -> None:
                     """Clears the filter bar; the tree/category/collection stays."""
-                    active.update(incomplete=False, q=None, where=None)
+                    active.update(incomplete=False, q=None, where=None, released_for=None)
                     suppress_change["value"] = True
                     try:
                         incomplete_switch.value = False
                         search_input.value = ""
+                        if channel_filter is not None:
+                            channel_filter.value = ""
                     finally:
                         suppress_change["value"] = False
                     update_where_chip()
@@ -2600,6 +2676,18 @@ async def products_page(request: Request) -> None:
                         t("grid.filter_incomplete"), value=bool(active["incomplete"])
                     ).props("dense shrink-0")
                     incomplete_switch.on_value_change(on_incomplete_change)
+                    channel_filter = None
+                    if channels:
+                        channel_filter = (
+                            ui.select(
+                                {"": t("grid.filter_all_channels"), **channel_labels},
+                                value=active["released_for"] or "",
+                            )
+                            .props("dense filled shrink-0")
+                            .classes("w-48")
+                            .tooltip(t("grid.filter_released_for"))
+                        )
+                        channel_filter.on_value_change(on_channel_change)
                     ui.button(icon="filter_alt_off", on_click=reset_filters).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.filter_reset"))
@@ -2638,7 +2726,7 @@ async def products_page(request: Request) -> None:
                     html_columns=[
                         i
                         for i, column in enumerate(column_defs)
-                        if column["field"] in ("_status", "_completeness")
+                        if column["field"] in ("_status", "_completeness", "_releases")
                     ],
                 ).classes("w-full grow")
                 grid.on("cellValueChanged", mark_changed, ["data", "colId"])

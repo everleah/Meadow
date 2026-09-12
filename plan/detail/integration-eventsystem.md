@@ -112,6 +112,7 @@ Jede CRUD-Operation im Rust-Kern erzeugt ein **Event**, das Änderungen am Daten
 - `object.created` – neues Objekt angelegt
 - `object.updated` – Attribute oder Status geändert
 - `object.deleted` – Objekt (soft) gelöscht
+- `object.released` / `object.unreleased` – **kanalspezifische Freigabe** gesetzt/geändert bzw. zurückgezogen (`changes` tragen `channel`, `status` bzw. `previous_status`; siehe [workflow-freigaben.md](workflow-freigaben.md))
 - `reference.created` – neue Referenz erstellt
 - `reference.deleted` – Referenz entfernt
 - `attribute_definition.created` / `updated` / `deleted` – Änderungen an Attributdefinitionen

@@ -32,7 +32,13 @@ from nicegui import app, ui
 
 from meadow.frontend import auth, config, edit_queue
 from meadow.frontend.api import CoreClient, CoreError
-from meadow.frontend.display import completeness_badge, resolve_value, status_badge
+from meadow.frontend.channels import channel_label
+from meadow.frontend.display import (
+    RELEASE_STATUSES,
+    completeness_badge,
+    resolve_value,
+    status_badge,
+)
 from meadow.frontend.enums import enum_options
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -193,6 +199,10 @@ async def product_form(object_id: str) -> None:
                 enum_sets = await client.list_enum_sets(token)
             except Exception:  # noqa: BLE001 - degrade to raw enum codes
                 enum_sets = []
+            try:
+                channels = await client.list_channels(token, active=True)
+            except Exception:  # noqa: BLE001 - no channel section without a catalog
+                channels = []
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -1196,6 +1206,85 @@ async def product_form(object_id: str) -> None:
                     ui.notify(str(exc), color="negative")
             render_sections.refresh()
 
+        # --- Channels ("released for that channel") --------------------------
+        # A channel release is a workflow action, not part of the saved attribute
+        # payload: like the category edges it is written immediately
+        # (`PUT`/`DELETE /objects/{id}/releases`), so `workflow_guard` rules can
+        # veto a release. The section is hidden without a channel catalog.
+        release_state: dict[str, str] = {str(c.get("code")): "" for c in channels}
+        if channels:
+            try:
+                for row in await client.list_object_releases(token, object_id):
+                    code = str(row.get("channel") or "")
+                    if code in release_state:
+                        release_state[code] = str(row.get("status") or "")
+            except Exception:  # noqa: BLE001 - show the section as not released
+                pass
+
+        async def set_release(code: str, status: str) -> None:
+            """Releases the object for a channel (or changes the channel state)."""
+            if not status or status == release_state.get(code, ""):
+                return
+            try:
+                await client.set_object_release(token, object_id, channel=code, status=status)
+            except Exception as exc:  # noqa: BLE001 - e.g. a `workflow_guard` denial
+                ui.notify(f"{t('form.release_failed')}: {exc}", color="negative")
+            else:
+                release_state[code] = status
+                ui.notify(t("form.release_saved", channel=code, status=status), color="positive")
+            render_sections.refresh()
+
+        async def withdraw_release(code: str) -> None:
+            """Withdraws the release of one channel."""
+            try:
+                await client.withdraw_object_release(token, object_id, code)
+            except Exception as exc:  # noqa: BLE001 - show a friendly message
+                ui.notify(f"{t('form.release_failed')}: {exc}", color="negative")
+            else:
+                release_state[code] = ""
+                ui.notify(t("form.release_withdrawn", channel=code), color="positive")
+            render_sections.refresh()
+
+        def build_channels_section() -> tuple[ui.expansion, ui.column]:
+            """Renders the channel releases of the object (one row per channel)."""
+            released = sum(1 for status in release_state.values() if status)
+            state_key = "__channels__"
+            expansion = (
+                ui.expansion(
+                    f"{t('form.channels')} ({released})",
+                    value=section_state.get(state_key, False),
+                )
+                .classes("w-full")
+                .props("header-class=bg-blue-2 text-blue-9")
+            )
+            expansion.on_value_change(
+                lambda event, key=state_key: remember_section(key, bool(event.value))
+            )
+            with expansion:
+                content = ui.column().classes("w-full gap-2 p-2")
+            with expansion, content:
+                ui.label(t("form.channels_hint")).classes("text-caption text-gray-500")
+                for channel in channels:
+                    code = str(channel.get("code") or "")
+                    status = release_state.get(code, "")
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.label(channel_label(channel, locale)).classes("w-48")
+                        ui.select(
+                            {value: value for value in RELEASE_STATUSES},
+                            value=status or None,
+                            on_change=lambda event, c=code: set_release(c, str(event.value or "")),
+                        ).props(f'filled dense placeholder="{t("form.release_none")}"').classes(
+                            "w-48"
+                        ).tooltip(t("form.release_status_hint"))
+                        if status:
+                            ui.button(
+                                icon="undo",
+                                on_click=lambda c=code: withdraw_release(c),
+                            ).props("flat dense size=sm").tooltip(t("form.release_withdraw"))
+                        else:
+                            ui.icon("block").classes("text-gray-300 text-sm shrink-0")
+            return expansion, content
+
         def build_category_section(definition: dict) -> tuple[ui.expansion, ui.column]:
             """Renders the collapsible section of one category relation type."""
             def_key = definition_key(definition)
@@ -1379,6 +1468,10 @@ async def product_form(object_id: str) -> None:
                     )
                     result = build_category_section(definition)
                     jump_refs.append((title, *result))
+                # Channels (channel-specific releases) — hidden without a catalog.
+                if channels:
+                    result = build_channels_section()
+                    jump_refs.append((t("form.channels"), *result))
                 # Relations (graph edges) — always visible.
                 result = build_relations_section()
                 if result is not None:

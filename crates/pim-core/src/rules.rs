@@ -66,6 +66,53 @@ pub struct RuleSpec {
     pub script: String,
 }
 
+/// Additional context for a rule evaluation (besides object, mode, language).
+///
+/// Set for channel-specific release transitions (`release` table): the Python
+/// contract exposes them as `ctx.channel` / `ctx.release_status`, while
+/// `obj.status` keeps the **global** object status. Object status transitions
+/// use `EvaluationContext::default()`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvaluationContext<'a> {
+    /// Channel whose release is being changed.
+    pub channel: Option<&'a str>,
+    /// Target state of that channel release.
+    pub release_status: Option<&'a str>,
+}
+
+/// What to evaluate for a write operation (rule set, mode, actor, context).
+#[derive(Debug, Clone, Copy)]
+pub struct WriteEvaluation<'a> {
+    /// Rule types to run (`validation`, `computed`, `workflow_guard`, …).
+    pub rule_types: &'a [&'a str],
+    /// Evaluation mode (`save`, `transition`, `import`, `bulk`).
+    pub mode: &'a str,
+    /// Working language of the resolved view, if any.
+    pub language: Option<&'a str>,
+    /// Triggering user or system.
+    pub actor: Option<&'a str>,
+    /// Channel-release context (default for plain object writes).
+    pub context: EvaluationContext<'a>,
+}
+
+impl<'a> WriteEvaluation<'a> {
+    /// A write evaluation without channel context.
+    pub fn new(
+        rule_types: &'a [&'a str],
+        mode: &'a str,
+        language: Option<&'a str>,
+        actor: Option<&'a str>,
+    ) -> Self {
+        Self {
+            rule_types,
+            mode,
+            language,
+            actor,
+            context: EvaluationContext::default(),
+        }
+    }
+}
+
 /// Failure modes of a rule-evaluation request.
 #[derive(Debug)]
 pub enum EvaluateError {
@@ -158,6 +205,7 @@ impl RulesClient {
         mode: &str,
         language: Option<&str>,
         actor: Option<&str>,
+        context: EvaluationContext<'_>,
     ) -> Result<RuleOutcome, EvaluateError> {
         let payload = json!({
             "rules": rules,
@@ -165,6 +213,8 @@ impl RulesClient {
             "mode": mode,
             "language": language,
             "actor": actor,
+            "channel": context.channel,
+            "release_status": context.release_status,
         });
         let bytes = serde_json::to_vec(&payload)
             .map_err(|error| EvaluateError::BadReply(error.to_string()))?;
@@ -277,11 +327,15 @@ pub async fn evaluate_for_write(
     db: &Db,
     client: &RulesClient,
     object_view: &Value,
-    rule_types: &[&str],
-    mode: &str,
-    language: Option<&str>,
-    actor: Option<&str>,
+    evaluation: WriteEvaluation<'_>,
 ) -> Result<RuleOutcome, ApiError> {
+    let WriteEvaluation {
+        rule_types,
+        mode,
+        language,
+        actor,
+        context,
+    } = evaluation;
     let object_type = object_view
         .get("type")
         .and_then(Value::as_str)
@@ -291,7 +345,7 @@ pub async fn evaluate_for_write(
         return Ok(RuleOutcome::default());
     }
     match client
-        .evaluate(&rules, object_view, mode, language, actor)
+        .evaluate(&rules, object_view, mode, language, actor, context)
         .await
     {
         Ok(outcome) => {

@@ -71,6 +71,9 @@ JSON, passend zum Datenexport (MEF), mit eigenem Kopf und Sektionen.
     "languages": [
       { "code": "de", "parent": null, "label": { "de": "Deutsch", "en": "German" }, "active": true, "is_ui": true }
     ],
+    "channels": [
+      { "code": "webshop", "label": { "de": "Webshop", "en": "Web shop" }, "description": "Hauptkanal", "active": true, "position": 10 }
+    ],
     "units": [
       { "symbol": "mm", "dimension": "length", "canonical_unit": "m", "factor": 0.001, "offset": 0, "label": { "de": "Millimeter", "en": "Millimetre" }, "system": "default" }
     ],
@@ -107,6 +110,18 @@ JSON, passend zum Datenexport (MEF), mit eigenem Kopf und Sektionen.
 | `is_ui` | bool | Für UI-Sprachumschalter |
 
 `fallback_order` wird bei der Auflösung aus der Struktur abgeleitet (nicht aus dem Dokument übernommen).
+
+### 4.1a Sektion `channels` (Kanal-Katalog)
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `code` | string | Kanalcode (stabiler Schlüssel und Record-Key, z. B. `webshop`) |
+| `label` | object | Mehrsprachiges Label |
+| `description` | string? | Optionale Beschreibung |
+| `active` | bool | Im UI angeboten (Default `true`) |
+| `position` | number | Sortierposition |
+
+Kanal-**Freigaben** (`release`) sind Daten und werden **nicht** übertragen. Beim Löschen/Ersetzen blockiert eine Sektion `replace` einen Kanal, solange Freigaben auf ihn verweisen (wie bei `units` über `attribute_definition`).
 
 ### 4.2 Sektion `units` (Einheiten-Katalog)
 
@@ -246,7 +261,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 
 **Vorbedingungen:** admin/superadmin; `format_version` unterstützt; Dokument-Validierung ok.
 
-1. **Abhängigkeits-Reihenfolge:** `languages → units → attribute_groups → enum_sets → object_types → attribute_definitions → relation_definitions → business_rules`.
+1. **Abhängigkeits-Reihenfolge:** `languages → channels → units → attribute_groups → enum_sets → object_types → attribute_definitions → relation_definitions → business_rules`. Die **Kanäle** stehen wie die Sprachen früh, weil sie keine Abhängigkeiten haben; die **Freigaben selbst sind Daten** (`release`) und gehören nicht ins MCF.
 2. **Zweiphasig:**
    - **Phase 1 (Erzeugen/Aktualisieren nach stabilem Schlüssel):** je Sektion je Eintrag den stabilen Schlüssel im Ziel auflösen → `find` oder `create`. Referenzen auf noch nicht angelegte Entitäten (Forward-Referenzen: `object_type.key_attributes`/`label_attribute`, `attribute_definition.computed_rule`, `relation_definition.attributes`, `business_rule.dependencies`) werden als **ausstehend** registriert.
    - **Phase 2 (Querverweis-Auflösung):** Nachdem alle Entitäten existieren, werden die ausstehenden Referenzen auf die Ziel-IDs gemappt und an den Datensätzen aktualisiert.
@@ -255,6 +270,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 | Sektion | find/create per | Referenzen |
 |---|---|---|
 | `languages` | `code` | `parent` → Sprachcode |
+| `channels` | `code` | – (Freigaben sind Daten) |
 | `units` | `symbol` | `canonical_unit` → Symbol |
 | `attribute_groups` | `name` | `applicable_types` → Objekttyp-Name |
 | `enum_sets` | Set `name`; Optionen per `code` (im Set) | – |

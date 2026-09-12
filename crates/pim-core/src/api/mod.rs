@@ -3,6 +3,7 @@
 pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
+pub mod channels;
 pub mod config;
 pub mod connector_schema;
 pub mod connectors;
@@ -63,6 +64,14 @@ use utoipa::OpenApi;
         object_types::create_object_type,
         object_types::update_object_type,
         object_types::delete_object_type,
+        channels::list_channels,
+        channels::get_channel,
+        channels::create_channel,
+        channels::update_channel,
+        channels::delete_channel,
+        channels::list_object_releases,
+        channels::set_object_release,
+        channels::delete_object_release,
         objects::create_object,
         objects::get_object,
         objects::list_objects,
@@ -173,6 +182,10 @@ use utoipa::OpenApi;
         object_types::ListObjectTypes,
         object_types::CreateObjectType,
         object_types::UpdateObjectType,
+        channels::ListChannels,
+        channels::CreateChannel,
+        channels::UpdateChannel,
+        channels::SetRelease,
         objects::WriteObjectQuery,
         keys::ByKeyParams,
         objects::BySourceParams,

@@ -29,6 +29,11 @@ class Context:
     language: str | None = None
     mode: str = "save"
     actor: str | None = None
+    # Set for a channel-specific release transition (`release` row): the channel
+    # code and the target state of the release. `obj.status` keeps the **global**
+    # object status, so a rule can require the global release before a channel.
+    channel: str | None = None
+    release_status: str | None = None
 
 
 @dataclass

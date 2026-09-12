@@ -52,6 +52,8 @@ def evaluate(
             language=request.language,
             mode=request.mode,
             actor=request.actor,
+            channel=request.channel,
+            release_status=request.release_status,
         )
         try:
             result = execute_rule(

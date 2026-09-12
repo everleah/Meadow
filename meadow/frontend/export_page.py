@@ -26,6 +26,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.display import channel_label
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -34,7 +35,7 @@ from meadow.frontend.object_picker import open_object_picker
 #: Base fields always offered (the worker maps these onto each object row).
 BASE_FIELDS = ("id", "type", "status")
 #: The selectable export source kinds (matches the core `ExportSource.kind`).
-SOURCE_KINDS = ("type", "category", "collection", "saved_search", "selection")
+SOURCE_KINDS = ("type", "category", "collection", "saved_search", "channel", "selection")
 #: The selectable output formats (matches the core's `format`).
 FORMATS = ("csv", "xlsx", "json")
 #: Mime type per format, used for the browser download.
@@ -88,6 +89,8 @@ async def export_page(request: Request) -> None:
                 return await client.list_saved_searches(token, limit=1000)
             if coro_type == "categories":
                 return await client.list_objects(token, object_type="category", limit=1000)
+            if coro_type == "channels":
+                return await client.list_channels(token, active=True)
             if coro_type == "languages":
                 return await client.list_languages(token)
             return await client.list_attribute_definitions(token, limit=1000)
@@ -98,6 +101,7 @@ async def export_page(request: Request) -> None:
     collections = await _safe("collections")
     saved_searches = await _safe("saved_searches")
     categories = await _safe("categories")
+    channels = await _safe("channels")
     languages = await _safe("languages")
     attribute_definitions = await _safe("attribute_definitions")
 
@@ -140,6 +144,8 @@ async def export_page(request: Request) -> None:
                 return len(await client.list_objects(token, object_type=detail_value, limit=1000))
             if kind == "category":
                 return len(await client.list_objects(token, category=detail_value, limit=1000))
+            if kind == "channel":
+                return len(await client.list_objects(token, released_for=detail_value, limit=1000))
         except Exception:  # noqa: BLE001 - count is best-effort
             return None
         return None
@@ -153,6 +159,8 @@ async def export_page(request: Request) -> None:
             return {str(c.get("id")): _obj_name(c) for c in collections}
         if kind == "saved_search":
             return {str(s.get("id")): _obj_name(s) for s in saved_searches}
+        if kind == "channel":
+            return {str(c.get("code")): channel_label(c, locale) for c in channels}
         return {}
 
     def _source_payload(kind: str, detail_value: str) -> dict:
@@ -164,6 +172,8 @@ async def export_page(request: Request) -> None:
             return {"kind": "collection", "id": detail_value}
         if kind == "saved_search":
             return {"kind": "saved_search", "id": detail_value}
+        if kind == "channel":
+            return {"kind": "channel", "channel": detail_value}
         return {"kind": "selection", "object_ids": _split_ids(detail_value)}
 
     def _selected_fields() -> list[str]:

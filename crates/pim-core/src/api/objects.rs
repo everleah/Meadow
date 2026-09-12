@@ -112,6 +112,18 @@ pub struct ListObjects {
     /// (via `collection_member`; flat, no hierarchy).
     #[serde(default)]
     pub collection: Option<String>,
+    /// Only return objects that are **released for this channel**: they carry a
+    /// `release` row for the channel code (or `channel:<code>`) whose state
+    /// matches `release_status` (default `published`).
+    #[serde(default)]
+    pub released_for: Option<String>,
+    /// State a channel release must have for `released_for` (default `published`).
+    #[serde(default)]
+    pub release_status: Option<String>,
+    /// Attach the channel releases of every object as
+    /// `releases: [{channel, status}]` (used by the grid's release column).
+    #[serde(default)]
+    pub releases: bool,
     /// Comma-separated object ids (bare keys or full `object:<key>`) to
     /// return; used for grid selections and saved-search results.
     #[serde(default)]
@@ -167,6 +179,12 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
         )));
     }
     Ok(key)
+}
+
+/// Splits an `object:<key>` id and verifies the table (shared with the
+/// channel-release endpoints).
+pub(crate) fn parse_object_key(id: &str) -> Result<&str, ApiError> {
+    parse_key(id, TABLE)
 }
 
 /// Creates a new object with a `depends_on` edge to the universal root.
@@ -238,10 +256,12 @@ pub async fn create_object(
         &state.db,
         &state.rules,
         &candidate,
-        &["validation", "computed"],
-        "save",
-        locale,
-        Some(&user_id),
+        crate::rules::WriteEvaluation::new(
+            &["validation", "computed"],
+            "save",
+            locale,
+            Some(&user_id),
+        ),
     )
     .await?;
     crate::rules::enforce(&outcome)?;
@@ -333,8 +353,9 @@ pub async fn create_object(
 ///
 /// `DELETE /objects/{id}` marks the object and every `depends_on` descendant
 /// as deleted (`deleted_at`), removes all reference edges (composition and
-/// aggregation) that touch a deleted object so the graph stays clean, and
-/// writes an `object.deleted` outbox event. The universal root cannot be
+/// aggregation) and the channel releases that touch a deleted object so the
+/// graph and the release catalog stay clean, and writes an `object.deleted`
+/// outbox event. The universal root cannot be
 /// deleted. Aggregation edges never cascade — they are removed, but the
 /// connected objects stay intact.
 #[utoipa::path(
@@ -387,14 +408,18 @@ pub async fn delete_object(
     let cascade_keys = crate::api::references::subtree_keys(&state.db, &id).await?;
     let object_ids: Vec<String> = cascade_keys.iter().map(|k| format!("object:{k}")).collect();
 
-    // Statements: BEGIN(0), LET(1), UPDATE(2), DELETE refs(3), [CREATE outbox(4)],
-    // COMMIT(4|5).
+    // Statements: BEGIN(0), LET(1), UPDATE(2), DELETE refs(3), DELETE releases(4),
+    // [CREATE outbox(5)], COMMIT(5|6).
+    //
+    // The releases are deleted per record (`FOR … WHERE object_id = $r`) because
+    // `object_id IN $recs` does not match the typed `record<object>` field.
     let sql = if emit_events {
         "
         BEGIN TRANSACTION;
         LET $recs = array::map($keys, |$k| type::record('object', $k));
         UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
         DELETE reference WHERE in IN $recs OR out IN $recs;
+        FOR $r IN $recs { DELETE release WHERE object_id = $r; };
         CREATE outbox_event CONTENT $outbox;
         COMMIT TRANSACTION;
         "
@@ -405,6 +430,7 @@ pub async fn delete_object(
         LET $recs = array::map($keys, |$k| type::record('object', $k));
         UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
         DELETE reference WHERE in IN $recs OR out IN $recs;
+        FOR $r IN $recs { DELETE release WHERE object_id = $r; };
         COMMIT TRANSACTION;
         "
         .to_owned()
@@ -652,6 +678,12 @@ pub async fn list_objects(
             "id IN array::map($collection_member_ids, |$k| type::record('object', $k))".to_owned(),
         );
     }
+    if params.released_for.is_some() {
+        conditions.push(
+            "id IN (SELECT VALUE object_id FROM release WHERE channel = $released_for AND status = $release_status)"
+                .to_owned(),
+        );
+    }
     // The category filters work on a single category relation type: the built-in
     // primary type by default, or the one requested via `definition_id`. An
     // explicit `definition_id` is always validated, even if no filter uses it.
@@ -710,8 +742,15 @@ pub async fn list_objects(
     } else {
         format!(" WHERE {}", conditions.join(" AND "))
     };
+    // The channel releases are fetched with a correlated subquery (one query,
+    // no per-object round trip) and only when the caller asks for them.
+    let projection = if params.releases {
+        "*, (SELECT VALUE { channel: channel, status: status } FROM release WHERE object_id = $parent.id ORDER BY channel) AS releases"
+    } else {
+        "*"
+    };
     let sql = format!(
-        "SELECT * FROM object{where_clause} ORDER BY created_at DESC LIMIT $limit START $start"
+        "SELECT {projection} FROM object{where_clause} ORDER BY created_at DESC LIMIT $limit START $start"
     );
 
     let mut query = state.db.inner().query(sql);
@@ -736,6 +775,22 @@ pub async fn list_objects(
     if let Some(collection) = &params.collection {
         let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;
         query = query.bind(("collection_member_ids", keys));
+    }
+    if let Some(released_for) = &params.released_for {
+        query = query.bind((
+            "released_for",
+            crate::api::channels::channel_code(released_for),
+        ));
+        query = query.bind((
+            "release_status",
+            params
+                .release_status
+                .as_deref()
+                .map(str::trim)
+                .filter(|status| !status.is_empty())
+                .unwrap_or("published")
+                .to_owned(),
+        ));
     }
     if !object_ids.is_empty() {
         query = query.bind(("object_ids", object_ids));
@@ -1188,10 +1243,12 @@ async fn apply_object_update(
         &state.db,
         &state.rules,
         &candidate,
-        &["validation", "computed"],
-        "save",
-        locale,
-        Some(&user_id),
+        crate::rules::WriteEvaluation::new(
+            &["validation", "computed"],
+            "save",
+            locale,
+            Some(&user_id),
+        ),
     )
     .await?;
     crate::rules::enforce(&outcome)?;
@@ -1213,10 +1270,12 @@ async fn apply_object_update(
             &state.db,
             &state.rules,
             &candidate,
-            &["workflow_guard"],
-            "transition",
-            locale,
-            Some(&user_id),
+            crate::rules::WriteEvaluation::new(
+                &["workflow_guard"],
+                "transition",
+                locale,
+                Some(&user_id),
+            ),
         )
         .await?;
         crate::rules::enforce(&guard)?;
@@ -1458,19 +1517,21 @@ pub struct BulkObjectRequest {
     /// Operation key: `set_attribute` | `clear_attribute` | `change_status` |
     /// `send_for_approval` | `add_category` | `remove_category` |
     /// `add_relation` | `remove_relation` | `change_parent` | `replace_text` |
-    /// `consolidate_inheritance` | `delete`.
+    /// `consolidate_inheritance` | `release_for_channel` |
+    /// `withdraw_from_channel` | `delete`.
     pub op: String,
     /// Explicit object ids (full record ids) the operation applies to. The
     /// frontend resolves the selection (all filter hits / page / checked rows)
     /// into this list; the core stays lean and does not re-resolve a filter.
     #[serde(default)]
     pub object_ids: Vec<String>,
-    /// Op-specific parameters (attribute name/value, status, category, parent).
+    /// Op-specific parameters (attribute name/value, status, category, parent,
+    /// channel).
     #[serde(default)]
     pub parameters: Value,
 }
 
-const BULK_OPS: [&str; 12] = [
+const BULK_OPS: [&str; 14] = [
     "set_attribute",
     "clear_attribute",
     "change_status",
@@ -1482,6 +1543,8 @@ const BULK_OPS: [&str; 12] = [
     "change_parent",
     "replace_text",
     "consolidate_inheritance",
+    "release_for_channel",
+    "withdraw_from_channel",
     "delete",
 ];
 

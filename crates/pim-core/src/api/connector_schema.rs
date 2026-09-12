@@ -375,6 +375,11 @@ fn json_export_spec() -> TypeSpec {
                     .help("connector_fields.json_export.locales.help")
                     .options_from("languages")
                     .default(json!([])),
+                Field::new("channel", FieldKind::String, Widget::Select)
+                    .label("connector_fields.json_export.channel.label")
+                    .help("connector_fields.json_export.channel.help")
+                    .options_from("channels")
+                    .default(json!("")),
                 Field::new(
                     "options.email_to",
                     FieldKind::StringList,
@@ -847,7 +852,7 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            vec!["format", "fields", "locales", "options.email_to"]
+            vec!["format", "fields", "locales", "channel", "options.email_to"]
         );
 
         assert!(validate("json_import", &object(json!({"anything": true}))).is_empty());
@@ -873,7 +878,13 @@ mod tests {
         apply_defaults("json_export", &mut parameters);
         assert_eq!(
             Value::Object(parameters),
-            json!({"format": "csv", "fields": [], "locales": [], "options": {"email_to": []}})
+            json!({
+                "format": "csv",
+                "fields": [],
+                "locales": [],
+                "channel": "",
+                "options": {"email_to": []}
+            })
         );
     }
 

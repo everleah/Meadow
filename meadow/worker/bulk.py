@@ -37,6 +37,13 @@ created from every selected object to the target (the stored direction is
 `in` = source, `out` = target). Both are **idempotent** – an existing edge (or a
 collection membership created by the `/collections/{id}/members` endpoint, which
 also maintains `rank`/`added_at`) is reported as `skipped` instead of duplicated.
+
+`release_for_channel` / `withdraw_from_channel` set or remove the
+**channel-specific release** of the selection (`parameters.channel`, optional
+`parameters.release_status`, default `published`). Both are **idempotent**: a
+release that already is in the requested state (or an absent release when
+withdrawing) is reported as `skipped`. The channel state is written by the core
+(`PUT`/`DELETE /objects/{id}/releases`), so `workflow_guard` rules apply there.
 """
 
 from __future__ import annotations
@@ -61,11 +68,24 @@ _NON_TEXT_FIELDS = frozenset({"id", "type", "status", "parent", "key"})
 DEFAULT_APPROVAL_STATUS = "in_review"
 
 #: Operations that must not get an extra approval transition afterwards.
-_NO_APPROVAL_OPS = frozenset({"change_status", "send_for_approval", "delete"})
+_NO_APPROVAL_OPS = frozenset(
+    {"change_status", "send_for_approval", "delete", "release_for_channel", "withdraw_from_channel"}
+)
 
 #: Operations that report "nothing to do" for an object as `skipped` (they
 #: return `changed: 0` in that case).
-_SKIPPABLE_OPS = frozenset({"replace_text", "add_relation", "remove_relation"})
+_SKIPPABLE_OPS = frozenset(
+    {
+        "replace_text",
+        "add_relation",
+        "remove_relation",
+        "release_for_channel",
+        "withdraw_from_channel",
+    }
+)
+
+#: Default state of a channel release (`published` = released for that channel).
+DEFAULT_RELEASE_STATUS = "published"
 
 #: Roles a relation type can have (see `plan/detail/relationen.md`).
 ROLE_COMPOSITION = "composition"
@@ -152,6 +172,7 @@ def build_bulk_handler(
         replacements = 0
         approvals = 0
         relations = 0
+        releases = 0
         # Opt-in approval transition appended to a data-changing operation.
         wants_approval = bool(op_params.get("send_for_approval")) and op not in _NO_APPROVAL_OPS
         approval_status = str(op_params.get("approval_status") or DEFAULT_APPROVAL_STATUS)
@@ -176,6 +197,7 @@ def build_bulk_handler(
                     succeeded += 1
                     replacements += int(detail.get("replacements") or 0)
                     relations += int(detail.get("added") or 0) + int(detail.get("removed") or 0)
+                    releases += int(detail.get("released") or 0) + int(detail.get("withdrawn") or 0)
                     approvals += 1 if detail.get("approval") else 0
             except Exception as exc:  # noqa: BLE001 - isolate per-object failures
                 record["status"] = "error"
@@ -185,13 +207,14 @@ def build_bulk_handler(
 
         logger.info(
             "bulk_operation %s: %d ok, %d skipped, %d failed, %d relations, "
-            "%d approvals of %d objects",
+            "%d approvals, %d releases of %d objects",
             op,
             succeeded,
             skipped,
             failed,
             relations,
             approvals,
+            releases,
             len(object_ids),
         )
         return {
@@ -202,6 +225,7 @@ def build_bulk_handler(
             "failed": failed,
             "replacements": replacements,
             "relations": relations,
+            "releases": releases,
             "approvals": approvals,
             "results": results,
         }
@@ -272,6 +296,12 @@ async def _apply(
         # `new_status` (not `status`) keeps the per-object record status intact.
         return {"new_status": status}
 
+    if op in ("release_for_channel", "withdraw_from_channel"):
+        channel = str(params.get("channel") or "")
+        if not channel:
+            raise RuntimeError("`parameters.channel` is required")
+        return await _change_release(active, core_url, op, object_id, channel, params)
+
     if op == "send_for_approval":
         status = str(params.get("approval_status") or DEFAULT_APPROVAL_STATUS)
         await set_status(active, core_url, object_id, status)
@@ -330,6 +360,54 @@ async def set_status(
     """Transitions one object into `status` (workflow_guard rules apply)."""
     response = await active.patch(f"{core_url}/objects/{object_id}", json={"status": status})
     response.raise_for_status()
+
+
+async def _current_release(
+    active: httpx.AsyncClient,
+    core_url: str,
+    object_id: str,
+    channel: str,
+) -> str | None:
+    """Returns the stored release state of one object/channel pair (None = none)."""
+    response = await active.get(f"{core_url}/objects/{object_id}/releases")
+    response.raise_for_status()
+    for row in response.json():
+        if str(row.get("channel")) == channel:
+            return str(row.get("status") or "")
+    return None
+
+
+async def _change_release(
+    active: httpx.AsyncClient,
+    core_url: str,
+    op: str,
+    object_id: str,
+    channel: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Releases an object for a channel or withdraws that release (idempotent).
+
+    Both operations report `changed: 0` when the release already is in the
+    requested state, so the run summary counts them as `skipped` instead of
+    duplicated writes.
+    """
+    current = await _current_release(active, core_url, object_id, channel)
+    if op == "release_for_channel":
+        status = str(params.get("release_status") or DEFAULT_RELEASE_STATUS)
+        if current == status:
+            return {"channel": channel, "changed": 0}
+        response = await active.put(
+            f"{core_url}/objects/{object_id}/releases",
+            json={"channel": channel, "status": status},
+        )
+        response.raise_for_status()
+        return {"channel": channel, "release_status": status, "released": 1, "changed": 1}
+    # withdraw_from_channel
+    if current is None:
+        return {"channel": channel, "changed": 0}
+    response = await active.delete(f"{core_url}/objects/{object_id}/releases/{channel}")
+    response.raise_for_status()
+    return {"channel": channel, "withdrawn": 1, "changed": 1}
 
 
 async def request_approval(

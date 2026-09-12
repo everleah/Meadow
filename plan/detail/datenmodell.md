@@ -556,11 +556,52 @@ Persistierte Konnektor-Konfiguration: die Datenbank ist die dauerhafte Quelle de
 - `name` ist eindeutig und dient zugleich als Konnektor-Schlüssel des Workers; `parameters` ist ein freies JSON-Objekt (je Konnektor-Typ anders belegt).
 - Verwaltung über `/connectors` (Admin) bzw. `GET /connectors` (Worker, `X-Api-Key`). Der Worker lädt Änderungen per **Live-Reload** nach (`serve_webhooks_dynamic`, Intervall `WEBHOOK_RELOAD_INTERVAL_S`, Standard 30 s) – ein Worker-Neustart ist nicht erforderlich.
 
+### Tabelle `channel` (Kanal-Katalog)
+
+Ein **Kanal** ist eine Ausgabestrecke (Webshop, Printkatalog, Marktplatz) und eine **Konfigurationsentität** wie Einheiten oder Enum-Sets — kein Fachobjekt. Er ist die Bezugsgröße für kanalspezifische Freigaben und (später) für kanalspezifische Vollständigkeit; für Exporte wirkt er als Filter. Details: [workflow-freigaben.md](workflow-freigaben.md).
+
+```json
+{
+    "id": "channel:webshop",
+    "code": "webshop",            // stabiler Schlüssel (Record-Key), eindeutig, unveränderlich
+    "label": { "de": "Webshop", "en": "Web shop" },
+    "description": "Hauptkanal",   // optional
+    "active": true,
+    "position": 10,
+    "created_at": "2026-09-12T10:00:00Z",
+    "updated_at": "2026-09-12T10:00:00Z",
+    "updated_by": "user_admin"
+}
+```
+
+- Der **Record-Key ist der `code`** (wie bei `object_type`); Referenzen (z. B. in `release`) speichern den Code, damit Konfigurationsdokumente und Filter portabel bleiben.
+- `label` ist mehrsprachig (Sprach-Fallback-Kette); `code` ist unveränderlich — für Exporte und den MCF-Import der stabile Schlüssel.
+- Unique-Index auf `code`, Sortier-Index auf `position`; die Sektion `channels` gehört zum [MCF-Export/-Import](konfiguration-export-import.md).
+
+### Tabelle `release` (kanalspezifische Freigaben)
+
+Die kanalspezifische Freigabe eines Objekts: **eine Zeile pro `(object, channel)`** mit dem Kanalzustand. Die Existenz der Zeile bedeutet „dieser Kanal ist bewertet/gepflegt“, `status: "published"` heißt „für den Kanal veröffentlicht“.
+
+```json
+{
+    "id": "release:01M2AXFGPMZS2ASEPC9M50CYS4",
+    "object_id": "object:01M2AXFGPMZS2ASEPC9M50CYS4",  // nativer Record (record<object>)
+    "channel": "webshop",                              // Code des Kanals
+    "status": "published",                             // Zustandswert des Workflows (nicht validiert)
+    "released_at": "2026-09-12T13:39:00Z",
+    "released_by": "user:admin"
+}
+```
+
+- **Eindeutigkeit** über `(object_id, channel)` (Unique-Index); ein erneutes Setzen **ersetzt** die Zeile (Delete + Create in einer Transaktion), damit der Index immer hält.
+- **Zurückziehen** = Zeile löschen; beim **Löschen des Objekts** werden seine Freigaben mitentfernt (Kaskade wie bei den `reference`-Kanten).
+- `object_id` ist ein **nativer Record**, damit der Filter `GET /objects?released_for=<code>` eine Subquery (`SELECT VALUE object_id FROM release …`) ist; `channel` ist der **Code** (kein Record), damit Kanäle portabel referenziert werden.
+- Indizes: `(object_id, channel)` unique und `(channel, status)` (Filter „für Kanal X veröffentlicht“). Details, Regeln und API: [workflow-freigaben.md](workflow-freigaben.md).
+
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
 - **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.
 - **`collection`**: Objekttyp (`type: "collection"`) für materialisierte Ergebnislisten auf Basis gespeicherter Suchen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.
-- **`release`**: Eigene Tabelle für kanalspezifische Freigaben (Phase 9, siehe [workflow-freigaben.md](workflow-freigaben.md)).
 
 ## Indizes & Suche
 

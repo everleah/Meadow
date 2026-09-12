@@ -201,6 +201,9 @@ class CoreClient:
         missing_required: bool = False,
         ids: list[str] | None = None,
         where: str | None = None,
+        released_for: str | None = None,
+        release_status: str | None = None,
+        releases: bool = False,
         locale: str | None = None,
         resolve_inheritance: bool = False,
         limit: int = 100,
@@ -214,7 +217,10 @@ class CoreClient:
         ``category``/``uncategorized`` (default: the built-in primary type); with
         ``collection`` to objects that are members of the materialized collection
         (flat, no hierarchy); with ``uncategorized`` to objects with no category
-        assignment; with ``ids`` to exactly those objects
+        assignment; with ``released_for`` to objects **released for that channel**
+        (``release_status``, default ``published``); with ``releases`` the response
+        carries the channel releases of every object; with ``ids`` to exactly those
+        objects
         (used by the grid search). With ``where`` (a compact JSON document of the
         query DSL — the grid's advanced search) the core renders the condition
         tree server-side against the search field catalog. With ``locale``, each
@@ -243,6 +249,12 @@ class CoreClient:
             params["ids"] = ",".join(ids)
         if where:
             params["where"] = where
+        if released_for:
+            params["released_for"] = released_for
+        if release_status:
+            params["release_status"] = release_status
+        if releases:
+            params["releases"] = "true"
         if locale:
             params["locale"] = locale
         if resolve_inheritance:
@@ -2022,6 +2034,133 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def list_channels(
+        self,
+        token: str,
+        *,
+        active: bool | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Lists the channel catalog (``GET /channels``)."""
+        params: dict[str, str] = {"limit": str(limit)}
+        if active is not None:
+            params["active"] = "true" if active else "false"
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/channels",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def create_channel(
+        self,
+        token: str,
+        *,
+        code: str,
+        label: dict | None = None,
+        description: str | None = None,
+        active: bool = True,
+        position: int = 0,
+    ) -> dict:
+        """Creates a channel (``POST /channels``, admin)."""
+        payload: dict[str, object] = {"code": code, "active": active, "position": position}
+        if label:
+            payload["label"] = label
+        if description:
+            payload["description"] = description
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/channels",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_channel(
+        self,
+        token: str,
+        channel_id: str,
+        *,
+        label: dict | None = None,
+        description: str | None = None,
+        active: bool | None = None,
+        position: int | None = None,
+    ) -> dict:
+        """Partially updates a channel (``PATCH /channels/{id}``, admin)."""
+        payload: dict[str, object] = {}
+        if label is not None:
+            payload["label"] = label
+        if description is not None:
+            payload["description"] = description
+        if active is not None:
+            payload["active"] = active
+        if position is not None:
+            payload["position"] = position
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/channels/{channel_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_channel(self, token: str, channel_id: str) -> None:
+        """Deletes a channel (``DELETE /channels/{id}``, admin; 409 while in use)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/channels/{channel_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def list_object_releases(self, token: str, object_id: str) -> list[dict]:
+        """Lists the channel releases of an object (``GET /objects/{id}/releases``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}/releases",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def set_object_release(
+        self,
+        token: str,
+        object_id: str,
+        *,
+        channel: str,
+        status: str,
+    ) -> dict:
+        """Sets or changes a channel release (``PUT /objects/{id}/releases``)."""
+        async with _api_client() as client:
+            response = await client.put(
+                f"{self.base_url}/objects/{object_id}/releases",
+                json={"channel": channel, "status": status},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def withdraw_object_release(self, token: str, object_id: str, channel: str) -> None:
+        """Withdraws a channel release (``DELETE /objects/{id}/releases/{channel}``)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/objects/{object_id}/releases/{channel}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def list_enum_sets(self, token: str) -> list[dict]:
         """Lists enum sets with their options resolved (``GET /enum-sets``)."""

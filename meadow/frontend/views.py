@@ -7,6 +7,7 @@ from nicegui import app, ui
 from meadow.frontend import (
     attribute_definitions,  # noqa: F401  (registers the /attribute-definitions page)
     categories,  # noqa: F401  (registers the /categories page)
+    channels,  # noqa: F401  (registers the /channels page)
     config,
     config_page,  # noqa: F401  (registers the /config page)
     connectors,  # noqa: F401  (registers the /connectors page)
@@ -51,6 +52,7 @@ _IMPLEMENTED_ROUTES = {
     "/object-types",
     "/relation-definitions",
     "/enum-sets",
+    "/channels",
     "/config",
     "/export",
     "/import",

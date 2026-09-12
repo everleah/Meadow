@@ -715,7 +715,14 @@ pub async fn dry_run_rule(
     };
     let outcome = state
         .rules
-        .evaluate(&[spec], &candidate, mode, None, Some(&claims.sub))
+        .evaluate(
+            &[spec],
+            &candidate,
+            mode,
+            None,
+            Some(&claims.sub),
+            crate::rules::EvaluationContext::default(),
+        )
         .await
         .map_err(|error| ApiError::unavailable(format!("rule service unavailable: {error}")))?;
 
@@ -865,6 +872,7 @@ pub async fn test_batch_rule(
                 mode,
                 None,
                 Some(&claims.sub),
+                crate::rules::EvaluationContext::default(),
             )
             .await
             .map_err(|error| ApiError::unavailable(format!("rule service unavailable: {error}")))?;

@@ -147,6 +147,7 @@ async def connectors_page() -> None:
         "object_types": [],
         "attribute_names": [],
         "languages": [],
+        "channels": [],
     }
     try:
         object_types = await client.list_object_types(token, limit=1000)
@@ -168,6 +169,13 @@ async def connectors_page() -> None:
             str(item.get("code"))
             for item in languages
             if item.get("active") and item.get("code") not in (None, "root")
+        ]
+    except Exception:  # noqa: BLE001 - the picker then only offers entered values
+        pass
+    try:
+        channels = await client.list_channels(token, active=True)
+        option_sources["channels"] = [
+            str(item.get("code")) for item in channels if item.get("code")
         ]
     except Exception:  # noqa: BLE001 - the picker then only offers entered values
         pass

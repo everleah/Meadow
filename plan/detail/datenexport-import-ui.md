@@ -39,7 +39,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 
 | Schritt | Auswahl |
 |---|---|
-| Quelle | Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **aktuelle Grid-Auswahl/Filter** |
+| Quelle | Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **Kanal (für den Kanal freigegebene Objekte)** · **aktuelle Grid-Auswahl/Filter** |
 | Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; Checkbox-Auswahltabelle mit Spalten-Reihenfolge / „alle auswählen" |
 | Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) |
 | Sprache | Eine oder **mehrere** Locales (Fallback-Kette); pro Sprache eine Spalte `<attribut>_<code>` |
@@ -63,7 +63,7 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
 ```json
 {
   "source": {
-    "kind": "collection" | "type" | "category" | "saved_search" | "selection",
+    "kind": "collection" | "type" | "category" | "saved_search" | "channel" | "selection",
     "id": "<collection|saved_search id>",
     "type": "product",
     "category": "<category id>",
@@ -78,7 +78,7 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
 
 - **Vorgaben aus dem `json_export`-Konnektor (Stage 2b, implementiert):** `format`, `fields`, `locales` und `options.email_to` sind optional — fehlen sie in der Anfrage, zieht der Kern die Werte des ersten aktivierten `json_export`-Konnektors (Profil). Ohne Konnektor bleibt `format` bei `json` und der Worker leitet die Felder wie bisher ab. Analog füllt `POST /imports` `match_by_key`/`match_by_id`/`emit_events`/`source` aus dem `json_import`-Profil.
 
-- **`source.kind`:** Bestimmt die Auflösung der Objektmenge. `selection` = Grid-Auswahl (explizite `object_ids`).
+- **`source.kind`:** Bestimmt die Auflösung der Objektmenge. `selection` = Grid-Auswahl (explizite `object_ids`); `channel` = Objekte, die für `source.channel` freigegeben sind (optional `source.release_status`, Default `published`; der Kern filtert über `?released_for=`).
 - **Auflösung:**
   - `collection` → `GET /collections/{id}/members` (nur Mitglieder).
   - `type` → `GET /objects?type=<type>`.

@@ -21,7 +21,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `konnektor-konfiguration.md` — schema-driven connector configuration forms (extension of section 7 & 11; stages 1–2 implemented, stage 3 sketched in §14)
   - `konfiguration-export-import.md` — configuration export & import (MCF, extension of the data export/import, section 7)
   - `datenexport-import-ui.md` — UI-driven data export & import for normal users (extension of sections 7 & 11)
-  - `workflow-freigaben.md` — workflow & releases (section 8)
+  - `workflow-freigaben.md` — workflow, approvals & channel-specific releases (section 8)
   - `business-rules.md` — Business Rules: Python scripting, sandbox, execution & lifecycle (section 8)
   - `benutzer-gruppen-rechte.md` — users, groups & permissions (section 9)
   - `gespeicherte-suchen-collections.md` — saved searches & collections (section 10)

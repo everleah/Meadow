@@ -174,6 +174,39 @@ DEFINE FIELD OVERWRITE updated_at ON TABLE unit TYPE datetime DEFAULT time::now(
 DEFINE INDEX IF NOT EXISTS idx_unit_symbol ON TABLE unit FIELDS symbol UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_unit_dimension ON TABLE unit FIELDS dimension;
 
+-- Channels: output channels (webshop, print catalog, marketplace) as a managed
+-- configuration catalog. A channel is referenced by its stable `code` (not by
+-- the record id) so that configuration documents (MCF) and filters stay
+-- portable. See `plan/detail/workflow-freigaben.md`.
+DEFINE TABLE IF NOT EXISTS channel;
+DEFINE FIELD IF NOT EXISTS code ON TABLE channel TYPE string;
+DEFINE FIELD IF NOT EXISTS label ON TABLE channel TYPE object;
+DEFINE FIELD IF NOT EXISTS description ON TABLE channel TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS active ON TABLE channel TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS position ON TABLE channel TYPE int;
+DEFINE FIELD OVERWRITE created_at ON TABLE channel TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE channel TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE channel TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_channel_code ON TABLE channel FIELDS code UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_channel_position ON TABLE channel FIELDS position;
+
+-- Releases: the channel-specific approval state of an object. One row per
+-- (object, channel) carries the channel state (`status`, same vocabulary as the
+-- object status); the row's existence means "the channel is assessed for this
+-- object", `status = 'published'` means "released for that channel".
+-- `object_id` is a native record so the `?released_for=` filter is a subquery.
+DEFINE TABLE IF NOT EXISTS release;
+DEFINE FIELD IF NOT EXISTS object_id ON TABLE release TYPE record<object>;
+DEFINE FIELD IF NOT EXISTS channel ON TABLE release TYPE string;
+DEFINE FIELD IF NOT EXISTS status ON TABLE release TYPE string;
+DEFINE FIELD IF NOT EXISTS released_at ON TABLE release TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS released_by ON TABLE release TYPE option<string>;
+DEFINE FIELD OVERWRITE created_at ON TABLE release TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE release TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE release TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_release_object_channel ON TABLE release FIELDS object_id, channel UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_release_channel_status ON TABLE release FIELDS channel, status;
+
 -- Users: technical table, separate from business objects.
 DEFINE TABLE IF NOT EXISTS user;
 DEFINE FIELD IF NOT EXISTS username ON TABLE user TYPE string;

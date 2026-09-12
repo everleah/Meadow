@@ -20,6 +20,10 @@ use crate::error::ApiError;
 pub const EVENT_OBJECT_CREATED: &str = "object.created";
 pub const EVENT_OBJECT_UPDATED: &str = "object.updated";
 pub const EVENT_OBJECT_DELETED: &str = "object.deleted";
+/// A channel-specific release was set or changed (`release` row written).
+pub const EVENT_OBJECT_RELEASED: &str = "object.released";
+/// A channel-specific release was withdrawn (`release` row deleted).
+pub const EVENT_OBJECT_UNRELEASED: &str = "object.unreleased";
 pub const EVENT_REFERENCE_CREATED: &str = "reference.created";
 pub const EVENT_REFERENCE_DELETED: &str = "reference.deleted";
 pub const EVENT_ATTRIBUTE_DEFINITION_CREATED: &str = "attribute_definition.created";

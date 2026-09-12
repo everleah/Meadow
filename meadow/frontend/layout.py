@@ -36,6 +36,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.object_types", "/object-types", True),
     ("nav.relation_definitions", "/relation-definitions", True),
     ("nav.enum_sets", "/enum-sets", True),
+    ("nav.channels", "/channels", True),
     ("nav.saved_searches", "/saved-searches", True),
     ("nav.config", "/config", True),
     ("nav.system_settings", "/system-settings", True),
