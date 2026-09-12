@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 10 ([Gespeicherte Suchen & Collections](../meadow-pim-architektur.md#10-gespeicherte-suchen--materialisierte-collections)) und Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), aufbauend auf Phase 9, Punkt 1
-- **Stand:** **Stage A + B umgesetzt** (2026-09-11) — Feldkatalog (`GET /search-fields`), Validierung mit Pfadmeldungen, DSL-Erweiterung (UND/ODER-Baum + `between`), Formular (`meadow/frontend/search_form.py`), Vorschau (`POST /saved-searches/preview`), Referenzen, Sortierung und Zusammenfassungsspalte sind verifiziert; bestehende Suchen/Collections wurden gelöscht und neu angelegt (keine Migration). **Stage C** (Tiefe > 4, `not_between`, Volltext je Feld, erweiterte Suche im Grid) bleibt offen. Die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
+- **Stand:** **Stage A + B umgesetzt** (2026-09-11) — Feldkatalog (`GET /search-fields`), Validierung mit Pfadmeldungen, DSL-Erweiterung (UND/ODER-Baum + `between`), Formular (`meadow/frontend/search_form.py`), Vorschau (`POST /saved-searches/preview`), Referenzen, Sortierung und Zusammenfassungsspalte sind verifiziert; bestehende Suchen/Collections wurden gelöscht und neu angelegt (keine Migration). **Stage C umgesetzt** (2026-09-11): erweiterte Suche im Grid (`GET /objects?where=…`), Tiefe 6 und `not_between`. **Volltext je Feld** ist bewusst **nicht** Teil von Stage C, sondern als zukünftige Phase-9-Entwicklung dokumentiert (Abschnitt 12). Die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
 
 **Getroffene Entscheidungen:**
 
@@ -14,16 +14,17 @@
 - **Regel:** Jedes im Katalog angebotene Feld/Operator-Paar wird vom Kern ausgeführt, und jeder ausgeführte Operator steht im Katalog (sonst ist das Formular Kosmetik).
 - **Volltext bleibt global:** Der Index liegt auf `object.attributes`; eine Feld-/Sprachauswahl wird nicht angeboten, weil sie keine Wirkung hätte (eine echte Einschränkung wäre ein Index je Attribut — nicht Teil dieses Vorhabens).
 
-## 0. Umsetzungsstand (Stages A + B, 2026-09-11)
+## 0. Umsetzungsstand (Stages A + B + C, 2026-09-11)
 
 | Baustein | Ort |
 |---|---|
-| Feldkatalog, Validierung, Normalisierung, Zusammenfassung | `crates/pim-core/src/api/search_schema.rs` (18 Unit-Tests) |
-| Endpunkte `GET /search-fields`, `POST /saved-searches/preview` | `crates/pim-core/src/api/saved_searches.rs` (Routen in `app.rs`, OpenAPI in `api/mod.rs`) |
-| DSL (`where`-Baum, `between`), Ausführen, Validierung in Schreiben/Ausführen/Preview/Collection-Refresh | `crates/pim-core/src/api/saved_searches.rs` (Renderer mit 5 Unit-Tests) |
-| Formular-Helfer + Gruppen-Editor | `meadow/frontend/search_form.py` |
+| Feldkatalog, Validierung, Normalisierung, Zusammenfassung, **Filter-Renderer** | `crates/pim-core/src/api/search_schema.rs` |
+| Endpunkte `GET /search-fields`, `POST /saved-searches/preview`, `GET /objects?where=…` | `crates/pim-core/src/api/saved_searches.rs`, `objects.rs` (Routen in `app.rs`, OpenAPI in `api/mod.rs`) |
+| DSL (`where`-Baum, `between`/`not_between`), Ausführen, Sortierung | `crates/pim-core/src/api/saved_searches.rs` |
+| Formular-Helfer + Gruppen-Editor (wiederverwendet im Grid) | `meadow/frontend/search_form.py` |
 | Dialog (Tabs Formular/JSON, Vorschau, Hinweis, Zusammenfassungsspalte) | `meadow/frontend/saved_searches.py`, `api.py` |
-| Tests | `tests/test_search_form.py` (15 Fälle), `cargo test` (Katalog/Validator/Renderer), i18n-Parität en/de/fr (1162 Keys) |
+| Erweiterte Suche im Grid (`/products`: Dialog, Chip, „Aus Suche laden“, „Als Suche speichern“) | `meadow/frontend/grid.py` |
+| Tests | `tests/test_search_form.py`, `cargo test` (Katalog/Validator/Renderer), i18n-Parität en/de/fr |
 
 **Abweichungen vom Entwurf (bewusst):**
 
@@ -32,6 +33,7 @@
 - **Mengen:** `type`/`status`/Enums liefern Optionen mit Labels (Mehrfachauswahl für `in`/`not_in`, Freitext-Tags ohne Optionsquelle); Sprachvarianten entstehen über ein Sprach-Select (`attributes.name.de`).
 - **Sortierung** war im Kern defekt (SurrealDB verlangt jedes `ORDER BY`-Idiom in der Selektion) — Sortierfelder werden jetzt als `_sort_N` projiziert; das galt auch für die frühere flache Ausführung.
 - **`is_null`/`not_empty`** werden geklammert; vorher verband der Ausführer `a IS NONE OR a = NULL` ungeschützt mit UND (Vorrangfehler).
+- **Fehlende Werte:** In SurrealDB ist `NONE < 0` **wahr** (fehlende Werte sortieren vor Zahlen) und `NONE != "x"` ebenfalls. Ordnungs- und Negativ-Operatoren (`ne`, `gt`, `gte`, `lt`, `lte`, `between`, `not_between`, `not_in`, `not_contains`) werden deshalb mit `(field IS NOT NONE AND field != NULL)` abgesichert; „hat keinen Wert“ prüft `is_null`. Ohne diesen Wächter lieferte z. B. `not_between [0, 200]` in Stage C 33 statt 0 Produkte (alle mit fehlendem `net_price`). Siehe Abschnitt 5.
 - **`created_at`/`updated_at`** sind echte Datetime-Spalten; ihre Operanden werden in `type::datetime(…)` gewrappt, damit sie nicht lexikografisch mit Strings verglichen werden.
 
 ## 1. Ausgangslage & Problem (vor der Umsetzung)
@@ -200,17 +202,18 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 
 - **Ein Knoten ist entweder Gruppe oder Bedingung:** `{op, conditions[]}` bzw. `{field, operator, value}`. Fehlt `op`, gilt UND; erlaubt sind `and`/`or`.
 - **Übersetzung nach SurrealQL:** Gruppe → `(…)` mit `AND`/`OR` zwischen den Kindern, Bedingung → Klausel. Parameter werden **rekursiv** durchnummeriert (`f0`, `f1`, …), damit Untergruppen nicht mit der äußeren Gruppe kollidieren.
-- **`between`** → `field >= $a AND field <= $b` (zwei Parameter).
-- **Grenzen:** Tiefe ≤ 4, Bedingungen (Blätter) ≤ 50, leere Gruppe → Fehler. Damit bleibt die erzeugte Abfrage beherrschbar.
+- **`between`** → `field >= $a AND field <= $b` (zwei Parameter); **`not_between`** → `field < $a OR field > $b`. Beide werden geklammert.
+- **Fehlende Werte sind keine Treffer:** Ordnungs- und Negativ-Operatoren hängen an der Bedingung `field IS NOT NONE AND field != NULL`. Grund: SurrealDB wertet `NONE < 0` als **wahr** (fehlende Werte sortieren vor Zahlen) und `NONE != "x"` ebenfalls, sodass „nicht zwischen“/„größer als“/„ungleich“ sonst alle Objekte **ohne** Wert einschließen würden. „Hat keinen Wert“ ist ausschließlich `is_null` (bzw. `eq` mit `null`); `ne` mit `null` prüft weiterhin auf **vorhandenen** Wert.
+- **Grenzen:** Tiefe ≤ 6, Bedingungen (Blätter) ≤ 50, leere Gruppe → Fehler. Damit bleibt die erzeugte Abfrage beherrschbar.
 - **Operator-Aliase** (`neq`, `ge`, `le`, `is_empty`) werden beim Normalisieren auf die kanonischen Namen gezogen (`ne`, `gte`, `lte`, `is_null`), damit gespeicherte Queries einheitlich sind.
 - **Keine Migration:** `filters` entfällt; vorhandene gespeicherte Suchen werden gelöscht und neu angelegt (Entscheidung des Auftraggebers). Collections hängen an Suchen und werden zusammen mit ihnen neu angelegt.
 
 **Der Kern validiert die Query** bei `POST /saved-searches`, `PATCH /saved-searches/{id}`, `POST /saved-searches/preview` und beim Ausführen:
 
-- **Struktur:** Gruppe ohne `conditions`, Gruppe **mit** `field`, Bedingung **mit** `conditions`, Tiefe > 4, mehr als 50 Bedingungen → `400` mit Pfad (z. B. `query.where.conditions[2]: group requires a non-empty conditions list`).
+- **Struktur:** Gruppe ohne `conditions`, Gruppe **mit** `field`, Bedingung **mit** `conditions`, Tiefe > 6, mehr als 50 Bedingungen → `400` mit Pfad (z. B. `query.where.conditions[2]: group requires a non-empty conditions list`).
 - **Feld:** muss im Katalog stehen (Systemfeld, existierendes Attribut, ggf. mit aktiver Sprache). Unbekannt → `query.where.conditions[1].field: unknown field attributes.preis_alt`.
 - **Operator:** muss für dieses Feld erlaubt sein → `query.where.conditions[1].operator: gt is not allowed for attributes.brand (use eq, ne, in, not_in)`.
-- **Wert:** `arity: 0` verlangt **keinen** Wert, `arity: 1` einen, `arity: 2` (`between`) genau **zwei**; `multi: true` verlangt eine **Liste**, sonst einen Skalar. Typfehler werden gemeldet (`must be a number`, `must be a list of two values`); Enum-Werte werden gegen die Optionsliste geprüft (unbekannter Code → UI-Warnung, der Kern akzeptiert ihn, siehe Abschnitt 11).
+- **Wert:** `arity: 0` verlangt **keinen** Wert, `arity: 1` einen, `arity: 2` (`between`/`not_between`) genau **zwei**; `multi: true` verlangt eine **Liste**, sonst einen Skalar. Typfehler werden gemeldet (`must be a number`, `must be a list of two values`); Enum-Werte werden gegen die Optionsliste geprüft (unbekannter Code → UI-Warnung, der Kern akzeptiert ihn, siehe Abschnitt 11).
 - **Sortierung:** nur `sortable`-Felder, `order` ∈ `asc`/`desc`; **`limit`** 1–10000, **`start`** ≥ 0 (der Ausführer klemmt heute stillschweigend – künftig meldet der Kern).
 - **Mehrere Fehler** werden gesammelt (`; `-getrennt, dedupliziert) wie bei den Konnektoren; `ApiError` bleibt unverändert einfach.
 - **Normierung beim Schreiben:** Der Kern speichert die **kanonische** Form (Operator-Aliase aufgelöst, `op` gesetzt, leere optionale Felder weggelassen) — Formular und JSON-Tab sehen nach dem Speichern dasselbe.
@@ -235,9 +238,9 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 
 ## 7. Bewusste Einschränkungen
 
-1. **Gruppen nur bis Tiefe 4 und 50 Bedingungen.** Ein unbegrenzter Ausdrucksbaum wäre im Formular nicht mehr bedienbar; die Grenzen gelten in Kern und UI („+ Gruppe“ verschwindet an der Maximaltiefe).
-2. **Kein `not_between`, kein `in` auf Objektwerten.** Es bleibt bei der Operatormenge aus Abschnitt 4.
-3. **Volltext ohne Feld-/Sprachauswahl.** Der Index liegt auf `object.attributes`; die UI verspricht keine Einschränkung, die nichts bewirkt.
+1. **Gruppen nur bis Tiefe 6 und 50 Bedingungen.** Ein unbegrenzter Ausdrucksbaum wäre im Formular nicht mehr bedienbar; die Grenzen gelten in Kern und UI („+ Gruppe“ verschwindet an der Maximaltiefe).
+2. **Operatormenge bleibt wie in Abschnitt 4** (`not_between` ist inzwischen dabei; `in` auf Objektwerten gibt es nicht).
+3. **Volltext ohne Feld-/Sprachauswahl.** Der Index liegt auf `object.attributes`; die UI verspricht keine Einschränkung, die nichts bewirkt. Der feldweise Volltext ist als zukünftige Entwicklung in **Abschnitt 12** beschrieben.
 4. **Wert-Widgets nur für die vorhandenen Werttypen** (Text, Zahl, boolesch, Datum, Enum). `reference`- und Medien-Attribute sind **nicht** filterbar – dafür gibt es die Referenz-Zeilen (Relationstyp + Zielobjekt).
 5. **Kein Ersatz des JSON-Tabs.** Alles, was das Formular nicht darstellt, bleibt dort möglich und wird im Formular als „nicht dargestellt“ gemeldet.
 6. **Keine Migration.** Bestehende gespeicherte Suchen (und ihre Collections) werden gelöscht und im Formular neu angelegt.
@@ -246,14 +249,14 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 
 | Stelle | Änderung |
 |---|---|
-| `api-design.md` | neue Endpunkte `GET /search-fields` (geplant) und `POST /saved-searches/preview` (geplant, Abschnitt 9); Hinweis, dass `POST/PATCH /saved-searches` die Query validiert |
+| `api-design.md` | neue Endpunkte `GET /search-fields`, `POST /saved-searches/preview` und `GET /objects?where=…`; Hinweis, dass Schreiben/Ausführen/Preview/Grid-Filter die Query validieren |
 | `gespeicherte-suchen-collections.md` | Verweis auf dieses Dokument; „Editor als JSON“ bleibt als Ist-Stand, das Formular als Ausbau |
-| `frontend.md` | Modul `search_form.py` und der Tab-Aufbau des Dialogs; die Zeile „Erweiterte Suche mit Query-Builder“ in den späteren Ausbaustufen verlinkt hierher; dasselbe Formular kann später die erweiterte Suche im Grid bedienen |
+| `frontend.md` | Modul `search_form.py`, der Tab-Aufbau des Dialogs und die erweiterte Suche im Grid (dasselbe Formular als Filter) |
 | `datenexport-import-ui.md` | Quelle `saved_search` im Export-Wizard profitiert vom Katalog (Feldauswahl) — nur Hinweis |
 | `crates/AGENTS.md`, `meadow/AGENTS.md` | Modul `search_schema.rs` bzw. `search_form.py` + Regel „Katalog ↔ Ausführer“ |
 | `plan/detail/AGENTS.md` | neues Detaildokument in die Liste |
 
-## 9. Implementierungsschritte (Stages A + B umgesetzt, 2026-09-11)
+## 9. Implementierungsschritte (Stages A + B + C umgesetzt, 2026-09-11)
 
 **Stage A — DSL, Katalog, Validierung, Formular (MVP):**
 
@@ -266,17 +269,20 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 
 5. `references` (Relationstyp + Zielobjekt über den Objekt-Picker + Richtung) und `sort` (Feld + Richtung) im Formular; `start` im Formular; Spalte „Zusammenfassung“ in der Liste; bestehende Suchen/Collections löschen und neu anlegen.
 
-**Stage C — nur bei Bedarf (nicht Teil dieses Vorhabens):**
+**Stage C — erweiterte Suche im Grid und Feinschliff (umgesetzt, 2026-09-11):**
 
-6. Tiefere Ausdrücke (Tiefe > 4), weitere Operatoren (`not_between`), Volltext je Feld (Index je Attribut), Übernahme desselben Katalogs in eine **erweiterte Suche im Grid** (`/products`).
+6. **Erweiterte Suche im Grid (`/products`)** (umgesetzt): `GET /objects?where=<Query-DSL-JSON>` filtert serverseitig über denselben Feldkatalog (Validierung wie bei Suchen, gemeinsamer Renderer); der Grid-Filter bekommt einen Dialog mit **demselben Formular** (Abschnitte Bedingungen/Referenzen/Volltext), einen Chip mit der Query-Zusammenfassung, „Aus gespeicherter Suche laden“ und „Als Suche speichern“.
+7. **Tiefere Ausdrücke** (Tiefe 4 → **6**) und **`not_between`** (Umkehrung von `between`) — kleine Kern-/Katalog-Erweiterungen.
 
 **Nicht-Ziele:** kein Ersatz des JSON-Expertenmodus, keine Migration bestehender Suchen, keine neuen Rollen, keine Änderung an Collections/Refresh, kein Query-Builder für die Middleware-Schnittstellen.
 
 ## 10. Testfälle
 
 - `GET /search-fields` liefert Systemfelder, Attributfelder mit Typ/Operatoren/`sortable`, Enum-Optionen mit Labels und die Operatortabelle mit `arity`/`multi`.
-- `POST /saved-searches` mit unbekanntem Feld → `400` mit `query.where.conditions[0].field`; mit Operator, der nicht zum Feld passt → `400` mit Hinweis auf die erlaubten; `in` ohne Liste → `400`; `between` mit einem statt zwei Werten → `400`; `gt` auf einem Enum-Feld → `400`; leere Gruppe → `400`; Tiefe 5 → `400`; `limit: 99999` → `400`; gültige Query → `201`.
-- Übersetzung: `(A UND B) ODER C` ergibt genau diese Klammerung; `between` erzeugt zwei Parameter; Untergruppen kollidieren nicht mit den Parametern der äußeren Gruppe.
+- `POST /saved-searches` mit unbekanntem Feld → `400` mit `query.where.conditions[0].field`; mit Operator, der nicht zum Feld passt → `400` mit Hinweis auf die erlaubten; `in` ohne Liste → `400`; `between` mit einem statt zwei Werten → `400`; `gt` auf einem Enum-Feld → `400`; leere Gruppe → `400`; Tiefe 7 → `400`; `limit: 99999` → `400`; gültige Query → `201`.
+- `GET /objects?where=…` liefert dieselbe Ergebnismenge wie eine identische gespeicherte Suche; ein ungültiger Baum → `400` mit Pfad; ohne `where` bleibt die Liste unverändert.
+- Übersetzung: `(A UND B) ODER C` ergibt genau diese Klammerung; `between`/`not_between` erzeugen zwei Parameter; Untergruppen kollidieren nicht mit den Parametern der äußeren Gruppe.
+- Übersetzung: Ordnungs-/Negativ-Operatoren enthalten den `IS NOT NONE AND != NULL`-Wächter; `is_null` bleibt die einzige Prüfung auf fehlende Werte (verifiziert: 35 Produkte, davon 2 mit `net_price` — `not_between [0, 200]` → 0, `between [0, 200]` → 2, `is_null` → 33).
 - Formular-Roundtrip: Baum → DSL → Baum ist verlustfrei (mehrsprachiges Feld, Enum-Code, `between`, `not_empty` ohne Wert, verschachtelte Gruppen).
 - Operatorabhängiges Widget: `not_empty` blendet den Wert aus, `in` bietet Mehrfachauswahl, `between` zeigt zwei Felder, `gt` ein Zahlenfeld.
 - JSON-Tab → Formular: nicht darstellbare Bestandteile werden gezählt und angezeigt, **nicht** verworfen; Speichern aus dem Formular schickt genau die dargestellte Query plus die unveränderten Bestandteile.
@@ -292,6 +298,20 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 | Vorschau-Endpunkt oder Speichern zum Testen? | **Preview-Endpunkt** (rein lesend) – sonst hinterlässt jeder Testversuch eine Suche |
 | Ist die Zählung in der Vorschau teuer? | Vorschau mit Debounce (~800 ms), `limit`-Obergrenze, Ergebnis-IDs gekürzt; bei Bedarf später „nur zählen“ (COUNT statt ID-Liste) |
 | Standardgruppe beim Anlegen? | Eine **UND**-Gruppe mit einem vorgefüllten Blatt (`type = product`) — so umgesetzt (`default_state`) |
-| Denselben Katalog auch für die erweiterte Suche im Grid? | **Ja, mittelfristig** – derselbe Vertrag, dasselbe Formular; im Grid ist es ein Filter, in `/saved-searches` ein gespeicherter Ausdruck |
+| Denselben Katalog auch für die erweiterte Suche im Grid? | **Erledigt (Stage C):** `GET /objects?where=…` nutzt denselben Katalog, dieselbe Validierung und denselben Renderer; im Grid ist es ein Filter, in `/saved-searches` ein gespeicherter Ausdruck |
 | Bezug zu Business Rules (`saved_search` als Filter)? | Unverändert; die Validierung sorgt dafür, dass gespeicherte Suchen ausführbar bleiben |
 | Collections bei der DSL-Umstellung? | **Erledigt:** die bestehenden Suchen/Collections wurden gelöscht und neu angelegt (siehe Abschnitt 5) |
+
+## 12. Zukünftige Entwicklung: Volltext je Feld (Phase 9, nicht umgesetzt)
+
+Der Volltext bleibt in Stage A–C **global** (`attributes @@ $q`): der Index liegt auf dem ganzen `attributes`-Objekt, die Felder `fulltext.fields`/`fulltext.language` werden vom Kern angenommen, aber **nicht ausgewertet**. Eine feldweise Volltextsuche ist bewusst **nicht** Teil von Stage C — sie ist eine eigene Aufgabe mit eigenem Aufwand und wird hier als mögliche spätere Entwicklung festgehalten.
+
+- **Nutzen:** „Titel enthält *Edelstahl*, Beschreibung aber nicht“ (Feld-Positiv/Negativ-Kombinationen), Suche in genau einer Sprache, Rangfolge (`search::score`) je Feld statt global. Für große Datenbestände vermeidet ein gezielter Index Streufunde in Freitextfeldern.
+- **Skizze (Kern):**
+  1. **Index je Feld:** zusätzliche `FULLTEXT`-Indizes auf ausgewählte Attributpfade (`DEFINE INDEX … ON object FIELDS attributes.title FULLTEXT ANALYZER meadow_std`) oder ein eigener Suchindex (`search_analyzer`); Attributdefinitionen bekommen dafür ein Kennzeichen, das der Feldkatalog als `fulltext: true` ausweist (heute in der UI bereits so gekennzeichnet, aber ohne Wirkung).
+  2. **DSL:** statt `fulltext.fields` eine **Bedingung** mit eigenem Operator — `{field: "attributes.title", operator: "matches", value: "Edelstahl"}` mit optionaler Sprache (`attributes.title.de`) — damit die Feldauswahl mit der bestehenden Validierung/Widget-Logik (Operator mit `arity: 1`, Text-Widget) funktioniert und **kein** zweiter Suchbegriff-Block nötig ist. `matches` (und `not_matches`) werden in den Katalog aufgenommen, sobald der Index existiert.
+  3. **Gemischte Bäume:** Der globale Volltext bleibt als „irgendwo in den Attributen“ erhalten (heutiges Verhalten); beides lässt sich in derselben Query kombinieren (`and[matches(title), fulltext(query)]`).
+  4. **Sprachvarianten:** Für mehrsprachige Felder gilt die Sprachauswahl des Formulars (`attributes.title.de`) — genau das, was der globale Volltext heute **nicht** kann.
+- **Voraussetzungen/Entscheidungen:** (a) Analyzer je Sprache oder ein gemeinsamer Analyzer je Feld; (b) Indexgröße und Reindex-Strategie bei bestehenden Daten (`REBUILD INDEX`); (c) Migration der gespeicherten Suchen (heute `fulltext.fields`) — Bestandssuchen bleiben gültig, `fields` wird dann ausgewertet statt ignoriert; (d) Aufwand im Formular ist gering (das Widget existiert bereits), der Aufwand liegt im Schema/Index.
+- **Aufwand (Schätzung):** Kern mittel (Analyzer/Index je Feld, neuer Operator, optional `search::score`-Sortierung), Frontend klein (Operator erscheint automatisch, sobald er im Katalog steht), Doku/Tests mittel (Indexverhalten, Sprachvarianten).
+- **Nicht-Ziele dieses Ausbaus:** autocomplete-/Vorschlagsfunktionen, Fuzzy-Suche, gewichtete Relevanz-Sortierung über mehrere Felder (eigene Themen).

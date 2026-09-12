@@ -25,7 +25,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `business-rules.md` — Business Rules: Python scripting, sandbox, execution & lifecycle (section 8)
   - `benutzer-gruppen-rechte.md` — users, groups & permissions (section 9)
   - `gespeicherte-suchen-collections.md` — saved searches & collections (section 10)
-  - `suche-formular.md` — schema-driven search form (query builder) for saved searches (extension of sections 10 & 11; plan, stage A ready to implement)
+  - `suche-formular.md` — schema-driven search form (query builder) and the shared query DSL for saved searches *and* the grid (extension of sections 10 & 11; stages A–C implemented, per-field full text sketched in §12)
   - `frontend.md` — frontend: architecture, i18n & module overview (section 11)
   - `frontend-arbeitsflaechen.md` — frontend working areas: grid, form, mass maintenance, completeness & dashboard (section 11)
   - `betrieb-deployment.md` — operations & deployment (section 12)
