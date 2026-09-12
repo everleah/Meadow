@@ -2218,5 +2218,25 @@ mod tests {
         assert_eq!(key_field("object_types"), "name");
         assert_eq!(key_field("attribute_definitions"), "name");
         assert_eq!(key_field("business_rules"), "name");
+        assert_eq!(
+            key_field("category_attributes"),
+            "class",
+            "class features are keyed by the class, not by a local id"
+        );
+    }
+
+    #[test]
+    fn category_attributes_comes_last_and_after_its_dependencies() {
+        assert_eq!(
+            SECTIONS.last().copied(),
+            Some("category_attributes"),
+            "the class-feature section must be applied last"
+        );
+        let position = |name: &str| SECTIONS.iter().position(|section| *section == name);
+        let features = position("category_attributes");
+        // The section resolves classes (taxonomy objects) and features
+        // (attribute definitions), so it depends on both sections.
+        assert!(position("object_types") < features);
+        assert!(position("attribute_definitions") < features);
     }
 }

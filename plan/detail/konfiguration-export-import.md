@@ -378,6 +378,7 @@ Die Merkmale der Taxonomie-Klassen ([kategorisierung.md](kategorisierung.md), St
 - Datentyp-Abweichung (`number` → `text`) wird blockiert.
 - Forward-Referenzen (`object_type.key_attributes` → Attribut) werden aufgelöst.
 - `replace` löscht nur eigene, nicht `system`.
+- **Sektion `category_attributes`** (Kern-Unit-Tests in `config.rs`/`config/category_attributes.rs`): der stabile Klassen-Schlüssel gewinnt gegen die lokale `class_id` (leerer Schlüssel ⇒ Fallback), Report-Label fällt auf `class_id`/Platzhalter zurück, die Merkmalsliste ist deterministisch sortiert (`position`, dann Attribut), `key_field` = `class`, und die Sektion steht **zuletzt** (nach `object_types`/`attribute_definitions`).
 - Unbekannte `format_version` → 400; nicht-admin → 403.
 - `business_rule`-Skript wird compile-geprüft and importiert mit `state=disabled`.
 

@@ -55,6 +55,36 @@ fn record_key(id: &str) -> &str {
     id.split_once(':').map(|(_, key)| key).unwrap_or(id)
 }
 
+/// Deterministic feature order: by `position`, then by attribute name.
+fn sort_features(features: &mut [FeatureEntry]) {
+    features.sort_by(|a, b| {
+        a.position
+            .cmp(&b.position)
+            .then_with(|| a.attribute.cmp(&b.attribute))
+    });
+}
+
+/// The stable key of a class node: the value of the type's first `key_attributes`
+/// entry. `key_attributes` are `text` and not multilingual (enforced by the
+/// object-type API), so the value is a plain string; everything else yields `""`
+/// and the entry then relies on `class_id` alone.
+fn class_key_value(node: Option<&Value>, key_attribute: Option<&str>) -> String {
+    key_attribute
+        .and_then(|name| node?.get("attributes")?.as_object()?.get(name)?.as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Report label of one entry: the stable key first, then the local `class_id`,
+/// then a placeholder — so an unresolvable class stays traceable in the report.
+fn class_label(entry: &Value) -> String {
+    as_str(entry, "class")
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| as_str(entry, "class_id").map(str::to_owned))
+        .unwrap_or_else(|| "(unnamed class)".to_owned())
+}
+
 /// Renders a JSON array of strings as a SurrealDB list literal.
 fn sql_string_list(values: impl IntoIterator<Item = String>) -> String {
     Value::Array(values.into_iter().map(Value::String).collect()).to_string()
@@ -106,28 +136,13 @@ pub(super) async fn category_attributes_section(
 
     let mut out = Vec::new();
     for (class_id, mut features) in by_class {
-        features.sort_by(|a, b| {
-            a.position
-                .cmp(&b.position)
-                .then_with(|| a.attribute.cmp(&b.attribute))
-        });
+        sort_features(&mut features);
         let node = nodes_by_id.get(&class_id);
         let node_type = node
             .and_then(|node| as_str(node, "type"))
             .unwrap_or_default();
         let key_attribute = keys_by_type.get(node_type).map(String::as_str);
-        // `key_attributes` are `text` and not multilingual (enforced by the
-        // object-type API), so the value is a plain string.
-        let class = key_attribute
-            .and_then(|name| {
-                node?
-                    .get("attributes")
-                    .and_then(Value::as_object)
-                    .and_then(|attributes| attributes.get(name))
-                    .and_then(Value::as_str)
-            })
-            .unwrap_or_default()
-            .to_owned();
+        let class = class_key_value(node, key_attribute);
         out.push(json!({
             "class": class,
             "class_key": key_attribute,
@@ -219,11 +234,7 @@ pub(super) async fn apply_category_attributes(
             .collect();
 
     for entry in entries {
-        let label = as_str(entry, "class")
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .or_else(|| as_str(entry, "class_id").map(str::to_owned))
-            .unwrap_or_else(|| "(unnamed class)".to_owned());
+        let label = class_label(entry);
 
         let Some(node_id) = resolve_class(db, entry, &taxonomy_types).await? else {
             report.error(
@@ -346,4 +357,72 @@ pub(super) async fn apply_category_attributes(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn record_key_strips_the_table_prefix() {
+        assert_eq!(record_key("object:01ABC"), "01ABC");
+        assert_eq!(record_key("01ABC"), "01ABC");
+    }
+
+    #[test]
+    fn class_key_value_reads_the_configured_key_attribute() {
+        let node = json!({ "type": "etim_class", "attributes": { "code": "ETIM-12345" } });
+        assert_eq!(class_key_value(Some(&node), Some("code")), "ETIM-12345");
+        // Without a node, without a key attribute, with an unknown attribute
+        // name or with a non-string value the key stays empty; the entry then
+        // falls back to `class_id` on import.
+        assert_eq!(class_key_value(None, Some("code")), "");
+        assert_eq!(class_key_value(Some(&node), None), "");
+        assert_eq!(class_key_value(Some(&node), Some("nope")), "");
+        let numeric = json!({ "attributes": { "code": 42 } });
+        assert_eq!(class_key_value(Some(&numeric), Some("code")), "");
+    }
+
+    #[test]
+    fn class_label_prefers_the_stable_key() {
+        assert_eq!(
+            class_label(&json!({ "class": "ETIM-12345", "class_id": "object:01ABC" })),
+            "ETIM-12345"
+        );
+        assert_eq!(
+            class_label(&json!({ "class": "", "class_id": "object:01ABC" })),
+            "object:01ABC",
+            "an empty key falls back to the local id"
+        );
+        assert_eq!(
+            class_label(&json!({ "class_id": "object:01ABC" })),
+            "object:01ABC"
+        );
+        assert_eq!(class_label(&json!({})), "(unnamed class)");
+    }
+
+    #[test]
+    fn sort_features_orders_by_position_then_attribute() {
+        let mut features = vec![
+            FeatureEntry {
+                attribute: "b".to_owned(),
+                required: false,
+                position: 1,
+            },
+            FeatureEntry {
+                attribute: "a".to_owned(),
+                required: true,
+                position: 1,
+            },
+            FeatureEntry {
+                attribute: "z".to_owned(),
+                required: false,
+                position: 0,
+            },
+        ];
+        sort_features(&mut features);
+        let order: Vec<&str> = features.iter().map(|f| f.attribute.as_str()).collect();
+        assert_eq!(order, ["z", "a", "b"]);
+    }
 }
