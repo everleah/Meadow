@@ -118,6 +118,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - UTF-8 (CSV), `\r\n` Zeilenende, Header-Zeile optional.
 - Leere Werte = leere Zelle; mehrsprachig = eine Spalte je Locale.
 - Objekt-/Attributwerte JSON-serialisiert (z. B. `{"value":…,"unit":…}`); Struktur/Objekte als JSON-String, wenn nicht tabellarisch.
+- **`url`-Spalten als Hyperlink (XLSX, Phase 9):** Zellen von `url`-Attributen (auch die Sprach-Spalten `<name>_<locale>`) bekommen zusätzlich zum Wert einen **Hyperlink** plus Link-Optik (blau/unterstrichen) — der Export springt direkt auf Website/Datenblatt. Nur `url`-typisierte Spalten werden verlinkt, und nur bei gültiger `http(s)`-Adresse (`is_valid_url`), sonst bleibt der Text unverändert; CSV/JSON exportieren weiterhin den reinen Wert. Der Worker lädt dafür die Typ-Flags einmal pro Lauf (`_load_attribute_flags` → `multilingual`/`quantified`/`urls`) und bestimmt die Spalten mit `_url_columns`.
 
 ### 5.5 Import & Collection-Bulk-Add
 

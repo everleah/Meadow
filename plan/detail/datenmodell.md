@@ -126,6 +126,8 @@ Ein `url`-Attribut speichert eine **Webadresse** — Website, Produktseite, Date
 - **Bild/Video:** Endet die Adresse auf eine Bild- bzw. Video-Endung, wird sie **nicht** verlinkt, sondern als klickbare Zelle dargestellt — ein Klick öffnet den **NiceGUI-Vorschau-Dialog** (Bild eingebettet, Video mit Player, plus „In neuem Tab öffnen“). Die Entscheidung trifft Python (`url_values.media_kind`), das Zell-Rendering erhält sie über die Zeilenmarkierung `_media` — eine Quelle der Wahrheit.
 - **Formular:** Feld mit `type=url` und Button „Öffnen“ (Bild/Video → Dialog, sonst neuer Tab); der Button ist deaktiviert, solange kein gültiger Wert im Feld steht.
 - **Suche:** `url`-Felder sind filterbar wie Text (`GET /search-fields` meldet `value_type: "url"` mit den Text-Operatoren plus `in`/`not_in`).
+- **Massenpflege:** `url` zählt als **stringwertiger** Typ und ist damit im **Find & Replace** wählbar (Domain-/CDN-Präfix umschreiben); der Kern validiert das Ergebnis, ein kaputter Ersatz wird pro Objekt abgelehnt (Report) statt still geschrieben.
+- **Export:** In **XLSX** werden Zellen von `url`-Spalten (auch je Sprache) als **Hyperlink** geschrieben (blau/unterstrichen) — ein Nicht-`url`-Attribut mit URL-Text bleibt Text. CSV/JSON bleiben unverändert (Wert = URL).
 
 ## Datentypwechsel
 
