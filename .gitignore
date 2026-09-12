@@ -142,6 +142,10 @@ ipython_config.py
 # Database backups (exported via scripts/backup-db.ps1)
 backups/
 
+# Vendor standard artefacts (BMEcat/ETIM schemas, guidelines, classification exports):
+# licensed material, kept local only - see resources/AGENTS.md
+resources/etim/
+
 # Production secrets & ad-hoc diagnostics bundles
 .env.vps
 diagnostics-*/

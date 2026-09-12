@@ -87,6 +87,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - `meadow/` is owned by `meadow/AGENTS.md` (Python source code: rules engine, later worker/frontend).
 - `tests/` is owned by `tests/AGENTS.md` (automated tests).
 - `docs/` is owned by `docs/AGENTS.md` (non-planning documentation).
+- `resources/` is owned by `resources/AGENTS.md` (local, non-versioned vendor standard data).
 
 ## Local Contracts
 
@@ -136,3 +137,4 @@ When the user requests a durable behavior change, record it here or in the relev
 - `meadow/` — Python source code; owned by `meadow/AGENTS.md`.
 - `tests/` — automated tests; owned by `tests/AGENTS.md`.
 - `docs/` — non-planning documentation; owned by `docs/AGENTS.md`.
+- `resources/` — local vendor standard data (BMEcat/ETIM artefacts), gitignored; owned by `resources/AGENTS.md`.
