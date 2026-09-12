@@ -72,12 +72,19 @@ pub struct RuleSpec {
 /// contract exposes them as `ctx.channel` / `ctx.release_status`, while
 /// `obj.status` keeps the **global** object status. Object status transitions
 /// use `EvaluationContext::default()`.
+///
+/// Set for object writes with class features (Stage B): `ctx.missing_features`
+/// lists the mandatory features of the object's taxonomy classes that are not
+/// set — a rule can use it to block a transition (e.g. "publish only with a
+/// complete ETIM class").
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EvaluationContext<'a> {
     /// Channel whose release is being changed.
     pub channel: Option<&'a str>,
     /// Target state of that channel release.
     pub release_status: Option<&'a str>,
+    /// Unset mandatory class features (empty when the object has no classes).
+    pub missing_features: Option<&'a [String]>,
 }
 
 /// What to evaluate for a write operation (rule set, mode, actor, context).
@@ -215,6 +222,7 @@ impl RulesClient {
             "actor": actor,
             "channel": context.channel,
             "release_status": context.release_status,
+            "missing_features": context.missing_features,
         });
         let bytes = serde_json::to_vec(&payload)
             .map_err(|error| EvaluateError::BadReply(error.to_string()))?;
@@ -344,6 +352,16 @@ pub async fn evaluate_for_write(
     if rules.is_empty() {
         return Ok(RuleOutcome::default());
     }
+    // Class features (Stage B): resolve the unset mandatory class features once
+    // the rules are known (so the extra queries only run when rules exist).
+    let missing_features = match context.missing_features {
+        Some(names) => names.to_vec(),
+        None => missing_class_features(db, object_view).await?,
+    };
+    let context = EvaluationContext {
+        missing_features: Some(&missing_features),
+        ..context
+    };
     match client
         .evaluate(&rules, object_view, mode, language, actor, context)
         .await
@@ -368,6 +386,36 @@ pub async fn evaluate_for_write(
             }
         }
     }
+}
+
+/// Unset mandatory class features of the candidate object (Stage B).
+///
+/// `object_view` is the resolved candidate view sent to the rules, so a value
+/// that is set (own or inherited) counts as satisfied. Objects without an id
+/// (create) have no classes yet.
+async fn missing_class_features(db: &Db, object_view: &Value) -> Result<Vec<String>, ApiError> {
+    let Some(id) = object_view
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let required =
+        crate::class_features::class_required_names(db, crate::class_features::key_of(id)).await?;
+    if required.is_empty() {
+        return Ok(Vec::new());
+    }
+    let attributes = object_view.get("attributes").and_then(Value::as_object);
+    Ok(required
+        .into_iter()
+        .filter(|name| {
+            attributes
+                .and_then(|map| map.get(name.as_str()))
+                .map(Value::is_null)
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 /// Enforces the outcome of a blocking rule evaluation (fail-closed).

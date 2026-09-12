@@ -409,10 +409,11 @@ pub async fn delete_object(
     let object_ids: Vec<String> = cascade_keys.iter().map(|k| format!("object:{k}")).collect();
 
     // Statements: BEGIN(0), LET(1), UPDATE(2), DELETE refs(3), DELETE releases(4),
-    // [CREATE outbox(5)], COMMIT(5|6).
+    // DELETE class features(5), [CREATE outbox(6)], COMMIT(6|7).
     //
-    // The releases are deleted per record (`FOR … WHERE object_id = $r`) because
-    // `object_id IN $recs` does not match the typed `record<object>` field.
+    // Releases and class features are deleted per record (`FOR … WHERE object_id
+    // = $r`) because `object_id IN $recs` does not match the typed
+    // `record<object>` field.
     let sql = if emit_events {
         "
         BEGIN TRANSACTION;
@@ -420,6 +421,7 @@ pub async fn delete_object(
         UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
         DELETE reference WHERE in IN $recs OR out IN $recs;
         FOR $r IN $recs { DELETE release WHERE object_id = $r; };
+        FOR $r IN $recs { DELETE category_attribute WHERE category_id = $r; };
         CREATE outbox_event CONTENT $outbox;
         COMMIT TRANSACTION;
         "
@@ -431,6 +433,7 @@ pub async fn delete_object(
         UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
         DELETE reference WHERE in IN $recs OR out IN $recs;
         FOR $r IN $recs { DELETE release WHERE object_id = $r; };
+        FOR $r IN $recs { DELETE category_attribute WHERE category_id = $r; };
         COMMIT TRANSACTION;
         "
         .to_owned()

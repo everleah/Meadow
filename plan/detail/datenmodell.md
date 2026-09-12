@@ -598,6 +598,24 @@ Die kanalspezifische Freigabe eines Objekts: **eine Zeile pro `(object, channel)
 - `object_id` ist ein **nativer Record**, damit der Filter `GET /objects?released_for=<code>` eine Subquery (`SELECT VALUE object_id FROM release …`) ist; `channel` ist der **Code** (kein Record), damit Kanäle portabel referenziert werden.
 - Indizes: `(object_id, channel)` unique und `(channel, status)` (Filter „für Kanal X veröffentlicht“). Details, Regeln und API: [workflow-freigaben.md](workflow-freigaben.md).
 
+### Tabelle `category_attribute` (Klassen-Merkmale, Stufe B)
+
+Die Merkmale einer Taxonomie-Klasse: **eine Zeile pro `(Klasse, Attribut)`**. Die Existenz der Zeile heißt „diese Klasse kennt das Merkmal“, `required: true` heißt „Pflicht-Merkmal der Klasse“. Merkmale gelten für alle der Klasse zugeordneten Objekte **und** für deren Unterklassen (Vorfahren-Kette über `depends_on`).
+
+```json
+{
+    "id": "category_attribute:vwphwrbrprcw56drkrbf",
+    "category_id": "object:01M2AXFGPMZS2ASEPC9M50CYS4",  // nativer Record (record<object>)
+    "attribute": "power",                               // Name der Attributdefinition (portabel)
+    "required": true,                                   // Pflicht-Merkmal dieser Klasse
+    "position": 0
+}
+```
+
+- **Eindeutigkeit** über `(category_id, attribute)` (Unique-Index); `attribute` ist der **Name** der Attributdefinition (wie der Kanal-`code` portabel für Konfigurationsdokumente).
+- **Referenzielle Pflege:** beim **Löschen** einer Attributdefinition werden ihre Merkmals-Zeilen entfernt, beim **Umbenennen** mitgezogen; beim **Löschen** eines Klassenknotens kaskadieren seine Zeilen (wie die `release`-Zeilen).
+- **Wirkung:** Pflicht-Merkmale zählen in die Vollständigkeit (`completeness`) und stehen Regeln als `ctx.missing_features` zur Verfügung; die Objektseite löst sie über `GET /objects/{id}/category-attributes` auf. Details: [kategorisierung.md](kategorisierung.md).
+
 ### Zukünftige Objekttypen & Tabellen (nicht im MVP, aber konzeptionell vorgesehen)
 
 - **`saved_search`**: Objekttyp (`type: "saved_search"`) für komplexe Suchanfragen (siehe [gespeicherte-suchen-collections.md](gespeicherte-suchen-collections.md)); wird in der Tabelle `object` gespeichert.

@@ -1,10 +1,13 @@
 //! Completeness (Vollständigkeit) computation for objects.
 //!
-//! An object's completeness is the percentage of its type's required
-//! attributes (`required_types` on `attribute_definition`) that are set. A
-//! required attribute counts as *set* when its key is present in the object's
-//! own `attributes` (including an explicitly empty/null value, which breaks
-//! inheritance) or when a non-null value is inherited along `depends_on`.
+//! An object's completeness is the percentage of its required attributes that
+//! are set. Required are the attributes with `required_types` for the object's
+//! type (plus the type's `key_attributes`) **and** the class features its
+//! taxonomy nodes mark as mandatory (`category_attribute.required`, see
+//! `class_features`). A required attribute counts as *set* when its key is
+//! present in the object's own `attributes` (including an explicitly empty/null
+//! value, which breaks inheritance) or when a non-null value is inherited along
+//! `depends_on`.
 //!
 //! Computation lives in the core so it is consistent across grid, form and
 //! dashboard (per object type × working language).
@@ -100,7 +103,11 @@ pub async fn compute(
     locale: Option<&str>,
     own_attributes: &Map<String, Value>,
 ) -> Result<Completeness, ApiError> {
-    let required = required_names(db, object_type).await?;
+    let mut required = required_names(db, object_type).await?;
+    // Class features (Stage B): the mandatory attributes of the object's
+    // taxonomy classes count as required too.
+    let class_required = crate::class_features::class_required_names(db, key_of(object_id)).await?;
+    crate::class_features::merge_names(&mut required, &class_required);
     compute_with_required(cache, db, object_id, locale, own_attributes, &required).await
 }
 
@@ -197,13 +204,24 @@ pub(crate) async fn compute_batch(
         attrs_by_key.insert(key_of(object_id).to_owned(), own.clone());
     }
     let parent_by_key = load_parent_map(db).await?;
+    // Class features (Stage B): mandatory class attributes per object, resolved
+    // from the categorisation edges plus the parent map we already have.
+    let object_keys: Vec<String> = items
+        .iter()
+        .map(|(object_id, _, _)| key_of(object_id).to_owned())
+        .collect();
+    let class_required_by_key =
+        crate::class_features::class_required_names_batch(db, &object_keys, &parent_by_key).await?;
     let fallback_chain: Option<Arc<Vec<String>>> = match locale {
         Some(locale) => Some(cache.fallback_chain(db, locale).await?),
         None => None,
     };
 
     for (object_id, otype, own) in items {
-        let required = required_by_type.get(otype).cloned().unwrap_or_default();
+        let mut required = required_by_type.get(otype).cloned().unwrap_or_default();
+        if let Some(class_required) = class_required_by_key.get(key_of(object_id)) {
+            crate::class_features::merge_names(&mut required, class_required);
+        }
         if required.is_empty() {
             out.insert(
                 object_id.clone(),

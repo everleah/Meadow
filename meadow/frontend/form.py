@@ -212,6 +212,14 @@ async def product_form(object_id: str) -> None:
                 )
             except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
                 taxonomy_types = taxonomy_type_names([])
+            try:
+                # Class features (Stage B): the features of the object's taxonomy
+                # classes, incl. the mandatory ones that are still unset.
+                class_features = await client.list_object_category_attributes(
+                    token, object_id, locale=locale
+                )
+            except Exception:  # noqa: BLE001 - no class features without classes
+                class_features = {}
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -1298,6 +1306,74 @@ async def product_form(object_id: str) -> None:
                             ui.icon("block").classes("text-gray-300 text-sm shrink-0")
             return expansion, content
 
+        def build_class_features_section() -> tuple[ui.expansion, ui.column]:
+            """Renders the class features of the object (Stage B).
+
+            `class_features` is the resolved list of the object's taxonomy classes
+            (`GET /objects/{id}/category-attributes`): every feature with its
+            required flag and the classes that contribute it. A missing mandatory
+            feature is marked, so the section shows *what the classification
+            demands* — the same data a `validation`/`workflow_guard` rule sees as
+            `ctx.missing_features`.
+            """
+            missing = set(class_features.get("missing") or [])
+            count = len(class_features.get("attributes") or [])
+            state_key = "__class_features__"
+            expansion = (
+                ui.expansion(
+                    f"{t('form.class_features')} ({count})",
+                    value=section_state.get(state_key, False),
+                )
+                .classes("w-full")
+                .props("header-class=bg-teal-2 text-teal-9")
+            )
+            expansion.on_value_change(
+                lambda event, key=state_key: remember_section(key, bool(event.value))
+            )
+            with expansion:
+                content = ui.column().classes("w-full gap-1 p-2")
+            with expansion, content:
+                ui.label(t("form.class_features_hint")).classes("text-caption text-gray-500")
+                for feature in class_features.get("attributes") or []:
+                    name = str(feature.get("name") or "")
+                    nodes = [str(node) for node in (feature.get("nodes") or [])]
+                    with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
+                        ui.label(name).classes("grow text-body2")
+                        ui.html(
+                            '<span class="px-2 py-0.5 rounded text-xs bg-primary text-white">'
+                            + t("categories.feature_required")
+                            + "</span>"
+                            if feature.get("required")
+                            else '<span class="px-2 py-0.5 rounded text-xs bg-neutral '
+                            'text-gray-600">' + t("categories.feature_optional") + "</span>"
+                        )
+                        if feature.get("missing"):
+                            ui.html(
+                                '<span class="px-2 py-0.5 rounded text-xs bg-negative text-white">'
+                                + t("form.class_features_missing")
+                                + "</span>"
+                            )
+                        tooltip = t("form.class_features_source").format(
+                            nodes=", ".join(node.split(":")[-1] for node in nodes)
+                            or t("grid.bulk_nothing_picked")
+                        )
+                        ui.icon("category").classes("text-gray-400 text-sm shrink-0").tooltip(
+                            tooltip
+                        )
+                if missing:
+                    ui.label(
+                        t("form.class_features_missing_hint").format(
+                            count=len(missing), names=", ".join(sorted(missing))
+                        )
+                    ).classes("text-caption text-negative")
+                with ui.row().classes("items-center gap-2 w-full"):
+                    ui.button(
+                        t("form.class_features_manage"),
+                        icon="category",
+                        on_click=lambda: ui.navigate.to("/categories"),
+                    ).props("flat dense")
+            return expansion, content
+
         def build_category_section(definition: dict) -> tuple[ui.expansion, ui.column]:
             """Renders the collapsible section of one category relation type."""
             def_key = definition_key(definition)
@@ -1481,6 +1557,11 @@ async def product_form(object_id: str) -> None:
                     )
                     result = build_category_section(definition)
                     jump_refs.append((title, *result))
+                # Class features (Stage B) — shown when the object's classes
+                # define features at all.
+                if class_features.get("attributes"):
+                    result = build_class_features_section()
+                    jump_refs.append((t("form.class_features"), *result))
                 # Channels (channel-specific releases) — hidden without a catalog.
                 if channels:
                     result = build_channels_section()

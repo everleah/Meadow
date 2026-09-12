@@ -2166,6 +2166,92 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    async def list_category_attributes(self, token: str, category_id: str) -> list[dict]:
+        """Lists a class's features, own and inherited (``GET /categories/{id}/attributes``)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/categories/{category_id}/attributes",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def attach_category_attribute(
+        self,
+        token: str,
+        category_id: str,
+        *,
+        attribute: str,
+        required: bool = False,
+        position: int | None = None,
+    ) -> dict:
+        """Attaches an attribute definition to a class (``POST /categories/{id}/attributes``)."""
+        payload: dict[str, object] = {"attribute": attribute, "required": required}
+        if position is not None:
+            payload["position"] = position
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/categories/{category_id}/attributes",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_category_attribute(
+        self,
+        token: str,
+        category_id: str,
+        attribute: str,
+        *,
+        required: bool | None = None,
+        position: int | None = None,
+    ) -> dict:
+        """Updates a class feature (``PATCH /categories/{id}/attributes/{attribute}``)."""
+        payload: dict[str, object] = {}
+        if required is not None:
+            payload["required"] = required
+        if position is not None:
+            payload["position"] = position
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/categories/{category_id}/attributes/{attribute}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def detach_category_attribute(self, token: str, category_id: str, attribute: str) -> None:
+        """Detaches a class feature (``DELETE /categories/{id}/attributes/{attribute}``)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/categories/{category_id}/attributes/{attribute}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def list_object_category_attributes(
+        self, token: str, object_id: str, *, locale: str | None = None
+    ) -> dict:
+        """Resolved class features of an object (``GET /objects/{id}/category-attributes``)."""
+        params: dict[str, str] = {}
+        if locale:
+            params["locale"] = locale
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}/category-attributes",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def list_enum_sets(self, token: str) -> list[dict]:
         """Lists enum sets with their options resolved (``GET /enum-sets``)."""
         async with _api_client() as client:

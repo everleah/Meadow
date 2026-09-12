@@ -208,6 +208,24 @@ DEFINE FIELD IF NOT EXISTS updated_by ON TABLE release TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_release_object_channel ON TABLE release FIELDS object_id, channel UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_release_channel_status ON TABLE release FIELDS channel, status;
 
+-- Class features (Stage B): the attribute definitions a taxonomy node ("class")
+-- requires or offers as a feature. One row per (node, attribute). `category_id`
+-- is a native record so "which features does this class have?" is one indexed
+-- query; `attribute` is the attribute definition's **name** (configuration stays
+-- portable, like the channel `code`). `required` marks the mandatory features of
+-- the class; features of an ancestor class apply to its descendants too.
+-- See `plan/detail/kategorisierung.md` ("Klassifizierungsstandards").
+DEFINE TABLE IF NOT EXISTS category_attribute;
+DEFINE FIELD IF NOT EXISTS category_id ON TABLE category_attribute TYPE record<object>;
+DEFINE FIELD IF NOT EXISTS attribute ON TABLE category_attribute TYPE string;
+DEFINE FIELD IF NOT EXISTS required ON TABLE category_attribute TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS position ON TABLE category_attribute TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE created_at ON TABLE category_attribute TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE category_attribute TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE category_attribute TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_category_attribute_unique ON TABLE category_attribute FIELDS category_id, attribute UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_category_attribute_name ON TABLE category_attribute FIELDS attribute;
+
 -- Users: technical table, separate from business objects.
 DEFINE TABLE IF NOT EXISTS user;
 DEFINE FIELD IF NOT EXISTS username ON TABLE user TYPE string;

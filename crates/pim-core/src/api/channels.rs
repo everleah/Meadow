@@ -234,6 +234,8 @@ async fn guard_release(
             context: crate::rules::EvaluationContext {
                 channel: Some(channel),
                 release_status: Some(release_status),
+                // Filled by `evaluate_for_write` (class features, Stage B).
+                missing_features: None,
             },
         },
     )

@@ -65,6 +65,36 @@ def test_evaluate_workflow_guard_denies_transition() -> None:
     assert response.deny_reason == "must be approved"
 
 
+def test_evaluate_exposes_the_unset_class_features_to_rules() -> None:
+    """Stage B: `ctx.missing_features` carries the mandatory class features."""
+    guard = EvaluationRule(
+        name="class_complete",
+        type="workflow_guard",
+        script=(
+            "def run(obj, ctx, result):\n"
+            "    missing = list(ctx.missing_features)\n"
+            "    result.allow(not missing, 'class features missing: ' + ', '.join(missing))\n"
+        ),
+    )
+    denied = evaluate(
+        EvaluationRequest(
+            rules=[guard],
+            object=_obj(),
+            mode="transition",
+            missing_features=["power", "voltage"],
+        )
+    )
+    allowed = evaluate(
+        EvaluationRequest(rules=[guard], object=_obj(), mode="transition", missing_features=[])
+    )
+
+    assert denied.allowed is False
+    assert denied.deny_reason == "class features missing: power, voltage"
+    assert allowed.allowed is True
+    # Without the field (older core) the tuple is simply empty.
+    assert evaluate(EvaluationRequest(rules=[guard], object=_obj(), mode="transition")).allowed
+
+
 def test_evaluate_reports_syntax_error_as_failed() -> None:
     broken = EvaluationRule(
         name="broken",

@@ -102,6 +102,20 @@ pub fn router(state: AppState) -> Router {
             "/objects/{id}/releases/{channel}",
             axum::routing::delete(api::channels::delete_object_release),
         )
+        .route(
+            "/objects/{id}/category-attributes",
+            get(api::category_attributes::list_object_category_attributes),
+        )
+        .route(
+            "/categories/{id}/attributes",
+            get(api::category_attributes::list_category_attributes)
+                .post(api::category_attributes::create_category_attribute),
+        )
+        .route(
+            "/categories/{id}/attributes/{attribute}",
+            axum::routing::patch(api::category_attributes::update_category_attribute)
+                .delete(api::category_attributes::delete_category_attribute),
+        )
         .route("/references", post(api::references::create_reference))
         .route(
             "/references/{id}",

@@ -14,7 +14,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `sprachbaum-mehrsprachigkeit.md` — language tree & multilingual data (section 4)
   - `datenwertvererbung.md` — data value inheritance & conflict resolution (section 4)
   - `vererbung-konsolidierung.md` — consolidating inheritance (pushing identical child values up to the parent, implemented Phase 9)
-  - `kategorisierung.md` — categorization & grouping: category dimensions (per-relation-type counters & filters), taxonomy node types (`object_type.taxonomy`) and the staged classification-standard plan (section 4)
+  - `kategorisierung.md` — categorization & grouping: category dimensions (per-relation-type counters & filters), taxonomy node types (`object_type.taxonomy`), class features (`category_attribute`) and the classification-standard plan (section 4)
   - `api-design.md` — REST API design (section 5)
   - `jobs-scheduler.md` — background jobs & scheduler (section 6)
   - `integration-eventsystem.md` — integration & event system (section 7)

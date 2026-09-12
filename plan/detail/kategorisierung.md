@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 2, 9
-- **Stand:** Kern umgesetzt (Taxonomie-Typen Stufe A + Dimensionen); Klassifizierungsstandards bewertet, Stufe B offen
+- **Stand:** umgesetzt (Dimensionen, Taxonomie-Typen Stufe A, Klassen-Merkmale Stufe B); offen bleiben Import/Versionierung der Standard-Metadaten und das BMEcat/xChange-Export-Mapping
 
 Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, ohne dafür neue technische Entitäten einzuführen. Kategorien sind ganz normale Objekte, die über Relationen mit den zugeordneten Objekten verbunden werden. Dadurch bleibt das Datenmodell schlank und nutzt die bereits vorhandenen Graph-Fähigkeiten.
 
@@ -101,11 +101,16 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 
 **Schlussfolgerung:** Ein Standard braucht beides — die **eigene, versionierte Hierarchie** (Stufe A, erledigt) **und** die **klassen-spezifischen Merkmale** (Stufe B, offen). Ohne Stufe B bleibt ein ETIM-Baum eine Hierarchie mit Handpflege.
 
-**Stufe B — Skizze (nicht umgesetzt):**
+**Stufe B — Merkmale je Klasse: umgesetzt (2026-09-12).**
 
-1. **Merkmale je Kategorieknoten:** eine Zuordnung `attribute_definition` ↔ Kategorieknoten (Pflicht/optional + erlaubte Werte). Passt zu `attribute_definition.applicable_types` als zweiter Dimension (z. B. `required_for_categories`/`attributes_for_category`), ohne die Kategorien-Kanten zu vererbenden Kanten zu machen.
-2. **Wirkung:** Formular zeigt die Merkmale der gewählten Klasse; Vollständigkeit rechnet je Klasse; eine Business Rule kann die Zuordnung prüfen (ähnlich `workflow_guard`).
-3. **Standard-Metadaten:** eigener Knotentyp (z. B. `etim_class`) mit `code`/`version`/`source`, Import über MCF/Connector, Mapping eigene Kategorie → Standardklasse als `link`-Relation (`target_types` beschränkt), Read-only-Kennzeichnung.
-4. **Export:** BMEcat/xChange-Mapping im Export-Wizard (Folgearbeit).
+**Modell.** Neue Tabelle **`category_attribute`** (ein Datensatz je Klasse × Attribut):
+`category_id` (native Referenz auf den Taxonomie-Knoten), `attribute` (Name der Attributdefinition, portabel wie der Kanal-`code`), `required` (Pflicht-Merkmal der Klasse), `position`, Audit-Felder; Unique-Index auf `(category_id, attribute)`.
 
-**Nicht-Ziele:** kein Klassifikations-Modul außerhalb des Objekt-/Relationsmodells, keine automatische Umklassifizierung, kein vererbender Kategorie-Baum.
+- **Klasse ⇒ Merkmale:** Merkmale gelten fuer jedes Objekt, das der Klasse zugeordnet ist, **plus** die Merkmale ihrer **Vorfahren** (`depends_on`-Kette): eine Taxonomie kann gemeinsame Merkmale oben und spezifische unten definieren (ETIM/BMEcat-Stil). Die Klasse wird ueber **jede** Kategorisierung (Rolle `category`, beliebige Dimension) gefunden.
+- **Wirkung:** Pflicht-Merkmale zaehlen in die **Vollstaendigkeit** (Einzel- und Batch-Pfad, damit Dashboard/Grid/Formular uebereinstimmen), erscheinen in `GET /objects/{id}?locale=` unter `missing_required` und damit im Filter `?missing_required=true`, und stehen Regeln als **`ctx.missing_features`** zur Verfuegung (`validation`/`workflow_guard`: „nicht publizieren ohne vollstaendige Klasse“). Ein Wert gilt als gesetzt, wenn er im eigenen Objekt oder per Vererbung vorliegt.
+- **API (admin fuer CRUD, editor+ fuer Lesen):** `GET|POST /categories/{id}/attributes`, `PATCH|DELETE /categories/{id}/attributes/{attribute}`, `GET /objects/{id}/category-attributes` (aufgeloeste Merkmale + `missing`). Eine nicht vorhandene Attributdefinition wird mit `400` abgelehnt, ein Nicht-Taxonomie-Knoten ebenfalls. Beim **Loeschen** eines Attributs werden die Merkmals-Zeilen entfernt, beim **Umbenennen** mitgezogen, beim **Loeschen eines Knotens** kaskadiert.
+- **UI:** `/categories` hat im Detail-Panel die Sektion **„Merkmale der Klasse“** (Anhaengen per Auswahl, Pflicht-Schalter, Entfernen; geerbte Merkmale mit Quellklasse); das **Produkt-Formular** zeigt die Sektion **„Klassen-Merkmale“** mit Pflicht-/Optional-Kennzeichnung, „fehlt“-Badge und Sprung zur Klassen-Pflege.
+
+**Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung) und das **BMEcat/xChange-Export-Mapping** im Export-Wizard.
+
+**Nicht-Ziele (bewusst):** keine klassen-spezifische Einschraenkung der erlaubten Werte (erlaubte Werte bleiben an der Attributdefinition/Enum-Set, wie in ETIM), kein zweiter Merkmals-Mechanismus ausserhalb der Attributdefinitionen, keine vererbenden Kategorie-Kanten.

@@ -11,6 +11,7 @@ pub mod attribute_values;
 pub mod audit;
 pub mod auth;
 pub mod cache;
+pub mod class_features;
 pub mod completeness;
 pub mod config;
 pub mod db;

@@ -46,6 +46,8 @@ class EvaluationRequest(BaseModel):
     # Channel-specific release transition (mode `transition`): see `Context`.
     channel: str | None = None
     release_status: str | None = None
+    # Unset mandatory class features of the object's taxonomy classes (Stage B).
+    missing_features: list[str] = Field(default_factory=list)
 
 
 class EvaluationIssue(BaseModel):

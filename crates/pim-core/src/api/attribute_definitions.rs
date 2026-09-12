@@ -644,6 +644,29 @@ pub async fn update_attribute_definition(
         }
     }
 
+    // A rename must carry the class features over: `category_attribute`
+    // references the attribute by its (stable) name.
+    let previous_name = existing
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let renamed_to = changes
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|new_name| !new_name.is_empty() && new_name != &previous_name);
+    if let Some(new_name) = renamed_to {
+        state
+            .db
+            .inner()
+            .query("UPDATE category_attribute SET attribute = $new WHERE attribute = $old;")
+            .bind(("old", previous_name))
+            .bind(("new", new_name))
+            .await?
+            .check()?;
+    }
+
     let outbox = crate::event::content(&crate::event::OutboxEvent {
         event_type: crate::event::EVENT_ATTRIBUTE_DEFINITION_UPDATED,
         object_type: String::new(),
@@ -1338,6 +1361,16 @@ pub async fn delete_attribute_definition(
         .inner()
         .query(del_sql)
         .bind(("key", key))
+        .await?
+        .check()?;
+
+    // Class features (Stage B) reference the attribute by name; the definition is
+    // gone, so drop the dangling feature rows of every class.
+    state
+        .db
+        .inner()
+        .query("DELETE category_attribute WHERE attribute = $name;")
+        .bind(("name", name.clone()))
         .await?
         .check()?;
 

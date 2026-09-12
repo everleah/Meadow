@@ -34,6 +34,11 @@ class Context:
     # object status, so a rule can require the global release before a channel.
     channel: str | None = None
     release_status: str | None = None
+    # Set for object writes (Stage B, class features): the **mandatory features of
+    # the object's taxonomy classes that are not set**. A validation or
+    # workflow_guard rule can block a transition on it, e.g. "publish only with a
+    # complete classification class".
+    missing_features: tuple[str, ...] = ()
 
 
 @dataclass

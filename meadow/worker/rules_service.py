@@ -54,6 +54,7 @@ def evaluate(
             actor=request.actor,
             channel=request.channel,
             release_status=request.release_status,
+            missing_features=tuple(request.missing_features),
         )
         try:
             result = execute_rule(

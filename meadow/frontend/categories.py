@@ -90,6 +90,11 @@ async def categories_page() -> None:
         # `all` feeds the node-id lookup (labels of every taxonomy), `key` is the
         # taxonomy currently edited (the tree shows one taxonomy at a time).
         nodes: dict = {"all": taxonomy_types, "key": taxonomy_types[0]}
+        # Attribute definitions: candidates for the class features (Stage B).
+        try:
+            attribute_definitions = await client.list_attribute_definitions(token, limit=1000)
+        except Exception:  # noqa: BLE001 - the feature picker stays empty
+            attribute_definitions = []
 
         try:
             category_roots = await _category_roots(
@@ -384,6 +389,108 @@ async def categories_page() -> None:
                         ui.button(
                             t("categories.save"), icon="save", on_click=lambda: save_inline()
                         ).props("flat")
+                # Class features (Stage B): the attributes this class requires or
+                # offers. They apply to every object assigned to the class (and to
+                # its descendants); see `plan/detail/kategorisierung.md`.
+                with ui.column().classes("w-full mt-4 gap-1"):
+                    ui.label(t("categories.features")).classes("text-subtitle2")
+                    ui.label(t("categories.features_hint")).classes("text-caption text-gray-500")
+                    category_id = selected_category["id"]
+                    try:
+                        features = await client.list_category_attributes(token, category_id)
+                    except Exception:  # noqa: BLE001 - degrade to an empty list
+                        features = []
+                    attached = {str(row.get("attribute")) for row in features}
+
+                    async def attach(value: str | None = None) -> None:
+                        name = str(value or "").strip()
+                        if not name:
+                            ui.notify(t("categories.features_pick"), color="warning")
+                            return
+                        try:
+                            await client.attach_category_attribute(
+                                token, category_id, attribute=name
+                            )
+                        except CoreError as exc:
+                            ui.notify(f"{t('categories.feature_failed')}: {exc}", color="negative")
+                            return
+                        await render_detail()
+                        ui.notify(t("categories.feature_added"), color="positive")
+
+                    async def set_required(name: str, value: bool) -> None:
+                        try:
+                            await client.update_category_attribute(
+                                token, category_id, name, required=value
+                            )
+                        except CoreError as exc:
+                            ui.notify(f"{t('categories.feature_failed')}: {exc}", color="negative")
+                        await render_detail()
+
+                    async def detach(name: str) -> None:
+                        try:
+                            await client.detach_category_attribute(token, category_id, name)
+                        except CoreError as exc:
+                            ui.notify(f"{t('categories.feature_failed')}: {exc}", color="negative")
+                            return
+                        await render_detail()
+                        ui.notify(t("categories.feature_removed"), color="positive")
+
+                    if not features:
+                        ui.label(t("categories.features_none")).classes(
+                            "text-caption text-gray-400 italic"
+                        )
+                    for row in features:
+                        name = str(row.get("attribute") or "")
+                        inherited = bool(row.get("inherited"))
+                        with (
+                            ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap")
+                        ):
+                            ui.label(name).classes("grow text-body2")
+                            ui.html(
+                                '<span class="px-2 py-0.5 rounded text-xs bg-primary text-white">'
+                                + t("categories.feature_required")
+                                + "</span>"
+                                if row.get("required")
+                                else '<span class="px-2 py-0.5 rounded text-xs bg-neutral '
+                                'text-gray-600">' + t("categories.feature_optional") + "</span>"
+                            )
+                            if inherited:
+                                ui.label(
+                                    t("categories.feature_inherited").format(
+                                        node=str(row.get("from") or "")
+                                    )
+                                ).classes("text-caption text-gray-500")
+                            else:
+                                ui.switch(
+                                    value=bool(row.get("required")),
+                                    on_change=lambda e, n=name: set_required(n, bool(e.value)),
+                                ).props("dense").tooltip(t("categories.feature_required_toggle"))
+                                ui.button(icon="close", on_click=lambda n=name: detach(n)).props(
+                                    "flat dense round"
+                                ).tooltip(t("categories.feature_remove"))
+                    available = {
+                        str(d.get("name")): str(d.get("name"))
+                        for d in attribute_definitions
+                        if d.get("name") and str(d.get("name")) not in attached
+                    }
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        feature_select = (
+                            ui.select(
+                                available,
+                                label=t("categories.features_add"),
+                            )
+                            .props("outline dense")
+                            .classes("grow")
+                            .set_enabled(bool(available))
+                        )
+                        ui.button(
+                            icon="add",
+                            on_click=lambda: attach(feature_select.value),
+                        ).props("flat dense round").set_enabled(bool(available))
+                    if not available:
+                        ui.label(t("categories.features_all_attached")).classes(
+                            "text-caption text-gray-400 italic"
+                        )
 
         async def save_inline() -> None:
             category_id = str(edit_state.get("id") or "")
