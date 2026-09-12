@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 2, 9
-- **Stand:** umgesetzt (Dimensionen, Taxonomie-Typen Stufe A, Klassen-Merkmale Stufe B); offen bleiben Import/Versionierung der Standard-Metadaten und das BMEcat/xChange-Export-Mapping
+- **Stand:** umgesetzt (Dimensionen, Taxonomie-Typen Stufe A, Klassen-Merkmale Stufe B); offen bleiben Import/Versionierung der Standard-Metadaten und das BMEcat/xChange-Export-Mapping (geplant in [bmecat-export.md](bmecat-export.md))
 
 Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, ohne dafür neue technische Entitäten einzuführen. Kategorien sind ganz normale Objekte, die über Relationen mit den zugeordneten Objekten verbunden werden. Dadurch bleibt das Datenmodell schlank und nutzt die bereits vorhandenen Graph-Fähigkeiten.
 
@@ -111,6 +111,6 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 - **API (admin fuer CRUD, editor+ fuer Lesen):** `GET|POST /categories/{id}/attributes`, `PATCH|DELETE /categories/{id}/attributes/{attribute}`, `GET /objects/{id}/category-attributes` (aufgeloeste Merkmale + `missing`). Eine nicht vorhandene Attributdefinition wird mit `400` abgelehnt, ein Nicht-Taxonomie-Knoten ebenfalls. Beim **Loeschen** eines Attributs werden die Merkmals-Zeilen entfernt, beim **Umbenennen** mitgezogen, beim **Loeschen eines Knotens** kaskadiert.
 - **UI:** `/categories` hat im Detail-Panel die Sektion **„Merkmale der Klasse“** (Anhaengen per Auswahl, Pflicht-Schalter, Entfernen; geerbte Merkmale mit Quellklasse); das **Produkt-Formular** zeigt die Sektion **„Klassen-Merkmale“** mit Pflicht-/Optional-Kennzeichnung, „fehlt“-Badge und Sprung zur Klassen-Pflege.
 
-**Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung) und das **BMEcat/xChange-Export-Mapping** im Export-Wizard.
+**Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung) und das **BMEcat/xChange-Export-Mapping** im Export-Wizard — recherchiert und geplant in [bmecat-export.md](bmecat-export.md) (Mapping-Modell, Datenkonvertierung, Export-Profile, Phasen; Umsetzung noch offen).
 
 **Nicht-Ziele (bewusst):** keine klassen-spezifische Einschraenkung der erlaubten Werte (erlaubte Werte bleiben an der Attributdefinition/Enum-Set, wie in ETIM), kein zweiter Merkmals-Mechanismus ausserhalb der Attributdefinitionen, keine vererbenden Kategorie-Kanten.
