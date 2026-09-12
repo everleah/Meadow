@@ -1087,7 +1087,9 @@ pub async fn change_attribute_type(
         clear_fields.push("enum_set_id");
         clear_fields.push("constraints");
     }
-    if source == "number" && target != "number" {
+    if crate::attribute_definition_types::is_numeric(&source)
+        && !crate::attribute_definition_types::is_numeric(&target)
+    {
         clear_fields.push("unit_id");
         clear_fields.push("display_unit_id");
     }

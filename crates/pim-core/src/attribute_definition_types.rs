@@ -19,11 +19,17 @@ pub const TYPES: &[&str] = &[
     "text",
     "url",
     "number",
+    "range",
     "boolean",
     "date",
     "enum",
     "reference",
 ];
+
+/// Whether a data type stores numbers and may therefore carry a unit.
+pub fn is_numeric(kind: &str) -> bool {
+    matches!(kind, "number" | "range")
+}
 
 /// Whether the transition `from → to` is supported by the matrix.
 ///
@@ -37,14 +43,14 @@ pub fn is_allowed_transition(from: &str, to: &str, enum_set: bool) -> bool {
     if to == "text" {
         return matches!(
             from,
-            "url" | "number" | "boolean" | "date" | "enum" | "reference"
+            "url" | "number" | "range" | "boolean" | "date" | "enum" | "reference"
         );
     }
     if from == "text" {
         return match to {
             // An `enum` target needs the option list the codes are checked against.
             "enum" => enum_set,
-            "url" | "number" | "boolean" | "date" | "reference" => true,
+            "url" | "number" | "range" | "boolean" | "date" | "reference" => true,
             _ => false,
         };
     }
@@ -62,6 +68,9 @@ pub fn allowed_targets(from: &str) -> Vec<&'static str> {
 
 /// Renders a JSON value as text (for a change **into** `text`).
 fn as_text(value: &Value) -> Result<String, String> {
+    if let Some(rendered) = format_range(value) {
+        return Ok(rendered);
+    }
     match value {
         Value::String(text) => Ok(text.clone()),
         Value::Bool(flag) => Ok(flag.to_string()),
@@ -90,6 +99,48 @@ pub fn parse_number(text: &str) -> Option<Value> {
     }
     let float: f64 = trimmed.parse().ok()?;
     serde_json::Number::from_f64(float).map(Value::Number)
+}
+
+/// Whether the value is a range (`{"from": number, "to": number}`).
+///
+/// A range is stored as an object: the two bounds are numbers, which keeps the
+/// canonical-unit rules of `number` available. An object without numeric
+/// `from`/`to` keys is **not** a range (it may be a multilingual map).
+pub fn is_range(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("from").is_some_and(Value::is_number)
+            && object.get("to").is_some_and(Value::is_number)
+    })
+}
+
+/// Builds a range value, ordering the bounds (`from <= to`).
+pub fn range_value(from: Value, to: Value) -> Value {
+    let inverted = matches!(
+        (from.as_f64(), to.as_f64()),
+        (Some(from), Some(to)) if from > to
+    );
+    let (from, to) = if inverted { (to, from) } else { (from, to) };
+    let mut object = Map::new();
+    object.insert("from".to_owned(), from);
+    object.insert("to".to_owned(), to);
+    Value::Object(object)
+}
+
+/// Canonical text form of a range: `from..to`.
+///
+/// Two dots keep the separator unambiguous — a hyphen would clash with negative
+/// bounds (`-10..60` is fine, `-10-60` would not be).
+pub fn format_range(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let from = canonical_number(object.get("from")?.as_number()?);
+    let to = canonical_number(object.get("to")?.as_number()?);
+    Some(format!("{from}..{to}"))
+}
+
+/// Parses the canonical text form `from..to` into a range value.
+pub fn parse_range(text: &str) -> Option<Value> {
+    let (from, to) = text.split_once("..")?;
+    Some(range_value(parse_number(from)?, parse_number(to)?))
 }
 
 /// Whether the text is a date in the stored form `JJJJ-MM-TT`.
@@ -144,6 +195,10 @@ pub fn convert_scalar(
             let text = value.as_str().unwrap_or_default();
             parse_number(text).ok_or_else(|| "must be a number".to_owned())
         }
+        "range" => {
+            let text = value.as_str().unwrap_or_default();
+            parse_range(text).ok_or_else(|| "must be a range in the form `from..to`".to_owned())
+        }
         "boolean" => match value.as_str().unwrap_or_default().trim() {
             "true" => Ok(Value::Bool(true)),
             "false" => Ok(Value::Bool(false)),
@@ -191,6 +246,8 @@ pub fn convert_value(
 ) -> Result<Value, String> {
     match value {
         Value::Null => Ok(Value::Null),
+        // A range is an object too, but not a language map — convert it as one value.
+        Value::Object(_) if is_range(value) => convert_scalar(from, to, value, enum_codes),
         Value::Object(entries) => {
             let mut converted = Map::new();
             let mut problems: Vec<String> = Vec::new();
@@ -280,9 +337,11 @@ mod tests {
     fn transitions_follow_the_compatibility_matrix() {
         assert!(is_allowed_transition("text", "number", false));
         assert!(is_allowed_transition("text", "url", false));
+        assert!(is_allowed_transition("text", "range", false));
         assert!(!is_allowed_transition("text", "enum", false)); // needs an enum set
         assert!(is_allowed_transition("text", "enum", true));
         assert!(is_allowed_transition("number", "text", false));
+        assert!(is_allowed_transition("range", "text", false));
         assert!(is_allowed_transition("url", "text", false));
         assert!(is_allowed_transition("reference", "text", false));
         // Not supported: silent interpretations between structural types.
@@ -290,6 +349,9 @@ mod tests {
         assert!(!is_allowed_transition("boolean", "number", false));
         assert!(!is_allowed_transition("date", "number", false));
         assert!(!is_allowed_transition("number", "url", false));
+        // A single number is not a range and vice versa.
+        assert!(!is_allowed_transition("number", "range", false));
+        assert!(!is_allowed_transition("range", "number", false));
         assert!(!is_allowed_transition("text", "text", false));
     }
 
@@ -297,10 +359,62 @@ mod tests {
     fn allowed_targets_are_listed_for_text_and_others() {
         assert_eq!(
             allowed_targets("text"),
-            vec!["url", "number", "boolean", "date", "enum", "reference"]
+            vec![
+                "url",
+                "number",
+                "range",
+                "boolean",
+                "date",
+                "enum",
+                "reference"
+            ]
         );
         assert_eq!(allowed_targets("number"), vec!["text"]);
+        assert_eq!(allowed_targets("range"), vec!["text"]);
         assert_eq!(allowed_targets("reference"), vec!["text"]);
+    }
+
+    #[test]
+    fn range_is_numeric_and_holds_two_ordered_bounds() {
+        assert!(is_numeric("number") && is_numeric("range"));
+        assert!(!is_numeric("text") && !is_numeric("boolean"));
+
+        let range = json!({ "from": 4, "to": 12.5 });
+        assert!(is_range(&range));
+        // A language map, a text bound or a single number is not a range.
+        assert!(!is_range(&json!({ "de": "x" })));
+        assert!(!is_range(&json!({ "from": "4", "to": 12.5 })));
+        assert!(!is_range(&json!(4)));
+
+        // The bounds are ordered, so an inverted input is stored correctly.
+        assert_eq!(
+            range_value(json!(12.5), json!(4)),
+            json!({ "from": 4, "to": 12.5 })
+        );
+        assert_eq!(format_range(&range).as_deref(), Some("4..12.5"));
+    }
+
+    #[test]
+    fn text_converts_to_range_and_back() {
+        assert_eq!(
+            convert_scalar("text", "range", &json!("12.5..4"), None),
+            Ok(json!({ "from": 4, "to": 12.5 }))
+        );
+        assert_eq!(
+            convert_scalar("text", "range", &json!(" 7 .. 9 "), None),
+            Ok(json!({ "from": 7, "to": 9 }))
+        );
+        assert!(convert_scalar("text", "range", &json!("1.5"), None).is_err());
+        assert!(convert_scalar("text", "range", &json!("teuer..4"), None).is_err());
+        assert_eq!(
+            convert_scalar("range", "text", &json!({ "from": 4, "to": 12.5 }), None),
+            Ok(json!("4..12.5"))
+        );
+        // A range is an object, but must not be treated as a language map.
+        assert_eq!(
+            convert_value("range", "text", &json!({ "from": 1, "to": 2 }), None),
+            Ok(json!("1..2"))
+        );
     }
 
     #[test]

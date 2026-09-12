@@ -1234,6 +1234,8 @@
   "form.inherited_from": "Vererbt von {label}",
   "form.interrupted": "Vererbung unterbrochen (explizit leer gesetzt)",
   "form.value_actions": "Wertaktionen",
+  "form.range_from": "Von",
+  "form.range_to": "Bis",
   "form.clear_value": "Leer setzen (Vererbung unterbrechen)",
   "form.reset_inherited": "Auf vererbt zurücksetzen",
   "form.inherit_failed": "Die Aktion konnte nicht ausgeführt werden.",

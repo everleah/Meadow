@@ -37,6 +37,7 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
+from meadow.frontend.range_values import format_range
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     association_definitions,
@@ -446,6 +447,8 @@ def editable_cell_value(
         return None
     if atype == "number":
         return _as_number(value)
+    if atype == "range":
+        return format_range(value) or None
     if atype == "boolean":
         return _as_bool(value)
     text = str(value)

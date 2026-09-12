@@ -15,9 +15,10 @@ from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
+from meadow.frontend.range_values import NUMERIC_TYPES
 
 #: Supported attribute data types (extensible; existing types are never renamed).
-ATTR_TYPES = ("text", "url", "number", "boolean", "date", "enum", "reference")
+ATTR_TYPES = ("text", "url", "number", "range", "boolean", "date", "enum", "reference")
 
 
 @ui.page("/attribute-definitions", response_timeout=15)
@@ -657,8 +658,10 @@ async def attribute_definitions_page() -> None:
                     definition["id"],
                     definition_type=target,
                     enum_set_id=fields.get("enum_set_id") if target == "enum" else None,
-                    unit_id=fields.get("unit_id") if target == "number" else None,
-                    display_unit_id=(fields.get("display_unit_id") if target == "number" else None),
+                    unit_id=fields.get("unit_id") if target in NUMERIC_TYPES else None,
+                    display_unit_id=(
+                        fields.get("display_unit_id") if target in NUMERIC_TYPES else None
+                    ),
                     drop_incompatible=drop,
                 )
                 await client.update_attribute_definition(token, definition["id"], **fields)

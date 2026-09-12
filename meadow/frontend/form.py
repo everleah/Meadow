@@ -44,6 +44,7 @@ from meadow.frontend.enums import enum_options
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
+from meadow.frontend.range_values import range_bounds, range_value
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     ROLE_CATEGORY,
@@ -512,6 +513,37 @@ async def product_form(object_id: str) -> None:
             def on_change(e) -> None:
                 set_value(attr_name, edit_lang, e.value, multilingual=multilingual)
 
+            if atype == "range":
+                # Two bounds in one row. Numbers are never multilingual, so the
+                # language dialog does not mirror this field (`main_widgets`).
+                low, high = range_bounds(value)
+                with ui.row().classes("items-center gap-1 flex-1"):
+                    from_field = (
+                        ui.number(value=low)
+                        .props(f'filled dense label="{t("form.range_from")}"')
+                        .classes("w-28")
+                    )
+                    ui.label("–").classes("text-gray-500")
+                    to_field = (
+                        ui.number(value=high)
+                        .props(f'filled dense label="{t("form.range_to")}"')
+                        .classes("w-28")
+                    )
+
+                    def on_bounds_change(_event=None) -> None:
+                        set_value(
+                            attr_name,
+                            edit_lang,
+                            range_value(from_field.value, to_field.value),
+                            multilingual=multilingual,
+                        )
+
+                    from_field.on_value_change(on_bounds_change)
+                    to_field.on_value_change(on_bounds_change)
+                if dim:
+                    for element in (from_field, to_field):
+                        element.style("opacity: 0.65")
+                return
             if atype == "number":
                 field: ui.element = (
                     ui.number(value=value).props("filled dense").on_value_change(on_change)

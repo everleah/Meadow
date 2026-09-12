@@ -1234,6 +1234,8 @@
   "form.inherited_from": "Inherited from {label}",
   "form.interrupted": "Inheritance interrupted (explicitly set empty)",
   "form.value_actions": "Value actions",
+  "form.range_from": "From",
+  "form.range_to": "To",
   "form.clear_value": "Set empty (interrupt inheritance)",
   "form.reset_inherited": "Reset to inherited",
   "form.inherit_failed": "The action could not be applied.",

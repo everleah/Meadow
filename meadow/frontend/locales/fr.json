@@ -1234,6 +1234,8 @@
   "form.inherited_from": "Hérité de {label}",
   "form.interrupted": "Héritage interrompu (défini explicitement vide)",
   "form.value_actions": "Actions de valeur",
+  "form.range_from": "De",
+  "form.range_to": "À",
   "form.clear_value": "Définir vide (interrompre l’héritage)",
   "form.reset_inherited": "Rétablir l’héritage",
   "form.inherit_failed": "L’action n’a pas pu être appliquée.",

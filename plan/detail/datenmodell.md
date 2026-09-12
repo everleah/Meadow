@@ -129,11 +129,21 @@ Ein `url`-Attribut speichert eine **Webadresse** — Website, Produktseite, Date
 - **Massenpflege:** `url` zählt als **stringwertiger** Typ und ist damit im **Find & Replace** wählbar (Domain-/CDN-Präfix umschreiben); der Kern validiert das Ergebnis, ein kaputter Ersatz wird pro Objekt abgelehnt (Report) statt still geschrieben.
 - **Export:** In **XLSX** werden Zellen von `url`-Spalten (auch je Sprache) als **Hyperlink** geschrieben (blau/unterstrichen) — ein Nicht-`url`-Attribut mit URL-Text bleibt Text. CSV/JSON bleiben unverändert (Wert = URL).
 
+### Range-Attribute (`range`)
+
+Ein `range`-Attribut speichert **zwei numerische Grenzen** als `{ "from": <Zahl>, "to": <Zahl> }` — dieselbe Zahlenstruktur wie `number` (kanonische Einheit), deshalb darf auch ein `range`-Attribut Einheiten tragen (`unit_id`/`display_unit_id`) und beim Datentypwechsel zwischen `number` und `range` bleiben sie erhalten. Die Grenzen werden **geordnet** gespeichert (`from <= to`); die kanonische Textform ist `from..to` (zwei Punkte, damit ein negatives Vorzeichen nicht mit dem Trenner kollidiert).
+
+- **Anlass:** Klassifikationsstandards kennen Bereichsmerkmale — ETIM 10.0 hat **931** `Range`-Merkmale (von 17377), die in BMEcat/ETIM als **zwei `FVALUE`** übertragen werden ([bmecat-export.md](bmecat-export.md) §11.4).
+- **Formular:** zwei numerische Felder („Von“/„Bis“, `form.range_from`/`form.range_to`), die **einen** Wert schreiben; **Grid:** Anzeige als `from – to`, **nicht** inline editierbar (`EDITABLE_TYPES` enthält `range` bewusst nicht — einer Paarstruktur fehlt die Einzelzellen-Entsprechung).
+- **Abgrenzung zu Mehrsprachigkeit:** ein Bereich ist nicht sprachabhängig; geprüft wird numerisch über `is_range` (ein Sprachobjekt `{de: …}` ist damit kein Bereich).
+- **Suche:** `range`-Attribute fehlen noch im Feldkatalog (`search_schema.rs::attribute_widget` lässt unbekannte Typen aus) — numerische Suche über die beiden Grenzen bleibt Folgearbeit.
+- **Validierung:** wie bei `number` prüft der Kern **nicht** bei jedem Schreibvorgang; geprüft wird beim **Datentypwechsel** und beim Parsen der Textform (`parse_range`).
+
 ## Datentypwechsel
 
 > **Stand:** umgesetzt (Phase 9) — Endpunkt `POST /attribute-definitions/{id}/type-change` (Dry-Run + Anwendung), Migration der Werte in einer Transaktion, Audit + Event, Dialog im Frontend.
 
-Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate. **`url`** ist die erste Ausnahme bei der Schreibvalidierung: der Kern akzeptiert nur absolute `http(s)`-URLs (siehe [URL-Attribute](#url-attribute)).
+Der Datentyp eines Attributs wird über `type` in der `attribute_definition` festgelegt (`text`, `url`, `number`, `range`, `boolean`, `date`, `enum`, `reference`) und optional über Modifikatoren (`multilingual`, `unit_id`/`display_unit_id`) präzisiert. Die Werte selbst werden **generisch als JSON** im `attributes`-Feld der Objekte gespeichert – es gibt keine typgebundenen Spalten und keine typspezifischen, verlustbehafteten Speicherformate. **`url`** ist die erste Ausnahme bei der Schreibvalidierung: der Kern akzeptiert nur absolute `http(s)`-URLs (siehe [URL-Attribute](#url-attribute)).
 
 **Grundsatz:** Der Datentyp ist eine **Eigenschaft der Definition, nicht der gespeicherten Werte**. Genau deshalb ist ein Wechsel möglich — aber nur **mit Migration aller vorhandenen Werte**, geprüft gegen die Kompatibilitätsmatrix.
 
@@ -146,20 +156,21 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
 
 **Kompatibilitätsmatrix:** Nicht jeder Wechsel ist möglich oder verlustfrei. Umgesetzt ist die folgende Matrix; jeder Wechsel umfasst eine **Migration aller vorhandenen Werte**, einen **Audit-Log-Eintrag** und ein Event.
 
-| von \ nach  | `text`                         | `url`                                  | `number`               | `boolean`                             | `date`                            | `enum`                            | `reference`                  |
-| ----------- | ------------------------------ | -------------------------------------- | ---------------------- | ------------------------------------- | --------------------------------- | --------------------------------- | ---------------------------- |
-| `text`      | —                              | ⚠️ nur gültige `http(s)`-URLs          | ⚠️ nur parsebare Zahlen | ⚠️ nur`true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-Datum (`JJJJ-MM-TT`) | ⚠️ nur Codes der Optionsliste   | ⚠️ nur `object:<key>`-IDs    |
-| `url`       | ✅ verlustfrei                 | —                                      | ❌                     | ❌                                    | ❌                                | ❌                                | ❌                           |
-| `number`    | ✅ verlustfrei (kanonisch)     | ❌                                     | —                      | ❌                                    | ❌                                | ❌                                | ❌                           |
-| `boolean`   | ✅ verlustfrei (`true`/`false`) | ❌                                     | ❌                     | —                                     | ❌                                | ❌                                | ❌                           |
-| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                                     | ❌                     | ❌                                    | —                                 | ❌                                | ❌                           |
-| `enum`      | ✅ verlustfrei (Code)          | ❌                                     | ❌                     | ❌                                    | ❌                                | —                                 | ❌                           |
-| `reference` | ✅ verlustfrei (als ID-String) | ❌                                     | ❌                     | ❌                                    | ❌                                | ❌                                | —                            |
+| von \ nach  | `text`                         | `url`                       | `number`                 | `range`                              | `boolean`                             | `date`                              | `enum`                          | `reference`               |
+| ----------- | ------------------------------ | --------------------------- | ------------------------ | ------------------------------------ | ------------------------------------- | ----------------------------------- | ------------------------------- | ------------------------- |
+| `text`      | —                              | ⚠️ nur gültige `http(s)`-URLs | ⚠️ nur parsebare Zahlen   | ⚠️ nur `from..to` mit zwei Zahlen     | ⚠️ nur `true`/`false`-konforme Werte   | ⚠️ nur ISO-8601-Datum (`JJJJ-MM-TT`) | ⚠️ nur Codes der Optionsliste   | ⚠️ nur `object:<key>`-IDs |
+| `url`       | ✅ verlustfrei                 | —                           | ❌                       | ❌                                   | ❌                                    | ❌                                  | ❌                              | ❌                        |
+| `number`    | ✅ verlustfrei (kanonisch)     | ❌                          | —                        | ❌                                   | ❌                                    | ❌                                  | ❌                              | ❌                        |
+| `range`     | ✅ verlustfrei (`from..to`)    | ❌                          | ❌                       | —                                    | ❌                                    | ❌                                  | ❌                              | ❌                        |
+| `boolean`   | ✅ verlustfrei (`true`/`false`) | ❌                          | ❌                       | ❌                                   | —                                     | ❌                                  | ❌                              | ❌                        |
+| `date`      | ✅ verlustfrei (ISO-8601)      | ❌                          | ❌                       | ❌                                   | ❌                                    | —                                   | ❌                              | ❌                        |
+| `enum`      | ✅ verlustfrei (Code)          | ❌                          | ❌                       | ❌                                   | ❌                                    | ❌                                  | —                               | ❌                        |
+| `reference` | ✅ verlustfrei (als ID-String) | ❌                          | ❌                       | ❌                                   | ❌                                    | ❌                                  | ❌                              | —                         |
 
 - ✅ = verlustfrei möglich; ⚠️ = möglich, aber abhängig von den vorhandenen Werten (nicht konforme Werte → Ablehnung oder, mit `drop_incompatible`, Löschung dieser Werte); ❌ = nicht sinnvoll/unzulässig (bleibt die Antwort auf den Wechsel eine `400` mit Liste der erlaubten Ziel-Typen).
-- **Nur Text-Ziele sind Sammelziele** (`text`): alles ist vertextbar, weil nur die Darstellung wechselt. Zahlen sind bewusst **nicht** aus `boolean`/`date`/`enum` ableitbar (keine stillen Interpretationen).
+- **Nur Text-Ziele sind Sammelziele** (`text`): alles ist vertextbar, weil nur die Darstellung wechselt. Zahlen (und Bereiche) sind bewusst **nicht** aus `boolean`/`date`/`enum` ableitbar (keine stillen Interpretationen).
 - **Mehrsprachigkeit** (`multilingual`) ist **nicht** Teil des Wechsels: sie ändert die Wertstruktur (String ↔ Sprachobjekt) und braucht eine eigene, verlustentscheidende Migration (Auswahl einer Ausgangs-/Zielsprache). Sie bleibt eine eigene Ausbaustufe; der Wechselendpunkt lehnt eine gleichzeitige Änderung nicht ab, weil er sie gar nicht annimmt (nur `type` + Ziel-Modifikatoren).
-- **Modifikatoren:** Beim Verlassen von `enum` wird `enum_set_id` (und die Legacy-Liste `constraints.enum_values`) **geleert**; beim Verlassen von `number` werden `unit_id`/`display_unit_id` **geleert**. Beim Wechsel **nach** `enum` ist ein `enum_set_id` Pflicht (Auswahl im Request), nach `number` dürfen Einheiten mitgegeben werden.
+- **Modifikatoren:** Beim Verlassen von `enum` wird `enum_set_id` (und die Legacy-Liste `constraints.enum_values`) **geleert**; beim Verlassen der **numerischen** Typen (`number`/`range`, `is_numeric`) werden `unit_id`/`display_unit_id` **geleert**. Beim Wechsel **nach** `enum` ist ein `enum_set_id` Pflicht (Auswahl im Request), nach `number`/`range` dürfen Einheiten mitgegeben werden.
 
 ### Ablauf & API
 
@@ -183,9 +194,11 @@ Der Datentyp eines Attributs wird über `type` in der `attribute_definition` fes
 
 **Konvertierung (rein, unit-getestet in `attribute_definition_types.rs`):**
 
-- **nach `text`:** Zahl → kanonische Dezimaldarstellung, Boolean → `true`/`false`, `date`/`enum`/`reference`/`url` → unverändert (sind schon Strings).
+- **nach `text`:** Zahl → kanonische Dezimaldarstellung, `range` → `from..to`, Boolean → `true`/`false`, `date`/`enum`/`reference`/`url` → unverändert (sind schon Strings).
 - **`text` → `url`:** muss `is_valid_url` erfüllen (derselbe Prüfer wie beim Schreiben).
 - **`text` → `number`:** getrimmt parsebar als Zahl (Ganzzahl bleibt Ganzzahl, sonst Fließkomma).
+- **`text` → `range`:** getrimmt `from..to` mit **zwei** parsebaren Zahlen; die Grenzen werden normalisiert (`from <= to`).
+- **`range` → `text`:** kanonische Textform `from..to`.
 - **`text` → `boolean`:** exakt `true`/`false` (kein `1`/`0`/`yes`).
 - **`text` → `date`:** exaktes `JJJJ-MM-TT` mit gültigen Monats-/Tageswerten (gespeichert wird weiter der ISO-String, wie beim Typ `date` üblich).
 - **`text` → `enum`:** Wert muss ein Code der Optionsliste des Ziel-Sets sein.
