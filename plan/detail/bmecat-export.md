@@ -124,7 +124,7 @@ Ein BMEcat-Export braucht eine **Konfiguration**, sonst ist das Mapping im Code 
 
 Dieser Abschnitt ist die **maßgebliche Grundlage** für die Umsetzung und korrigiert §2–§6 dort, wo die erste Recherche nur Wikipedia kannte. Quellen sind die **amtlichen Artefakte** (lokal) plus die **Herstellerseiten** (BME, ETIM) — nichts davon ist geraten.
 
-### 11.1 Vorliegende Artefakte (`resources/etim/`, nicht versioniert)
+### 11.1 Vorliegende Artefakte (nicht versioniert)
 
 | Datei | Was sie belegt |
 |---|---|
@@ -133,9 +133,9 @@ Dieser Abschnitt ist die **maßgebliche Grundlage** für die Umsetzung und korri
 | `ETIM BMEcat Guideline V5-0 - Overview elements.xlsx` | Element-/Pflichtfeld-Matrix der Guideline. |
 | `SampleFile_bmecat_etim_V5_T_NEW_CATALOG_ETIM{7,8,9,10}.xml` | amtliche Beispielkataloge (u. a. für ETIM-10.0), verwendbar als Golden-File-Vorlage. |
 | `ETIM-10.0-ALL-SECTORS-IXF-NO-CHANGE-CODES-METRIC-BE.xml` | **ETIM-Standarddaten 10.0** (Release 2024-12-05) im **IXF** (`schemaVersion="3.1"`, Namespace `.../etimixf/31`), Export 2025-08-05, 70 MB; Kopf mit `ExportDate`/`Publication`, danach u. a. `Units` → `Unit/Code` (z. B. `EU000002`) + `Translations/Translation[@language]` (`EN`, `fr-BE`, `nl-BE`, …) mit `Description`/`Abbreviation`. **Lizenzhinweis im Kopf:** `etim-international.com/classification/license-info`. |
-| `bmecat_2005-2.xsd` | von bme.de **heruntergeladenes** offizielles BMEcat-**2005.2**-Schema (Datei 2022-09-10, © BME e.V.), `targetNamespace="http://www.bmecat.org/bmecat/2005.2"`; enthält **`PRODUCT_*` *und* `ARTICLE_*`** sowie `CLASSIFICATION_SYSTEM*`, `MIME_TYPE`, `MIME_PURPOSE`, `VARIANTS`. |
+| `resources/bmecat/` | Der **BMEcat-Standard** selbst: `bmecat_base_1_2.dtd` + `bmecat_new_catalog_1_2.{dtd,xsd}` + `bmecat_update_products_1_2.{dtd,xsd}` + `bmecat_update_prices_1_2.{dtd,xsd}` (1.2 Rev. A, 2003-05-09, © Fraunhofer IAO/Univ. Essen BLI) sowie `bmecat_2005.xsd`, `bmecat_2005_t{nc,upro,upri}.dtd`, `bmecat_2005-2.xsd` (© BME e.V.) und die 2005.2-Beschreibungen (de/en). → Struktur verifiziert in §11.8. |
 
-**Lizenz-/Ablage-Hinweis:** BMEcat-Schemata sind © BME e.V. („Rechtlicher Hinweis“), die ETIM-Daten stehen unter der ETIM-Lizenz. Deshalb: **`resources/etim/` wird gitignored** und dient nur lokal für Spike/Tests; Gates dürfen sich nicht auf diese Dateien verlassen (nur optionale, skip-fähige Tests).
+**Lizenz-/Ablage-Hinweis (entschieden):** BMEcat-Schemata sind © BME e.V. („Rechtlicher Hinweis“), die ETIM-Daten stehen unter der ETIM-Lizenz. Deshalb ist **`resources/*` gitignored** (Ausnahme: `resources/AGENTS.md`) und dient nur lokal für Spike/Tests — **keine** Kopien, Auszüge oder Test-Fixtures im Repo, und Gates dürfen sich nicht auf diese Dateien verlassen (nur optionale, skip-fähige Tests).
 
 ### 11.2 Versionen & EuroCat (verifiziert: bme.de/services/bmecat[/info], BME-News 14.04.2026, nexoma 03.06.2026)
 
@@ -175,15 +175,49 @@ Dieser Abschnitt ist die **maßgebliche Grundlage** für die Umsetzung und korri
 
 **Texte:** `dtMLSTRING` = `xsd:string` + **`lang`**-Attribut (`dtLANG`) — Mehrsprachigkeit gilt **je Textknoten** (Kurz-/Langtext, Keywords, Remarks, `FNAME`, `FVALUE`, `FVALUE_DETAILS` …). Pflichtfeld-Längen sind z. B. `DESCRIPTION_SHORT`/`CATALOG_NAME` ≤100, `REMARKS` ≤64000, `REMARKS`-ähnlich; `dtNUMBER` = `xsd:decimal`.
 
-### 11.4 Standarddaten-Import (IXF)
+### 11.4 Standarddaten-Import (IXF) — verifiziert
 
-Der IXF-Export ist die **Datenquelle für den Spike** und für ein späteres „Standard-Datenmodell importieren“: ETIM-Struktur (Klassen `EC…`, Merkmale `EF…`, Werte `EV…`, Einheiten `EU…`, Gruppen) samt **Übersetzungen je Sprache** (u. a. EN, nl-BE, fr-BE) wird eingelesen und in Meadows Taxonomie (Stufe A) + `attribute_definition`/`enum_set` (Stufe B) abgebildet. **Noch zu erfassen:** die vollständige Abschnitts-/Feldliste des IXF (Units ist verifiziert; Klassen/Merkmale/Werte/Gruppen folgen demselben `Code` + `Translations`-Muster, sind aber **nicht** geraten).
+Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `iterparse`) vollständig erfasst; Struktur (Namespace `…/etimixf/31`, `schemaVersion 3.1`):
+
+| Sektion | Umfang | Felder je Eintrag |
+|---|---|---|
+| `Header` | 2 × `Publication` | `Name`, `Number` (= 10), `Date` (2024-12-05), `Prerelease` (false) |
+| `Units` | **188** × `Unit` | `Code` (`EU…`), `Translations` |
+| `FeatureGroups` | **18** × `FeatureGroup` | `Code` (`EFG…`), `Translations` (ETIM Feature Grouping) |
+| `Features` | **17377** × `Feature` | `Code` (`EF…`), `Type`, `FeatureGroupCode`, `Translations` |
+| `Values` | **16163** × `Value` | `Code` (`EV…`), `Translations` |
+| `Groups` | **159** × `Group` | `Code` (`EG…`), `Translations` |
+| `Classes` | **5640** × `Class` | `Code` (`EC…`), `Version`, **`Status`** (immer `Published`), `GroupCode` (`EG…`), `Translations` |
+
+**Verschachtelung (verifiziert):** `Translations → Translation[@language] → Description` (+ `Synonyms/Synonym` bei Klassen, Merkmalen, Werten); `Classes → Class → Features → Feature → {FeatureCode, UnitCode, OrderNumber}` (**76625** Klassen-Merkmal-Zuordnungen) — d. h. eine Klasse trägt ihre Merkmalsliste **mit Position (`OrderNumber`) und Default-Einheit (`UnitCode`)**. Einträge tragen zudem `changeCode` (in diesem Export durchgängig `Unchanged`, Variante „NO-CHANGE-CODES“).
+
+**Sprachen:** der Export enthält **genau** `EN`, `fr-BE`, `nl-BE` — vollständig (jede Sektion ×3: 52131 = 17377 × 3; 16920 = 5640 × 3; 48489 = 16163 × 3 …). Ein Import kann also nur diese drei Sprachen liefern; weitere Sprachen kommen aus einem anderen Export (oder der ETIM-API).
+
+**Merkmalstypen (ETIM-Datenmodell A/N/L/R, verifiziert über alle 17377 Merkmale):** `Logical` **7311**, `Numeric` **5707**, `Alphanumeric` **3428**, `Range` **931**.
+
+**Mapping auf Meadow (Stufe A/B):**
+
+| IXF | Meadow |
+|---|---|
+| `Group` (159) | Produktgruppe — organisatorisch, nicht Shop-Navigation (ETIM ist hierarchiefrei); als eigener Taxonomie-Typ oder als Attribut am Klassenknoten |
+| `Class` (5640) | Taxonomie-Knoten mit Key-Attribut `code` = `EC…` (`Translations.Description` → mehrsprachiges Label, `Synonyms` → Suchbegriffe, `Status` → Freigabe) |
+| `Class → Features → Feature` | `category_attribute`-Zeile je Klasse: Merkmal (Attributdefinition), `position` = `OrderNumber`, Default-Einheit = `UnitCode` → **1:1 unser Stufe-B-Modell** |
+| `Feature` (Typ `Numeric`/`Logical`/`Alphanumeric`) | `attribute_definition` mit `value_type` `number` (Einheit!), `boolean`, `text`/`enum` |
+| `Unit` (188) | `unit` (ETIM-Einheitencode als stabiler Schlüssel + Übersetzungen) |
+| `FeatureGroup` (18) | ETIM Feature Grouping → `attribute_group` |
+
+**Offene Punkte aus dem IXF (nicht geraten):**
+
+1. **Werte ↔ Merkmal:** die Sektion `Values` (16163 `EV…`) hat nur `Code` + `Translations` — **keine** sichtbare Zuordnung zum Merkmal. Wie erlaubte Werte an ein Merkmal gebunden werden, ist im Spike zu klären (andere IXF-Variante, ETIM-API/CMT).
+2. **Pflicht-Kennzeichen:** `Class → Feature` liefert **kein** `mandatory`-Flag; die ETIM-Regel („alle Merkmale der Klasse“) ist strenger als optional. Import-Default daher `required=false` plus Profil-/Regeloption „alle Pflicht“.
+3. **`Range`-Merkmale (931):** Meadow hat keinen Bereichs-Datentyp. Optionen: als `text` mit Konvention (Export zerlegt in zwei `FVALUE`), zwei Attribute (von/bis) oder neuer Datentyp — Entscheidung im Spike (§11.7).
+4. **`Version`/`Status`** je Klasse sind Standard-Metadaten (Read-only-Kennzeichnung nötig, s. `kategorisierung.md` „Offen“).
 
 ### 11.5 Korrekturen an §3–§6
 
 1. **Sprache (§3):** nicht „ein Dokument je Sprache“, sondern **ein mehrsprachiges Dokument** (`LANGUAGE default` + `lang`); die Profil-Option „Datei je Sprache“ bleibt als Alternative für strenge Abnehmer.
 2. **Format-Schichtung (neu):** die Zielformate sind **Profile über einer gemeinsamen Mapping-Engine**: `etim_bmecat_5.0` (XSD 5.0.1, oben), `bmecat_2005.2` (generisch, `CLASSIFICATION_SYSTEM`/ECLASS, `MIME_TYPE`/`MIME_PURPOSE`, `VARIANTS`), `bmecat_1.2` (`ARTICLE*`, DTD-validiert) — *eine* Datenquelle, drei Serialisierer/Validatoren.
-3. **Preise (§6):** `T_NEW_CATALOG` verlangt `PRODUCT_PRICE_DETAILS` **und** `USER_DEFINED_EXTENSIONS`. Für Produkte ohne Preis ist `T_NEW_PRODUCTDATA` vorgesehen → das Profil braucht einen **Modus** (mit/ohne Preise) statt eines hart verdrahteten Pfads.
+3. **Preise (§6) — entschieden:** es wird **kein Preis erfunden** (kein `0`). Im **ETIM-Profil** ist `T_NEW_PRODUCTDATA` der preislose Pfad (die Transaktion existiert **nur dort** — im generischen 2005.2-Schema und in 1.2 nicht). Im **1.2-/2005-Pfad** ist der Preis Pflicht (`ARTICLE_PRICE_DETAILS+` bzw. `PRODUCT_PRICE_DETAILS` 1..n) ⇒ preislose Produkte werden **ausgelassen und im Report geführt** (Profilregel `skip_products_without_price`, Default an).
 4. **Merkmale (§4):** ETIM erwartet **Merkmalcodes** (`EF…`/`EV…`) statt Namen — deshalb gehört das Standard-Mapping in die **Export-Profile**, nicht in die Attributdefinitionen (dieselbe `attribute` kann in ETIM und ECLASS verschiedene Codes haben); optional als Default am Attribut.
 5. **Pflicht-Merkmale (§4):** die ETIM-Regel („alle Merkmale der Klasse“) **ist** unsere Stufe-B-Semantik (`category_attribute.required` + `ctx.missing_features`) → Export-Report und ETIM-Validierung teilen dieselbe Quelle.
 6. **MIME (§3):** im ETIM-Profil keine `MIME_TYPE`/`MIME_PURPOSE` (nur `MIME_SOURCE`/`MIME_DESCR`/`MIME_ALT` + `MIME_ROOT`); strukturierte Metadaten über `UDX.EDXF.MIME*`.
@@ -191,18 +225,43 @@ Der IXF-Export ist die **Datenquelle für den Spike** und für ein späteres „
 
 ### 11.6 Angepasste Phasen (ergänzt §9)
 
-1. **Spike (jetzt durchführbar):** IXF-Abschnitte erfassen und Units + 10–20 Klassen (mit Merkmalen/Werten/Übersetzungen) ins Meadow-Modell importieren; ein Beispielprodukt gegen **`bmecat_etim_501.xsd`** validieren (Schema liegt vor); **1.2-DTD + Spezifikation** beschaffen.
+1. **Spike (jetzt durchführbar):** IXF-Abschnitte erfassen und Units + 10–20 Klassen (mit Merkmalen/Werten/Übersetzungen) ins Meadow-Modell importieren; ein Beispielprodukt gegen **`bmecat_etim_501.xsd`** validieren; 1.2 gegen `bmecat_new_catalog_1_2.xsd`/dtl-DTD validieren (**beide Varianten sind vorhanden**, §11.8).
 2. **V1 – ETIM-Profil-Export** (`T_NEW_CATALOG` mit Preisen *und* `T_NEW_PRODUCTDATA` ohne; ETIM-Pflichtmerkmale, `-`/`NA|MV|UN`, Einheitenlisten, MIME_ROOT, XSD-Validierung im Job).
 3. **V1b – 1.2-Export** (`ARTICLE*`, DTD-Validierung) über dieselbe Mapping-Engine — exakt der Fall „wir kommen an 1.2 nicht vorbei“.
 4. **V2 – Import** (`T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`, Merkmale rückwärts) **und** IXF-Standardimport als eigener Job.
 5. **V3 – generisches 2005.2:** `CLASSIFICATION_SYSTEM` (+ `CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES`, ECLASS-Referenzen), `MIME_TYPE`/`MIME_PURPOSE`, `CATALOG_GROUP_SYSTEM`, `VARIANTS`.
 6. **V4 –** Preise/Varianten/Konfigurationen; **EuroCat** als Profil, sobald das **Syntax Binding** zur **EN 17015-2** veröffentlicht ist (Beobachtungsposten, kein Blocker).
 
-### 11.7 Offene Entscheidungen (ersetzt §10)
+### 11.7 Entscheidungen (2026-09-12)
 
-1. **Zielversion je Abnehmer:** Vorschlag — **ETIM-Profil (2005-Basis)** + **2005.2** als Standard, **1.2** als ausdrücklich angeforderte Legacy-Ausgabe (V1b).
-2. **Preisstrategie:** `T_NEW_CATALOG` (Preise nötig) oder `T_NEW_PRODUCTDATA` (ohne Preise) als Default? Vorschlag: Profilschalter, Default `T_NEW_PRODUCTDATA`, wenn kein Preisattribut gemappt ist.
-3. **Wo liegen Standardcodes (`EF…`/`EV…`/Einheitencodes)?** Vorschlag: **im Export-Profil** (Mapping) mit optionalem Default am Attribut/Enum-Option — nicht als harte Semantik in der Attributdefinition.
-4. **ETIM-Lizenz/Certification:** Daten sind lizenzpflichtig, die Guideline nennt ein **ETIM-BMEcat-Certification-Tool** (lokale Standardmerkmale werden dort pflichtig) — wird eine Zertifizierung angestrebt?
-5. **`resources/etim`:** bestätigt **gitignored** (Lizenz + 70 MB). Sollen die kleinen amtlichen Beispielkataloge als Test-Fixture (mit Herkunftshinweis) ins Repo, obwohl © BME/ETIM?
-6. **EuroCat:** bleibt Beobachtung; sobald das Syntax Binding öffentlich ist, wird es in diesem Dokument ergänzt (gleiches Mapping, anderes Zielprofil).
+1. **Zielversionen — entschieden:** **ETIM-Profil (2005-Basis)** und **2005.2** als Standard, **1.2** als ausdrücklich angeforderte Legacy-Ausgabe („an 1.2 kommen wir nicht vorbei").
+2. **Preisstrategie — entschieden:** kein Preis, wenn nichts gemappt ist (Details in §11.5 Punkt 3).
+3. **Standardcodes (`EF…`/`EV…`/Einheitencodes) — entschieden:** Pflege **im Profilmapping** (optionaler Default am Attribut/dan der Enum-Option) — nicht als harte Semantik in der Attributdefinition.
+4. **Ablage — entschieden:** alles bleibt **lokal** in dieser Entwicklungsumgebung; `resources/*` gitignored (Ausnahme `resources/AGENTS.md`), **keine** Fixtures im Repo.
+5. **ETIM-Zertifizierung — offen:** die Guideline nennt ein ETIM-BMEcat-Certification-Tool (dort werden lokale Standardmerkmale pflichtig) — wird eine Zertifizierung angestrebt?
+6. **EuroCat — Beobachtungsposten:** sobald das Syntax Binding zur EN 17015-2 öffentlich ist, wird es hier ergänzt (gleiches Mapping, anderes Zielprofil).
+7. **Noch zu beschaffen:** BMEcat-1.2-Spezifikations-PDF (`bmecatv12e.pdf`) und die vollständige IXF-Abschnittsliste.
+
+### 11.8 BMEcat 1.2 — verifiziert aus `resources/bmecat/`
+
+**Zwei Varianten, zwei Namespaces:** Die DTD-Variante nutzt `http://www.bmecat.org/bmecat/1.2/bmecat_new_catalog`, die XSD-Variante (10.01.2003) `http://www.bmecat.org/XMLSchema/1.2/bmecat_new_catalog`. Das `xmlns`-Attribut ist im Dokument `#FIXED` ⇒ **ein Dokument erfüllt nur eine der beiden Varianten** (Profiloption „DTD- oder XSD-Ausgabe“; im Zweifel die Validierungsvorgabe des Abnehmers erfragen). Die XSD-Variante enthält **identity-constraints** und warnt im Kopf selbst, dass Parser daran scheitern können ⇒ beim Validieren im Job auf diese Meldungen achten (ggf. ohne identity-constraints validieren und die Referenzen zusätzlich selbst prüfen).
+
+**Struktur (DTD 1.2 Rev. A):**
+
+- `BMECAT` (`version="1.2"` fixed) → `(HEADER, T_NEW_CATALOG)`.
+- `HEADER (GENERATOR_INFO?, CATALOG, BUYER?, AGREEMENT*, SUPPLIER, USER_DEFINED_EXTENSIONS?)`.
+- `CATALOG (LANGUAGE, CATALOG_ID, CATALOG_VERSION, CATALOG_NAME?, DATETIME?, TERRITORY*, CURRENCY?, MIME_ROOT?, PRICE_FLAG*)` → **`LANGUAGE` genau einmal**: 1.2 kennt **eine Sprache je Dokument** (2005 dagegen mehrsprachig in einer Datei, §11.2) ⇒ Sprachen = Dateien.
+- `T_NEW_CATALOG (FEATURE_SYSTEM*, CLASSIFICATION_SYSTEM*, CATALOG_GROUP_SYSTEM?, ARTICLE*, ARTICLE_TO_CATALOGGROUP_MAP*)`, Attribut `prev_version?`.
+- `ARTICLE (SUPPLIER_AID, ARTICLE_DETAILS, ARTICLE_FEATURES*, ARTICLE_ORDER_DETAILS, ARTICLE_PRICE_DETAILS+, MIME_INFO?, USER_DEFINED_EXTENSIONS?, ARTICLE_REFERENCE*)`, `mode` fixed `new`; die Update-Transaktionen (`bmecat_update_products_1_2`, `bmecat_update_prices_1_2`) sind eigene DTDs/XSDs → Import deckt `T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`/`T_UPDATE_PRICES` ab.
+- `ARTICLE_DETAILS (DESCRIPTION_SHORT, DESCRIPTION_LONG?, EAN?, SUPPLIER_ALT_AID?, BUYER_AID*, MANUFACTURER_AID?, MANUFACTURER_NAME?, MANUFACTURER_TYPE_DESCR?, ERP_GROUP_BUYER?, ERP_GROUP_SUPPLIER?, DELIVERY_TIME?, SPECIAL_TREATMENT_CLASS*, KEYWORD*, REMARKS?, SEGMENT?, ARTICLE_ORDER?, ARTICLE_STATUS*)` → 1.2 nutzt **`EAN`** (nicht `INTERNATIONAL_PID`), ein eigenes `ARTICLE_STATUS`-Vokabular (`bargain|new_article|old_article|new|used|refurbished|core_article|others`) und Elemente, die es ab 2005 nicht mehr gibt (`SEGMENT`, `ERP_GROUP_*`).
+- `ARTICLE_ORDER_DETAILS (ORDER_UNIT, CONTENT_UNIT?, NO_CU_PER_OU?, PRICE_QUANTITY?, QUANTITY_MIN?, QUANTITY_INTERVAL?)` → `ORDER_UNIT` Pflicht, `CONTENT_UNIT` optional (im ETIM-Profil sind beide Pflicht).
+- `ARTICLE_PRICE_DETAILS (DATETIME*, DAILY_PRICE?, ARTICLE_PRICE+)`, `ARTICLE_PRICE (PRICE_AMOUNT, PRICE_CURRENCY?, TAX?, PRICE_FACTOR?, LOWER_BOUND?, TERRITORY*)` mit **`price_type` als freiem Text (CDATA)** — ab 2005/ETIM enumeriert (`net_customer|net_list|nrp`); das Profil sollte die enge Liste verwenden.
+- `MIME_INFO/MIME (MIME_TYPE?, MIME_SOURCE, MIME_DESCR?, MIME_ALT?, MIME_PURPOSE?, MIME_ORDER?)` → 1.2 kennt `MIME_TYPE`/`MIME_PURPOSE` (das ETIM-Profil nicht, §11.3).
+- `ARTICLE_REFERENCE (ART_ID_TO, CATALOG_ID?, CATALOG_VERSION?)` mit `type` (`sparepart|similar|followup|mandatory|select|others|accessories|diff_orderunit|consists_of`) und `quantity` — Vokabular weicht von 2005 ab (`base_product` fehlt, `diff_orderunit` nur hier).
+
+**Stufe A/B in 1.2 (wichtig für unser Modell):**
+
+- **Navigation:** `CATALOG_GROUP_SYSTEM (GROUP_SYSTEM_ID?, GROUP_SYSTEM_NAME?, CATALOG_STRUCTURE+, GROUP_SYSTEM_DESCRIPTION?)` mit `CATALOG_STRUCTURE (GROUP_ID, GROUP_NAME, GROUP_DESCRIPTION?, PARENT_ID, GROUP_ORDER?, MIME_INFO?, USER_DEFINED_EXTENSIONS?, KEYWORD*)` und `type=(root|node|leaf)` sowie der Zuordnung `ARTICLE_TO_CATALOGGROUP_MAP (ART_ID, CATALOG_GROUP_ID, ARTICLE_TO_CATALOGGROUP_MAP_ORDER?)` → entspricht **unserer Kategorie-Taxonomie** (Stufe A) + `category_member`-Zuordnung (Knoten sind Mehrfachzuordnungen erlaubt: `CATALOG_STRUCTURE` ist mehrfach, `ARTICLE_TO_CATALOGGROUP_MAP*`).
+- **Klassifikation = unsere Klassen + Merkmale:** `CLASSIFICATION_SYSTEM (CLASSIFICATION_SYSTEM_NAME, FULLNAME?, VERSION?, DESCR?, LEVELS?, LEVEL_NAMES?, ALLOWED_VALUES?, UNITS?, CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES?, CLASSIFICATION_GROUPS)`; `CLASSIFICATION_GROUP (GROUP_ID, GROUP_NAME, GROUP_DESCR?, SYNONYMS?, CLASSIFICATION_GROUP_FEATURE_TEMPLATES?, CLASSIFICATION_GROUP_PARENT_ID?)`, `type=(node|leaf)`, `level`; `CLASSIFICATION_SYSTEM_FEATURE_TEMPLATE (FT_ID, FT_NAME, FT_DESCR?)`; `CLASSIFICATION_GROUP_FEATURE_TEMPLATE (FT_IDREF, FT_MANDATORY, FT_DATATYPE, FT_UNIT?, FT_ORDER?, FT_ALLOWED_VALUES?)`; `ALLOWED_VALUE (ALLOWED_VALUE_ID, ALLOWED_VALUE_NAME, ALLOWED_VALUE_DESCR?)`; `UNITS (UNIT (UNIT_ID, UNIT_NAME?, UNIT_DESCR?), @system)`.
+  ⇒ **1:1-Abbildung auf** `object_type.taxonomy`/Klassenhierarchie (`CLASSIFICATION_GROUP_PARENT_ID` + `level`), `category_attribute.required` (`FT_MANDATORY`), `category_attribute.position` (`FT_ORDER`), `attribute_definition` (`FT_DATATYPE`), `enum_set`/`enum_option` (`ALLOWED_VALUES`), `unit` (`UNITS`). Anders als beim ETIM-Profil wird das Klassifikationssystem hier also **mitgeliefert** — das ist der richtige Weg für ECLASS und für eigene Standards.
+- **Merkmale am Produkt:** `ARTICLE_FEATURES (REFERENCE_FEATURE_SYSTEM_NAME?, (REFERENCE_FEATURE_GROUP_ID | REFERENCE_FEATURE_GROUP_NAME)?, FEATURE*)` — 1.2 erlaubt zusätzlich den **Namen** der Gruppe und **`FEATURE` ist optional** (im ETIM-Profil Pflicht, sobald einer ETIM-Klasse zugeordnet). `FEATURE (FNAME, (VARIANTS | FVALUE+), FUNIT?, FORDER?, FDESCR?, FVALUE_DETAILS?)` → 1.2 kennt **`FORDER`** (Position) und **`FDESCR`**; Varianten stecken **innerhalb** des Merkmals (`VARIANTS (VARIANT+ (FVALUE, SUPPLIER_AID_SUPPLEMENT), VORDER)`) statt auf Produktebene wie ab 2005; `FVALUE+` erlaubt ebenfalls Bereiche/Mehrfachwerte.

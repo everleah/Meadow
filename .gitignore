@@ -144,7 +144,8 @@ backups/
 
 # Vendor standard artefacts (BMEcat/ETIM schemas, guidelines, classification exports):
 # licensed material, kept local only - see resources/AGENTS.md
-resources/etim/
+resources/*
+!resources/AGENTS.md
 
 # Production secrets & ad-hoc diagnostics bundles
 .env.vps
