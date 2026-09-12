@@ -18,11 +18,13 @@ import json as _json
 import logging
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 from openpyxl import Workbook
+from openpyxl.styles import Font
 
+from meadow.urls import is_valid_url
 from meadow.worker.http import loopback_host
 from meadow.worker.jobs import JobHandler, JobMessage
 from meadow.worker.mail import SmtpConfig, send_with_attachment
@@ -32,6 +34,20 @@ logger = logging.getLogger(__name__)
 
 #: Default cap for exported objects per run.
 DEFAULT_EXPORT_LIMIT = 1000
+
+#: Font of a hyperlinked export cell (blue + underlined, like a browser link).
+URL_CELL_FONT = Font(color="FF0563C1", underline="single")
+
+
+class AttributeFlags(NamedTuple):
+    """Attribute types that change how an attribute is exported."""
+
+    #: Attributes holding one value per language (column per locale).
+    multilingual: set[str]
+    #: Attributes stored as canonical-SI numbers with a unit.
+    quantified: set[str]
+    #: Attributes of type `url` (XLSX cells become clickable hyperlinks).
+    urls: set[str]
 
 
 def _now_iso_utc() -> str:
@@ -174,12 +190,13 @@ async def _load_languages(client: httpx.AsyncClient, core_url: str) -> dict[str,
     return result
 
 
-async def _load_multilingual(client: httpx.AsyncClient, core_url: str) -> tuple[set[str], set[str]]:
-    """Returns (multilingual attr names, quantified attr unit_map names)."""
+async def _load_attribute_flags(client: httpx.AsyncClient, core_url: str) -> AttributeFlags:
+    """Returns the attribute-type flags the export needs in one catalog call."""
     resp = await client.get(f"{core_url}/attribute-definitions", params={"limit": 1000})
     resp.raise_for_status()
     multilingual: set[str] = set()
     quantified: set[str] = set()
+    urls: set[str] = set()
     for definition in resp.json():
         name = definition.get("name")
         if not name:
@@ -188,7 +205,9 @@ async def _load_multilingual(client: httpx.AsyncClient, core_url: str) -> tuple[
             multilingual.add(str(name))
         if definition.get("unit_id"):
             quantified.add(str(name))
-    return multilingual, quantified
+        if definition.get("type") == "url":
+            urls.add(str(name))
+    return AttributeFlags(multilingual=multilingual, quantified=quantified, urls=urls)
 
 
 def _pick(value: Any, fallback: dict[str, list[str]], locale: str) -> Any:
@@ -276,17 +295,40 @@ def _csv_cell(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def _serialize_xlsx(columns: list[str], rows: list[dict[str, Any]]) -> bytes:
-    """Serializes rows to an XLSX workbook and returns the bytes."""
+def _serialize_xlsx(
+    columns: list[str], rows: list[dict[str, Any]], url_columns: set[str] | None = None
+) -> bytes:
+    """Serializes rows to an XLSX workbook and returns the bytes.
+
+    Cells of `url` attribute columns carry a **hyperlink**, so the exported file
+    links straight to the website/reference (a `text` attribute holding a URL
+    stays plain text — the data type is the contract). The value itself is the
+    URL either way, so a CSV/JSON export keeps working unchanged.
+    """
+    links = url_columns or set()
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Export"
     sheet.append(columns)
-    for row in rows:
-        sheet.append([_csv_cell(row.get(col, "")) for col in columns])
+    for offset, row in enumerate(rows, start=2):
+        for index, column in enumerate(columns, start=1):
+            text = _csv_cell(row.get(column, ""))
+            cell = sheet.cell(row=offset, column=index, value=text)
+            if column in links and is_valid_url(text):
+                cell.hyperlink = text
+                cell.font = URL_CELL_FONT
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _url_columns(columns: list[str], urls: set[str]) -> set[str]:
+    """Columns whose values are URLs (multilingual columns are `<name>_<locale>`)."""
+    result: set[str] = set()
+    for column in columns:
+        if column in urls or ("_" in column and column.rsplit("_", 1)[0] in urls):
+            result.add(column)
+    return result
 
 
 def _attachment_from_result(result: dict[str, Any]) -> tuple[str, bytes, str]:
@@ -398,7 +440,8 @@ async def _structured_export(
     # "Also export inherited values": fills attributes maintained on an ancestor.
     resolve_inheritance = bool(options.get("resolve_inheritance"))
 
-    multilingual, quantified = await _load_multilingual(active, core_url)
+    flags = await _load_attribute_flags(active, core_url)
+    multilingual = flags.multilingual
     fallback = await _load_languages(active, core_url)
 
     # Resolve objects (synchronously for the requested source).
@@ -437,7 +480,7 @@ async def _structured_export(
         columns = _build_columns(fields, locales, multilingual)
         rows = _build_rows(objects, columns, locales, fallback, multilingual)
         if format_ == "xlsx":
-            data = _serialize_xlsx(columns, rows)
+            data = _serialize_xlsx(columns, rows, _url_columns(columns, flags.urls))
             result = {
                 "format": "xlsx",
                 "exported": len(objects),

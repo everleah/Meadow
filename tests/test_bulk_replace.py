@@ -17,6 +17,7 @@ from meadow.worker.jobs import JobMessage
 _DEFINITIONS = [
     {"name": "title", "type": "text", "multilingual": True},
     {"name": "supplier", "type": "text"},
+    {"name": "homepage", "type": "url"},
     {"name": "computed_alpha", "type": "text", "computed": True},
     {"name": "color", "type": "enum"},
     {"name": "width", "type": "number"},
@@ -74,6 +75,17 @@ def test_is_replaceable_covers_convention_and_text_attributes() -> None:
     assert not _is_replaceable("color", definitions)  # enum code
     assert not _is_replaceable("width", definitions)  # number
     assert not _is_replaceable("_internal", definitions)
+
+
+def test_is_replaceable_includes_url_attributes() -> None:
+    """Rewriting a domain/CDN prefix in URLs is a normal maintenance task.
+
+    The core validates the result, so a broken replacement is rejected per
+    object instead of being written silently.
+    """
+    definitions = _definitions_for(["homepage", "computed_alpha"])
+    assert _is_replaceable("homepage", definitions)
+    assert not _is_replaceable("computed_alpha", definitions)
 
 
 async def test_handler_replaces_text_and_reports_skips() -> None:

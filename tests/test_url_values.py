@@ -1,8 +1,10 @@
-"""Tests for the `url` attribute type in the frontend (Phase 9).
+"""Tests for the `url` attribute type (Phase 9).
 
-The core validates URL values (`crates/pim-core/src/attribute_values.rs`); the
-frontend mirrors the display rule: a URL cell is a link that opens in a new tab,
-image/video URLs open in a preview dialog instead.
+The pure helpers live in the shared `meadow.urls` (used by the frontend and the
+worker); the core validates URL values
+(`crates/pim-core/src/attribute_values.rs`). The frontend mirrors the display
+rule: a URL cell is a link that opens in a new tab, image/video URLs open in a
+preview dialog instead.
 """
 
 from __future__ import annotations
@@ -20,13 +22,22 @@ from meadow.frontend.grid import (
 )
 from meadow.frontend.i18n import t
 from meadow.frontend.search_form import validate_state, widget_kind
-from meadow.frontend.url_values import (
+from meadow.urls import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
     is_valid_url,
     media_kind,
     url_extension,
 )
+
+
+def test_frontend_re_exports_the_shared_url_helpers() -> None:
+    """The pages import the helpers from `url_values`; keep that path working."""
+    from meadow.frontend import url_values
+
+    assert url_values.media_kind is media_kind
+    assert url_values.is_valid_url is is_valid_url
+    assert url_values.url_extension is url_extension
 
 
 def test_url_is_a_known_attribute_type() -> None:

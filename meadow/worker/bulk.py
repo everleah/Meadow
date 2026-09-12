@@ -546,14 +546,24 @@ async def _attribute_definitions(
     return definitions
 
 
+#: Attribute types Find & Replace may rewrite (all string-valued types).
+_REPLACEABLE_TYPES = ("text", "url")
+
+
 def _is_replaceable(name: str, definitions: dict[str, dict[str, Any]]) -> bool:
-    """True when the attribute may be rewritten by Find & Replace."""
+    """True when the attribute may be rewritten by Find & Replace.
+
+    `url` counts as text: rewriting a domain or CDN prefix in many objects is a
+    normal maintenance task. The core validates the result, so a replacement
+    that breaks the address is rejected per object (`validation` error in the
+    run report) instead of being written silently.
+    """
     if name.startswith("_") or name in _NON_TEXT_FIELDS:
         return False
     definition = definitions.get(name)
     if definition is None:
         return True  # convention field such as `name`
-    return definition.get("type") == "text" and not definition.get("computed")
+    return definition.get("type") in _REPLACEABLE_TYPES and not definition.get("computed")
 
 
 def replace_in_value(

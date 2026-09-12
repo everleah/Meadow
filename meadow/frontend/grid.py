@@ -2003,15 +2003,17 @@ async def products_page(request: Request) -> None:
             report_dialog.open()
 
         # --- Find & Replace (Phase 9) ---------------------------------------
-        # Replaces a literal text in the text attributes of the selection. It
-        # runs as the `replace_text` bulk operation (same scope/progress/report
-        # machinery as the wizard) so large selections are processed in the
-        # worker instead of blocking the page.
+        # Replaces a literal text in the string-valued attributes (`text`, `url`)
+        # of the selection. It runs as the `replace_text` bulk operation (same
+        # scope/progress/report machinery as the wizard) so large selections are
+        # processed in the worker instead of blocking the page.
         replace_attr_options: dict[str, str] = {"": t("grid.replace_all_attributes")}
         replace_attr_options["name"] = t("grid.name")
         for definition in definitions:
             name = str(definition.get("name") or "")
-            if not name or definition.get("type") != "text" or definition.get("computed"):
+            if not name or definition.get("computed"):
+                continue
+            if str(definition.get("type") or "") not in ("text", "url"):
                 continue
             label = str(resolve_value(definition.get("label"), locale) or name)
             replace_attr_options[name] = label if label == name else f"{label} ({name})"

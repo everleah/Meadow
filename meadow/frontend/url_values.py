@@ -1,79 +1,39 @@
-"""URL attribute values: validation, link handling and the media preview.
+"""UI side of the `url` attribute type: opening links and previewing media.
 
-A `url` attribute stores a web address. The UI shows it as a link that opens in
-a new tab — unless it points to an **image or video**, which is previewed in a
-NiceGUI dialog instead (the file would otherwise be downloaded or shown bare).
+The pure URL helpers live in `meadow.urls` (shared with the worker, no NiceGUI);
+this module imports them for the pages and adds the NiceGUI parts:
 
-The pure helpers at the top mirror the core's rule
-(`crates/pim-core/src/attribute_values.rs`): only absolute `http(s)` URLs are
-stored, so the UI never renders a link the browser cannot open. The core stays
-authoritative — the helpers here are deliberately lenient (they only decide how
-a value is *displayed*); the checks that reject a write live in the core.
+* `open_url` — images/videos in the preview dialog, everything else in a new tab.
+* `open_media_dialog` — the dialog with `ui.image`/`ui.video` plus "open in new
+  tab"/"close".
+
+`media_kind` stays the single source of truth for "is this an image/video?": the
+grid cell renderer receives the decision through the row marker `_media` (see
+`grid.py`).
 """
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 from nicegui import ui
 
 from meadow.frontend.i18n import t
-
-#: Extensions shown in the image preview dialog.
-IMAGE_EXTENSIONS = (
-    "png",
-    "jpg",
-    "jpeg",
-    "gif",
-    "webp",
-    "avif",
-    "bmp",
-    "svg",
-    "ico",
+from meadow.urls import (
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    is_valid_url,
+    media_kind,
+    url_extension,
 )
-#: Extensions shown in the video preview dialog.
-VIDEO_EXTENSIONS = ("mp4", "webm", "ogv", "ogg", "mov", "m4v", "avi", "mkv")
 
-
-def url_extension(url: object) -> str:
-    """Lowercase file extension of a URL (`''` when it has none).
-
-    Query strings and fragments are ignored, so
-    `https://cdn.example.com/a/img.png?w=800` still counts as a PNG.
-    """
-    path = urlsplit(str(url or "")).path
-    name = path.rsplit("/", 1)[-1]
-    if "." not in name:
-        return ""
-    return name.rsplit(".", 1)[-1].lower()
-
-
-def media_kind(url: object) -> str | None:
-    """Whether the URL points to an `image`, a `video` or nothing (`None`).
-
-    Decides between the preview dialog and the new tab: only file extensions
-    are inspected, a link to a page that *contains* a video keeps opening in
-    the browser.
-    """
-    extension = url_extension(url)
-    if extension in IMAGE_EXTENSIONS:
-        return "image"
-    if extension in VIDEO_EXTENSIONS:
-        return "video"
-    return None
-
-
-def is_valid_url(value: object) -> bool:
-    """Whether the value is an absolute `http(s)` URL (display-side check).
-
-    Used to enable the "open" affordance next to an input; the core rejects
-    everything else on write (`attribute_values::is_valid_url`).
-    """
-    text = str(value or "").strip()
-    if not text:
-        return False
-    parts = urlsplit(text)
-    return parts.scheme in ("http", "https") and bool(parts.netloc)
+__all__ = [
+    "IMAGE_EXTENSIONS",
+    "VIDEO_EXTENSIONS",
+    "is_valid_url",
+    "media_kind",
+    "open_media_dialog",
+    "open_url",
+    "url_extension",
+]
 
 
 def open_url(url: object) -> None:
