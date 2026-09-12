@@ -197,7 +197,7 @@ Quantifizierte Werte folgen der Einheiten-Konvention (Abschnitt 4 / [einheiten.m
 ## Attributtypen & Datentypwechsel
 
 - Der Datentyp eines Attributs wird über `type` in der Attributdefinition festgelegt; die API behandelt `type` als **erweiterbare Werteliste** (neue Typen dürfen ergänzt, bestehende nicht umbenannt werden).
-- In der ersten Version ist **kein** Endpunkt zum Wechseln des Datentyps vorgesehen. Ein späterer Wechsel (Phase 9) erfordert eine Migration der vorhandenen Werte, einen Audit-Log-Eintrag und folgt der Kompatibilitätsmatrix in [datenmodell.md](datenmodell.md#datentypwechsel).
+- **Datentypwechsel (umgesetzt, Phase 9):** `POST /attribute-definitions/{id}/type-change` (admin) ändert den Typ und **migriert alle vorhandenen Werte**; `?dry_run=true` liefert nur den Report (`checked`/`convertible`/`incompatible`/`samples[]`/`dropped`). Erlaubte Ziele und Übergänge folgen der Kompatibilitätsmatrix in [datenmodell.md](datenmodell.md#datentypwechsel): nicht konforme Werte → **409** (mit `drop_incompatible` werden sie entfernt), `computed`/`is_key` → **409**, unzulässiges Ziel oder fehlender Ziel-Modifikator (`enum` ohne `enum_set_id`) → **400**. Definition und Werte werden in einer Transaktion geschrieben (Audit + Event + Cache-Invalidierung); ein `PATCH /attribute-definitions/{id}` mit `type` wird abgelehnt.
 
 ## Attributkatalog (Definitionen & Gruppen) in der API
 

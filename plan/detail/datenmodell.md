@@ -103,7 +103,7 @@ Ein **Business-Schlüssel** (z. B. SKU) dient dem Anwender als fachliche Kennung
 7. **Änderbar:** Schlüsselwerte sind änderbar; bei jeder Änderung prüft der Kern die Eindeutigkeit neu und protokolliert die Änderung im Audit-Log.
 8. **Adressierung & Import:** Die API bietet einen Key-Lookup-Endpunkt; der MEF-Import kann per Schlüssel abgleichen (Upsert) – Details in [api-design.md](api-design.md) und [integration-eventsystem.md](integration-eventsystem.md).
 
-> **Hinweis:** Der Datentypwechsel-Abschnitt unten gilt auch für Schlüsselattribute: Ein Wechsel von `is_key` oder des Typs ist eine spätere Ausbaustufe (Phase 9) und erfordert eine Migration vorhandener Werte.
+> **Hinweis:** Für Schlüsselattribute gilt der Datentypwechsel nur eingeschränkt: Ein Schlüssel muss `text` bleiben, deshalb wird ein Typwechsel mit **409** abgelehnt, solange `is_key` gesetzt ist (erst `is_key` entfernen). Die `is_key`-Markierung selbst wird weiterhin per `PATCH /attribute-definitions/{id}` gepflegt.
 
 ## URL-Attribute
 
@@ -266,7 +266,7 @@ Definiert Metadaten-Attribute (Name, Typ, Gruppe, Validierung, Wertelisten, Mehr
 }
 ```
 
-- `type` bestimmt den Datentyp (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein späterer Wechsel des Typs ist in [Datentypwechsel](#datentypwechsel) beschrieben.
+- `type` bestimmt den Datentyp (`text`, `url`, `number`, `boolean`, `date`, `enum`, `reference`). Die Werteliste ist erweiterbar; bestehende Typen werden nicht umbenannt. Ein Wechsel des Typs ist über einen eigenen Endpunkt möglich (siehe [Datentypwechsel](#datentypwechsel)).
 - `group_ids` (viele-zu-viele): Ein Attribut kann in **mehreren** Attributgruppen erscheinen; die Zuordnung wird als **Inline-Array der Group-Keys** direkt am `attribute_definition`-Datensatz gespeichert (keine separate Join-Tabelle). Am Objekt instanziert ist es **dasselbe** Attribut (ein Feld, mehrere UI-Gruppen). Ist `group_ids` leer/`[]`, gehört das Attribut keiner Gruppe („Attribute ohne Gruppe“). *Schema-Detail:* der Feldtyp ist `option<array>` – Datensätze, die vor der Gruppen-Erzwingung angelegt wurden, können das Feld noch nicht tragen (im Code als `group_ids ?? []` behandelt, d. h. fehlend == `[]`).*
 - `inheritable` steuert, ob das Attribut in die Datenwertvererbung einbezogen wird (siehe [datenwertvererbung.md](datenwertvererbung.md)).
 - `is_key` kennzeichnet ein Attribut als **Business-Schlüssel** (z. B. SKU): nur `text`, nicht lokalisiert, nicht vererbbar; eindeutig pro Objekttyp (anwendungsseitig beim Schreiben erzwungen, konzeptionell `(type, attributes.<name>)`). Details siehe [Schlüssel (Business-Schlüssel)](#schlüssel-business-schlüssel).
