@@ -144,6 +144,10 @@ pub fn router(state: AppState) -> Router {
             get(api::attribute_definitions::enum_value_usage),
         )
         .route(
+            "/attribute-definitions/{id}/type-change",
+            axum::routing::post(api::attribute_definitions::change_attribute_type),
+        )
+        .route(
             "/enum-sets",
             get(api::enum_sets::list_enum_sets).post(api::enum_sets::create_enum_set),
         )

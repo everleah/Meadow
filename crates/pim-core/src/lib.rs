@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod app;
+pub mod attribute_definition_types;
 pub mod attribute_values;
 pub mod audit;
 pub mod auth;

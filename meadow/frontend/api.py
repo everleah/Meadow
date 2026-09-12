@@ -338,6 +338,51 @@ class CoreClient:
                 raise CoreError(detail or response.text, status=response.status_code)
             return response.json()
 
+    async def change_attribute_type(
+        self,
+        token: str,
+        definition_id: str,
+        *,
+        definition_type: str,
+        enum_set_id: str | None = None,
+        unit_id: str | None = None,
+        display_unit_id: str | None = None,
+        drop_incompatible: bool = False,
+        dry_run: bool = False,
+    ) -> dict:
+        """Changes the data type and migrates the values.
+
+        ``POST /attribute-definitions/{id}/type-change`` converts every existing
+        value; values that do not fit the new type block the change unless
+        ``drop_incompatible`` removes them. With ``dry_run`` the core only
+        returns the report (`checked`/`convertible`/`incompatible`/`samples`).
+        """
+        payload: dict[str, object] = {"type": definition_type}
+        for key, value in (
+            ("enum_set_id", enum_set_id),
+            ("unit_id", unit_id),
+            ("display_unit_id", display_unit_id),
+        ):
+            if value:
+                payload[key] = value
+        if drop_incompatible:
+            payload["drop_incompatible"] = True
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/attribute-definitions/{definition_id}/type-change",
+                json=payload,
+                params={"dry_run": "true"} if dry_run else None,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                detail = None
+                try:
+                    detail = response.json().get("error")
+                except Exception:  # noqa: BLE001 - body may not be JSON
+                    detail = None
+                raise CoreError(detail or response.text, status=response.status_code)
+            return response.json()
+
     async def enum_usage(
         self,
         token: str,

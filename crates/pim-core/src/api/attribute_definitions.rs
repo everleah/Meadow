@@ -121,6 +121,10 @@ pub struct UpdateAttributeDefinition {
     /// `{ old_value: new_value }` re-assigns the objects before the removal.
     #[serde(default)]
     pub enum_remap: Option<serde_json::Map<String, Value>>,
+    /// Not supported here: the data type changes through
+    /// `POST /attribute-definitions/{id}/type-change` (it migrates the values).
+    #[serde(default, rename = "type")]
+    pub definition_type: Option<String>,
 }
 
 /// Query parameters for listing attribute definitions.
@@ -417,6 +421,14 @@ pub async fn update_attribute_definition(
 ) -> Result<Json<Value>, ApiError> {
     if !claims.is_admin() {
         return Err(ApiError::forbidden("requires admin role"));
+    }
+    // A type change migrates every existing value, so it has its own endpoint;
+    // silently ignoring `type` in a PATCH would look like a successful change.
+    if body.definition_type.is_some() {
+        return Err(ApiError::bad_request(
+            "the data type cannot be patched: use `POST /attribute-definitions/{id}/type-change` \
+             so the existing values are migrated",
+        ));
     }
     let key = parse_key(&id, TABLE)?;
     let user_id = claims.sub.clone();
@@ -796,6 +808,383 @@ pub struct EnumUsageParams {
 
 fn default_usage_limit() -> u32 {
     50
+}
+
+/// Payload for `POST /attribute-definitions/{id}/type-change`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ChangeAttributeType {
+    /// New data type (`text`, `url`, `number`, `boolean`, `date`, `enum`,
+    /// `reference`).
+    #[serde(rename = "type")]
+    pub definition_type: String,
+    /// Target enum set (required when switching **to** `enum`).
+    #[serde(default)]
+    pub enum_set_id: Option<String>,
+    /// Canonical unit for the new `number` type (optional).
+    #[serde(default)]
+    pub unit_id: Option<String>,
+    /// Display unit for the new `number` type (optional).
+    #[serde(default)]
+    pub display_unit_id: Option<String>,
+    /// Apply even though some values cannot be converted: those values are
+    /// removed instead of blocking the change.
+    #[serde(default)]
+    pub drop_incompatible: bool,
+}
+
+/// Query parameters for `POST /attribute-definitions/{id}/type-change`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TypeChangeParams {
+    /// Only compute and return the report; change nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Every object that carries a value for the attribute (`id` + raw value).
+///
+/// Soft-deleted objects are skipped: they are invisible everywhere else and
+/// keep their value only until the data is purged.
+async fn load_attribute_values(
+    db: &crate::db::Db,
+    name: &str,
+) -> Result<Vec<(String, Value)>, ApiError> {
+    let mut response = db
+        .inner()
+        .query(
+            "SELECT VALUE {id: type::string(id), value: attributes[$name]} FROM object \
+             WHERE deleted_at IS NONE AND attributes[$name] IS NOT NONE;",
+        )
+        .bind(("name", name.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(Value::as_str)?.to_owned();
+            Some((id, row.get("value").cloned().unwrap_or(Value::Null)))
+        })
+        .collect())
+}
+
+/// Option codes of an enum set (`enum_set.options` → `enum_option.code`).
+async fn enum_option_codes(db: &crate::db::Db, set_ref: &str) -> Result<Vec<String>, ApiError> {
+    let key = parse_key(set_ref, "enum_set")?;
+    let mut response = db
+        .inner()
+        .query(
+            "LET $set = type::record('enum_set', $key); \
+             SELECT VALUE code FROM enum_option WHERE id IN ($set.options ?? []);",
+        )
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    let codes: Vec<String> = rows
+        .into_iter()
+        .filter_map(|code| code.as_str().map(str::to_owned))
+        .collect();
+    Ok(codes)
+}
+
+/// Changes the data type of an attribute definition and migrates its values.
+///
+/// The transition must be allowed by the compatibility matrix
+/// (`attribute_definition_types`); every existing value is converted, and a
+/// value that cannot be converted blocks the change (`409` with samples) unless
+/// `drop_incompatible` removes it. With `?dry_run=true` only the report is
+/// computed. Definition update and value migration run in one transaction, so a
+/// failure never leaves values with a definition that no longer matches.
+#[utoipa::path(
+    post,
+    path = "/attribute-definitions/{id}/type-change",
+    request_body = ChangeAttributeType,
+    params(TypeChangeParams),
+    responses(
+        (status = 200, description = "Conversion report (applied or dry run)", body = Value),
+        (status = 400, description = "Unsupported target type or missing modifier", body = Value),
+        (status = 404, description = "Attribute definition not found", body = Value),
+        (status = 409, description = "Computed/key attribute or incompatible values", body = Value)
+    )
+)]
+pub async fn change_attribute_type(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<TypeChangeParams>,
+    Json(body): Json<ChangeAttributeType>,
+) -> Result<Json<Value>, ApiError> {
+    if !claims.is_admin() {
+        return Err(ApiError::forbidden("requires admin role"));
+    }
+    let key = parse_key(&id, TABLE)?;
+    let user_id = claims.sub.clone();
+    let target = body.definition_type.trim().to_owned();
+
+    let definition = load_definition(&state.db, key).await?;
+    let name = definition
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let source = definition
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if target == source {
+        return Err(ApiError::bad_request(format!(
+            "attribute `{name}` already has type `{source}`"
+        )));
+    }
+    if definition
+        .get("computed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::conflict(format!(
+            "attribute `{name}` is computed: adapt the rule first, then change the type"
+        )));
+    }
+    if definition
+        .get("is_key")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && target != "text"
+    {
+        return Err(ApiError::conflict(format!(
+            "attribute `{name}` is a business key (`is_key`): remove `is_key` first, \
+             keys must stay `text`"
+        )));
+    }
+
+    // The target enum set is required and must exist; its codes validate the
+    // values. Units are passed through like in `create_attribute_definition`.
+    let enum_set = match (&body.enum_set_id, target.as_str()) {
+        (Some(raw), "enum") => Some(validate_enum_set(&state.db, raw).await?),
+        (None, "enum") => {
+            return Err(ApiError::bad_request(
+                "switching to `enum` requires `enum_set_id`",
+            ));
+        }
+        _ => None,
+    };
+    if !crate::attribute_definition_types::is_allowed_transition(
+        &source,
+        &target,
+        enum_set.is_some(),
+    ) {
+        let allowed = crate::attribute_definition_types::allowed_targets(&source);
+        return Err(ApiError::bad_request(format!(
+            "`{source}` → `{target}` is not supported (allowed targets: {})",
+            allowed.join(", ")
+        )));
+    }
+    let codes = match &enum_set {
+        Some(set_ref) => Some(enum_option_codes(&state.db, set_ref).await?),
+        None => None,
+    };
+
+    let values = load_attribute_values(&state.db, &name).await?;
+    let plan = crate::attribute_definition_types::plan_conversion(
+        &source,
+        &target,
+        &values,
+        codes.as_deref(),
+    );
+
+    // Report: the same shape for the dry run and the applied change.
+    let samples: Vec<Value> = plan
+        .incompatible
+        .iter()
+        .take(10)
+        .map(|problem| {
+            json!({
+                "object": problem.object_id,
+                "value": problem.value,
+                "reason": problem.reason,
+            })
+        })
+        .collect();
+    let mut report = json!({
+        "name": name,
+        "from": source,
+        "to": target,
+        "checked": plan.checked,
+        "convertible": plan.convertible(),
+        "incompatible": plan.incompatible.len(),
+        "samples": samples,
+        "dropped": if body.drop_incompatible && !params.dry_run {
+            plan.dropped.len()
+        } else {
+            0
+        },
+        "dry_run": params.dry_run,
+    });
+
+    // The dry run always reports what *would* happen (the caller shows the
+    // sample list and asks whether the values may be dropped); an applied
+    // change without `drop_incompatible` is rejected instead.
+    if !plan.incompatible.is_empty() && !body.drop_incompatible && !params.dry_run {
+        return Err(ApiError::conflict(format!(
+            "{} of {} value(s) of `{name}` cannot be converted to `{target}` \
+             (use `drop_incompatible` to remove them): {}",
+            plan.incompatible.len(),
+            plan.checked,
+            plan.incompatible
+                .iter()
+                .take(3)
+                .map(|problem| format!("{} ({})", problem.object_id, problem.reason))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )));
+    }
+
+    if params.dry_run {
+        return Ok(Json(report));
+    }
+
+    // Definition changes: new type plus the target modifiers. Leaving `enum`
+    // clears the set (and the legacy option list), leaving `number` clears the
+    // units — `MERGE` cannot write `NONE`, so those fields are `UNSET` after it.
+    let mut changes = serde_json::Map::new();
+    changes.insert("type".to_owned(), Value::String(target.clone()));
+    if let Some(set_ref) = &enum_set {
+        changes.insert("enum_set_id".to_owned(), Value::String(set_ref.clone()));
+    }
+    if let Some(unit) = body.unit_id.filter(|unit| !unit.trim().is_empty()) {
+        changes.insert("unit_id".to_owned(), Value::String(unit));
+    }
+    if let Some(unit) = body.display_unit_id.filter(|unit| !unit.trim().is_empty()) {
+        changes.insert("display_unit_id".to_owned(), Value::String(unit));
+    }
+    let mut clear_fields: Vec<&str> = Vec::new();
+    if source == "enum" && target != "enum" {
+        clear_fields.push("enum_set_id");
+        clear_fields.push("constraints");
+    }
+    if source == "number" && target != "number" {
+        clear_fields.push("unit_id");
+        clear_fields.push("display_unit_id");
+    }
+    let unset_sql = if clear_fields.is_empty() {
+        String::new()
+    } else {
+        format!("UPDATE $obj UNSET {};", clear_fields.join(", "))
+    };
+
+    let rows: Vec<Value> = plan
+        .converted
+        .iter()
+        .map(|(object_id, value)| {
+            let key = object_id
+                .split_once(':')
+                .map(|(_, k)| k)
+                .unwrap_or(object_id);
+            json!({ "key": key, "value": value })
+        })
+        .collect();
+    let drops: Vec<String> = plan
+        .dropped
+        .iter()
+        .map(|object_id| {
+            object_id
+                .split_once(':')
+                .map(|(_, k)| k)
+                .unwrap_or(object_id)
+                .to_owned()
+        })
+        .collect();
+    let outbox = crate::event::content(&crate::event::OutboxEvent {
+        event_type: crate::event::EVENT_ATTRIBUTE_DEFINITION_UPDATED,
+        object_type: String::new(),
+        object_id: id.clone(),
+        changes: json!({
+            "type": {"from": source, "to": target},
+            "converted": plan.convertible(),
+            "dropped": drops.len(),
+        }),
+        metadata: json!({ "user_id": user_id.clone() }),
+    });
+
+    // Statements: BEGIN(0), LET(1), UPDATE MERGE(2), [UNSET](3), UPDATE SET,
+    // FOR converted, FOR dropped, CREATE outbox, SELECT, COMMIT. The `UNSET`
+    // statement only exists when fields must be cleared.
+    let sql = format!(
+        "
+        BEGIN TRANSACTION;
+        LET $obj = type::record('attribute_definition', $key);
+        UPDATE $obj MERGE $changes;
+        {unset_sql}
+        UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
+        FOR $row IN $rows {{ UPDATE type::record('object', $row.key) SET attributes[$name] = $row.value; }};
+        FOR $drop IN $drops {{ UPDATE type::record('object', $drop) SET attributes[$name] = NONE; }};
+        CREATE outbox_event CONTENT $outbox;
+        SELECT * FROM $obj;
+        COMMIT TRANSACTION;
+        "
+    );
+    let select_index = if unset_sql.is_empty() { 7 } else { 8 };
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .bind(("changes", Value::Object(changes)))
+        .bind(("user", user_id.clone()))
+        .bind(("name", name.clone()))
+        .bind(("rows", Value::Array(rows)))
+        .bind(("drops", json!(drops)))
+        .bind(("outbox", outbox))
+        .await?
+        .check()?;
+    let definitions: Vec<Value> = response.take(select_index)?;
+    let updated = definitions
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("attribute definition `{id}` not found")))?;
+
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "attribute_definition_type_changed",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(json!({
+                "name": name,
+                "from": source,
+                "to": target,
+                "converted": plan.convertible(),
+                "dropped": plan.dropped.len(),
+            })),
+        },
+    )
+    .await;
+    // The data type feeds the search catalog, the `url` validation and the
+    // multilingual handling — all cached.
+    state.cache.invalidate_attribute_definitions().await;
+
+    if let Some(object) = report.as_object_mut() {
+        object.insert("definition".to_owned(), updated);
+    }
+    Ok(Json(report))
+}
+
+/// Loads one attribute definition by record key.
+async fn load_definition(db: &crate::db::Db, key: &str) -> Result<Value, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT * FROM type::record('attribute_definition', $key);")
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    rows.into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("attribute definition `{key}` not found")))
 }
 
 /// Reports how many objects use a given enum value for an attribute (Phase 9).

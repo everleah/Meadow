@@ -464,6 +464,7 @@ async def attribute_definitions_page() -> None:
                         )
                         .props("filled dense")
                         .classes("w-40")
+                        .tooltip(t("attr_def.type_change_hint"))
                     )
                 def_store: dict[str, object] = {"label": {}}
                 label_field = multilingual_value_editor(
@@ -601,10 +602,9 @@ async def attribute_definitions_page() -> None:
             delete_btn.visible = editing
             name_input.set_value(definition["name"] if editing else "")
             type_select.set_value(definition["type"] if editing else "text")
-            if editing:
-                type_select.disable()
-            else:
-                type_select.enable()
+            # The type stays selectable while editing: a change runs through
+            # `confirm_type_change` (report + migration), never through the PATCH.
+            type_select.enable()
             label = (definition["label"] if editing else {}) or {}
             def_store["label"] = dict(label)
             label_field.set_value(str(def_store["label"].get(base_lang(locale)) or ""))
@@ -647,6 +647,97 @@ async def attribute_definitions_page() -> None:
             state["definitions"] = definitions
             grid.run_grid_method("setGridOption", "rowData", _rows())
 
+        async def apply_type_change(
+            definition: dict, target: str, fields: dict, *, drop: bool
+        ) -> None:
+            """Migrates the values to the new type, then applies the other edits."""
+            try:
+                report = await client.change_attribute_type(
+                    token,
+                    definition["id"],
+                    definition_type=target,
+                    enum_set_id=fields.get("enum_set_id") if target == "enum" else None,
+                    unit_id=fields.get("unit_id") if target == "number" else None,
+                    display_unit_id=(fields.get("display_unit_id") if target == "number" else None),
+                    drop_incompatible=drop,
+                )
+                await client.update_attribute_definition(token, definition["id"], **fields)
+            except Exception as exc:  # noqa: BLE001 - show a friendly error
+                ui.notify(f"{t('attr_def.type_change_failed')}: {exc}", color="negative")
+                return
+            form_dialog.close()
+            await reload()
+            ui.notify(
+                t("attr_def.type_change_done").format(
+                    source=report.get("from"),
+                    target=report.get("to"),
+                    converted=report.get("convertible", 0),
+                    dropped=report.get("dropped", 0),
+                ),
+                color="positive",
+            )
+
+        async def confirm_type_change(definition: dict, target: str, fields: dict) -> None:
+            """Shows the conversion report (dry run) and applies it on request.
+
+            The core converts every existing value; values that do not fit the
+            new type block the change unless the user explicitly allows removing
+            them — that is exactly what the dialog asks about.
+            """
+            try:
+                report = await client.change_attribute_type(
+                    token, definition["id"], definition_type=target, dry_run=True
+                )
+            except Exception as exc:  # noqa: BLE001 - show a friendly error
+                ui.notify(f"{t('attr_def.type_change_failed')}: {exc}", color="negative")
+                return
+            incompatible = int(report.get("incompatible") or 0)
+            with ui.dialog() as dialog, ui.card().classes("w-[36rem] max-w-[94vw]"):
+                ui.label(
+                    t("attr_def.type_change_title").format(name=definition.get("name"))
+                ).classes("text-h6")
+                ui.label(
+                    t("attr_def.type_change_report").format(
+                        source=report.get("from"),
+                        target=report.get("to"),
+                        checked=report.get("checked", 0),
+                        convertible=report.get("convertible", 0),
+                        incompatible=incompatible,
+                    )
+                ).classes("text-caption text-gray-600")
+                samples = report.get("samples") or []
+                if samples:
+                    with ui.column().classes("w-full gap-1 max-h-40 overflow-y-auto"):
+                        for sample in samples:
+                            ui.label(
+                                f"{sample.get('object')} · {sample.get('value')} · "
+                                f"{sample.get('reason')}"
+                            ).classes("text-caption text-warning break-all")
+                drop_switch: ui.switch | None = None
+                if incompatible:
+                    ui.label(t("attr_def.type_change_drop_hint")).classes(
+                        "text-caption text-warning"
+                    )
+                    drop_switch = ui.switch(t("attr_def.type_change_drop"))
+                with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                    ui.button(t("grid.close"), on_click=dialog.close).props("flat")
+
+                    async def _apply() -> None:
+                        dialog.close()
+                        await apply_type_change(
+                            definition,
+                            target,
+                            fields,
+                            drop=bool(drop_switch.value) if drop_switch is not None else False,
+                        )
+
+                    ui.button(
+                        t("attr_def.type_change_apply"),
+                        icon="sync_alt",
+                        on_click=_apply,
+                    ).props("color=primary")
+            dialog.open()
+
         async def save() -> None:
             editing_id = getattr(save, "editing_id", None)
             name = name_input.value or ""
@@ -681,6 +772,10 @@ async def attribute_definitions_page() -> None:
 
             try:
                 if editing_id:
+                    current = next((d for d in definitions if d.get("id") == editing_id), None)
+                    if current and str(current.get("type") or "") != definition_type:
+                        await confirm_type_change(current, definition_type, common)
+                        return
                     await client.update_attribute_definition(
                         token,
                         editing_id,
