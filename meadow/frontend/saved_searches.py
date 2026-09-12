@@ -107,7 +107,10 @@ async def saved_searches_page() -> None:
         with ui.tabs() as tabs:
             tab_searches = ui.tab(t("saved_searches.tab_search"))
             tab_collections = ui.tab(t("saved_searches.tab_collections"))
-        with ui.tab_panels(tabs, value=tab_searches):
+        # `w-full` on the panel container: `ui.column` aligns its children at the
+        # start, so without it the panels (and therefore both tables) shrink to
+        # the width of their content instead of filling the page.
+        with ui.tab_panels(tabs, value=tab_searches).classes("w-full"):
             with ui.tab_panel(tab_searches):
                 await _build_search_panel(client, token, searches)
             with ui.tab_panel(tab_collections):

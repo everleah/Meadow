@@ -118,7 +118,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - All gates in one run: `bash scripts/check.sh` (Linux/CI/VPS) or `powershell -File scripts/check.ps1` (Windows); `rust` / `python` selects a subset. The core must not be running — on Windows a running `pim-core.exe` locks the binary while relinking.
 - Rust: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (workspace root).
 - Python: `ruff check`, `ruff format --check`, `pytest` (dev dependencies via uv).
-- CI: **Forgejo Actions** on `registry.example.com` (`.forgejo/workflows/ci.yml`) runs the same gates on push to `main` and on pull requests (the job installs the Rust toolchain and uv/Python 3.14). Requires a registered Forgejo runner and a resolvable `actions/checkout@v4` (GitHub-compatible actions or a mirror).
+- CI: **Forgejo Actions** on `registry.example.com` (`.forgejo/workflows/ci.yml`) runs the same gates on push to `main` and on pull requests (the job installs the Rust toolchain and uv/Python 3.14). Requires a registered Forgejo runner and a resolvable `actions/checkout@v4` (GitHub-compatible actions or a mirror). **Status:** no runner is registered yet (deliberately deferred), so the pipeline does not run — verify locally with the scripts above until then.
 - The translation files must carry the same key set and no empty values — enforced by `tests/test_frontend.py::test_translation_files_share_the_same_keys` (part of the pytest gate).
 
 ## User Preferences
