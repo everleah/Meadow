@@ -213,6 +213,8 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 3. **`Range`-Merkmale (931) — entschieden und umgesetzt:** eigener Datentyp **`range`** (`{"from": <Zahl>, "to": <Zahl>}`, Grenzen geordnet; Konvertierung/Matrix in `attribute_definition_types.rs`, UI-Helfer in `meadow/frontend/range_values.py`, Formular mit zwei Grenzen, Grid `from – to` — s. [datenmodell.md](datenmodell.md#range-attribute-range)). Der Export schreibt je Bereichsmerkmal **zwei `FVALUE`** (bzw. bei nicht angebbarem Wert genau ein `-`).
 4. **`Version`/`Status`** je Klasse sind Standard-Metadaten (Read-only-Kennzeichnung nötig, s. `kategorisierung.md` „Offen“).
 
+**Befund aus dem Spike (Kern-Asymmetrie, offen):** Eine Attributdefinition mit `"label": null` wird beim **Import** mit **500** abgewiesen (`Couldn't coerce value for field 'label' … Expected object but found NULL`), obwohl der **Export** `null` schreibt, wenn eine Definition kein Label hat. Der Konverter setzt deshalb immer ein Label-Objekt; ein Kern-Fix (NULL als „nicht gesetzt“ behandeln) steht aus — reproduzierbar mit einer label-losen Definition im Dokument.
+
 ### 11.5 Korrekturen an §3–§6
 
 1. **Sprache (§3):** nicht „ein Dokument je Sprache“, sondern **ein mehrsprachiges Dokument** (`LANGUAGE default` + `lang`); die Profil-Option „Datei je Sprache“ bleibt als Alternative für strenge Abnehmer.
@@ -225,7 +227,9 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 
 ### 11.6 Angepasste Phasen (ergänzt §9)
 
-1. **Spike (jetzt durchführbar):** IXF-Abschnitte erfassen und Units + 10–20 Klassen (mit Merkmalen/Werten/Übersetzungen) ins Meadow-Modell importieren; ein Beispielprodukt gegen **`bmecat_etim_501.xsd`** validieren; 1.2 gegen `bmecat_new_catalog_1_2.xsd`/dtl-DTD validieren (**beide Varianten sind vorhanden**, §11.8).
+1. **Spike – Schritt 1 (IXF → Modell) erledigt (2026-09-12):** `scripts/etim_ixf_to_mef.py` liest den IXF-Export und schreibt drei importierbare Dokumente: `model.mcf.json` (Taxonomie-Knotentyp + eine Attributdefinition je Merkmal: Name = stabiler Code `EF…`, Label = IXF-Übersetzungen, Typ aus `Feature.Type`), `classes.mef.json` (die Klassenknoten, Key `code` = `EC…`) und `features.mcf.json` (die `category_attributes`-Zeilen mit `required: true` und Position aus `OrderNumber`). **Importreihenfolge:** Modell → Klassen → Merkmale (die Merkmals-Sektion löst Klassen über den Business-Key auf).
+   **Verifiziert mit 10 Klassen** (163 Merkmale: 70 Numeric, 42 Logical, 39 Alphanumeric, 12 Range): Modell-Import `errors: []` (Knotentyp + 165 Definitionen angelegt), 10/10 Klassen angelegt, Merkmals-Import `errors: []` (10 Klassen `updated`), `GET /categories/{id}/attributes` liefert je Klasse die Zeilen mit `required: true`, und ein in die Klasse kategorisiertes Produkt führt sie sofort in `required`/`missing`, in `GET /objects/{id}?locale=` als `missing_required` und in der **Vollständigkeit** — Stufe A/B und der Standard-Import greifen also ineinander.
+   **Offen in Schritt 1:** Einheiten (der Report nennt statt einer Anwendung die nötigen ETIM-Einheiten: für die 10 Klassen `W`, `°C`, `V`, `mm²`, `kA`, `kV`, `kW`, `mm`, `A`, `kN`; **keine Konflikte** — dasselbe Merkmal trägt in allen Klassen dieselbe Einheit und darf deshalb an der Attributdefinition hängen), die Wertebindung (Punkt 1 oben), die XSD-Validierung eines Beispielkatalogs (Schritt 2) sowie 1.2 gegen XSD/DTD (beide Varianten liegen vor, §11.8).
 2. **V1 – ETIM-Profil-Export** (`T_NEW_CATALOG` mit Preisen *und* `T_NEW_PRODUCTDATA` ohne; ETIM-Pflichtmerkmale, `-`/`NA|MV|UN`, Einheitenlisten, MIME_ROOT, XSD-Validierung im Job).
 3. **V1b – 1.2-Export** (`ARTICLE*`, DTD-Validierung) über dieselbe Mapping-Engine — exakt der Fall „wir kommen an 1.2 nicht vorbei“.
 4. **V2 – Import** (`T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`, Merkmale rückwärts) **und** IXF-Standardimport als eigener Job.
