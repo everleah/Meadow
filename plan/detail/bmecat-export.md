@@ -209,7 +209,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 **Offene Punkte aus dem IXF (nicht geraten):**
 
 1. **Werte ↔ Merkmal:** die Sektion `Values` (16163 `EV…`) hat nur `Code` + `Translations` — **keine** sichtbare Zuordnung zum Merkmal. Wie erlaubte Werte an ein Merkmal gebunden werden, ist im Spike zu klären (andere IXF-Variante, ETIM-API/CMT).
-2. **Pflicht-Kennzeichen:** `Class → Feature` liefert **kein** `mandatory`-Flag; die ETIM-Regel („alle Merkmale der Klasse“) ist strenger als optional. Import-Default daher `required=false` plus Profil-/Regeloption „alle Pflicht“.
+2. **Pflicht-Kennzeichen — entschieden (2026-09-12):** `Class → Feature` liefert **kein** `mandatory`-Flag; die ETIM-Regel („alle Merkmale der Klasse“) gilt aber für den Export. Der Standard-Import setzt deshalb für **alle** Klassenmerkmale `required=true` (Default, im Import konfigurierbar) — so zeigt die Vollständigkeit sofort die Lücken und `ctx.missing_features` (Stufe B) greift ohne Zusatzregel.
 3. **`Range`-Merkmale (931) — entschieden und umgesetzt:** eigener Datentyp **`range`** (`{"from": <Zahl>, "to": <Zahl>}`, Grenzen geordnet; Konvertierung/Matrix in `attribute_definition_types.rs`, UI-Helfer in `meadow/frontend/range_values.py`, Formular mit zwei Grenzen, Grid `from – to` — s. [datenmodell.md](datenmodell.md#range-attribute-range)). Der Export schreibt je Bereichsmerkmal **zwei `FVALUE`** (bzw. bei nicht angebbarem Wert genau ein `-`).
 4. **`Version`/`Status`** je Klasse sind Standard-Metadaten (Read-only-Kennzeichnung nötig, s. `kategorisierung.md` „Offen“).
 
@@ -239,9 +239,10 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 3. **Standardcodes (`EF…`/`EV…`/Einheitencodes) — entschieden:** Pflege **im Profilmapping** (optionaler Default am Attribut/dan der Enum-Option) — nicht als harte Semantik in der Attributdefinition.
 4. **Ablage — entschieden:** alles bleibt **lokal** in dieser Entwicklungsumgebung; `resources/*` gitignored (Ausnahme `resources/AGENTS.md`), **keine** Fixtures im Repo.
 5. **Bereichsmerkmale — entschieden (2026-09-12):** eigener Datentyp **`range`** statt zwei Einzelattributen (Datenmodell-Verrenkung) oder Text-Konvention (unsichtbare Semantik); umgesetzt und getestet (§11.4 Punkt 3).
-6. **ETIM-Zertifizierung — offen:** die Guideline nennt ein ETIM-BMEcat-Certification-Tool (dort werden lokale Standardmerkmale pflichtig) — wird eine Zertifizierung angestrebt?
-7. **EuroCat — Beobachtungsposten:** sobald das Syntax Binding zur EN 17015-2 öffentlich ist, wird es hier ergänzt (gleiches Mapping, anderes Zielprofil).
-8. **Noch zu beschaffen:** BMEcat-1.2-Spezifikations-PDF (`bmecatv12e.pdf`), die **Werte↔Merkmal-Zuordnung** der ETIM-`Values` (in keinem der beiden IXF-Exporte enthalten, s. §11.4 Punkt 1) und die vollständige IXF-Dokumentation.
+6. **Pflicht-Default beim Standard-Import — entschieden (2026-09-12):** `required=true` für alle Klassenmerkmale des Standards (§11.4 Punkt 2).
+7. **ETIM-Zertifizierung — offen:** die Guideline nennt ein ETIM-BMEcat-Certification-Tool (dort werden lokale Standardmerkmale pflichtig) — wird eine Zertifizierung angestrebt?
+8. **EuroCat — Beobachtungsposten:** sobald das Syntax Binding zur EN 17015-2 öffentlich ist, wird es hier ergänzt (gleiches Mapping, anderes Zielprofil).
+9. **Noch zu beschaffen:** BMEcat-1.2-Spezifikations-PDF (`bmecatv12e.pdf`), die **Werte↔Merkmal-Zuordnung** der ETIM-`Values` (in keinem der beiden IXF-Exporte enthalten, s. §11.4 Punkt 1) und die vollständige IXF-Dokumentation.
 
 ### 11.8 BMEcat 1.2 — verifiziert aus `resources/bmecat/`
 
