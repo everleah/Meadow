@@ -104,7 +104,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 - The repository contains the Rust workspace scaffold (`crates/pim-core/`) and Python packaging (`pyproject.toml` + `uv.lock`); keep all implementation work consistent with `plan/meadow-pim-architektur.md`.
 - When the plan changes, update `plan/meadow-pim-architektur.md` and `plan/AGENTS.md` together, and run the DOX pass.
 - The architecture and planning documents are written in German; keep new planning documents in German unless otherwise directed.
-- Local dev infrastructure helpers live in `scripts/`: `backup-db.ps1` (SurrealDB-Export nach `backups/`, Retention `-RetentionDays`), `restore-db.ps1` (`-File`), `run-dev.ps1`, `setup.ps1`, `load_test.py` (HTTP-Load-Test für die heißen Read-Pfade gegen `pim-core`: `--duration/--concurrency/--queries`, optional `--seed N --cleanup`). SurrealDB-Export/-Import erfolgen im Container (Binary `/surreal`, Flags `--namespace`/`--database`) und werden per `docker cp` geholt – eine PowerShell-`>`-Umleitung kodiert UTF-16 und erzeugt einen ungültigen Import. In der verwendeten `surrealdb/surrealdb:latest`-Version ist der Healthcheck `surreal isready --conn …` ungültig; korrekt ist `/surreal is-ready` (siehe `docker-compose.dev.yml`).
+- Local dev infrastructure helpers live in `scripts/`: `check.sh`/`check.ps1` (alle Verifikations-Gates, siehe Verification), `backup-db.ps1` (SurrealDB-Export nach `backups/`, Retention `-RetentionDays`), `restore-db.ps1` (`-File`), `run-dev.ps1`, `setup.ps1`, `load_test.py` (HTTP-Load-Test für die heißen Read-Pfade gegen `pim-core`: `--duration/--concurrency/--queries`, optional `--seed N --cleanup`). SurrealDB-Export/-Import erfolgen im Container (Binary `/surreal`, Flags `--namespace`/`--database`) und werden per `docker cp` geholt – eine PowerShell-`>`-Umleitung kodiert UTF-16 und erzeugt einen ungültigen Import. In der verwendeten `surrealdb/surrealdb:latest`-Version ist der Healthcheck `surreal isready --conn …` ungültig; korrekt ist `/surreal is-ready` (siehe `docker-compose.dev.yml`).
 - Production deployment (VPS, `plan/detail/betrieb-deployment.md` §3–8): `docker-compose.vps.yml` (Services `pim-core`/`pim-frontend`/`pim-worker`/`surrealdb`/`nats`/`object-storage`, optionale `redis`; Traefik-Labels nur für Core/Frontend; interne Netze `meadow-backend` + external `traefik-net`), `.env.vps.example` (Kopie → `.env.vps`, nie in Git), Dockerfiles unter `docker/` (`Dockerfile.core`/`.frontend`/`.worker`), und VPS-Bash-Skripte in `scripts/`: `build-images.sh` (Build/Push der Images), `deploy-vps-meadow.sh` (Registry-Login, Compose-Validierung, Netz-Check, Pull, `up -d --remove-orphans`), `backup-vps-db.sh`/`cleanup-backups.sh`/`restore-vps-db.sh` (SurrealDB-Backup/Restore mit korrekter CLI), `healthcheck-vps.sh`, `collect-vps-diagnostics.sh`, `tail-vps-errors.sh`, `bootstrap-vps-admin.sh`. `backups/`, `.env.vps`, `diagnostics-*/` sind gitignored. Hinweis: Der Kern sät derzeit `admin`/`admin` (MVP); der Passwort-Änderungs-Flow ist implementiert (`POST /auth/password`, Schlüssel-Button im UI-Kopf, Hinweis-Banner solange das Passwort nie geändert wurde) — die Seed-Zugangsdaten sollten nach dem ersten Deployment geändert werden.
 
 ## Coding Guidelines
@@ -115,9 +115,11 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
 
 ## Verification
 
+- All gates in one run: `bash scripts/check.sh` (Linux/CI/VPS) or `powershell -File scripts/check.ps1` (Windows); `rust` / `python` selects a subset. The core must not be running — on Windows a running `pim-core.exe` locks the binary while relinking.
 - Rust: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (workspace root).
-- Python: `ruff check`, `pytest` (dev dependencies via uv).
-- No CI pipeline yet; add one once the first tests exist.
+- Python: `ruff check`, `ruff format --check`, `pytest` (dev dependencies via uv).
+- CI: **Forgejo Actions** on `registry.example.com` (`.forgejo/workflows/ci.yml`) runs the same gates on push to `main` and on pull requests (the job installs the Rust toolchain and uv/Python 3.14). Requires a registered Forgejo runner and a resolvable `actions/checkout@v4` (GitHub-compatible actions or a mirror).
+- The translation files must carry the same key set and no empty values — enforced by `tests/test_frontend.py::test_translation_files_share_the_same_keys` (part of the pytest gate).
 
 ## User Preferences
 

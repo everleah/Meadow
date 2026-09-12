@@ -95,6 +95,33 @@ def test_t_falls_back_to_key() -> None:
     assert t("login.username", locale="de") == "Benutzername"
 
 
+def test_translation_files_share_the_same_keys() -> None:
+    """Every supported locale translates the same keys, none of them blank.
+
+    A missing translation silently falls back to the key (visible as
+    `grid.some_key` in the UI), so the three files are kept in lockstep —
+    the gate runs in CI (`scripts/check.sh`).
+    """
+    import json
+
+    from meadow.frontend.i18n import LOCALES_DIR, SUPPORTED_LOCALES
+
+    per_locale = {
+        locale: json.loads((LOCALES_DIR / f"{locale}.json").read_text(encoding="utf-8"))
+        for locale in SUPPORTED_LOCALES
+    }
+    reference_locale = SUPPORTED_LOCALES[0]
+    reference = set(per_locale[reference_locale])
+    for locale, strings in per_locale.items():
+        missing = sorted(reference - set(strings))
+        extra = sorted(set(strings) - reference)
+        assert not missing and not extra, (
+            f"{locale} differs from {reference_locale}: missing {missing[:5]}, extra {extra[:5]}"
+        )
+        blank = sorted(key for key, text in strings.items() if not str(text).strip())
+        assert not blank, f"{locale} has empty translations: {blank[:5]}"
+
+
 def test_grid_view_keys_translate() -> None:
     assert t("grid.views", locale="de") == "Ansichten"
     assert t("grid.save_view", locale="en") == "Save view"

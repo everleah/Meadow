@@ -1,0 +1,50 @@
+name: CI
+
+# Verification gates of Meadow PIM (same set as `scripts/check.sh`).
+# Runs on the self-hosted Forgejo (registry.example.com).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official runner images are minimal: install the C toolchain the
+      # Rust dependencies need (roaring/aws-lc-sys build C/C++) plus pkg-config.
+      - name: System packages
+        run: |
+          SUDO=""
+          if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+          if command -v apt-get >/dev/null 2>&1; then
+            $SUDO apt-get update
+            $SUDO apt-get install -y --no-install-recommends build-essential pkg-config curl ca-certificates
+          fi
+
+      - name: Rust toolchain (stable + rustfmt + clippy)
+        run: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+          . "$HOME/.cargo/env"
+          rustup component add rustfmt clippy
+          cargo --version
+          rustc --version
+
+      - name: uv + Python 3.14
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+          export PATH="$HOME/.local/bin:$PATH"
+          uv python install 3.14
+          uv --version
+
+      - name: Gates (fmt, clippy, tests, ruff, pytest)
+        run: |
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          bash scripts/check.sh
