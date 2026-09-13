@@ -47,12 +47,23 @@ BASE_FIELDS = ("id", "type", "status")
 #: The selectable export source kinds (matches the core `ExportSource.kind`).
 SOURCE_KINDS = ("type", "category", "collection", "saved_search", "channel", "selection")
 #: The selectable output formats (matches the core's `format`).
-FORMATS = ("csv", "xlsx", "json")
+FORMATS = ("csv", "xlsx", "json", "bmecat")
 #: Mime type per format, used for the browser download.
 MIME = {
     "csv": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "json": "application/json",
+    "bmecat": "application/xml",
+}
+#: BMEcat catalogue language (ISO 639-2/B) per data language of the catalogue.
+#: Mirrors `ATTRIBUTE_LANGUAGES` in `meadow/worker/bmecat.py`.
+BMECAT_LANGUAGES = {
+    "en": "eng",
+    "de": "ger",
+    "fr": "fre",
+    "nl": "dut",
+    "it": "ita",
+    "es": "spa",
 }
 
 
@@ -262,8 +273,60 @@ async def export_page(request: Request) -> None:
         ui.download(tmp_path, filename, MIME.get(format_, "application/octet-stream"))
         asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
-    def _show_report(run_id: str, exported: int, columns: list[str], format_: str) -> None:
+    def _render_bmecat_report(report: dict) -> None:
+        """Summary of a BMEcat run: counters, skips and the XSD verdict."""
+        with ui.row().classes("flex-wrap gap-2 mt-1"):
+            for key in ("products", "classes", "features", "with_value", "dash"):
+                ui.badge(f"{t(f'export.bmecat_{key}')}: {int(report.get(key) or 0)}").props(
+                    "outline"
+                )
+        skipped = report.get("skipped") or {}
+        if skipped:
+            details = ", ".join(f"{reason}: {count}" for reason, count in skipped.items())
+            ui.label(t("export.bmecat_skipped").format(details=details)).classes(
+                "text-caption text-orange-600 mt-1"
+            )
+        missing = report.get("missing_required") or []
+        if missing:
+            names = ", ".join(sorted({str(item.get("feature")) for item in missing})[:10])
+            ui.label(t("export.bmecat_missing").format(count=len(missing), names=names)).classes(
+                "text-caption text-negative mt-1"
+            )
+        text_values = report.get("text_values") or []
+        if text_values:
+            ui.label(t("export.bmecat_text_values").format(count=len(text_values))).classes(
+                "text-caption text-gray-500 mt-1"
+            )
+        without_code = report.get("nodes_without_code") or []
+        if without_code:
+            # Assigned taxonomy nodes that cannot name a class in BMEcat (no
+            # `code`): the reason a product may be missing from the file.
+            ui.label(t("export.bmecat_nodes_without_code").format(count=len(without_code))).classes(
+                "text-caption text-orange-600 mt-1"
+            )
+        validation = report.get("validation") or {}
+        if validation.get("validated"):
+            key = "export.bmecat_valid" if validation.get("valid") else "export.bmecat_invalid"
+            colour = "text-positive" if validation.get("valid") else "text-negative"
+            ui.label(t(key)).classes(f"text-caption {colour} mt-1")
+            for error in validation.get("errors") or []:
+                ui.label(str(error)).classes("text-caption text-negative")
+        else:
+            ui.label(
+                t("export.bmecat_not_validated").format(
+                    reason=validation.get("reason") or t("export.bmecat_no_reason")
+                )
+            ).classes("text-caption text-orange-600 mt-1")
+
+    def _show_report(
+        run_id: str,
+        exported: int,
+        columns: list[str],
+        format_: str,
+        report: dict | None = None,
+    ) -> None:
         """Renders the export success report with a download button."""
+        report = report or {}
         with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl"):
             ui.label(t("export.report_title")).classes("text-subtitle1")
             ui.label(t("export.report_count").format(count=exported)).classes(
@@ -273,10 +336,15 @@ async def export_page(request: Request) -> None:
                 "text-caption"
             )
             ui.separator()
-            ui.label(t("export.report_columns")).classes("text-subtitle2")
-            with ui.row().classes("flex-wrap gap-2 mt-1"):
-                for column in columns:
-                    ui.badge(column).props("outline")
+            if format_ == "bmecat":
+                # The BMEcat report is a mapping report: what was written, what was
+                # skipped and whether the document validates against the XSD.
+                _render_bmecat_report(report)
+            else:
+                ui.label(t("export.report_columns")).classes("text-subtitle2")
+                with ui.row().classes("flex-wrap gap-2 mt-1"):
+                    for column in columns:
+                        ui.badge(column).props("outline")
             with ui.row().classes("mt-3 w-full justify-end"):
                 ui.button(t("export.download"), on_click=lambda: _download(run_id, format_)).props(
                     "unelevated"
@@ -440,7 +508,7 @@ async def export_page(request: Request) -> None:
             add_group(ungrouped_title, ungrouped_visible)
 
         # --- Fields --------------------------------------------------------
-        with ui.card().classes("w-full mt-4"):
+        with ui.card().classes("w-full mt-4") as fields_card:
             ui.label(t("export.fields_section")).classes("text-subtitle1")
             ui.label(t("export.fields_hint")).classes("text-caption text-gray-500")
             # The vocabulary of an imported classification standard (380 features
@@ -493,7 +561,7 @@ async def export_page(request: Request) -> None:
                     .classes("w-64")
                 )
 
-            with ui.row().classes("flex-wrap gap-6 mt-3"):
+            with ui.row().classes("flex-wrap gap-6 mt-3") as csv_options:
                 header_switch = ui.switch(t("export.header"), value=True)
                 separator_select = (
                     ui.select(
@@ -505,6 +573,7 @@ async def export_page(request: Request) -> None:
                     .classes("w-56")
                 )
                 include_system_switch = ui.switch(t("export.include_system"))
+            with ui.row().classes("flex-wrap gap-6 mt-1"):
                 inherit_switch = ui.switch(t("export.resolve_inheritance")).tooltip(
                     t("export.resolve_inheritance_hint")
                 )
@@ -513,6 +582,71 @@ async def export_page(request: Request) -> None:
                 ui.input(t("export.email_to")).props("outlined dense").classes("w-full mt-3")
             )
             ui.label(t("export.email_hint")).classes("text-caption text-gray-500")
+
+        # --- BMEcat profile (only for the BMEcat format) --------------------
+        # The document header is a business statement and the mapping is fixed by
+        # the standard, so this replaces the field selection and the CSV options
+        # (`plan/detail/bmecat-export.md` §3–§5).
+        with ui.card().classes("w-full mt-4") as bmecat_card:
+            ui.label(t("export.bmecat_section")).classes("text-subtitle1")
+            ui.label(t("export.bmecat_hint")).classes("text-caption text-gray-500")
+            with ui.row().classes("flex-wrap gap-6 mt-2"):
+                bmecat_catalog_id = (
+                    ui.input(t("export.bmecat_catalog_id"), value="MEADOW")
+                    .props("filled dense")
+                    .classes("w-48")
+                )
+                bmecat_catalog_name = (
+                    ui.input(t("export.bmecat_catalog_name"), value="Meadow catalogue")
+                    .props("filled dense")
+                    .classes("w-64")
+                )
+                bmecat_catalog_version = (
+                    ui.input(t("export.bmecat_version"), value="1.0")
+                    .props("filled dense")
+                    .classes("w-28")
+                )
+            with ui.row().classes("flex-wrap gap-6 mt-2"):
+                bmecat_language = (
+                    ui.select(
+                        {code: BMECAT_LANGUAGES.get(code, code) for code in data_languages},
+                        value=(data_languages[0] if data_languages else "en"),
+                        label=t("export.bmecat_language"),
+                    )
+                    .props("filled dense")
+                    .classes("w-44")
+                    .tooltip(t("export.bmecat_language_hint"))
+                )
+                bmecat_currency = (
+                    ui.input(t("export.bmecat_currency"), value="EUR")
+                    .props("filled dense")
+                    .classes("w-28")
+                )
+                bmecat_pid = (
+                    ui.input(t("export.bmecat_pid"), value="code")
+                    .props("filled dense")
+                    .classes("w-44")
+                    .tooltip(t("export.bmecat_pid_hint"))
+                )
+            with ui.row().classes("flex-wrap gap-6 mt-2"):
+                bmecat_supplier = (
+                    ui.input(t("export.bmecat_supplier")).props("filled dense").classes("w-64")
+                )
+                bmecat_buyer = (
+                    ui.input(t("export.bmecat_buyer")).props("filled dense").classes("w-64")
+                )
+            ui.label(t("export.bmecat_validity_hint")).classes("text-caption text-gray-500")
+
+        def _update_format_visibility(format_: str) -> None:
+            """BMEcat has a fixed mapping: no field selection, no CSV options."""
+            is_bmecat = format_ == "bmecat"
+            fields_card.set_visibility(not is_bmecat)
+            bmecat_card.set_visibility(is_bmecat)
+            csv_options.set_visibility(not is_bmecat)
+            locale_select.set_visibility(not is_bmecat)
+
+        format_select.on_value_change(lambda event: _update_format_visibility(str(event.value)))
+        _update_format_visibility(str(format_select.value or "csv"))
 
         # --- Actions -------------------------------------------------------
         with ui.row().classes("mt-4 gap-2 items-center"):
@@ -529,6 +663,21 @@ async def export_page(request: Request) -> None:
 
         def _format() -> str:
             return str(format_select.value or "csv")
+
+        def _bmecat_profile() -> dict:
+            """The BMEcat profile block of the request (empty values stay unset)."""
+            return {
+                "catalog_id": str(bmecat_catalog_id.value or "").strip() or None,
+                "catalog_name": str(bmecat_catalog_name.value or "").strip() or None,
+                "catalog_version": str(bmecat_catalog_version.value or "").strip() or None,
+                "language": BMECAT_LANGUAGES.get(
+                    str(bmecat_language.value or "en"), str(bmecat_language.value or "eng")
+                ),
+                "currency": str(bmecat_currency.value or "EUR").strip() or None,
+                "supplier": str(bmecat_supplier.value or "").strip() or None,
+                "buyer": str(bmecat_buyer.value or "").strip() or None,
+                "pid_attribute": str(bmecat_pid.value or "").strip() or None,
+            }
 
         def _email_recipients() -> list[str]:
             raw = str(email_input.value or "")
@@ -566,7 +715,8 @@ async def export_page(request: Request) -> None:
                 ui.notify(t("export.source_required"), type="warning")
                 return
             fields = _selected_fields()
-            if not fields:
+            is_bmecat = _format() == "bmecat"
+            if not is_bmecat and not fields:
                 ui.notify(t("export.fields_required"), type="warning")
                 return
             source = _source_payload(kind, detail_value)
@@ -590,6 +740,7 @@ async def export_page(request: Request) -> None:
                     format=_format(),
                     locales=_locale_values(),
                     options=options,
+                    bmecat=_bmecat_profile() if is_bmecat else None,
                 )
                 run_id = str(queued.get("job_run_id") or "")
                 if not run_id:
@@ -611,7 +762,13 @@ async def export_page(request: Request) -> None:
             result = run.get("result") or {}
             exported = int(result.get("exported") or 0)
             columns = [str(c) for c in (result.get("columns") or [])]
-            _show_report(run_id, exported, columns, result.get("format") or _format())
+            _show_report(
+                run_id,
+                exported,
+                columns,
+                result.get("format") or _format(),
+                result.get("report") or {},
+            )
 
         preview_button.on_click(on_preview)
         export_button.on_click(on_export)

@@ -2676,12 +2676,14 @@ class CoreClient:
         format: str = "csv",
         locales: list[str] | None = None,
         options: dict | None = None,
+        bmecat: dict | None = None,
     ) -> dict:
         """Queues a structured export (``POST /exports``, editor+).
 
         Returns ``{"job_run_id": ...}``. The worker resolves the ``source`` and
         stores the serializer-ready output in ``job_run.result``; the file is
-        fetched later via :meth:`get_export_file`.
+        fetched later via :meth:`get_export_file`. ``bmecat`` carries the catalogue
+        metadata of a BMEcat export (only used with ``format="bmecat"``).
         """
         payload: dict[str, object] = {"source": source, "format": format}
         if fields:
@@ -2690,6 +2692,8 @@ class CoreClient:
             payload["locales"] = locales
         if options:
             payload["options"] = options
+        if bmecat:
+            payload["bmecat"] = bmecat
         async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/exports",

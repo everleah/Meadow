@@ -18,7 +18,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `api-design.md` — REST API design (section 5)
   - `jobs-scheduler.md` — background jobs & scheduler (section 6)
   - `integration-eventsystem.md` — integration & event system (section 7)
-  - `bmecat-export.md` — BMEcat export/import and external classification standards (ETIM): mapping model, data conversion, export profiles, phases (extension of sections 7 & 4; planning only, no implementation yet)
+  - `bmecat-export.md` — BMEcat export/import and external classification standards (ETIM): mapping model, data conversion, export profiles, phases (extension of sections 7 & 4; V1 export implemented 2026-09-13, §11.10)
   - `konnektor-konfiguration.md` — schema-driven connector configuration forms (extension of section 7 & 11; stages 1–2 implemented, stage 3 sketched in §14)
   - `konfiguration-export-import.md` — configuration export & import (MCF, extension of the data export/import, section 7)
   - `datenexport-import-ui.md` — UI-driven data export & import for normal users (extension of sections 7 & 11)

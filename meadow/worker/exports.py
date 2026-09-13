@@ -25,6 +25,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from meadow.urls import is_valid_url
+from meadow.worker import bmecat
 from meadow.worker.http import loopback_host
 from meadow.worker.jobs import JobHandler, JobMessage
 from meadow.worker.mail import SmtpConfig, send_with_attachment
@@ -362,6 +363,9 @@ def _attachment_from_result(result: dict[str, Any]) -> tuple[str, bytes, str]:
             "utf-8"
         )
         return ("meadow-export.json", body, "application/json")
+    if format_ == "bmecat":
+        body = str(result.get("xml") or "").encode("utf-8")
+        return ("meadow-export-bmecat.xml", body, "application/xml")
     return ("meadow-export.csv", str(result.get("csv") or "").encode("utf-8"), "text/csv")
 
 
@@ -424,7 +428,7 @@ async def _maybe_archive(
     # exceeds the inline threshold (the download then uses the presigned URL).
     threshold = int(os.environ.get("EXPORT_INLINE_MAX_BYTES", "1000000"))
     if len(content) > threshold:
-        for field in ("csv", "xlsx_base64", "document"):
+        for field in ("csv", "xlsx_base64", "document", "xml"):
             result.pop(field, None)
 
 
@@ -444,6 +448,10 @@ async def _structured_export(
     """Runs a structured export and returns the serializable job result."""
     source = parameters.get("source") or {}
     format_ = str(parameters.get("format") or "json")
+    if format_ == "bmecat":
+        # The BMEcat mapping is fixed by the standard (class features, header
+        # metadata) — no field selection, no CSV options.
+        return await _bmecat_export(active, core_url, parameters)
     fields = [str(f) for f in (parameters.get("fields") or [])]
     if not fields:
         fields = list(_BASE_FIELDS)
@@ -514,6 +522,124 @@ async def _structured_export(
 
     await _finalize(result, options)
     return result
+
+
+async def _bmecat_export(
+    active: httpx.AsyncClient,
+    core_url: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Builds a BMEcat/ETIM catalogue document for the resolved source.
+
+    Only objects of a product type with a supplier PID **and** at least one class
+    become a `PRODUCT`; everything else is counted in `report["skipped"]` (the
+    BMEcat profile identifies a product through its class, and `SUPPLIER_PID` is
+    limited to 32 characters). The document is validated against the ETIM XSD when
+    the schema and `lxml` are available — a missing schema is reported, not fatal
+    (`plan/detail/bmecat-export.md` §8 V1).
+
+    A `PRODUCT_FEATURES` block names its class by the **business key** (`code`,
+    the ETIM class `EC…`) — an assigned taxonomy node without a code (a plain shop
+    category) cannot be referenced in BMEcat and is therefore no block; those
+    nodes are listed in `report["nodes_without_code"]` so a product that dropped
+    out of the file can be explained.
+    """
+    profile = parameters.get("bmecat") or {}
+    options = parameters.get("options") or {}
+    definitions = {
+        str(definition.get("name")): definition
+        for definition in await _load_definitions(active, core_url)
+    }
+    objects = await _resolve_objects(
+        active,
+        core_url,
+        parameters.get("source") or {},
+        resolve_inheritance=bool(options.get("resolve_inheritance")),
+    )
+
+    class_codes: dict[str, str] = {}
+
+    async def class_code(key: str) -> str:
+        """The business key (`code`) of a node — empty when it has none."""
+        if key not in class_codes:
+            response = await active.get(f"{core_url}/objects/object:{key}")
+            code = ""
+            if response.status_code == 200:
+                attributes = response.json().get("attributes") or {}
+                code = str(attributes.get("code") or "").strip()
+            class_codes[key] = code
+        return class_codes[key]
+
+    products: list[dict[str, Any]] = []
+    without_code: set[str] = set()
+    for obj in objects:
+        attributes = dict(obj.get("attributes") or {})
+        resolved = await _load_class_features(active, core_url, str(obj.get("id") or ""))
+        keys = [str(key) for key in resolved.get("classes") or []]
+        codes = {key: await class_code(key) for key in keys}
+        without_code.update(key for key, code in codes.items() if not code)
+        # The block ids: the assigned classes that have a business key.
+        blocks = list(dict.fromkeys(code for code in codes.values() if code))
+        # The features carry the **node keys** of the classes that define them;
+        # the export identifies a class by its business key (`code`), so the
+        # membership test compares codes (a key without a code — an ancestor of
+        # another dimension — stays as-is and counts as inherited).
+        features: list[dict[str, Any]] = []
+        for feature in resolved.get("attributes") or []:
+            entry = dict(feature)
+            nodes: list[str] = []
+            for node in feature.get("nodes") or []:
+                code = await class_code(str(node))
+                nodes.append(code or str(node))
+            entry["nodes"] = nodes
+            features.append(entry)
+        products.append(
+            {
+                "id": obj.get("id"),
+                "type": obj.get("type"),
+                "attributes": attributes,
+                "pid": bmecat.pid_of(attributes, profile),
+                "classes": blocks,
+                "features": features,
+            }
+        )
+
+    document, report = bmecat.build_document(products, definitions, profile)
+    report["nodes_without_code"] = sorted(without_code)
+    report["validation"] = bmecat.validate(document)
+    logger.info(
+        "bmecat export wrote %d products (%d classes, %d features, validation=%s)",
+        report["products"],
+        report["classes"],
+        report["features"],
+        report["validation"].get("valid", report["validation"].get("validated")),
+    )
+    return {
+        "format": "bmecat",
+        "exported": report["products"],
+        "catalog": str(profile.get("catalog_id") or "MEADOW"),
+        "xml": document,
+        "report": report,
+    }
+
+
+async def _load_definitions(client: httpx.AsyncClient, core_url: str) -> list[dict[str, Any]]:
+    """Attribute definitions (type/unit/label) — the mapping needs their types."""
+    response = await client.get(f"{core_url}/attribute-definitions", params={"limit": 1000})
+    response.raise_for_status()
+    return response.json()
+
+
+async def _load_class_features(
+    client: httpx.AsyncClient, core_url: str, object_id: str
+) -> dict[str, Any]:
+    """The resolved class features of an object (empty when it has no class)."""
+    if not object_id:
+        return {}
+    response = await client.get(f"{core_url}/objects/{object_id}/category-attributes")
+    if response.status_code != 200:
+        return {}
+    return response.json()
 
 
 def build_export_handler(

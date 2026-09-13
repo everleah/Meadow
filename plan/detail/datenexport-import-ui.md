@@ -4,10 +4,12 @@
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zum bestehenden MEF-Export/Import (Phase 6)
 - **Stand:** Umsetzungsreif — Core-API & Worker-Export (CSV/XLSX/JSON, Locale-Auflösung) implementiert & E2E-verifiziert; `/export`-Wizard (`editor+`) implementiert & im Browser verifiziert (Vorschau + Export + Download). **Collection-Bulk-Add** (`POST /collections/{id}/members`, idempotent) implementiert & verifiziert; die Collections-Seite bietet einen **„Add members"-Dialog** und einen **„Export"-Button** (führt mit vorausgewählter Collection (`?collection=<id>`) in den Wizard). **Grid-Auswahl-/Filter-Export** im `/products`-Grid implementiert & verifiziert (Toolbar-Download-Button → Dialog mit Scope „Selected rows" / „All filter matches" + Format; nutzt die sichtbaren Grid-Spalten als Felder über die `selection`-Quelle). **Geplante Exporte** implementiert & E2E-verifiziert: ein Export wird als `job_definition` (`type = outbound_export`, Cron im 6-Feld-Format) gespeichert und vom bestehenden Scheduler periodisch als `outbound_export`-Job ausgeführt; im `/export`-Wizard (Admin) über „Schedule…" anlegbar, mit Liste (Run-now/Aktiv/Löschen) und **„Recent exports"**-Liste (Download pro Lauf, Ablage im `job_run.result`). **E-Mail-Versand** implementiert & E2E-verifiziert: `options.email_to` → der Worker versendet den Export als Anhang (`meadow/worker/mail.py`, SMTP per Env; Dev-Catcher `mailhog` in `docker-compose.dev.yml`, SMTP 1025 / UI 8025). **Objektstorage-Ablage** implementiert & E2E-verifiziert: bei konfiguriertem S3/MinIO archiviert der Worker die Datei (`result.archive` mit `{bucket, key, size, url}`, Presigned-URL) und entfernt ab `EXPORT_INLINE_MAX_BYTES` (Standard 1 MB) die Inline-Daten; `GET /exports/{run_id}/file` leitet dann per **302** auf die Presigned-URL um (`inline_present`), sonst wird wie zuvor inline serialisiert. **Tabellarischer Import (CSV und XLSX)** implementiert & im Browser verifiziert: gemeinsamer Adapter `meadow/tabular.py` (CSV/XLSX → MEF) und die Seite `/import` (`editor+`) mit Upload, **Arbeitsblatt-Auswahl** (Mehrblatt-XLSX), automatischem Spalten-Mapping (inkl. Freitext-Attributen und Sprache `attribut|<lang>`), Vorschau und Import über die bestehende `POST /imports`-Pipeline (idempotent per Business-Schlüssel). **MEF-JSON-Import** implementiert & E2E-verifiziert: die Seite erkennt MEF-Dokumente (`meadow/mef.py`), zeigt statt des Mappings eine Dokument-Zusammenfassung + Objekt-Vorschau und bietet den Abgleich **per Objekt-ID** (`?match_by_id=true`, im Core/Worker neu) — ein Export→Import-Roundtrip von Meadow-MEF (`source: "meadow"`, `id` = Core-Record-ID) **aktualisiert** die Objekte (`updated: N`, `created: 0`, keine Duplikate) statt sie zu duplizieren.
 
+**BMEcat/ETIM-Export (V1)** implementiert & E2E-verifiziert (2026-09-13): viertes Format `bmecat`, eigenes Profil im Wizard statt Feldauswahl, XSD-validiertes Dokument mit Bericht — Details und Grenzen in [bmecat-export.md](bmecat-export.md) §11.10.
+
 **Getroffene Entscheidungen:**
 
 - **Dateiablage:** `job_run.result` — die strukturierten Daten (`columns` + `rows` bzw. MEF-Dokument) liegen im Job-Ergebnis; die Datei wird beim Download daraus serialisiert (CSV/XLSX/JSON) — kein binäres Blob im Ergebnis, keine Objektstorage-Ablage im MVP.
-- **XLSX:** im MVP enthalten (openpyxl). Formate `csv | xlsx | json`.
+- **XLSX:** im MVP enthalten (openpyxl). Formate `csv | xlsx | json` — **`bmecat`** ergänzt (2026-09-13) den Klassifikations-/Katalogpfad: ein XML-Dokument im ETIM-Profil statt einer Tabelle, siehe §5.6.
 - **Rechte:** Export `editor+`; Import `editor+`; Collection-Verwaltung `admin`.
 - **Mehrere Locale-Spalten:** ja — pro gewählter Sprache eine Spalte `<attribut>_<code>` (z. B. `title_de`, `title_en`); Standardsprache zusätzlich als `<attribut>`/`<attribut>_<std>`.
 
@@ -41,7 +43,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 |---|---|
 | Quelle | Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **Kanal (für den Kanal freigegebene Objekte)** · **aktuelle Grid-Auswahl/Filter** |
 | Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; **gruppiert nach Attributgruppe** (je Gruppe eine `ui.expansion` mit Sammel-Checkbox), nur Attribute, die der gewählten Objekttyp **erlaubt** (`applicable_types`); „ohne Gruppe" als eigener Abschnitt, „alle auswählen" über die sichtbaren Felder |
-| Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) |
+| Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) · **BMEcat/ETIM** (XML, eigenes Profil statt Feldauswahl, §5.6) |
 | Sprache | Eine oder **mehrere** Locales (Fallback-Kette); pro Sprache eine Spalte `<attribut>_<code>` |
 | Optionen | Header-Zeile, Trennzeichen (`;`/`,`), quantifizierte Werte als `{value, unit}` in Anzeigeeinheit, `include_system`, **`resolve_inheritance` („Auch vererbte Werte exportieren", umgesetzt 2026-09-11)** |
 
@@ -70,9 +72,10 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
     "object_ids": ["object:…"]
   },
   "fields": ["sku", "title", "price", "status"],
-  "format": "csv" | "xlsx" | "json",
+  "format": "csv" | "xlsx" | "json" | "bmecat",
   "locales": ["de", "en"],
-  "options": { "header": true, "separator": ",", "include_system": false, "resolve_inheritance": false }
+  "options": { "header": true, "separator": ",", "include_system": false, "resolve_inheritance": false },
+  "bmecat": { "catalog_id": "MEADOW-2026", "language": "eng", "supplier": "ACME" }
 }
 ```
 
@@ -100,16 +103,18 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 4. **Ergebnis** in `job_run.result`:
    - `json`: `{ "format": "json", "exported": N, "columns": […], "document": {…MEF…} }`
    - `csv`/`xlsx`: `{ "format": "csv"|"xlsx", "exported": N, "columns": […], "rows": [{col: val, …}] }`
+   - `bmecat`: `{ "format": "bmecat", "exported": N, "catalog": "…", "xml": "…", "report": {…} }` (§5.6)
 5. Datei wird beim Download aus `columns`/`rows` serialisiert (siehe 5.3) — kein binäres Blob im Ergebnis.
 
 ### 5.3 Download-Endpunkt (`GET /exports/{run_id}/file`)
 
-`GET /exports/{run_id}/file?format=csv|xlsx|json` (`editor+`, JWT):
+`GET /exports/{run_id}/file?format=csv|xlsx|json|bmecat` (`editor+`, JWT):
 
 - Liest `job_run.result`.
 - `csv` → CSV (UTF-8, `;`/`,` Trenner, Header) via `csv`/`StringIO`.
 - `xlsx` → openpyxl-Workbook (`columns` als Header, `rows`), Bytes in den Response.
 - `json` → MEF-Dokument (`document`) als JSON-Download.
+- `bmecat` → XML-Dokument (`xml`) als `application/xml; charset=utf-8` (Dateiname `meadow-export-bmecat.xml`).
 - **Objektstorage:** Sind die Inline-Daten (nach Archivierung über `EXPORT_INLINE_MAX_BYTES`) entfernt, antwortet der Endpunkt mit **302** auf `result.archive.url` (Presigned-URL des Objektstorage-Objekts); sonst wie oben inline.
 - Antwort mit `Content-Disposition: attachment; filename="meadow-export.<ext>"`.
 
@@ -135,12 +140,29 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 - **Roundtrip-Hinweis:** Das MEF-`id` ist eine **Source-Referenz**, nicht die Core-Objekt-ID. Ein Export→Import ohne Business-Schlüssel legt daher **neue** Objekte an (Source-Ref = exportierte `id`); für ein Update muss derselbe **Business-Schlüssel** wie im Export gesetzt werden (z. B. `sku`).
 - **Collection-Bulk-Add:** neuer Endpunkt `POST /collections/{id}/members` (`editor+`, JWT) mit `{ "object_ids": ["…"] }` — legt `collection_member`-Relationen an (`attributes.rank` aufsteigend, `added_at`); **idempotent** (bereits vorhandene Mitglieder überspringen), Antwort `{ added, skipped }`.
 
+### 5.6 BMEcat-/ETIM-Ausgabe (`format: "bmecat"`, umgesetzt 2026-09-13)
+
+Ein Katalogdokument ist **keine Tabelle**: Spaltenauswahl, Trennzeichen und Header-Zeile sind hier bedeutungslos. Deshalb bringt das Format ein **eigenes Profil** mit, und der Wizard tauscht die Karten: Feldauswahl und CSV-Optionen verschwinden, die Karte **„BMEcat-Katalogdaten"** erscheint (Quelle, Sprache und Optionen des allgemeinen Teils bleiben nutzbar). Die Regeln, das Mapping und die Grenzen stehen in [bmecat-export.md](bmecat-export.md) — hier nur die UI-Sicht.
+
+| Profilfeld | Bedeutung |
+|---|---|
+| `catalog_id`, `catalog_name`, `catalog_version` | Kopf des Dokuments (`CATALOG`); `CATALOG_ID` ist der Abnehmer-Schlüssel |
+| `language` | Katalogsprache (`eng`/`ger`/…, BMEcat-Codes) — **eine Sprache je Datei** |
+| `currency` | `CURRENCY` (ISO-4217, Default `EUR`) |
+| `supplier`, `buyer` | `SUPPLIER_NAME`/`BUYER_NAME` — Pflicht im ETIM-Profil, wird **nicht** erfunden |
+| `pid_attribute` | Attribut, dessen Wert `SUPPLIER_PID` wird (Fallback `code`, dann `sku`; Schema-Limit 32 Zeichen) |
+| `etim_version` | Versionsteil von `REFERENCE_FEATURE_SYSTEM_NAME` (Default `10.0` ⇒ `ETIM-10.0`) |
+
+- **Vorgaben/Zwänge:** der Wizard schickt kein `fields`-Array (die Spaltenauswahl ist ausgeblendet) und die Formatprüfung entfällt — `bmecat` exportiert die Klasse, nicht die gewählten Felder. Alles andere (Quelle inkl. Kanal/Kollektion, `email_to`, geplante Exporte) läuft über denselben Job.
+- **Bericht statt Download-Überraschung:** der Report-Dialog zeigt Produkte/Klassen/Merkmale/„mit Wert"/„als `-`", die übersprungenen Objekte mit Grund, Pflichtmerkmale ohne Wert, Klartext-Merkmale und das XSD-Verdikt — inklusive der Zeile **„zugeordnete Taxonomieknoten ohne `code`"**, wenn Produkte deshalb nicht im Katalog landen (§11.10 in [bmecat-export.md](bmecat-export.md)).
+- **Noch offen:** Profil als speicherbare Entität (eigene Admin-Seite nach §10 Punkt 5 der BMEcat-Planung), mehrere Sprachen/Kanäle je Lauf, Preise/Varianten (V4), Streaming für sehr große Kataloge.
+
 ## 6. Frontend (NiceGUI)
 
 - Neue Seite **`/export`** (Wizard, `editor+`-Rolle):
   1. **Quelle** (Select: Typ / Kategorie-Baum / Collection / gespeicherte Suche / Grid-Auswahl; abhängig davon Detailselektor).
   2. **Felder** — **gruppiert nach Attributgruppe** (Basis-Felder zuerst, je Gruppe eine `ui.expansion` mit Anzahl und Sammel-Checkbox, „Attribute ohne Gruppe" zuletzt); gezeigt werden **nur die Attribute, die der gewählte Objekttyp erlaubt** (`applicable_types`, leere Liste = alle Typen — die Quellen Collection/Suche/Kanal legen keinen Typ fest, dort bleiben alle sichtbar, mit Hinweiszeile). Die Checkbox zeigt `Label (name)`, weil der Spaltenname bei einem importierten Standard der Merkmalscode ist. Die Auswahl bleibt beim Umschalten der Quelle erhalten (Zustand außerhalb des Renderers); gerendert wird von `meadow/frontend/export_fields.py` (rein, getestet).
-  3. **Format + Sprache + Optionen** — Format-Select (CSV/XLSX/JSON), **Locale-Mehrfachauswahl**, Optionen (Header, Trenner, quantifizierte Werte, `include_system`).
+  3. **Format + Sprache + Optionen** — Format-Select (CSV/XLSX/JSON/**BMEcat**), **Locale-Mehrfachauswahl**, Optionen (Header, Trenner, quantifizierte Werte, `include_system`). Bei Format **BMEcat** entfallen Feldauswahl und CSV-Optionen; stattdessen erscheint die Profilkarte (§5.6).
   4. **„Vorschau"** (Beispielzeilen für die gewählten Spalten) und **„Exportieren"** → Report (Anzahl, Download via `GET /exports/{run_id}/file`).
 - Im **Product-Grid** (`/products`): „Export-Auswahl / Export-Filter" Aktion.
 - Auf der **Collections-Seite** (`/saved-searches`): „Exportieren"-Button + „Mitglieder hinzufügen"-Import-Dialog.

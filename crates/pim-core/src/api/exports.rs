@@ -6,6 +6,11 @@
 //! JSON) and stores the serializer-ready output in `job_run.result`
 //! (`csv` text / `xlsx_base64` / `document`). `GET /exports/{run_id}/file`
 //! reads that result and returns it as a downloadable attachment.
+//!
+//! `format: "bmecat"` is the BMEcat/ETIM catalogue export: the worker builds one
+//! **XML** document (`result.xml`, plus the report) keyed by the `bmecat` profile
+//! block of the request and validates it against the XSD when the schema is
+//! available (`plan/detail/bmecat-export.md` §8 V1).
 
 use axum::Json;
 use axum::body::Body;
@@ -75,6 +80,46 @@ impl Default for ExportOptions {
     }
 }
 
+/// Profile metadata of a **BMEcat** export (`format: "bmecat"`).
+///
+/// The document header is a business statement (who delivers to whom, which
+/// catalogue in which language), so it is passed with the request. The values are
+/// written verbatim — the core does not invent a supplier name. Prices/variants
+/// stay out of V1 (`plan/detail/bmecat-export.md` §8 V4), hence `T_NEW_PRODUCTDATA`.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize, ToSchema)]
+pub struct BmecatProfile {
+    /// `CATALOG_ID` (e.g. `MEADOW-2026`).
+    #[serde(default)]
+    pub catalog_id: Option<String>,
+    /// `CATALOG_NAME`.
+    #[serde(default)]
+    pub catalog_name: Option<String>,
+    /// `CATALOG_VERSION` (default `1.0`).
+    #[serde(default)]
+    pub catalog_version: Option<String>,
+    /// Catalogue language (`eng`/`ger`/…, BMEcat codes); the export is one file
+    /// per language (§10 Punkt 3).
+    #[serde(default)]
+    pub language: Option<String>,
+    /// `CURRENCY` (ISO-4217, default `EUR`).
+    #[serde(default)]
+    pub currency: Option<String>,
+    /// `SUPPLIER_NAME` (mandatory in the ETIM profile).
+    #[serde(default)]
+    pub supplier: Option<String>,
+    /// `BUYER_NAME` (the ETIM profile requires a `BUYER` block, and it precedes
+    /// `SUPPLIER`).
+    #[serde(default)]
+    pub buyer: Option<String>,
+    /// Attribute whose value becomes `SUPPLIER_PID` (default `code`, then `sku`;
+    /// the schema limits the value to 32 characters).
+    #[serde(default)]
+    pub pid_attribute: Option<String>,
+    /// `REFERENCE_FEATURE_SYSTEM_NAME` version part (default `10.0` ⇒ `ETIM-10.0`).
+    #[serde(default)]
+    pub etim_version: Option<String>,
+}
+
 /// Structured export request for `POST /exports`.
 #[derive(Debug, Deserialize, serde::Serialize, ToSchema)]
 pub struct ExportRequest {
@@ -92,6 +137,9 @@ pub struct ExportRequest {
     pub locales: Option<Vec<String>>,
     #[serde(default)]
     pub options: Option<ExportOptions>,
+    /// Profile of a BMEcat export; only used with `format: "bmecat"`.
+    #[serde(default)]
+    pub bmecat: Option<BmecatProfile>,
 }
 
 /// Query params for `GET /exports/{run_id}/file`.
@@ -126,6 +174,7 @@ fn inline_present(result: &Value, format: &str) -> bool {
         "csv" => result.get("csv").and_then(Value::as_str).is_some(),
         "xlsx" => result.get("xlsx_base64").and_then(Value::as_str).is_some(),
         "json" => result.get("document").is_some(),
+        "bmecat" => result.get("xml").and_then(Value::as_str).is_some(),
         _ => false,
     }
 }
@@ -173,9 +222,9 @@ pub async fn create_export(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| crate::api::connectors::default_string(&defaults, "format"))
         .unwrap_or_else(default_format);
-    if !matches!(format.as_str(), "csv" | "xlsx" | "json") {
+    if !matches!(format.as_str(), "csv" | "xlsx" | "json" | "bmecat") {
         return Err(ApiError::bad_request(format!(
-            "unsupported format `{format}` (expected csv | xlsx | json)"
+            "unsupported format `{format}` (expected csv | xlsx | json | bmecat)"
         )));
     }
     let fields = req
@@ -251,6 +300,7 @@ pub async fn create_export(
         "format": format,
         "locales": locales,
         "options": options,
+        "bmecat": req.bmecat,
     });
     let (_, run) = queue_run(
         &state.db,
@@ -315,7 +365,7 @@ pub async fn get_export_file(
         .and_then(Value::as_str)
         .unwrap_or("json");
     let format = params.format.as_deref().unwrap_or(stored_format);
-    if !matches!(format, "csv" | "xlsx" | "json") {
+    if !matches!(format, "csv" | "xlsx" | "json" | "bmecat") {
         return Err(ApiError::bad_request(format!(
             "unsupported format `{format}`"
         )));
@@ -371,6 +421,17 @@ pub async fn get_export_file(
                 "meadow-export.json".to_owned(),
                 serde_json::to_vec(&document)
                     .map_err(|e| ApiError::internal(format!("serialize json: {e}")))?,
+            )
+        }
+        "bmecat" => {
+            let xml = result
+                .get("xml")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::bad_request("no bmecat result"))?;
+            (
+                "application/xml; charset=utf-8",
+                "meadow-export-bmecat.xml".to_owned(),
+                xml.as_bytes().to_vec(),
             )
         }
         other => {

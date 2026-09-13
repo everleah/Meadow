@@ -27,7 +27,9 @@ use crate::api::object_types::is_taxonomy_type;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
-use crate::class_features::{ancestor_chain_live, key_of, resolved_features};
+use crate::class_features::{
+    ancestor_chain_live, assigned_node_keys, category_relation_keys, key_of, resolved_features,
+};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -374,6 +376,11 @@ pub async fn delete_category_attribute(
 /// name), `required`, the contributing classes and `missing`.
 /// `required`/`missing` list **attribute** names — the same semantics as the
 /// completeness computation, so grid filter, form and dashboard agree.
+///
+/// `classes` lists the taxonomy nodes the object is **assigned to** (the doc
+/// keys). A consumer that must name the classification block itself — the BMEcat
+/// export writes one `PRODUCT_FEATURES` per class — needs exactly that
+/// (`plan/detail/bmecat-export.md` §3).
 #[utoipa::path(
     get,
     path = "/objects/{id}/category-attributes",
@@ -399,6 +406,9 @@ pub async fn list_object_category_attributes(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let features = resolved_features(&state.db, key).await?;
+    // The classes the object is assigned to (the block id of an export).
+    let relations = category_relation_keys(&state.db).await?;
+    let classes = assigned_node_keys(&state.db, key, &relations).await?;
     // `required`/`missing` are keyed by the **attribute** that carries a feature
     // (a bound own attribute, or the feature name itself): completeness counts
     // values, while each row still reports the feature (`name`, e.g. the ETIM
@@ -422,6 +432,7 @@ pub async fn list_object_category_attributes(
     Ok(Json(json!({
         "object_id": format!("object:{key}"),
         "object_type": object_type,
+        "classes": classes,
         "attributes": features
             .iter()
             .map(|feature| json!({
