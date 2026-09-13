@@ -160,6 +160,8 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 | `label_key` **oder** `label` | Feste UI-Labels über i18n-Key, Datenlabels (Attribute) als mehrsprachige Map |
 | `value_type` | `string` · `number` · `boolean` · `date` · `enum` |
 | `widget` | `text` · `number` · `switch` · `select` · `date` |
+| `reference_data` | Feld ist Vokabular eines Klassifizierungsstandards: bleibt **filterbar**, wird aber in Feld-/Sortierauswahl erst nach dem Schalter angeboten (`kategorisierung.md`) |
+| `range_bound` | `from`/`to`, wenn das Feld **ein Rand eines `range`-Attributs** ist (das Label wird um `search_form.bound_from`/`bound_to` ergänzt) |
 | `options` / `options_source` | feste Optionen (Label + Wert) bzw. dynamische Quelle (`object_types`, `languages`) |
 | `multilingual` + `languages` | Feld hat Sprachvarianten; die UI bietet ein Sprach-Select an |
 | `unit` | Anzeige-Hinweis für quantifizierte Werte (nur Darstellung, der Wert bleibt kanonisch) |
@@ -241,7 +243,7 @@ Name      [ Aktive Produkte mit Preisfehler        ]   Cron (optional) [ 0 0 2 *
 1. **Gruppen nur bis Tiefe 6 und 50 Bedingungen.** Ein unbegrenzter Ausdrucksbaum wäre im Formular nicht mehr bedienbar; die Grenzen gelten in Kern und UI („+ Gruppe“ verschwindet an der Maximaltiefe).
 2. **Operatormenge bleibt wie in Abschnitt 4** (`not_between` ist inzwischen dabei; `in` auf Objektwerten gibt es nicht).
 3. **Volltext ohne Feld-/Sprachauswahl.** Der Index liegt auf `object.attributes`; die UI verspricht keine Einschränkung, die nichts bewirkt. Der feldweise Volltext ist als zukünftige Entwicklung in **Abschnitt 12** beschrieben.
-4. **Wert-Widgets nur für die vorhandenen Werttypen** (Text, Zahl, boolesch, Datum, Enum). `reference`- und Medien-Attribute sind **nicht** filterbar – dafür gibt es die Referenz-Zeilen (Relationstyp + Zielobjekt).
+4. **Wert-Widgets nur für die vorhandenen Werttypen** (Text, Zahl, boolesch, Datum, Enum). `reference`- und Medien-Attribute sind **nicht** filterbar – dafür gibt es die Referenz-Zeilen (Relationstyp + Zielobjekt). **`range`-Attribute (umgesetzt 2026-09-13):** ein `range`-Wert ist `{from, to}`, deshalb werden **beide Grenzen als je eigenes Zahlenfeld** angeboten (`attributes.<name>.from` / `.to`, mit `range_bound`) — jeder Zahlen-Operator behält damit seine dokumentierte Bedeutung („Breite von >= 10“ statt einer erfundenen Überlappungs-Semantik), Validierung/Sortierung/Einheiten-Hinweis funktionieren unverändert, und die UI beschriftet den Rand über `range_bound`. Vorher fehlten diese Felder ganz (die 25 `range`-Merkmale des ETIM-Pakets waren nicht filterbar).
 5. **Kein Ersatz des JSON-Tabs.** Alles, was das Formular nicht darstellt, bleibt dort möglich und wird im Formular als „nicht dargestellt“ gemeldet.
 6. **Keine Migration.** Bestehende gespeicherte Suchen (und ihre Collections) werden gelöscht und im Formular neu angelegt.
 

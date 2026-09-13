@@ -556,6 +556,8 @@
   "search_form.no_value": "aucune valeur",
   "search_form.language_base": "Toutes les langues",
   "search_form.field_unknown": "inconnu",
+  "search_form.bound_from": "de",
+  "search_form.bound_to": "à",
   "search_form.field_type": "Type d’objet",
   "search_form.field_status": "Statut",
   "status.draft": "Brouillon",

@@ -556,6 +556,8 @@
   "search_form.no_value": "kein Wert",
   "search_form.language_base": "Alle Sprachen",
   "search_form.field_unknown": "unbekannt",
+  "search_form.bound_from": "von",
+  "search_form.bound_to": "bis",
   "search_form.field_type": "Objekttyp",
   "search_form.field_status": "Status",
   "status.draft": "Entwurf",

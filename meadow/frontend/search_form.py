@@ -161,17 +161,25 @@ def field_label(field: dict, locale: str | None = None) -> str:
     """Display label of a field (i18n key for system fields, data label else).
 
     Attribute labels are data: when they carry no value for the locale (or no
-    text at all) the attribute name is used, so nothing shows up empty.
+    text at all) the attribute name is used, so nothing shows up empty. One bound
+    of a `range` attribute shares the attribute's label, so the translated bound
+    is appended (`range_bound`, `plan/detail/suche-formular.md`).
     """
     label_key = field.get("label_key")
     if label_key:
         return t(str(label_key), locale=locale)
     label = field.get("label")
+    text = ""
     if isinstance(label, dict):
         text = resolve_value(label, locale or current_locale())
-        if text:
-            return text
-    return str(field.get("key") or "").removeprefix("attributes.")
+    name = str(field.get("key") or "").removeprefix("attributes.")
+    bound = str(field.get("range_bound") or "")
+    if bound and name.endswith(f".{bound}"):
+        name = name[: -(len(bound) + 1)]
+    base = text or name
+    if not bound:
+        return base
+    return f"{base} ({t(f'search_form.bound_{bound}', locale=locale)})"
 
 
 def field_choices(

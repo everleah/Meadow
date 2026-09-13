@@ -556,6 +556,8 @@
   "search_form.no_value": "no value",
   "search_form.language_base": "All languages",
   "search_form.field_unknown": "unknown",
+  "search_form.bound_from": "from",
+  "search_form.bound_to": "to",
   "search_form.field_type": "Object type",
   "search_form.field_status": "Status",
   "status.draft": "Draft",

@@ -285,6 +285,12 @@ pub struct SearchField {
     /// (`plan/detail/kategorisierung.md`, "Referenzdaten").
     #[serde(skip_serializing_if = "is_false")]
     pub reference_data: bool,
+    /// `from`/`to` when the field is **one bound of a `range` attribute**.
+    ///
+    /// The label of the attribute is shared by both bounds, so the client adds
+    /// the translated bound (`search_form.bound_from`/`bound_to`) to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range_bound: Option<&'static str>,
 }
 
 impl SearchField {
@@ -310,6 +316,7 @@ impl SearchField {
             sortable: true,
             computed: false,
             reference_data: false,
+            range_bound: None,
         }
     }
 
@@ -345,6 +352,11 @@ impl SearchField {
 
     fn reference_data(mut self, reference_data: bool) -> Self {
         self.reference_data = reference_data;
+        self
+    }
+
+    fn range_bound(mut self, bound: &'static str) -> Self {
+        self.range_bound = Some(bound);
         self
     }
 }
@@ -507,9 +519,6 @@ pub fn build_catalog(sources: &CatalogSources) -> Catalog {
             continue;
         };
         let attribute_type = string_at(row, "type").unwrap_or_default();
-        let Some((value_type, widget)) = attribute_widget(&attribute_type) else {
-            continue;
-        };
         let multilingual = row
             .get("multilingual")
             .and_then(Value::as_bool)
@@ -522,6 +531,34 @@ pub fn build_catalog(sources: &CatalogSources) -> Catalog {
             .get("reference_data")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        // A `range` value is `{"from": <number>, "to": <number>}` (`datenmodell.md`,
+        // "range"). Instead of inventing a meaning for "the range is between X and
+        // Y", each **bound** becomes its own numeric field
+        // (`attributes.<name>.from` / `.to`): every numeric operator keeps its
+        // documented meaning ("width from >= 10"), validation and sorting work
+        // unchanged, and the client labels the bound via `range_bound`.
+        if attribute_type == "range" {
+            for bound in ["from", "to"] {
+                let mut field = SearchField::new(
+                    format!("attributes.{name}.{bound}"),
+                    "attribute",
+                    ValueType::Number,
+                    Widget::Number,
+                )
+                .label(row.get("label").cloned())
+                .range_bound(bound)
+                .computed(computed)
+                .reference_data(reference_data);
+                if let Some(unit) = unit_hint(row.get("unit_id"), sources) {
+                    field.unit = Some(unit);
+                }
+                fields.push(field);
+            }
+            continue;
+        }
+        let Some((value_type, widget)) = attribute_widget(&attribute_type) else {
+            continue;
+        };
         let options = if value_type == ValueType::Enum {
             enum_options(row.get("enum_set_id"), sources)
         } else {
@@ -1408,6 +1445,7 @@ mod tests {
                 json!({"name": "link", "label": {"en": "Link"}, "type": "reference"}),
                 json!({"name": "homepage", "label": {"en": "Homepage"}, "type": "url", "multilingual": true}),
                 json!({"name": "EF000040", "label": {"en": "Width"}, "type": "number", "reference_data": true}),
+                json!({"name": "busbar_width", "label": {"en": "Busbar width"}, "type": "range", "unit_id": "unit:eur"}),
             ],
             enum_sets: vec![json!({"id": "enum_set:brand", "options": ["enum_option:acme"]})],
             enum_options: vec![
@@ -1476,6 +1514,38 @@ mod tests {
             )
             .is_empty()
         );
+        // A `range` attribute is offered as its two bounds, each a number field
+        // with the full numeric operator set.
+        let low = catalog.field("attributes.busbar_width.from").unwrap();
+        assert_eq!(low.value_type, ValueType::Number);
+        assert_eq!(low.range_bound, Some("from"));
+        assert!(low.operators.contains(&"between"));
+        assert_eq!(low.unit.as_ref().unwrap()["symbol"], json!("€"));
+        let high = catalog.field("attributes.busbar_width.to").unwrap();
+        assert_eq!(high.range_bound, Some("to"));
+        // The pair itself is not a field (it has no meaningful scalar value).
+        assert!(catalog.field("attributes.busbar_width").is_none());
+        assert!(
+            validate_query(
+                &query(Some(leaf("attributes.busbar_width.from", "gte", json!(10)))),
+                &catalog
+            )
+            .is_empty()
+        );
+        // Type checking applies to the bound as well.
+        assert_eq!(
+            validate_query(
+                &query(Some(leaf(
+                    "attributes.busbar_width.from",
+                    "gte",
+                    json!("wide")
+                ))),
+                &catalog
+            ),
+            vec!["query.where.value: must be a number".to_owned()]
+        );
+        let (sql, _) = render(&leaf("attributes.busbar_width.to", "lte", json!(20)));
+        assert!(sql.contains("attributes.busbar_width.to <="));
         // Multilingual variants resolve through the base field.
         assert!(catalog.field("attributes.name.de").is_some());
         assert!(catalog.field("attributes.name.zz").is_none());

@@ -162,6 +162,18 @@ CATALOG: dict = {
             "sortable": True,
             "reference_data": True,
         },
+        {
+            # One bound of a `range` attribute: a plain number field that carries
+            # the bound so the label can be composed.
+            "key": "attributes.busbar_width.from",
+            "group": "attribute",
+            "label": {"en": "Busbar width", "de": "Sammelschienenbreite"},
+            "value_type": "number",
+            "widget": "number",
+            "operators": ["eq", "ne", "gte", "lte", "between", "is_null"],
+            "sortable": True,
+            "range_bound": "from",
+        },
     ],
     "languages": [
         {"code": "de", "label": {"en": "German"}},
@@ -499,6 +511,21 @@ def test_reference_data_is_offered_only_behind_the_switch() -> None:
     assert "attributes.price" in search_form.sortable_choices(CATALOG, locale="en")
 
 
+def test_a_range_bound_is_labelled_and_typed_as_a_number() -> None:
+    """`attributes.<name>.from` is a number field whose label names the bound."""
+    low = search_form.field_by_key(CATALOG, "attributes.busbar_width.from")
+    assert low is not None
+    assert search_form.value_type_of(CATALOG, "attributes.busbar_width.from") == "number"
+    assert search_form.split_language(CATALOG, "attributes.busbar_width.from") == ""
+    assert search_form.field_label(low, locale="en") == "Busbar width (from)"
+    assert search_form.field_label(low, locale="de") == "Sammelschienenbreite (von)"
+    between = search_form.operator_of(CATALOG, "between")
+    assert search_form.widget_kind(low, between) == "range-number"
+    # Without a label the bound is stripped from the name, not glued onto it.
+    bare = {"key": "attributes.x.from", "label": {}, "range_bound": "from"}
+    assert search_form.field_label(bare, locale="en") == "x (from)"
+
+
 @pytest.mark.parametrize("locale", ["en", "de", "fr"])
 def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
     keys = [
@@ -548,6 +575,8 @@ def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
         "search_form.no_value",
         "search_form.language_base",
         "search_form.field_unknown",
+        "search_form.bound_from",
+        "search_form.bound_to",
         "search_form.section_conditions",
         "search_form.section_fulltext",
         "search_form.section_references",
