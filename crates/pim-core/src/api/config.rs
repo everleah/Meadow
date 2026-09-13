@@ -1930,6 +1930,24 @@ async fn apply_business_rules(
 }
 
 /// Applies a parsed MCF document against the target environment.
+/// MCF entries may carry `null` for an empty label map: the **export** writes
+/// `null` when a record has no label, while the core's object-typed fields
+/// (`label`, `labels`) reject `NULL`. Normalising the entries once keeps every
+/// section (and every future one) tolerant instead of patching each apply
+/// function. Found in the ETIM spike (`plan/detail/bmecat-export.md` §11.4).
+fn normalise_entry_maps(entries: &mut [Value]) {
+    for entry in entries.iter_mut() {
+        let Some(fields) = entry.as_object_mut() else {
+            continue;
+        };
+        for name in ["label", "labels"] {
+            if fields.get(name).is_some_and(Value::is_null) {
+                fields.insert(name.to_owned(), json!({}));
+            }
+        }
+    }
+}
+
 async fn apply_document(
     db: &crate::db::Db,
     doc: &Value,
@@ -1958,11 +1976,12 @@ async fn apply_document(
     }
 
     for section in SECTIONS {
-        let entries = sections
+        let mut entries = sections
             .get(*section)
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        normalise_entry_maps(&mut entries);
         match *section {
             "languages" => apply_languages(db, mode, &entries, &mut resolve, &mut report).await?,
             "channels" => apply_channels(db, mode, &entries, &mut report).await?,
@@ -2238,5 +2257,30 @@ mod tests {
         // (attribute definitions), so it depends on both sections.
         assert!(position("object_types") < features);
         assert!(position("attribute_definitions") < features);
+    }
+
+    #[test]
+    fn null_label_maps_are_normalised() {
+        let mut entries = vec![
+            json!({ "name": "a", "label": null }),
+            json!({ "name": "b", "labels": null, "label": { "en": "B" } }),
+            json!({ "name": "c" }),
+            json!("not an object"),
+        ];
+        normalise_entry_maps(&mut entries);
+        // The export writes `null` for a missing label map; the core rejects NULL.
+        assert_eq!(entries[0]["label"], json!({}));
+        assert_eq!(entries[1]["labels"], json!({}));
+        assert_eq!(
+            entries[1]["label"],
+            json!({ "en": "B" }),
+            "labels stay untouched"
+        );
+        assert_eq!(
+            entries[2].get("label"),
+            None,
+            "an absent field stays absent"
+        );
+        assert_eq!(entries[3], json!("not an object"));
     }
 }
