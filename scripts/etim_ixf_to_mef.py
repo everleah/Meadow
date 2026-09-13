@@ -5,9 +5,11 @@ The converter reads an IXF document
 `plan/detail/bmecat-export.md` §11.4) and writes three importable files for a
 **selection** of classes:
 
-* ``model.mcf.json`` — the model: the taxonomy node type for the classes and one
-  attribute definition per referenced ETIM feature (name = the stable feature
-  code ``EF…``, label = the IXF translations, type from the IXF feature type).
+* ``model.mcf.json`` — the model: the taxonomy node type for the classes, one
+  attribute group per referenced ETIM *feature group* (``EFG…``, the ETIM
+  "Feature Grouping") and one attribute definition per referenced ETIM feature
+  (name = the stable feature code ``EF…``, label = the IXF translations, type
+  from the IXF feature type, ``group_ids`` = its feature group).
 * ``classes.mef.json`` — the class nodes themselves (data), keyed by ``EC…``.
 * ``features.mcf.json`` — the class-feature rows (``category_attributes``), i.e.
   which feature belongs to which class, in which order (``OrderNumber``).
@@ -117,7 +119,11 @@ class Selection:
     classes: list[IxfClass] = field(default_factory=list)
     features: dict[str, IxfFeature] = field(default_factory=dict)
     units: dict[str, IxfUnit] = field(default_factory=dict)
-    groups: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: `FeatureGroups` (`EFG…`) — the ETIM *feature* grouping, which maps onto
+    #: Meadow's `attribute_group` (one section per group in the product form).
+    feature_groups: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: `Groups` (`EG…`) — the ETIM *class* grouping (organisational, 159 items).
+    class_groups: dict[str, dict[str, str]] = field(default_factory=dict)
     #: `Header/Publication`: name, release number and date of the IXF export.
     publication: dict[str, str] = field(default_factory=dict)
     seen_classes: int = 0
@@ -226,11 +232,16 @@ def read_ixf(
                         group_code=_text(elem, "FeatureGroupCode"),
                         labels=labels,
                     )
+            elif section == "FeatureGroups":
+                labels, _ = _translations(elem)
+                code = _text(elem, "Code")
+                if code:
+                    selection.feature_groups[code] = labels
             elif section == "Groups":
                 labels, _ = _translations(elem)
                 code = _text(elem, "Code")
                 if code:
-                    selection.groups[code] = labels
+                    selection.class_groups[code] = labels
             elif section == "Classes":
                 selection.seen_classes += 1
                 code = _text(elem, "Code")
@@ -289,6 +300,25 @@ def build_model_document(
     }
     definitions = []
     unit_conflicts: dict[str, set[str]] = {}
+    # `FeatureGroups` in document order — one `attribute_group` per used group, so
+    # the features stay browsable in the UI (product form sections, export
+    # selection). Attributes reference their group by name; the MCF import
+    # resolves that to the record id (`attribute_groups` is applied before
+    # `attribute_definitions`).
+    used_group_codes = {
+        selection.features[code].group_code for code in used if selection.features[code].group_code
+    }
+    group_entries = [
+        {
+            "name": code,
+            "label": selection.feature_groups.get(code) or {},
+            "position": position,
+            "applicable_types": [applies_to],
+        }
+        for position, code in enumerate(
+            (code for code in selection.feature_groups if code in used_group_codes), start=1
+        )
+    ]
     for code in sorted(used):
         feature = selection.features[code]
         mapped = attribute_type(feature.etim_type)
@@ -306,7 +336,7 @@ def build_model_document(
             "name": code,
             "label": feature.labels,
             "type": mapped,
-            "group_ids": [],
+            "group_ids": [feature.group_code] if feature.group_code else [],
             "inheritable": False,
             "is_key": False,
             "multilingual": False,
@@ -369,6 +399,10 @@ def build_model_document(
     report = {
         "classes": len(selection.classes),
         "features": len(definitions),
+        "feature_groups": len(group_entries),
+        "features_without_group": sum(
+            1 for code in sorted(used) if not selection.features[code].group_code
+        ),
         "type_histogram": Counter(selection.features[code].etim_type for code in sorted(used)),
         "units_needed": {
             code: {
@@ -404,6 +438,7 @@ def build_model_document(
         "created_at": datetime.now(UTC).isoformat(),
         "sections": {
             "object_types": [node_definition],
+            "attribute_groups": group_entries,
             "attribute_definitions": [code_definition, description_definition, *definitions],
         },
     }
@@ -481,6 +516,7 @@ def bundle_manifest(
         "counts": {
             "classes": len(selection.classes),
             "features": report["features"],
+            "feature_groups": report["feature_groups"],
             "class_features": class_features,
         },
         # The installer compares this with the target's unit catalog.
@@ -489,7 +525,7 @@ def bundle_manifest(
             {
                 "file": "model.mcf.json",
                 "kind": "mcf",
-                "sections": ["object_types", "attribute_definitions"],
+                "sections": ["object_types", "attribute_groups", "attribute_definitions"],
             },
             {"file": "classes.mef.json", "kind": "mef", "objects": len(selection.classes)},
             {"file": "features.mcf.json", "kind": "mcf", "sections": ["category_attributes"]},
@@ -558,6 +594,7 @@ def main(argv: list[str]) -> int:
     )
     print(f"bundle: {manifest['name']} {manifest['standard_version']} -> {args.out_dir}")
     print(f"classes={report['classes']} features={report['features']} out={args.out_dir}")
+    print(f"feature groups: {report['feature_groups']}")
     print(f"types={dict(report['type_histogram'])}")
     print(
         f"units needed: {len(report['units_needed'])}, conflicts: {len(report['unit_conflicts'])}"

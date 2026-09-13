@@ -128,18 +128,27 @@ pub async fn create_attribute_group(
 }
 
 /// Lists attribute groups.
+///
+/// Read access is `editor+`, not admin-only: the groups are display metadata —
+/// the product form renders one section per group and the export wizard groups
+/// its attribute selection by them (mirrors `/channels`). Writes stay admin-only.
 #[utoipa::path(
     get,
     path = "/attribute-groups",
     params(ListAttributeGroups),
-    responses((status = 200, description = "Attribute groups", body = Vec<Value>))
+    responses(
+        (status = 200, description = "Attribute groups", body = Vec<Value>),
+        (status = 403, description = "Forbidden", body = Value)
+    )
 )]
 pub async fn list_attribute_groups(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Query(params): Query<ListAttributeGroups>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    require_admin(&claims)?;
+    if !claims.is_editor() {
+        return Err(ApiError::forbidden("requires editor role"));
+    }
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let sql = "SELECT * FROM attribute_group ORDER BY position ASC LIMIT $limit START $start";

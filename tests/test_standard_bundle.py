@@ -47,7 +47,11 @@ def test_manifest_describes_the_documents_in_install_order() -> None:
         },
         publication={"name": "TEST-EXPORT", "number": "10", "date": "2024-12-05"},
     )
-    report = {"features": 2, "units_needed": {"EU1": {"symbol": "mm", "en": "Millimetre"}}}
+    report = {
+        "features": 2,
+        "feature_groups": 1,
+        "units_needed": {"EU1": {"symbol": "mm", "en": "Millimetre"}},
+    }
     manifest = generator.bundle_manifest(
         selection, report, name="etim-10.0", node_type="etim_class", applies_to="product"
     )
@@ -57,7 +61,12 @@ def test_manifest_describes_the_documents_in_install_order() -> None:
     assert manifest["standard"] == "ETIM"
     assert manifest["standard_version"] == "10.0", "taken from the IXF publication"
     assert manifest["source"] == "TEST-EXPORT"
-    assert manifest["counts"] == {"classes": 1, "features": 2, "class_features": 2}
+    assert manifest["counts"] == {
+        "classes": 1,
+        "features": 2,
+        "feature_groups": 1,
+        "class_features": 2,
+    }
     assert manifest["units_needed"], "the installer checks the target's unit catalog"
     assert [step["file"] for step in manifest["documents"]] == [
         "model.mcf.json",
@@ -65,6 +74,11 @@ def test_manifest_describes_the_documents_in_install_order() -> None:
         "features.mcf.json",
     ]
     assert [step["kind"] for step in manifest["documents"]] == ["mcf", "mef", "mcf"]
+    assert manifest["documents"][0]["sections"] == [
+        "object_types",
+        "attribute_groups",
+        "attribute_definitions",
+    ]
     assert manifest["documents"][2]["sections"] == ["category_attributes"]
 
 

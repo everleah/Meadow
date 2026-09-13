@@ -40,7 +40,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 | Schritt | Auswahl |
 |---|---|
 | Quelle | Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **Kanal (für den Kanal freigegebene Objekte)** · **aktuelle Grid-Auswahl/Filter** |
-| Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; Checkbox-Auswahltabelle mit Spalten-Reihenfolge / „alle auswählen" |
+| Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; **gruppiert nach Attributgruppe** (je Gruppe eine `ui.expansion` mit Sammel-Checkbox), nur Attribute, die der gewählten Objekttyp **erlaubt** (`applicable_types`); „ohne Gruppe" als eigener Abschnitt, „alle auswählen" über die sichtbaren Felder |
 | Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) |
 | Sprache | Eine oder **mehrere** Locales (Fallback-Kette); pro Sprache eine Spalte `<attribut>_<code>` |
 | Optionen | Header-Zeile, Trennzeichen (`;`/`,`), quantifizierte Werte als `{value, unit}` in Anzeigeeinheit, `include_system`, **`resolve_inheritance` („Auch vererbte Werte exportieren", umgesetzt 2026-09-11)** |
@@ -139,7 +139,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 
 - Neue Seite **`/export`** (Wizard, `editor+`-Rolle):
   1. **Quelle** (Select: Typ / Kategorie-Baum / Collection / gespeicherte Suche / Grid-Auswahl; abhängig davon Detailselektor).
-  2. **Felder** (Auswahltabelle mit Spalten-Reihenfolge, „alle auswählen", Vorschau der verfügbaren Attributdefinitionen).
+  2. **Felder** — **gruppiert nach Attributgruppe** (Basis-Felder zuerst, je Gruppe eine `ui.expansion` mit Anzahl und Sammel-Checkbox, „Attribute ohne Gruppe" zuletzt); gezeigt werden **nur die Attribute, die der gewählte Objekttyp erlaubt** (`applicable_types`, leere Liste = alle Typen — die Quellen Collection/Suche/Kanal legen keinen Typ fest, dort bleiben alle sichtbar, mit Hinweiszeile). Die Checkbox zeigt `Label (name)`, weil der Spaltenname bei einem importierten Standard der Merkmalscode ist. Die Auswahl bleibt beim Umschalten der Quelle erhalten (Zustand außerhalb des Renderers); gerendert wird von `meadow/frontend/export_fields.py` (rein, getestet).
   3. **Format + Sprache + Optionen** — Format-Select (CSV/XLSX/JSON), **Locale-Mehrfachauswahl**, Optionen (Header, Trenner, quantifizierte Werte, `include_system`).
   4. **„Vorschau"** (Beispielzeilen für die gewählten Spalten) und **„Exportieren"** → Report (Anzahl, Download via `GET /exports/{run_id}/file`).
 - Im **Product-Grid** (`/products`): „Export-Auswahl / Export-Filter" Aktion.
@@ -163,6 +163,7 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 | Sprache | **Mehrere Locale-Spalten** (`<attribut>_<code>`); Fallback-Kette. |
 | Rechte | **Export `editor+`**; Import `editor+`; Collection-Verwaltung `admin`. |
 | Import-Ziel | MEF wiederverwenden — CSV **und** XLSX laufen über den gemeinsamen Tabellen-Adapter (`meadow/tabular.py`), kein separater Importpfad; Collection-Bulk-Add separat. |
+| Feldauswahl | **Gruppiert** nach `attribute_group` und **typtreu** (nur `applicable_types` des gewählten Objekttyps) — ein importierter Klassifikationsstandard bringt Tausende Merkmale mit, eine flache Liste ist nicht bedienbar ([bmecat-export.md](bmecat-export.md) §11.9). |
 
 ## 9. Implementierungsschritte
 

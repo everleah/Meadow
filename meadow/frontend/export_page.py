@@ -4,8 +4,10 @@ Lets a normal user configure and run an export of instance data (objects) from
 the surface instead of hand-writing connector JSON:
 
 1. **Source** — object type, category, collection, saved search, or a selection.
-2. **Fields** — base fields plus attribute definitions, in order, multilingual
-   attributes expanded to one `<attr>_<locale>` column per chosen language.
+2. **Fields** — base fields plus attribute definitions, grouped by their
+   attribute group in expansions (one group toggle each) and limited to the
+   attributes the chosen object type allows; multilingual attributes expand to
+   one `<attr>_<locale>` column per chosen language.
 3. **Format + language + options** — CSV / XLSX / JSON, one or more locales,
    header row, separator and `include_system`.
 4. **Preview** (columns + approximate object count) and **export**, which queues
@@ -27,6 +29,13 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.display import channel_label, taxonomy_type_names
+from meadow.frontend.export_fields import (
+    allowed_names,
+    attribute_names,
+    group_members,
+    group_order,
+    selected_fields,
+)
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -100,6 +109,8 @@ async def export_page(request: Request) -> None:
                 return await client.list_channels(token, active=True)
             if coro_type == "languages":
                 return await client.list_languages(token)
+            if coro_type == "attribute_groups":
+                return await client.list_attribute_groups(token)
             return await client.list_attribute_definitions(token, limit=1000)
         except Exception:  # noqa: BLE001 - degrade so the wizard still opens
             return []
@@ -111,27 +122,60 @@ async def export_page(request: Request) -> None:
     channels = await _safe("channels")
     languages = await _safe("languages")
     attribute_definitions = await _safe("attribute_definitions")
+    attribute_groups = await _safe("attribute_groups")
 
     def _type_label(obj: dict) -> str:
         return resolve_value(obj.get("label"), locale) or str(obj.get("name"))
+
+    def _type_label_for(object_type: str) -> str:
+        """The translated label of an object type name (falls back to the name)."""
+        for candidate in object_types:
+            if str(candidate.get("name")) == object_type:
+                return _type_label(candidate)
+        return object_type
 
     def _obj_name(obj: dict) -> str:
         raw_name = (obj.get("attributes") or {}).get("name")
         return resolve_value(raw_name, locale) or str(obj.get("id"))
 
     # Ordered field choices: base fields then every attribute definition name.
-    field_names: list[str] = list(BASE_FIELDS)
-    seen: set[str] = set()
-    for definition in attribute_definitions:
-        name = str(definition.get("name") or "")
-        if name and name not in seen:
-            seen.add(name)
-            field_names.append(name)
+    attribute_list = [
+        definition for definition in attribute_definitions if str(definition.get("name") or "")
+    ]
+    attribute_name_list = attribute_names(attribute_list)
+    definitions_by_name = {
+        str(definition.get("name")): definition for definition in attribute_definitions
+    }
     multilingual = {
         str(definition.get("name"))
         for definition in attribute_definitions
         if definition.get("multilingual")
     }
+
+    # Group membership: one expansion per attribute group (ordered by position),
+    # then the ungrouped attributes — the structure the product form renders too.
+    group_by_id = {str(group.get("id")): group for group in attribute_groups}
+    grouped_names, ungrouped_names = group_members(attribute_list)
+
+    def _group_title(group_id: str) -> str:
+        group = group_by_id.get(group_id)
+        if not group:
+            return group_id
+        return resolve_value(group.get("label"), locale) or str(group.get("name") or group_id)
+
+    ordered_group_ids = group_order(grouped_names, group_by_id, _group_title)
+
+    #: Field checkbox state, kept **across** re-renders: switching the source
+    #: type rebuilds the selection but must not drop what was already ticked.
+    field_state: dict[str, bool] = {}
+    field_checks: dict[str, ui.checkbox] = {}
+    visible_fields: list[str] = []
+
+    def _default_checked(name: str) -> bool:
+        return name in BASE_FIELDS
+
+    def _selected_fields() -> list[str]:
+        return selected_fields(visible_fields, field_state, BASE_FIELDS)
 
     async def _estimate_count(kind: str, detail_value: str) -> int | None:
         """Best-effort object count for the selected source (may be capped)."""
@@ -182,9 +226,6 @@ async def export_page(request: Request) -> None:
         if kind == "channel":
             return {"kind": "channel", "channel": detail_value}
         return {"kind": "selection", "object_ids": _split_ids(detail_value)}
-
-    def _selected_fields() -> list[str]:
-        return [name for name in field_names if field_checks[name].value]
 
     def _compute_columns(fields: list[str], locales: list[str]) -> list[str]:
         columns: list[str] = []
@@ -309,17 +350,83 @@ async def export_page(request: Request) -> None:
                 detail_select.value = initial_collection
                 detail_select.update()
 
+        @ui.refreshable
+        def render_fields() -> None:
+            """Renders the field selection grouped by attribute group.
+
+            One expansion per attribute group plus one for the ungrouped
+            attributes and one for the base fields; every group carries a toggle
+            for its members. Only the attributes the chosen object type allows
+            are offered (an object type is only fixed by the `type` source).
+            """
+            field_checks.clear()
+            object_type = str(detail_select.value or "") if str(kind_select.value) == "type" else ""
+            if object_type:
+                ui.label(
+                    t("export.fields_scope_type").format(type=_type_label_for(object_type))
+                ).classes("text-caption text-gray-500")
+                names = allowed_names(attribute_name_list, definitions_by_name, object_type)
+            else:
+                ui.label(t("export.fields_scope_all")).classes("text-caption text-gray-500")
+                names = list(attribute_name_list)
+            visible_fields[:] = [*BASE_FIELDS, *names]
+            if not names:
+                ui.label(t("export.fields_none")).classes("text-caption text-orange-600 ml-1")
+
+            def add_group(label: str, fields: list[str], *, open_: bool = False) -> None:
+                if not fields:
+                    return
+                with ui.expansion(label, value=open_).classes("w-full").props("dense"):
+                    if len(fields) > 1:
+
+                        def toggle_group(event, names_: list[str] = fields) -> None:
+                            for name_ in names_:
+                                field_checks[name_].value = bool(event.value)
+
+                        ui.checkbox(t("export.select_group")).props("dense").on_value_change(
+                            toggle_group
+                        )
+                    with ui.row().classes("flex-wrap gap-x-4 gap-y-0"):
+
+                        def remember(name_: str, value: bool) -> None:
+                            field_state[name_] = value
+
+                        for name in fields:
+                            # The column is the attribute **name** (for an
+                            # imported standard that is the feature code), so the
+                            # label is shown next to it — a list of `EF…` codes
+                            # alone is not usable.
+                            label = (
+                                resolve_value(
+                                    definitions_by_name.get(name, {}).get("label"), locale
+                                )
+                                or name
+                            )
+                            text = name if label == name else f"{label} ({name})"
+                            box = ui.checkbox(
+                                text, value=field_state.get(name, _default_checked(name))
+                            ).props("dense")
+                            box.on_value_change(
+                                lambda event, n=name: remember(n, bool(event.value))
+                            )
+                            field_checks[name] = box
+
+            visible_set = set(names)
+            add_group(t("export.fields_base"), list(BASE_FIELDS), open_=True)
+            for group_id in ordered_group_ids:
+                members = [name for name in grouped_names[group_id] if name in visible_set]
+                add_group(f"{_group_title(group_id)} ({len(members)})", members)
+            ungrouped_visible = [name for name in ungrouped_names if name in visible_set]
+            ungrouped_title = f"{t('export.fields_ungrouped')} ({len(ungrouped_visible)})"
+            add_group(ungrouped_title, ungrouped_visible)
+
         # --- Fields --------------------------------------------------------
         with ui.card().classes("w-full mt-4"):
             ui.label(t("export.fields_section")).classes("text-subtitle1")
             ui.label(t("export.fields_hint")).classes("text-caption text-gray-500")
-
-            field_checks: dict[str, ui.checkbox] = {}
-            with ui.row().classes("flex-wrap gap-4 mt-2"):
-                for name in field_names:
-                    field_checks[name] = ui.checkbox(
-                        name, value=name in ("id", "type", "status")
-                    ).props("dense")
+            fields_box = ui.column().classes("w-full gap-0 mt-1")
+            with fields_box:
+                render_fields()
             all_fields = ui.checkbox(t("export.select_all")).props("dense").classes("mt-2")
 
             def toggle_all(event) -> None:
@@ -327,6 +434,9 @@ async def export_page(request: Request) -> None:
                     box.value = event.value
 
             all_fields.on_value_change(toggle_all)
+            # The offered attributes depend on the chosen source type.
+            kind_select.on_value_change(lambda event: render_fields.refresh())
+            detail_select.on_value_change(lambda event: render_fields.refresh())
 
         # --- Format + language + options -----------------------------------
         with ui.card().classes("w-full mt-4"):

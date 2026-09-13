@@ -204,7 +204,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 | `Class → Features → Feature` | `category_attribute`-Zeile je Klasse: Merkmal (Attributdefinition), `position` = `OrderNumber`, Default-Einheit = `UnitCode` → **1:1 unser Stufe-B-Modell** |
 | `Feature` (Typ `Numeric`/`Logical`/`Alphanumeric`) | `attribute_definition` mit `value_type` `number` (Einheit!), `boolean`, `text`/`enum` |
 | `Unit` (188) | `unit` (ETIM-Einheitencode als stabiler Schlüssel + Übersetzungen) |
-| `FeatureGroup` (18) | ETIM Feature Grouping → `attribute_group` |
+| `FeatureGroup` (18) | ETIM Feature Grouping → `attribute_group` — **umgesetzt (2026-09-13):** der Konverter liest die Sektion `FeatureGroups` (`EFG…`) und legt je genutzter Gruppe eine Attributgruppe an (Label = IXF-Übersetzung, `position` = Dokumentreihenfolge, `applicable_types` = Zielobjekttyp); jedes Merkmal trägt `group_ids`. Damit sind die Merkmale in Formular und Export **gruppiert** (18 Abschnitte statt einer Liste). Nicht zu verwechseln mit der Sektion `Groups` (`EG…`, 159) — das ist die **Klassen**-Gruppierung. |
 
 **Offene Punkte aus dem IXF (nicht geraten):**
 
@@ -254,6 +254,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 7. **ETIM-Zertifizierung — offen:** die Guideline nennt ein ETIM-BMEcat-Certification-Tool (dort werden lokale Standardmerkmale pflichtig) — wird eine Zertifizierung angestrebt?
 8. **EuroCat — Beobachtungsposten:** sobald das Syntax Binding zur EN 17015-2 öffentlich ist, wird es hier ergänzt (gleiches Mapping, anderes Zielprofil).
 9. **Noch zu beschaffen:** BMEcat-1.2-Spezifikations-PDF (`bmecatv12e.pdf`), die **Werte↔Merkmal-Zuordnung** der ETIM-`Values` (in keinem der beiden IXF-Exporte enthalten, s. §11.4 Punkt 1) und die vollständige IXF-Dokumentation.
+10. **Abbildung *eigenes* Attribut → ETIM-Merkmal — offen (Klarstellung 2026-09-13):** Der Standard-Import macht das ETIM-Merkmal **zum Attribut** (Name = `EF…`), dieser Pfad braucht deshalb **kein** Mapping: die Klassen-Merkmal-Zeile (`category_attribute`) bindet Merkmal und Klasse, und der Export schreibt den ETIM-Code, weil er der Attributname ist. Für **eigene** Attribute (z. B. `width`) existiert jedoch **keine** Abbildung — genau die in §5/§11.5 Punkt 4 geplante Profil-Zuordnung (`attribute` → `feature_code`), die noch nicht implementiert ist. Optionen: (a) im **Exportprofil** (wie entschieden — erlaubt verschiedene Codes je Standard), (b) optionaler Standardcode-**Default am Attribut**, (c) am **Klassen-Merkmal** (`category_attribute.feature_code`), sodass eine Klasse ein eigenes Attribut auf einen Standardcode abbildet. Entscheidung offen; nur (c) erlaubt je Klasse unterschiedliche Codes.
 
 ### 11.8 BMEcat 1.2 — verifiziert aus `resources/bmecat/`
 

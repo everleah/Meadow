@@ -103,6 +103,10 @@ def test_read_ixf_collects_vocabulary_and_selection(ixf_file: Path) -> None:
     assert [entry.code for entry in selection.classes] == ["EC000001", "EC000002"]
     assert selection.units["EU570448"].symbol == "mm"
     assert selection.features["EF000001"].etim_type == "Numeric"
+    assert selection.features["EF000001"].group_code == "EFG00007"
+    assert selection.feature_groups == {"EFG00007": {"en": "Electrical"}}
+    # The `Groups` section is the *class* grouping (EG…), not a feature group.
+    assert selection.class_groups == {"EG000012": {"en": "Cables"}}
     assert selection.features["EF000001"].labels == {
         "en": "Nominal current",
         "nl": "Nominale stroom",
@@ -146,6 +150,7 @@ def test_model_document_maps_types_and_features(ixf_file: Path) -> None:
     assert by_name["EF000004"]["type"] == "text"
     assert by_name["EF000001"]["label"] == {"en": "Nominal current", "nl": "Nominale stroom"}
     assert by_name["EF000001"]["applicable_types"] == ["product"]
+    assert by_name["EF000001"]["group_ids"] == ["EFG00007"]
     assert by_name["code"]["is_key"] is True
     assert by_name["description"]["is_key"] is False
     # Units stay unset by default; the report lists what the selection needs.
@@ -182,6 +187,69 @@ def test_model_document_sets_units_only_when_known(ixf_file: Path) -> None:
     )
     by_name = {item["name"]: item for item in unknown["sections"]["attribute_definitions"]}
     assert by_name["EF000001"]["unit"] is None, "a symbol Meadow does not have is not applied"
+
+
+def test_model_document_groups_features_as_attribute_groups(ixf_file: Path) -> None:
+    selection = converter.read_ixf(ixf_file)
+    model, report = converter.build_model_document(
+        selection, node_type="etim_class", applies_to="product"
+    )
+    groups = model["sections"]["attribute_groups"]
+    assert groups == [
+        {
+            "name": "EFG00007",
+            "label": {"en": "Electrical"},
+            "position": 1,
+            "applicable_types": ["product"],
+        }
+    ]
+    assert report["feature_groups"] == 1
+    assert report["features_without_group"] == 0
+    # The class key/description attributes stay ungrouped.
+    by_name = {item["name"]: item for item in model["sections"]["attribute_definitions"]}
+    assert by_name["code"]["group_ids"] == []
+    assert by_name["EF000004"]["group_ids"] == ["EFG00007"]
+
+
+def test_model_document_tolerates_features_without_a_group() -> None:
+    """A feature without `FeatureGroupCode` must not break the model."""
+    selection = converter.Selection(
+        features={"EF000009": converter.IxfFeature(code="EF000009", etim_type="Numeric")},
+        classes=[
+            converter.IxfClass(
+                code="EC000009",
+                features=[converter.ClassFeature(code="EF000009", position=1)],
+            )
+        ],
+    )
+    model, report = converter.build_model_document(
+        selection, node_type="etim_class", applies_to="product"
+    )
+    assert model["sections"]["attribute_groups"] == []
+    assert report["features_without_group"] == 1
+    by_name = {item["name"]: item for item in model["sections"]["attribute_definitions"]}
+    assert by_name["EF000009"]["group_ids"] == []
+
+
+def test_manifest_names_the_group_section(ixf_file: Path) -> None:
+    selection = converter.read_ixf(ixf_file)
+    _, report = converter.build_model_document(
+        selection, node_type="etim_class", applies_to="product"
+    )
+    manifest = converter.bundle_manifest(
+        selection,
+        report,
+        name="etim-test",
+        node_type="etim_class",
+        applies_to="product",
+    )
+    assert manifest["counts"]["feature_groups"] == 1
+    model_doc = manifest["documents"][0]
+    assert model_doc["sections"] == [
+        "object_types",
+        "attribute_groups",
+        "attribute_definitions",
+    ]
 
 
 def test_feature_rows_are_required_and_ordered(ixf_file: Path) -> None:
