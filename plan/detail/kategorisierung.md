@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 4 ([Kategorisierung und Gruppierung](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 2, 9
-- **Stand:** umgesetzt (Dimensionen, Taxonomie-Typen Stufe A, Klassen-Merkmale Stufe B inkl. Bindung eigener Attribute an Standardcodes `standard_codes`); offen bleiben Import/Versionierung der Standard-Metadaten, die Merkmalswerte (`EV…`, ETIM-API) und der BMEcat/xChange-Export-Wizard (geplant in [bmecat-export.md](bmecat-export.md))
+- **Stand:** umgesetzt (Dimensionen, Taxonomie-Typen Stufe A, Klassen-Merkmale Stufe B inkl. Bindung eigener Attribute an Standardcodes `standard_codes`, BMEcat/ETIM-Export V1 in [bmecat-export.md](bmecat-export.md) §11.10); offen bleiben Import/Versionierung der Standard-Metadaten (`code`/`version`/`source`), die Merkmalswerte (`EV…`, braucht ETIM-API/CMT) und die weiteren BMEcat-Stufen (1.2, Preise/Varianten, Import)
 
 Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, ohne dafür neue technische Entitäten einzuführen. Kategorien sind ganz normale Objekte, die über Relationen mit den zugeordneten Objekten verbunden werden. Dadurch bleibt das Datenmodell schlank und nutzt die bereits vorhandenen Graph-Fähigkeiten.
 
@@ -112,7 +112,7 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 - **UI:** `/categories` hat im Detail-Panel die Sektion **„Merkmale der Klasse“** (Anhaengen per Auswahl, Pflicht-Schalter, Entfernen; geerbte Merkmale mit Quellklasse); das **Produkt-Formular** zeigt die Sektion **„Klassen-Merkmale“** mit Pflicht-/Optional-Kennzeichnung, „fehlt“-Badge und Sprung zur Klassen-Pflege.
 - **Eigene Attribute als Merkmalstraeger — umgesetzt (2026-09-13):** Ein Merkmal braucht nicht selbst ein Attribut zu sein. `attribute_definition.standard_codes` (`{"etim": "EF000040"}`) bindet ein **eigenes** Attribut an den Merkmalscode eines Standards; `GET /objects/{id}/category-attributes` liefert dann je Zeile `name` (der Code, den ein Export uebertraegt) **und** `attribute` (das Attribut, das den Wert traegt), und `required`/`missing`/Vollstaendigkeit rechnen mit dem **Attribut**. Fallback-Kette: Bindung → gleichnamiges Attribut → Code selbst. Genau ein Traeger je Code (die API lehnt eine zweite Bindung mit `409` ab); ein Attribut darf mehrere Standards bedienen. Damit laesst sich ein gepflegtes Produkt klassifizieren und exportieren, **ohne** die Standardattribute zu uebernehmen. Details und Grenzen: [bmecat-export.md](bmecat-export.md) §11.7 Punkt 10.
 
-**Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung), die Merkmals**werte** (`EV…`, braucht ETIM-API/CMT) und das **BMEcat/xChange-Export-Mapping** im Export-Wizard.
+**Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung) und die Merkmals**werte** (`EV…`, braucht ETIM-API/CMT). Das **BMEcat/xChange-Export-Mapping** im Export-Wizard ist umgesetzt ([bmecat-export.md](bmecat-export.md) §11.10).
 
 **Nicht-Ziele (bewusst):** keine klassen-spezifische Einschraenkung der erlaubten Werte (erlaubte Werte bleiben an der Attributdefinition/Enum-Set, wie in ETIM), kein zweiter Merkmals-Mechanismus ausserhalb der Attributdefinitionen, keine vererbenden Kategorie-Kanten.
 
