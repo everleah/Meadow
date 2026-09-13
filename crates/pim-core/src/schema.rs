@@ -46,6 +46,11 @@ DEFINE FIELD IF NOT EXISTS multilingual ON TABLE attribute_definition TYPE bool;
 DEFINE FIELD IF NOT EXISTS unit_id ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS display_unit_id ON TABLE attribute_definition TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS constraints ON TABLE attribute_definition TYPE option<object>;
+-- Binds an attribute to a classification standard's feature code, e.g.
+-- `{ "etim": "EF000123" }`. The class-feature resolution reads the value from
+-- the bound attribute, so an **own** attribute can feed a standard feature
+-- without being renamed (`plan/detail/bmecat-export.md` §11.7).
+DEFINE FIELD IF NOT EXISTS standard_codes ON TABLE attribute_definition TYPE option<object>;
 -- Reference to a reusable enum_set (`enum_set:<key>`); replaces
 -- `constraints.enum_values` for enum attributes (Phase 9, planned).
 DEFINE FIELD IF NOT EXISTS enum_set_id ON TABLE attribute_definition TYPE option<string>;

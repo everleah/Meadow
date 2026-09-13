@@ -46,10 +46,13 @@ def test_text_values_are_escaped() -> None:
 def test_document_follows_the_etim_profile() -> None:
     product = {"id": "object:X", "attributes": {"name": "Widget", "EF1": True}}
     definitions = {"EF1": {"type": "boolean"}, "EF2": {"type": "number"}}
+    features = [
+        {"name": "EF1", "attribute": "EF1", "required": True, "missing": False},
+        {"name": "EF2", "attribute": "EF2", "required": True, "missing": True},
+    ]
     document, report = export.build_document(
         product,
-        ["EF1", "EF2"],
-        ["EF2"],
+        features,
         definitions,
         class_code="EC000012",
         catalog_id="CAT",
@@ -61,6 +64,7 @@ def test_document_follows_the_etim_profile() -> None:
         "features": 2,
         "with_value": 1,
         "dash": 1,
+        "bound": 0,
         "by_reason": {"UN": 1},
         "text_values": [],
     }
@@ -77,3 +81,29 @@ def test_document_follows_the_etim_profile() -> None:
     # The ETIM profile has no UDX.EDXF.VERSION inside the product block.
     assert document.count("<UDX.EDXF.VERSION>") == 1
     assert "<T_NEW_PRODUCTDATA>" in document, "the price-less transaction is used"
+
+
+def test_a_bound_own_attribute_supplies_the_feature_value() -> None:
+    """The binding (`standard_codes`) reads the value from the own attribute."""
+    product = {"id": "object:X", "attributes": {"name": "Widget", "nominal_current": 16}}
+    definitions = {"nominal_current": {"type": "number"}}
+    features = [
+        {"name": "EF000123", "attribute": "nominal_current", "required": True, "missing": False},
+        {"name": "EF000124", "attribute": "EF000124", "required": False, "missing": False},
+    ]
+    document, report = export.build_document(
+        product,
+        features,
+        definitions,
+        class_code="EC000012",
+        catalog_id="CAT",
+        supplier="Supplier",
+        supplier_pid="411061",
+    )
+    # `FNAME` keeps the **standard's** code, the value comes from the own attribute.
+    assert "<FNAME>EF000123</FNAME>" in document
+    assert "<FVALUE>16</FVALUE>" in document
+    assert report["bound"] == 1
+    assert report["with_value"] == 1
+    # A feature without a definition is reported, not silently written.
+    assert report["by_reason"]["unknown feature"] == 1

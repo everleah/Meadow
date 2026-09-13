@@ -368,9 +368,12 @@ pub async fn delete_category_attribute(
 /// The features an object inherits from its classes, plus the mandatory ones
 /// that are not set yet.
 ///
-/// `attributes` carries every feature (name, `required`, contributing classes);
-/// `missing` lists the mandatory features that are unset — the same semantics as
-/// the completeness computation, so grid filter, form and dashboard agree.
+/// `attributes` carries every feature: `name` (as the class names it — for a
+/// classification standard that is the feature code `EF…`), `attribute` (the
+/// attribute whose value carries it: a bound own attribute, else the feature
+/// name), `required`, the contributing classes and `missing`.
+/// `required`/`missing` list **attribute** names — the same semantics as the
+/// completeness computation, so grid filter, form and dashboard agree.
 #[utoipa::path(
     get,
     path = "/objects/{id}/category-attributes",
@@ -396,11 +399,16 @@ pub async fn list_object_category_attributes(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let features = resolved_features(&state.db, key).await?;
-    let required: Vec<String> = features
-        .iter()
-        .filter(|feature| feature.required)
-        .map(|feature| feature.name.clone())
-        .collect();
+    // `required`/`missing` are keyed by the **attribute** that carries a feature
+    // (a bound own attribute, or the feature name itself): completeness counts
+    // values, while each row still reports the feature (`name`, e.g. the ETIM
+    // code `EF…`) that an export transmits.
+    let mut required: Vec<String> = Vec::new();
+    for feature in features.iter().filter(|feature| feature.required) {
+        if !required.contains(&feature.attribute) {
+            required.push(feature.attribute.clone());
+        }
+    }
     let own = crate::class_features::own_attributes(&object);
     let completeness = crate::completeness::compute_with_required(
         &state.cache,
@@ -418,9 +426,10 @@ pub async fn list_object_category_attributes(
             .iter()
             .map(|feature| json!({
                 "name": feature.name,
+                "attribute": feature.attribute,
                 "required": feature.required,
                 "nodes": feature.nodes,
-                "missing": completeness.missing.contains(&feature.name),
+                "missing": completeness.missing.contains(&feature.attribute),
             }))
             .collect::<Vec<Value>>(),
         "required": required,

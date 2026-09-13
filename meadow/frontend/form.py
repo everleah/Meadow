@@ -1346,8 +1346,16 @@ async def product_form(object_id: str) -> None:
             required flag and the classes that contribute it. A missing mandatory
             feature is marked, so the section shows *what the classification
             demands* — the same data a `validation`/`workflow_guard` rule sees as
-            `ctx.missing_features`.
+            `ctx.missing_features`. Each row shows the value of the attribute that
+            carries the feature (the bound own attribute, or the feature itself).
             """
+
+            def _feature_value(attribute: str) -> str:
+                """Displays the feature's value (read-only; edited in its section)."""
+                return resolve_value(
+                    (resolved.get("attributes") or {}).get(attribute), locale
+                ) or t("form.class_features_unset")
+
             missing = set(class_features.get("missing") or [])
             count = len(class_features.get("attributes") or [])
             state_key = "__class_features__"
@@ -1368,9 +1376,19 @@ async def product_form(object_id: str) -> None:
                 ui.label(t("form.class_features_hint")).classes("text-caption text-gray-500")
                 for feature in class_features.get("attributes") or []:
                     name = str(feature.get("name") or "")
+                    # The value lives in the **bound** attribute when the feature
+                    # is mapped to an own attribute (`standard_codes`, see
+                    # `plan/detail/bmecat-export.md` §11.7); otherwise the feature
+                    # name *is* the attribute name (standard-as-attribute path).
+                    attribute = str(feature.get("attribute") or name)
                     nodes = [str(node) for node in (feature.get("nodes") or [])]
                     with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                         ui.label(name).classes("grow text-body2")
+                        if attribute != name:
+                            ui.label(
+                                t("form.class_features_bound").format(attribute=attribute)
+                            ).classes("text-caption text-gray-500")
+                        ui.label(_feature_value(attribute)).classes("text-body2")
                         ui.html(
                             '<span class="px-2 py-0.5 rounded text-xs bg-primary text-white">'
                             + t("categories.feature_required")

@@ -375,6 +375,7 @@ async fn attribute_definitions_section(
             "unit": unit,
             "display_unit": display_unit,
             "enum_set": enum_set,
+            "standard_codes": definition.get("standard_codes").cloned().unwrap_or(Value::Null),
             "applicable_types": Value::Array(
                 as_string_array(&definition, "applicable_types").into_iter().map(Value::from).collect()
             ),
@@ -1762,6 +1763,18 @@ async fn apply_attribute_definitions(
         if let Some(s) = enum_set {
             content.insert("enum_set_id".to_owned(), Value::String(s));
         }
+        // The standard binding travels with the model: without it an imported
+        // own attribute would no longer feed its class feature
+        // (`plan/detail/bmecat-export.md` §11.7). A missing/null map means
+        // "not bound" — the `option<object>` field rejects JSON `null`.
+        content.insert(
+            "standard_codes".to_owned(),
+            entry
+                .get("standard_codes")
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
         if let Some(constraints) = entry.get("constraints")
             && !constraints.is_null()
         {

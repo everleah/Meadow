@@ -151,6 +151,51 @@ pub(crate) fn ancestor_chain(node_key: &str, parents: &HashMap<String, String>) 
     chain
 }
 
+/// Maps a standard's feature code to the attribute that carries its value.
+///
+/// `attribute_definition.standard_codes` binds an attribute to a standard's
+/// feature code (`{"etim": "EF000123"}`), so an **own** attribute can serve a
+/// class feature without being renamed after the standard
+/// (`plan/detail/bmecat-export.md` §11.7). An attribute that is *named* like the
+/// code needs no entry — the feature name is the fallback in
+/// [`resolved_features`]. Only definitions carrying a binding are loaded (a small
+/// set), so this stays cheap for a catalogue with thousands of standard features.
+pub(crate) async fn feature_bindings(db: &Db) -> Result<HashMap<String, String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT name, standard_codes FROM attribute_definition WHERE standard_codes IS NOT NONE;")
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut bindings: HashMap<String, String> = HashMap::new();
+    for row in rows {
+        let Some(name) = row.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(codes) = row.get("standard_codes").and_then(Value::as_object) else {
+            continue;
+        };
+        for code in codes.values().filter_map(Value::as_str) {
+            // The write path rejects a code claimed twice; should old data still
+            // carry one, the first binding wins instead of flapping.
+            bindings
+                .entry(code.to_owned())
+                .or_insert_with(|| name.to_owned());
+        }
+    }
+    Ok(bindings)
+}
+
+/// The attribute that carries a feature's value: the **binding** wins, otherwise
+/// the feature's own name is the attribute name (the path of a standard whose
+/// features *are* attributes). Pure so the rule is unit-testable.
+pub(crate) fn resolve_attribute(feature: &str, bindings: &HashMap<String, String>) -> String {
+    bindings
+        .get(feature)
+        .cloned()
+        .unwrap_or_else(|| feature.to_owned())
+}
+
 /// Ancestor chain of a node using single-node queries (per-object path).
 pub(crate) async fn ancestor_chain_live(db: &Db, node_key: &str) -> Result<Vec<String>, ApiError> {
     let mut chain = vec![node_key.to_owned()];
@@ -169,11 +214,16 @@ pub(crate) async fn ancestor_chain_live(db: &Db, node_key: &str) -> Result<Vec<S
     Ok(chain)
 }
 
-/// One resolved feature of an object: the attribute name, whether it is
-/// mandatory for at least one contributing class, and the contributing classes.
+/// One resolved feature of an object: the feature as the class defines it, the
+/// attribute that carries its value, whether it is mandatory for at least one
+/// contributing class, and the contributing classes.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedFeature {
+    /// The feature as the class names it — for a classification standard that is
+    /// the standard's feature code (`EF…`), which is what an export transmits.
     pub name: String,
+    /// The attribute definition whose value carries the feature.
+    pub attribute: String,
     pub required: bool,
     pub nodes: Vec<String>,
 }
@@ -189,6 +239,7 @@ pub(crate) async fn resolved_features(
 ) -> Result<Vec<ResolvedFeature>, ApiError> {
     let relations = category_relation_keys(db).await?;
     let assigned = assigned_node_keys(db, object_key, &relations).await?;
+    let bindings = feature_bindings(db).await?;
     let mut features: HashMap<String, ResolvedFeature> = HashMap::new();
     let mut seen_nodes: HashSet<String> = HashSet::new();
     for node in assigned {
@@ -197,8 +248,10 @@ pub(crate) async fn resolved_features(
                 continue;
             }
             for (name, required) in node_features(db, &chain_node).await? {
+                let attribute = resolve_attribute(&name, &bindings);
                 let entry = features.entry(name.clone()).or_insert(ResolvedFeature {
                     name,
+                    attribute,
                     required: false,
                     nodes: Vec::new(),
                 });
@@ -214,18 +267,20 @@ pub(crate) async fn resolved_features(
     Ok(resolved)
 }
 
-/// Names of the features an object **must** have (required by at least one of its
-/// classes). Used by the completeness computation.
+/// Names of the attributes an object **must** have (required by at least one of
+/// its classes). Used by the completeness computation: it counts **values**, so a
+/// feature bound to an own attribute contributes that attribute's name.
 pub(crate) async fn class_required_names(
     db: &Db,
     object_key: &str,
 ) -> Result<Vec<String>, ApiError> {
-    Ok(resolved_features(db, object_key)
-        .await?
-        .into_iter()
-        .filter(|feature| feature.required)
-        .map(|feature| feature.name)
-        .collect())
+    let mut names: Vec<String> = Vec::new();
+    for feature in resolved_features(db, object_key).await? {
+        if feature.required && !names.contains(&feature.attribute) {
+            names.push(feature.attribute);
+        }
+    }
+    Ok(names)
 }
 
 /// Class-required names for many objects in one pass.
@@ -247,6 +302,7 @@ pub(crate) async fn class_required_names_batch(
     if relations.is_empty() {
         return Ok(out);
     }
+    let bindings = feature_bindings(db).await?;
     // Assignments of the whole batch: object key -> class node keys.
     let mut response = db
         .inner()
@@ -307,8 +363,10 @@ pub(crate) async fn class_required_names_batch(
                     continue;
                 }
                 for (name, required) in features.get(&chain_node).cloned().unwrap_or_default() {
-                    if required && !names.contains(&name) {
-                        names.push(name);
+                    // A bound feature is checked through its own attribute.
+                    let attribute = resolve_attribute(&name, &bindings);
+                    if required && !names.contains(&attribute) {
+                        names.push(attribute);
                     }
                 }
             }
@@ -373,6 +431,17 @@ mod tests {
         merge_names(&mut required, &["power".to_owned(), "voltage".to_owned()]);
 
         assert_eq!(required, vec!["sku", "power", "voltage"]);
+    }
+
+    #[test]
+    fn resolve_attribute_prefers_the_binding_over_the_name() {
+        let bindings = HashMap::from([("EF000123".to_owned(), "nominal_current".to_owned())]);
+
+        // A bound standard code is read from the own attribute …
+        assert_eq!(resolve_attribute("EF000123", &bindings), "nominal_current");
+        // … an unbound feature keeps its own name (the standard-as-attribute path).
+        assert_eq!(resolve_attribute("EF009999", &bindings), "EF009999");
+        assert_eq!(resolve_attribute("width", &HashMap::new()), "width");
     }
 
     #[test]

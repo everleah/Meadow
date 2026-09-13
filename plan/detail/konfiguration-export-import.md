@@ -194,6 +194,7 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 | `dependencies` | string[] | Eingabe-Attributnamen |
 | `computed_reads_inherited` | bool | Regel liest vererbte Werte |
 | `constraints` | object? | Weitere Restriktionen (`min`/`max`/…; `enum_values` entfällt zugunsten `enum_set`) |
+| `standard_codes` | object? | Bindung an Klassifikationsstandards, `{ "<standard>": "<Merkmal-Code>" }` (z. B. `{"etim": "EF000040"}`) — wandert mit, damit ein Umzug die Merkmalsbindung nicht verliert |
 | `default_value` | any? | Default |
 | `description` | string? | Beschreibung |
 

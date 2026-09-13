@@ -19,6 +19,9 @@ from meadow.frontend.range_values import NUMERIC_TYPES
 
 #: Supported attribute data types (extensible; existing types are never renamed).
 ATTR_TYPES = ("text", "url", "number", "range", "boolean", "date", "enum", "reference")
+#: Classification standards an attribute can be bound to (`standard_codes`, see
+#: `plan/detail/bmecat-export.md` §11.7). The key is the map key on the record.
+STANDARDS = {"etim": "ETIM", "eclass": "ECLASS", "unspsc": "UNSPSC"}
 
 
 @ui.page("/attribute-definitions", response_timeout=15)
@@ -550,7 +553,22 @@ async def attribute_definitions_page() -> None:
                     ui.textarea(t("attr_def.field_description"))
                     .props("filled dense")
                     .classes("w-full")
-                )
+                )  # --- Standard binding (classification standards, Phase 9) ---
+                # Binds this attribute to a standard's feature code, so a
+                # class feature is filled from *this* attribute instead of one
+                # named after the code (`plan/detail/bmecat-export.md` §11.7).
+                with ui.row().classes("w-full gap-2"):
+                    standard_select = (
+                        ui.select(STANDARDS, label=t("attr_def.field_standard"), value="etim")
+                        .props("filled dense")
+                        .classes("w-32")
+                    )
+                    standard_code_input = (
+                        ui.input(t("attr_def.field_standard_code"))
+                        .props("filled dense")
+                        .classes("grow")
+                    )
+                ui.label(t("attr_def.standard_code_hint")).classes("text-caption text-gray-500")
                 computed_rule_input = (
                     ui.input(t("attr_def.field_computed_rule"))
                     .props("filled dense")
@@ -586,6 +604,8 @@ async def attribute_definitions_page() -> None:
                 "required": required_select,
                 "unit": unit_input,
                 "display_unit": display_input,
+                "standard": standard_select,
+                "standard_code": standard_code_input,
                 "enum_set": enum_set_select,
                 "description": description_area,
                 "computed_rule": computed_rule_input,
@@ -628,6 +648,12 @@ async def attribute_definitions_page() -> None:
             enum_set_select.set_value(
                 str(enum_set_value) if enum_set_value in enum_set_options else None
             )
+            # The binding shows one standard at a time; the others stay on the
+            # record (the save merges this field into the loaded map).
+            codes = dict(definition.get("standard_codes") or {}) if editing else {}
+            first_standard = next((key for key in codes if key in STANDARDS), "etim")
+            standard_select.set_value(first_standard)
+            standard_code_input.set_value(str(codes.get(first_standard) or ""))
             description_area.set_value(str(definition.get("description") or "") if editing else "")
             computed_rule_input.set_value(
                 str(definition.get("computed_rule") or "") if editing else ""
@@ -755,6 +781,25 @@ async def attribute_definitions_page() -> None:
             if type_select.value == "enum":
                 enum_set_id = enum_set_select.value or None
 
+            current = (
+                next((d for d in definitions if d.get("id") == editing_id), None)
+                if editing_id
+                else None
+            )
+            # Merge into the loaded map so a second standard is not dropped, and
+            # an empty input clears the binding of the shown standard.
+            standard_codes = {
+                str(key): str(value)
+                for key, value in dict((current or {}).get("standard_codes") or {}).items()
+                if value
+            }
+            standard = str(standard_select.value or "etim").strip() or "etim"
+            code = str(standard_code_input.value or "").strip()
+            if code:
+                standard_codes[standard] = code
+            else:
+                standard_codes.pop(standard, None)
+
             common = {
                 "label": label,
                 "group_ids": group_ids,
@@ -769,13 +814,13 @@ async def attribute_definitions_page() -> None:
                 "multilingual": bool(multilingual_check.value),
                 "unit_id": unit_input.value or None,
                 "display_unit_id": display_input.value or None,
+                "standard_codes": standard_codes,
                 "enum_set_id": enum_set_id,
                 "description": description_area.value or None,
             }
 
             try:
                 if editing_id:
-                    current = next((d for d in definitions if d.get("id") == editing_id), None)
                     if current and str(current.get("type") or "") != definition_type:
                         await confirm_type_change(current, definition_type, common)
                         return

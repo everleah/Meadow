@@ -95,8 +95,7 @@ def feature_values(value: object, language: str = "en") -> list[str] | None:
 
 def build_document(
     product: dict,
-    required: list[str],
-    missing: list[str],
+    features: list[dict],
     definitions: dict[str, dict],
     *,
     class_code: str,
@@ -106,7 +105,14 @@ def build_document(
     buyer: str = "Meadow buyer",
     language: str = "eng",
 ) -> tuple[str, dict]:
-    """Builds the ETIM BMEcat document plus a report of what was written."""
+    """Builds the ETIM BMEcat document plus a report of what was written.
+
+    ``features`` are the resolved class features of the product
+    (``GET /objects/{id}/category-attributes``): ``name`` is the ETIM feature
+    code (what ``FNAME`` transmits), ``attribute`` the attribute that carries the
+    value (a bound **own** attribute, or the code itself when the standard was
+    imported as attributes), ``missing`` whether the mandatory value is unset.
+    """
     attributes = product.get("attributes") or {}
     name = attributes.get("name") or "unnamed"
     now = datetime.now(UTC)
@@ -150,24 +156,31 @@ def build_document(
         "features": 0,
         "with_value": 0,
         "dash": 0,
+        "bound": 0,
         "by_reason": {},
         "text_values": [],
     }
     attribute_language = ATTRIBUTE_LANGUAGES.get(language, "en")
-    for name_ in required:
-        definition = definitions.get(name_)
+    for feature in features:
+        code = str(feature.get("name") or "")
+        if not code:
+            continue
+        attribute = str(feature.get("attribute") or code)
+        definition = definitions.get(attribute) or definitions.get(code)
         if definition is None:
             report["by_reason"]["unknown feature"] = (
                 report["by_reason"].get("unknown feature", 0) + 1
             )
             continue
-        value = attributes.get(name_)
+        if attribute != code:
+            report["bound"] += 1
+        value = attributes.get(attribute)
         values = feature_values(value, attribute_language)
         lines.append("        <FEATURE>")
-        lines.append(f"          <FNAME>{escape(name_)}</FNAME>")
+        lines.append(f"          <FNAME>{escape(code)}</FNAME>")
         if values is None:
             lines.append("          <FVALUE>-</FVALUE>")
-            reason = "NA" if name_ not in missing else "UN"
+            reason = "NA" if not feature.get("missing") else "UN"
             lines.append(f"          <FVALUE_DETAILS>{reason}</FVALUE_DETAILS>")
             report["dash"] += 1
             report["by_reason"][reason] = report["by_reason"].get(reason, 0) + 1
@@ -176,7 +189,7 @@ def build_document(
                 lines.append(f"          <FVALUE>{entry}</FVALUE>")
             report["with_value"] += 1
             if definition.get("type") == "text":
-                report["text_values"].append(name_)
+                report["text_values"].append(code)
         lines.append("        </FEATURE>")
         report["features"] += 1
     lines += [
@@ -242,8 +255,7 @@ def main(argv: list[str]) -> int:
         return 2
     document, report = build_document(
         product,
-        list(resolved.get("required") or []),
-        list(resolved.get("missing") or []),
+        list(resolved.get("attributes") or []),
         definitions,
         class_code=args.class_code,
         catalog_id=args.catalog_id,

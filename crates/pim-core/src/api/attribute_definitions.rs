@@ -65,6 +65,12 @@ pub struct CreateAttributeDefinition {
     /// Validation constraints (e.g. `{ "min": 0, "max": 10, "enum_values": [...] }`).
     #[serde(default)]
     pub constraints: Option<Value>,
+    /// Binds the attribute to a classification standard's feature code, e.g.
+    /// `{ "etim": "EF000123" }` (`plan/detail/bmecat-export.md` §11.7): the
+    /// class-feature resolution reads the value from this attribute, so an own
+    /// attribute can serve a standard feature without being renamed.
+    #[serde(default)]
+    pub standard_codes: Option<Value>,
     /// Reference to a reusable `enum_set:<key>` for `enum` attributes (Phase 9).
     #[serde(default)]
     pub enum_set_id: Option<String>,
@@ -110,6 +116,10 @@ pub struct UpdateAttributeDefinition {
     pub display_unit_id: Option<String>,
     #[serde(default)]
     pub constraints: Option<Value>,
+    /// Binds the attribute to a classification standard's feature code, e.g.
+    /// `{ "etim": "EF000123" }`; `{}` clears the binding.
+    #[serde(default)]
+    pub standard_codes: Option<Value>,
     /// Reference to a reusable `enum_set:<key>` for `enum` attributes.
     #[serde(default)]
     pub enum_set_id: Option<Option<String>>,
@@ -208,6 +218,7 @@ pub async fn create_attribute_definition(
         unit_id,
         display_unit_id,
         constraints,
+        standard_codes,
         enum_set_id,
         default_value,
         description,
@@ -273,6 +284,10 @@ pub async fn create_attribute_definition(
     if let Some(constraints) = constraints {
         content.insert("constraints".to_owned(), constraints);
     }
+    // The binding is validated (and claimed) before the definition exists, so a
+    // duplicate code is rejected with 409 instead of silently shadowing.
+    let standard_codes = validate_standard_codes(&state.db, standard_codes, None).await?;
+    content.insert("standard_codes".to_owned(), standard_codes);
     if let Some(set_id) = enum_set_id {
         let set_ref = validate_enum_set(&state.db, &set_id).await?;
         content.insert("enum_set_id".to_owned(), Value::String(set_ref));
@@ -530,6 +545,16 @@ pub async fn update_attribute_definition(
     if let Some(constraints_value) = new_constraints.as_ref() {
         changes.insert("constraints".to_owned(), constraints_value.clone());
     }
+    // An empty map means "no binding": `changes` must not carry it, because the
+    // update `MERGE`s and SurrealDB merges nested objects key-wise (an empty
+    // object would silently keep the old binding). Cleared separately below.
+    let clear_standard_codes = body.standard_codes.as_ref().is_some_and(clears_binding);
+    if let Some(standard_codes) = body.standard_codes {
+        let validated = validate_standard_codes(&state.db, Some(standard_codes), Some(key)).await?;
+        if !clear_standard_codes {
+            changes.insert("standard_codes".to_owned(), validated);
+        }
+    }
     let mut clear_enum_set = false;
     if let Some(enum_set_id) = body.enum_set_id {
         match enum_set_id
@@ -562,7 +587,7 @@ pub async fn update_attribute_definition(
         changes.insert("inheritable".to_owned(), Value::Bool(false));
     }
 
-    if changes.is_empty() {
+    if changes.is_empty() && !clear_standard_codes {
         return Ok(Json(existing));
     }
 
@@ -676,15 +701,19 @@ pub async fn update_attribute_definition(
     });
     let changes = Value::Object(changes);
 
-    // Clear an enum-set reference with `SET ... = NONE` because `MERGE` cannot
-    // carry the distinct `NONE` value (JSON `null` would be rejected by the
-    // `option<string>` field). Statement indices below shift when present.
-    let clear_sql = if clear_enum_set {
-        "UPDATE $obj SET enum_set_id = NONE;"
-    } else {
-        ""
-    };
-    let select_index = if clear_enum_set { 6 } else { 5 };
+    // Clear a reference with `SET ... = NONE`: `MERGE` cannot carry the distinct
+    // `NONE` value (JSON `null` would be rejected by an `option<…>` field) and
+    // merges nested objects instead of replacing them. Each clear adds one
+    // statement, so the index of the `SELECT` below shifts with them.
+    let mut clears: Vec<&str> = Vec::new();
+    if clear_enum_set {
+        clears.push("UPDATE $obj SET enum_set_id = NONE;");
+    }
+    if clear_standard_codes {
+        clears.push("UPDATE $obj SET standard_codes = NONE;");
+    }
+    let clear_sql = clears.join("\n        ");
+    let select_index = 5 + clears.len();
 
     // Statements (no clear): BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
     // CREATE outbox(4), SELECT(5), COMMIT(6).
@@ -731,6 +760,84 @@ pub async fn update_attribute_definition(
     state.cache.invalidate_attribute_definitions().await;
 
     Ok(Json(definition))
+}
+
+/// `true` when a `standard_codes` payload **clears** the binding (`{}`) instead
+/// of setting one.
+///
+/// The distinction matters to the caller, not to validation: the update runs
+/// `UPDATE … MERGE`, and SurrealDB merges nested objects key-wise, so an empty
+/// object must not travel inside the merge (it would silently keep the old
+/// binding) — it is applied as `SET standard_codes = NONE` instead. Pure so the
+/// rule is unit-testable.
+fn clears_binding(value: &Value) -> bool {
+    value.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+/// Normalises and validates a `standard_codes` map (`{"etim": "EF000123"}`).
+///
+/// The map binds an attribute to a classification standard's feature codes (see
+/// `plan/detail/bmecat-export.md` §11.7). Because a feature can only have **one**
+/// value, a code may be claimed by exactly one attribute: the check runs over
+/// the definitions that carry a binding (a small set) and returns `409` naming
+/// the other attribute. `own_key` is the record key being updated, so an
+/// attribute may keep its own codes.
+async fn validate_standard_codes(
+    db: &crate::db::Db,
+    standard_codes: Option<Value>,
+    own_key: Option<&str>,
+) -> Result<Value, ApiError> {
+    let Some(raw) = standard_codes else {
+        return Ok(Value::Object(serde_json::Map::new()));
+    };
+    let map = raw.as_object().ok_or_else(|| {
+        ApiError::bad_request("`standard_codes` must be an object of `{ standard: code }`")
+    })?;
+    let mut normalised = serde_json::Map::new();
+    for (standard, code) in map {
+        let standard = standard.trim();
+        let code = code.as_str().unwrap_or_default().trim();
+        if standard.is_empty() || code.is_empty() {
+            return Err(ApiError::bad_request(
+                "`standard_codes` must map a standard to a non-empty code",
+            ));
+        }
+        normalised.insert(standard.to_owned(), Value::String(code.to_owned()));
+    }
+    if normalised.is_empty() {
+        return Ok(Value::Object(normalised));
+    }
+
+    let mut response = db
+        .inner()
+        .query("SELECT id, name, standard_codes FROM attribute_definition WHERE standard_codes IS NOT NONE;")
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        let existing_key = row.get("id").and_then(Value::as_str).map(|id| {
+            id.split_once(':')
+                .map(|(_, key)| key)
+                .unwrap_or(id)
+                .to_owned()
+        });
+        if existing_key.as_deref() == own_key {
+            continue;
+        }
+        let Some(existing) = row.get("standard_codes").and_then(Value::as_object) else {
+            continue;
+        };
+        let name = row.get("name").and_then(Value::as_str).unwrap_or_default();
+        for (standard, code) in &normalised {
+            if existing.get(standard) == Some(code) {
+                return Err(ApiError::conflict(format!(
+                    "standard code `{standard}:{}` is already bound to attribute `{name}`",
+                    code.as_str().unwrap_or_default()
+                )));
+            }
+        }
+    }
+    Ok(Value::Object(normalised))
 }
 
 /// Returns the objects that currently carry a given enum value for an attribute.
@@ -1416,4 +1523,22 @@ pub async fn delete_attribute_definition(
     .await;
     state.cache.invalidate_attribute_definitions().await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An empty map must reach the handler as a **clear**, never as a merge
+    /// payload: `MERGE` would keep the old binding key by key.
+    #[test]
+    fn only_an_empty_object_clears_the_binding() {
+        assert!(clears_binding(&json!({})));
+        assert!(!clears_binding(&json!({ "etim": "EF000040" })));
+        // Invalid shapes are rejected by `validate_standard_codes`, not here.
+        assert!(!clears_binding(&json!([])));
+        assert!(!clears_binding(&json!("EF000040")));
+        assert!(!clears_binding(&Value::Null));
+    }
 }
