@@ -23,7 +23,7 @@ Holds vendor standard artefacts that are needed for integration work but must **
 
 - Obtain files from the official sources (bme.de BMEcat downloads, ETIM International/CMT) and place them here with their original file names so provenance stays traceable: BMEcat material in `resources/bmecat/`, ETIM material in `resources/etim/`.
 - `_guideline_text.txt` and `_ixf_structure.txt` are **derived** artefacts (created with `uv run --with pypdf` and `uv run python scripts/inspect_etim_ixf.py`) — regenerate instead of committing them.
-- Inspect a new IXF export with `scripts/inspect_etim_ixf.py` first (sections, counts, fields, sample item), then convert a class selection into importable documents with `scripts/etim_ixf_to_mef.py`; record the findings in `plan/detail/bmecat-export.md` §11.
+- Inspect a new IXF export with `scripts/inspect_etim_ixf.py` first (sections, counts, fields, sample item), convert a class selection into importable documents with `scripts/etim_ixf_to_mef.py` and validate an exported product with `scripts/etim_export_spike.py` (`uv run --with lxml`, needs `etim/bmecat_etim_501.xsd`); record the findings in `plan/detail/bmecat-export.md` §11.
 - To look up guideline rules, search the text dump (element name, `+Mandatory`, `FVALUE_DETAILS`, `FUNIT`, …) and check the structure against the XSD/DTD instead of assuming.
 - Still to obtain: the BMEcat 1.2 specification PDF, the full IXF section list, the EuroCat "Syntax Binding".
 
