@@ -45,6 +45,13 @@ LANGUAGE_CODES = {"EN": "en", "DE": "de", "NL-BE": "nl", "FR-BE": "fr", "FR": "f
 #: IXF feature type -> Meadow data type (`plan/detail/datenmodell.md`).
 TYPE_MAP = {"Logical": "boolean", "Numeric": "number", "Alphanumeric": "text", "Range": "range"}
 
+#: Standard-bundle envelope (`plan/detail/bmecat-export.md` §11.9): a *package*
+#: carrying a classification standard's model **and** data, installable in the
+#: order of `documents` — deliberately **not** seeded system data (a system runs
+#: without it, adding it is one command).
+BUNDLE_FORMAT = "meadow-standard-bundle"
+BUNDLE_VERSION = "1.0"
+
 
 def local(tag: str) -> str:
     """Strips the `{namespace}` prefix from an ElementTree tag."""
@@ -111,6 +118,8 @@ class Selection:
     features: dict[str, IxfFeature] = field(default_factory=dict)
     units: dict[str, IxfUnit] = field(default_factory=dict)
     groups: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: `Header/Publication`: name, release number and date of the IXF export.
+    publication: dict[str, str] = field(default_factory=dict)
     seen_classes: int = 0
     unknown_types: Counter[str] = field(default_factory=Counter)
 
@@ -192,7 +201,13 @@ def read_ixf(
         depth = len(stack) - 1
         section = stack[1] if len(stack) > 1 else ""
         if depth == 2:  # the item element itself, e.g. `Unit` inside `Units`
-            if section == "Units":
+            if section == "Header":
+                selection.publication = {
+                    "name": _text(elem, "Name"),
+                    "number": _text(elem, "Number"),
+                    "date": _text(elem, "Date"),
+                }
+            elif section == "Units":
                 labels, _ = _translations(elem)
                 code = _text(elem, "Code")
                 if code:
@@ -440,6 +455,48 @@ def build_features_document(selection: Selection, *, class_key: str = "code") ->
     }
 
 
+def bundle_manifest(
+    selection: Selection,
+    report: dict,
+    *,
+    name: str,
+    node_type: str,
+    applies_to: str,
+    class_key: str = "code",
+) -> dict:
+    """The manifest describing the bundle's documents and what they need."""
+    number = selection.publication.get("number", "")
+    class_features = sum(len(entry.features) for entry in selection.classes)
+    return {
+        "format": BUNDLE_FORMAT,
+        "format_version": BUNDLE_VERSION,
+        "name": name,
+        "standard": "ETIM",
+        "standard_version": f"{number}.0" if number else "",
+        "source": selection.publication.get("name", ""),
+        "created_at": datetime.now(UTC).isoformat(),
+        "node_type": node_type,
+        "applies_to": applies_to,
+        "class_key": class_key,
+        "counts": {
+            "classes": len(selection.classes),
+            "features": report["features"],
+            "class_features": class_features,
+        },
+        # The installer compares this with the target's unit catalog.
+        "units_needed": report["units_needed"],
+        "documents": [
+            {
+                "file": "model.mcf.json",
+                "kind": "mcf",
+                "sections": ["object_types", "attribute_definitions"],
+            },
+            {"file": "classes.mef.json", "kind": "mef", "objects": len(selection.classes)},
+            {"file": "features.mcf.json", "kind": "mcf", "sections": ["category_attributes"]},
+        ],
+    }
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ixf", type=Path, help="IXF export to read")
@@ -453,6 +510,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--with-units", action="store_true", help="set units where the symbol matches"
     )
+    parser.add_argument("--bundle-name", default="etim-10.0", help="name of the standard bundle")
     args = parser.parse_args(argv[1:])
 
     wanted = {code.strip() for code in args.classes.split(",") if code.strip()}
@@ -488,6 +546,17 @@ def main(argv: list[str]) -> int:
     (args.out_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    manifest = bundle_manifest(
+        selection,
+        report,
+        name=args.bundle_name,
+        node_type=args.node_type,
+        applies_to=args.applies_to,
+    )
+    (args.out_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"bundle: {manifest['name']} {manifest['standard_version']} -> {args.out_dir}")
     print(f"classes={report['classes']} features={report['features']} out={args.out_dir}")
     print(f"types={dict(report['type_histogram'])}")
     print(
