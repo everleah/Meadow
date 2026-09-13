@@ -11,6 +11,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
+from meadow.frontend.filters import filter_select
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
@@ -110,8 +111,8 @@ async def attribute_definitions_page() -> None:
             for g in groups
         }
 
-        # --- Filter state & predicate (name / group / type) ------------------
-        filters: dict[str, str] = {"name": "", "group": "", "type": ""}
+        # --- Filter state & predicate (name / group / type / reference) ------
+        filters: dict[str, str] = {"name": "", "group": "", "type": "", "reference": ""}
 
         def _matches(d: dict) -> bool:
             if filters["name"]:
@@ -120,6 +121,10 @@ async def attribute_definitions_page() -> None:
                 if q not in hay:
                     return False
             if filters["type"] and str(d.get("type")) != filters["type"]:
+                return False
+            if filters["reference"] == "own" and d.get("reference_data"):
+                return False
+            if filters["reference"] == "reference" and not d.get("reference_data"):
                 return False
             return not (filters["group"] and filters["group"] not in (d.get("group_ids") or []))
 
@@ -142,6 +147,9 @@ async def attribute_definitions_page() -> None:
                         "multilingual": "✔" if d.get("multilingual") else "–",
                         "applicable": ", ".join(d.get("applicable_types") or []),
                         "required": ", ".join(d.get("required_types") or []),
+                        "reference": (
+                            t("attr_def.reference_badge") if d.get("reference_data") else "–"
+                        ),
                     }
                 )
             return rows
@@ -154,19 +162,26 @@ async def attribute_definitions_page() -> None:
                 .classes("w-48")
                 .on_value_change(lambda e: _set_filter("name", str(e.value)))
             )
-            ui.select(
+            filter_select(
                 {str(gid): lbl for gid, lbl in groups_by_id.items()},
                 label=t("attr_def.filter_group"),
-                value=None,
-            ).props("filled dense").classes("w-48").on_value_change(
-                lambda e: _set_filter("group", str(e.value))
+                classes="w-48",
+                on_change=lambda value: _set_filter("group", str(value)),
             )
-            ui.select(
+            filter_select(
                 {typ: typ for typ in ATTR_TYPES},
                 label=t("attr_def.filter_type"),
-                value=None,
-            ).props("filled dense").classes("w-40").on_value_change(
-                lambda e: _set_filter("type", str(e.value))
+                classes="w-40",
+                on_change=lambda value: _set_filter("type", str(value)),
+            )
+            filter_select(
+                {
+                    "own": t("attr_def.reference_own"),
+                    "reference": t("attr_def.reference_standard"),
+                },
+                label=t("attr_def.filter_reference"),
+                classes="w-52",
+                on_change=lambda value: _set_filter("reference", str(value)),
             )
 
         state: dict = {"definitions": definitions}
@@ -177,6 +192,11 @@ async def attribute_definitions_page() -> None:
                     {"headerName": t("attr_def.col_name"), "field": "name", "width": 160},
                     {"headerName": t("attr_def.col_label"), "field": "label", "width": 120},
                     {"headerName": t("attr_def.col_type"), "field": "type", "width": 100},
+                    {
+                        "headerName": t("attr_def.col_reference"),
+                        "field": "reference",
+                        "width": 100,
+                    },
                     {"headerName": t("attr_def.col_group"), "field": "group", "width": 120},
                     {"headerName": t("attr_def.col_key"), "field": "key", "width": 70},
                     {
@@ -569,6 +589,11 @@ async def attribute_definitions_page() -> None:
                         .classes("grow")
                     )
                 ui.label(t("attr_def.standard_code_hint")).classes("text-caption text-gray-500")
+                # Reference data of an imported standard: hidden wherever
+                # attributes are chosen until it is adopted into the own set
+                # (`meadow/frontend/reference_data.py`).
+                reference_check = ui.checkbox(t("attr_def.field_reference"))
+                ui.label(t("attr_def.field_reference_hint")).classes("text-caption text-gray-500")
                 computed_rule_input = (
                     ui.input(t("attr_def.field_computed_rule"))
                     .props("filled dense")
@@ -654,6 +679,7 @@ async def attribute_definitions_page() -> None:
             first_standard = next((key for key in codes if key in STANDARDS), "etim")
             standard_select.set_value(first_standard)
             standard_code_input.set_value(str(codes.get(first_standard) or ""))
+            reference_check.set_value(bool(definition.get("reference_data")) if editing else False)
             description_area.set_value(str(definition.get("description") or "") if editing else "")
             computed_rule_input.set_value(
                 str(definition.get("computed_rule") or "") if editing else ""
@@ -815,6 +841,7 @@ async def attribute_definitions_page() -> None:
                 "unit_id": unit_input.value or None,
                 "display_unit_id": display_input.value or None,
                 "standard_codes": standard_codes,
+                "reference_data": bool(reference_check.value),
                 "enum_set_id": enum_set_id,
                 "description": description_area.value or None,
             }

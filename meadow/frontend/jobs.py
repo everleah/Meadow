@@ -21,6 +21,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
@@ -140,21 +141,17 @@ async def jobs_page() -> None:
                     ]
 
                 with ui.row().classes("w-full gap-2 items-center mb-2"):
-                    def_type_select = (
-                        ui.select(
-                            {"": t("jobs.all_types"), **{typ: typ for typ in JOB_TYPES}},
-                            label=t("jobs.filter_type"),
-                            value="",
-                        )
-                        .props("filled dense")
-                        .classes("w-52")
+                    filter_select(
+                        {"": t("jobs.all_types"), **{typ: typ for typ in JOB_TYPES}},
+                        label=t("jobs.filter_type"),
+                        value="",
+                        classes="w-52",
+                        on_change=lambda value: _apply_type_filter(str(value)),
                     )
 
-                    def _apply_type_filter() -> None:
-                        current_type["value"] = str(def_type_select.value or "")
+                    def _apply_type_filter(value: str) -> None:
+                        current_type["value"] = value
                         def_grid.run_grid_method("setGridOption", "rowData", _def_rows())
-
-                    def_type_select.on_value_change(lambda _: _apply_type_filter())
 
                 def_grid = ui.aggrid(
                     {

@@ -45,6 +45,7 @@ from meadow.frontend.connector_form import (
     unknown_keys,
     validate_values,
 )
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
@@ -218,22 +219,20 @@ async def connectors_page() -> None:
                 .classes("w-48")
                 .on_value_change(lambda e: _set_filter("name", str(e.value)))
             )
-            ui.select(
+            filter_select(
                 type_labels,
                 label=t("connectors.filter_type"),
-                value=None,
-            ).props("filled dense").classes("w-44").on_value_change(
-                lambda e: _set_filter("type", str(e.value))
+                classes="w-44",
+                on_change=lambda value: _set_filter("type", str(value)),
             )
-            ui.select(
+            filter_select(
                 {
                     "True": t("connectors.state_enabled"),
                     "False": t("connectors.state_disabled"),
                 },
                 label=t("connectors.filter_enabled"),
-                value=None,
-            ).props("filled dense").classes("w-44").on_value_change(
-                lambda e: _set_filter("enabled", str(e.value))
+                classes="w-44",
+                on_change=lambda value: _set_filter("enabled", str(value)),
             )
 
         def _apply_filters() -> None:

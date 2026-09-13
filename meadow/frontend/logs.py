@@ -15,6 +15,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
@@ -102,30 +103,35 @@ async def logs_page() -> None:
                 for e in logs
             ]
 
+        def _set_log_filter(key: str, value: str) -> None:
+            """Stores a filter; it is applied by the reload button.
+
+            The log request runs server-side over up to 200 entries, so it is not
+            fired on every change of a filter field.
+            """
+            filters[key] = value
+
         with ui.row().classes("w-full gap-2 items-center flex-wrap mb-2"):
-            service_select = (
-                ui.select(
-                    {"": t("logs.all"), **{s: s for s in SERVICES}},
-                    label=t("logs.filter_service"),
-                )
-                .props("filled dense")
-                .classes("w-40")
+            filter_select(
+                {"": t("logs.all"), **{s: s for s in SERVICES}},
+                label=t("logs.filter_service"),
+                value="",
+                classes="w-40",
+                on_change=lambda value: _set_log_filter("service", str(value)),
             )
-            category_select = (
-                ui.select(
-                    {"": t("logs.all"), **{c: c for c in CATEGORIES}},
-                    label=t("logs.filter_category"),
-                )
-                .props("filled dense")
-                .classes("w-40")
+            filter_select(
+                {"": t("logs.all"), **{c: c for c in CATEGORIES}},
+                label=t("logs.filter_category"),
+                value="",
+                classes="w-40",
+                on_change=lambda value: _set_log_filter("category", str(value)),
             )
-            level_select = (
-                ui.select(
-                    {"": t("logs.all"), **{level: level for level in LEVELS}},
-                    label=t("logs.filter_level"),
-                )
-                .props("filled dense")
-                .classes("w-40")
+            filter_select(
+                {"": t("logs.all"), **{level: level for level in LEVELS}},
+                label=t("logs.filter_level"),
+                value="",
+                classes="w-40",
+                on_change=lambda value: _set_log_filter("level", str(value)),
             )
             from_input = (
                 ui.input(t("logs.filter_from"))
@@ -149,9 +155,6 @@ async def logs_page() -> None:
 
         async def reload() -> None:
             nonlocal logs
-            filters["service"] = service_select.value if service_select.value else ""
-            filters["category"] = category_select.value if category_select.value else ""
-            filters["level"] = level_select.value if level_select.value else ""
             try:
                 logs = await client.list_system_logs(
                     token,

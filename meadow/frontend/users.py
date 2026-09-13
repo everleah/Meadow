@@ -20,6 +20,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import build_shell
 
@@ -111,12 +112,18 @@ async def users_page() -> None:
                 .classes("w-48")
                 .on_value_change(lambda e: _set_user_filter("name", str(e.value)))
             )
-            ui.select({r: r for r in ROLES}, label=t("users.filter_role"), value=None).props(
-                "filled dense"
-            ).classes("w-44").on_value_change(lambda e: _set_user_filter("role", str(e.value)))
-            ui.select({s: s for s in STATUSES}, label=t("users.filter_status"), value=None).props(
-                "filled dense"
-            ).classes("w-40").on_value_change(lambda e: _set_user_filter("status", str(e.value)))
+            filter_select(
+                {r: r for r in ROLES},
+                label=t("users.filter_role"),
+                classes="w-44",
+                on_change=lambda value: _set_user_filter("role", str(value)),
+            )
+            filter_select(
+                {s: s for s in STATUSES},
+                label=t("users.filter_status"),
+                classes="w-40",
+                on_change=lambda value: _set_user_filter("status", str(value)),
+            )
 
         def _apply_user_filters() -> None:
             users_grid.run_grid_method("setGridOption", "rowData", _user_rows())

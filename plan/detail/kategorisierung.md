@@ -115,3 +115,21 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 **Offen (Folgearbeit, nicht Teil von Stufe B):** Import/Versionierung der Standard-Metadaten (`code`/`version`/`source` als Attribute + MCF/Connector-Import, Read-only-Kennzeichnung), die Merkmals**werte** (`EV…`, braucht ETIM-API/CMT) und das **BMEcat/xChange-Export-Mapping** im Export-Wizard.
 
 **Nicht-Ziele (bewusst):** keine klassen-spezifische Einschraenkung der erlaubten Werte (erlaubte Werte bleiben an der Attributdefinition/Enum-Set, wie in ETIM), kein zweiter Merkmals-Mechanismus ausserhalb der Attributdefinitionen, keine vererbenden Kategorie-Kanten.
+
+## Referenzdaten — das Standardvokabular bleibt draussen (umgesetzt 2026-09-13)
+
+**Problem.** Der Standard-Import macht jedes Merkmal **zum Attribut** (Name = `EF…`). Allein das mitgelieferte ETIM-10.0-Paket bringt **380 Attributdefinitionen** (der volle Standard 17 377); sie fuellen das Produktformular, die Export-Feldauswahl und jede Attributauswahl und verdecken die eigenen Attribute. Bestes Beispiel: ein Pflicht-Merkmal der Klasse „fehlt“, aber kein Feld, in dem man es sieht.
+
+**Entscheidung (Option A, Auftraggeber 2026-09-13):** `attribute_definition.reference_data` (bool) kennzeichnet das Vokabular eines Standards. Es wird **dort ausgeblendet, wo ein Attribut *gewaehlt* wird** — und bleibt **dort sichtbar, wo Daten *gelesen* werden**:
+
+| Flaeche | Verhalten |
+|---|---|
+| Produktformular | Referenz-Attribute erscheinen **nur**, wenn das Objekt bereits einen Wert dafuer traegt (nichts Vorhandenes darf verschwinden, der Wert bleibt pflegbar). Merkmalswerte sieht man in der Sektion **„Klassen-Merkmale“**. |
+| Export-Feldauswahl | standardmaessig ausgeblendet, ueber den Schalter **„Standard-Attribute (Anzahl)“** zuschaltbar — die gruppierte Auswahl (18 Gruppen) bleibt unveraendert. |
+| Massenpflege (Bulk-Wizard, Suchen & Ersetzen) | als Ziel ausgeblendet. |
+| Grid-Spalten, Suche, Klassen-Merkmale | unveraendert sichtbar (Lesesicht). |
+| Attributverwaltung | vollstaendig sichtbar: Spalte **„Standard“**, Filter „Eigene / Standard-Attribute (Referenzdaten)“ und Kontrollkaestchen **„Referenzdaten“** — Haekchen entfernen heisst **uebernehmen** (das Attribut wird ein eigenes, plegbares Attribut im Formular). |
+
+**Warum so und nicht anders:** kein Zwang, Standardattribute zu verwenden (Leitlinie „einfach, nicht zu komplex“); ein Merkmal traegt weiterhin entweder ein **eigenes, gebundenes** Attribut (`standard_codes`, oben) **oder** das Standard-Attribut selbst — Letzteres, nachdem man es uebernommen hat. Referenzdaten sind **keine** System-Daten: sie lassen sich loeschen, uebernehmen oder unveraendert liegen lassen, und die MCF-Sektion `attribute_definitions` nimmt das Kennzeichen mit (`konfiguration-export-import.md`).
+
+**Umsetzung:** Konverter `scripts/etim_ixf_to_mef.py` setzt `reference_data: true` an jedes Merkmal (die Klassen-Knotentyp-Attribute `code`/`description` bleiben eigene), die reine Regel liegt in `meadow/frontend/reference_data.py` (6 Tests in `tests/test_reference_data.py`).

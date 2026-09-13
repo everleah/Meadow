@@ -14,6 +14,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
@@ -97,12 +98,11 @@ async def units_page() -> None:
             ]
 
         with ui.row().classes("w-full items-center gap-2 mt-2"):
-            ui.select(
+            filter_select(
                 {d: d for d in dimensions},
                 label=t("units.filter_dimension"),
-                value=None,
-            ).props("filled dense").classes("w-52").on_value_change(
-                lambda e: _set_filter(str(e.value))
+                classes="w-52",
+                on_change=lambda value: _set_filter(str(value)),
             )
 
         def _set_filter(dimension: str) -> None:

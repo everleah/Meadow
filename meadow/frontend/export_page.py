@@ -40,6 +40,7 @@ from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.object_picker import open_object_picker
+from meadow.frontend.reference_data import reference_names, visible_in_picker
 
 #: Base fields always offered (the worker maps these onto each object row).
 BASE_FIELDS = ("id", "type", "status")
@@ -170,6 +171,14 @@ async def export_page(request: Request) -> None:
     field_state: dict[str, bool] = {}
     field_checks: dict[str, ui.checkbox] = {}
     visible_fields: list[str] = []
+    #: Whether the reference data of an imported standard is offered as well
+    #: (`reference_data.py`); a dict, because the refreshable renderer reads it.
+    reference_state: dict[str, bool] = {"show": False}
+
+    def remember_reference(show: bool) -> None:
+        """Toggles the standard vocabulary and re-renders the selection."""
+        reference_state["show"] = show
+        render_fields.refresh()
 
     def _default_checked(name: str) -> bool:
         return name in BASE_FIELDS
@@ -357,18 +366,28 @@ async def export_page(request: Request) -> None:
             One expansion per attribute group plus one for the ungrouped
             attributes and one for the base fields; every group carries a toggle
             for its members. Only the attributes the chosen object type allows
-            are offered (an object type is only fixed by the `type` source).
+            are offered (an object type is only fixed by the `type` source), and
+            the reference data of an imported standard stays hidden until the
+            switch is set (`meadow/frontend/reference_data.py`).
             """
             field_checks.clear()
             object_type = str(detail_select.value or "") if str(kind_select.value) == "type" else ""
+            offered = [
+                name
+                for name in attribute_name_list
+                if visible_in_picker(
+                    definitions_by_name.get(name),
+                    include_reference=reference_state["show"],
+                )
+            ]
             if object_type:
                 ui.label(
                     t("export.fields_scope_type").format(type=_type_label_for(object_type))
                 ).classes("text-caption text-gray-500")
-                names = allowed_names(attribute_name_list, definitions_by_name, object_type)
+                names = allowed_names(offered, definitions_by_name, object_type)
             else:
                 ui.label(t("export.fields_scope_all")).classes("text-caption text-gray-500")
-                names = list(attribute_name_list)
+                names = list(offered)
             visible_fields[:] = [*BASE_FIELDS, *names]
             if not names:
                 ui.label(t("export.fields_none")).classes("text-caption text-orange-600 ml-1")
@@ -424,6 +443,19 @@ async def export_page(request: Request) -> None:
         with ui.card().classes("w-full mt-4"):
             ui.label(t("export.fields_section")).classes("text-subtitle1")
             ui.label(t("export.fields_hint")).classes("text-caption text-gray-500")
+            # The vocabulary of an imported classification standard (380 features
+            # in the ETIM 10.0 bundle) is not part of the own catalogue: hidden by
+            # default, one switch away when the raw standard codes are wanted.
+            reference_switch = (
+                ui.switch(
+                    t("export.show_reference").format(
+                        count=len(reference_names(attribute_definitions))
+                    )
+                )
+                .props("dense")
+                .classes("mt-1")
+                .tooltip(t("export.show_reference_hint"))
+            )
             fields_box = ui.column().classes("w-full gap-0 mt-1")
             with fields_box:
                 render_fields()
@@ -437,6 +469,7 @@ async def export_page(request: Request) -> None:
             # The offered attributes depend on the chosen source type.
             kind_select.on_value_change(lambda event: render_fields.refresh())
             detail_select.on_value_change(lambda event: render_fields.refresh())
+            reference_switch.on_value_change(lambda event: remember_reference(bool(event.value)))
 
         # --- Format + language + options -----------------------------------
         with ui.card().classes("w-full mt-4"):

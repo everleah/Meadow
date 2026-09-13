@@ -71,6 +71,11 @@ pub struct CreateAttributeDefinition {
     /// attribute can serve a standard feature without being renamed.
     #[serde(default)]
     pub standard_codes: Option<Value>,
+    /// Marks the attribute as reference data of a classification standard (set
+    /// by the standard import): hidden wherever attributes are chosen, until it
+    /// is adopted (`plan/detail/kategorisierung.md`, "Referenzdaten").
+    #[serde(default)]
+    pub reference_data: Option<bool>,
     /// Reference to a reusable `enum_set:<key>` for `enum` attributes (Phase 9).
     #[serde(default)]
     pub enum_set_id: Option<String>,
@@ -120,6 +125,10 @@ pub struct UpdateAttributeDefinition {
     /// `{ "etim": "EF000123" }`; `{}` clears the binding.
     #[serde(default)]
     pub standard_codes: Option<Value>,
+    /// `true` marks the attribute as reference data of a standard, `false`
+    /// adopts it into the own attribute set (both directions are allowed).
+    #[serde(default)]
+    pub reference_data: Option<bool>,
     /// Reference to a reusable `enum_set:<key>` for `enum` attributes.
     #[serde(default)]
     pub enum_set_id: Option<Option<String>>,
@@ -219,6 +228,7 @@ pub async fn create_attribute_definition(
         display_unit_id,
         constraints,
         standard_codes,
+        reference_data,
         enum_set_id,
         default_value,
         description,
@@ -288,6 +298,10 @@ pub async fn create_attribute_definition(
     // duplicate code is rejected with 409 instead of silently shadowing.
     let standard_codes = validate_standard_codes(&state.db, standard_codes, None).await?;
     content.insert("standard_codes".to_owned(), standard_codes);
+    content.insert(
+        "reference_data".to_owned(),
+        Value::Bool(reference_data.unwrap_or(false)),
+    );
     if let Some(set_id) = enum_set_id {
         let set_ref = validate_enum_set(&state.db, &set_id).await?;
         content.insert("enum_set_id".to_owned(), Value::String(set_ref));
@@ -554,6 +568,9 @@ pub async fn update_attribute_definition(
         if !clear_standard_codes {
             changes.insert("standard_codes".to_owned(), validated);
         }
+    }
+    if let Some(reference_data) = body.reference_data {
+        changes.insert("reference_data".to_owned(), Value::Bool(reference_data));
     }
     let mut clear_enum_set = false;
     if let Some(enum_set_id) = body.enum_set_id {

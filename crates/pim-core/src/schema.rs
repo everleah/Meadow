@@ -51,6 +51,12 @@ DEFINE FIELD IF NOT EXISTS constraints ON TABLE attribute_definition TYPE option
 -- the bound attribute, so an **own** attribute can feed a standard feature
 -- without being renamed (`plan/detail/bmecat-export.md` §11.7).
 DEFINE FIELD IF NOT EXISTS standard_codes ON TABLE attribute_definition TYPE option<object>;
+-- Marks an attribute as **reference data** of a classification standard (set by
+-- the standard import): it belongs to the standard's vocabulary, not to the
+-- customer's own attribute set, and is hidden wherever attributes are *chosen*
+-- (product form, export field selection, bulk maintenance) unless it already
+-- carries a value. "Adopting" it in the attribute catalog clears the flag.
+DEFINE FIELD IF NOT EXISTS reference_data ON TABLE attribute_definition TYPE bool;
 -- Reference to a reusable enum_set (`enum_set:<key>`); replaces
 -- `constraints.enum_values` for enum attributes (Phase 9, planned).
 DEFINE FIELD IF NOT EXISTS enum_set_id ON TABLE attribute_definition TYPE option<string>;

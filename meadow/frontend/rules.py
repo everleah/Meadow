@@ -22,6 +22,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.object_picker import open_object_picker
@@ -158,23 +159,21 @@ async def rules_page() -> None:
                 .classes("w-48")
                 .on_value_change(lambda e: _set_filter("name", str(e.value)))
             )
-            ui.select(
+            filter_select(
                 {typ: _type_label(typ) for typ in RULE_TYPES},
                 label=t("rules.filter_type"),
-                value=None,
-            ).props("filled dense").classes("w-44").on_value_change(
-                lambda e: _set_filter("type", str(e.value))
+                classes="w-44",
+                on_change=lambda value: _set_filter("type", str(value)),
             )
-            ui.select(
+            filter_select(
                 {
                     "draft": t("rules.state_draft"),
                     "active": t("rules.state_active"),
                     "disabled": t("rules.state_disabled"),
                 },
                 label=t("rules.filter_state"),
-                value=None,
-            ).props("filled dense").classes("w-44").on_value_change(
-                lambda e: _set_filter("state", str(e.value))
+                classes="w-44",
+                on_change=lambda value: _set_filter("state", str(value)),
             )
 
         def _apply_filters() -> None:

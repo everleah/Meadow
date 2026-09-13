@@ -33,11 +33,13 @@ from meadow.frontend.display import (
     status_badge,
     taxonomy_type_names,
 )
+from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 from meadow.frontend.range_values import format_range
+from meadow.frontend.reference_data import visible_in_picker
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     association_definitions,
@@ -1741,7 +1743,14 @@ async def products_page(request: Request) -> None:
         # structure tree); the chosen object per field key lives in `bulk_picked`.
         bulk_picked: dict[str, dict] = {}
 
-        bulk_attr_options = {name: name for name in attribute_names}
+        # Target selection for the bulk wizard: the own attributes only — an
+        # imported standard's vocabulary is not a maintenance target
+        # (`meadow/frontend/reference_data.py`).
+        bulk_attr_options = {
+            str(definition.get("name")): str(definition.get("name"))
+            for definition in definitions
+            if definition.get("name") and visible_in_picker(definition)
+        }
         bulk_status_options = {
             "draft": "draft",
             "in_review": "in_review",
@@ -2145,6 +2154,8 @@ async def products_page(request: Request) -> None:
                 continue
             if str(definition.get("type") or "") not in ("text", "url"):
                 continue
+            if not visible_in_picker(definition):
+                continue
             label = str(resolve_value(definition.get("label"), locale) or name)
             replace_attr_options[name] = label if label == name else f"{label} ({name})"
 
@@ -2546,9 +2557,8 @@ async def products_page(request: Request) -> None:
                     active["incomplete"] = bool(event.value)
                     await reload_grid()
 
-                async def on_channel_change(event) -> None:
+                async def on_channel_change(value: str) -> None:
                     """Filters the grid to the objects released for one channel."""
-                    value = str(event.value or "")
                     if value == (active["released_for"] or ""):
                         return
                     active["released_for"] = value or None
@@ -2753,16 +2763,13 @@ async def products_page(request: Request) -> None:
                     incomplete_switch.on_value_change(on_incomplete_change)
                     channel_filter = None
                     if channels:
-                        channel_filter = (
-                            ui.select(
-                                {"": t("grid.filter_all_channels"), **channel_labels},
-                                value=active["released_for"] or "",
-                            )
-                            .props("dense filled shrink-0")
-                            .classes("w-48")
-                            .tooltip(t("grid.filter_released_for"))
+                        channel_filter = filter_select(
+                            {"": t("grid.filter_all_channels"), **channel_labels},
+                            value=active["released_for"] or "",
+                            classes="w-48 shrink-0",
+                            tooltip=t("grid.filter_released_for"),
+                            on_change=on_channel_change,
                         )
-                        channel_filter.on_value_change(on_channel_change)
                     ui.button(icon="filter_alt_off", on_click=reset_filters).props(
                         "flat dense shrink-0"
                     ).tooltip(t("grid.filter_reset"))

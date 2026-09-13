@@ -45,6 +45,7 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
 from meadow.frontend.range_values import range_bounds, range_value
+from meadow.frontend.reference_data import visible_in_form
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     ROLE_CATEGORY,
@@ -1100,8 +1101,18 @@ async def product_form(object_id: str) -> None:
                                             )
             return expansion, content
 
-        # Attribute definitions applicable to this object type.
-        defs = [d for d in definitions if d.get("name") and _applicable(d, object_type)]
+        # Attribute definitions applicable to this object type. Reference data of
+        # a classification standard (an imported ETIM bundle brings 380 of them)
+        # stays out of the field list until the object carries a value for it —
+        # the class-features section is where the standard's vocabulary shows up
+        # (`meadow/frontend/reference_data.py`).
+        defs = [
+            d
+            for d in definitions
+            if d.get("name")
+            and _applicable(d, object_type)
+            and visible_in_form(d, resolved_attributes, str(d.get("name")))
+        ]
         defs_sorted = sorted(defs, key=lambda d: str(d.get("name", "")))
         group_by_id = {str(g.get("id")): g for g in groups}
 

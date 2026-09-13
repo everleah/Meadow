@@ -351,6 +351,13 @@ def build_model_document(
             "computed_reads_inherited": False,
             "constraints": None,
             "default_value": None,
+            # The features are the **vocabulary** of the standard, not part of the
+            # customer's own attribute set: the core hides reference data wherever
+            # attributes are chosen (product form, export selection, bulk
+            # maintenance) until it is adopted (`plan/detail/kategorisierung.md`,
+            # "Referenzdaten"). The class features keep working — they resolve to
+            # the bound own attribute or to the code itself.
+            "reference_data": True,
             "description": f"ETIM feature {code} ({feature.etim_type})",
         }
         if with_units and units:

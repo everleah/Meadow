@@ -376,6 +376,7 @@ async fn attribute_definitions_section(
             "display_unit": display_unit,
             "enum_set": enum_set,
             "standard_codes": definition.get("standard_codes").cloned().unwrap_or(Value::Null),
+            "reference_data": as_bool(&definition, "reference_data"),
             "applicable_types": Value::Array(
                 as_string_array(&definition, "applicable_types").into_iter().map(Value::from).collect()
             ),
@@ -1774,6 +1775,13 @@ async fn apply_attribute_definitions(
                 .filter(|value| value.is_object())
                 .cloned()
                 .unwrap_or_else(|| json!({})),
+        );
+        // Reference data travels with the model as well: an import of the
+        // standard bundle must mark its vocabulary, and an import of an exported
+        // configuration must keep the adopted state of an attribute.
+        content.insert(
+            "reference_data".to_owned(),
+            Value::Bool(as_bool(entry, "reference_data")),
         );
         if let Some(constraints) = entry.get("constraints")
             && !constraints.is_null()
