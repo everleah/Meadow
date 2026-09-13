@@ -116,3 +116,31 @@ def test_read_manifest_returns_the_document_order(tmp_path: Path) -> None:
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     assert installer.read_manifest(bundle)["name"] == "etim-10.0"
+
+
+def test_find_bundles_scans_a_drop_in_folder(tmp_path: Path) -> None:
+    (tmp_path / "etim-10.0").mkdir()
+    (tmp_path / "etim-10.0" / "manifest.json").write_text(
+        json.dumps({"format": installer.BUNDLE_FORMAT, "name": "etim-10.0"}), encoding="utf-8"
+    )
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "readme.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "broken" / "manifest.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "foreign").mkdir()
+    (tmp_path / "foreign" / "manifest.json").write_text(
+        json.dumps({"format": "mcf"}), encoding="utf-8"
+    )
+
+    bundles, notes = installer.find_bundles(tmp_path)
+    assert [path.name for path in bundles] == ["etim-10.0"]
+    assert len(notes) == 3, "everything else is ignored with a note, never an error"
+    assert any("no manifest.json" in note for note in notes)
+    assert any("unreadable manifest" in note for note in notes)
+    assert any("not a standard bundle" in note for note in notes)
+
+
+def test_find_bundles_tolerates_a_missing_folder(tmp_path: Path) -> None:
+    bundles, notes = installer.find_bundles(tmp_path / "nope")
+    assert bundles == []
+    assert notes == [f"{tmp_path / 'nope'} is not a directory (no bundles installed)"]

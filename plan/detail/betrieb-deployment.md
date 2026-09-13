@@ -253,6 +253,7 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
 7. **Healthcheck:** `./healthcheck-vps.sh`.
 8. **Verifikation:** `https://meadow.pim.example.com` (UI) und `https://meadow.api.example.com` (OpenAPI) im Browser prüfen.
 9. **Cron** für Backup/Cleanup einrichten (siehe Abschnitt 8).
+10. **Standardpakete (optional):** Paketordner nach `resources/standards/<name>/` kopieren und `uv run python scripts/install_standard_bundle.py --all --bulk` ausführen (idempotent, mit Einheiten-Vorprüfung). Für den Vollbestand danach **erneut** laufen lassen, damit die Klassen-Merkmale nachgezogen werden; ohne Pakete im Ordner ist der Aufruf ein No-op. Details: [bmecat-export.md](bmecat-export.md) §11.9.
 
 ## 8. Betriebs-Runbook (Day-2)
 

@@ -38,3 +38,34 @@ try {
 }
 
 Write-Host "[setup] Done."
+
+# 4. Standard bundles (optional): classification data lives in resources/standards/
+#    (gitignored). A missing or empty folder is fine - the system runs without it.
+$Standards = Join-Path $Root "resources\standards"
+$Bundles = @()
+if (Test-Path $Standards) {
+    $Bundles = Get-ChildItem -Path $Standards -Directory |
+        Where-Object { Test-Path (Join-Path $_.FullName "manifest.json") }
+}
+if ($Bundles.Count -eq 0) {
+    Write-Host "[setup] no standard bundles in resources/standards - skipping (optional)."
+} else {
+    $CoreUp = $false
+    try {
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:8080/health" -TimeoutSec 3 -UseBasicParsing
+        $CoreUp = $true
+    } catch {
+        $CoreUp = $false
+    }
+    if ($CoreUp) {
+        Push-Location $Root
+        try {
+            uv run python scripts/install_standard_bundle.py --all
+        } finally {
+            Pop-Location
+        }
+    } else {
+        Write-Host "[setup] $($Bundles.Count) standard bundle(s) found, but pim-core is not running."
+        Write-Host "[setup]   start the core, then: uv run python scripts/install_standard_bundle.py --all"
+    }
+}
