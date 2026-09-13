@@ -17,7 +17,6 @@ needs a NiceGUI slot).
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 
@@ -61,12 +60,16 @@ def filter_select(
     select = ui.select(options, label=label or None, value=value, multiple=multiple)
     select.props("filled dense clearable").classes(classes)
 
-    def changed(event) -> None:
+    async def changed(event) -> None:
+        # The wrapper is **async** on purpose: a callback may be a coroutine
+        # function (it reloads from the core and touches UI), and NiceGUI only
+        # awaits the handler it calls. Scheduling a detached task instead would
+        # run the callback *outside* the client's slot context — creating UI or
+        # calling `ui.run_javascript` then fails with "the current slot cannot be
+        # determined" (verified 2026-09-13 on the grid's channel filter).
         result = on_change(normalised(event.value, multiple=multiple))
-        # A callback may be a coroutine function (it reloads from the core); a
-        # plain lambda returning one still has to be awaited by somebody.
         if inspect.isawaitable(result):
-            asyncio.create_task(result)
+            await result
 
     select.on_value_change(changed)
     if tooltip:

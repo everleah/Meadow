@@ -573,6 +573,8 @@
   "search_form.section_references": "Références",
   "search_form.section_sort": "Tri",
   "search_form.section_limits": "Limites",
+  "search_form.show_reference": "Données de norme dans la liste de champs ({count})",
+  "search_form.show_reference_hint": "Proposer aussi les données de référence d'une norme de classification importée (p. ex. les caractéristiques ETIM `EF…`) comme champs de filtre. Elles ne font pas partie de vos propres attributs et sont donc masquées par défaut — une recherche enregistrée qui en utilise une continue de fonctionner.",
   "search_form.fulltext": "Termes de recherche",
   "search_form.fulltext_hint": "Recherche dans toutes les valeurs d’attributs (l’index plein texte porte sur l’objet d’attributs entier).",
   "search_form.limit": "Nombre de résultats",

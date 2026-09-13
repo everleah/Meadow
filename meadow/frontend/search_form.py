@@ -28,6 +28,7 @@ from nicegui import ui
 
 from meadow.frontend.display import resolve_value
 from meadow.frontend.i18n import current_locale, t
+from meadow.frontend.reference_data import is_reference
 
 #: Value of the "no language chosen" option of a multilingual field.
 BASE_LANGUAGE = ""
@@ -174,12 +175,20 @@ def field_label(field: dict, locale: str | None = None) -> str:
 
 
 def field_choices(
-    catalog: dict | None, extra: str | None = None, *, locale: str | None = None
+    catalog: dict | None,
+    extra: str | None = None,
+    *,
+    locale: str | None = None,
+    include_reference: bool = False,
 ) -> dict[str, str]:
     """Select options for the field picker, grouped by catalog section.
 
     ``extra`` keeps an unknown/removed field selectable so an existing condition
-    is never silently rewritten to another field.
+    is never silently rewritten to another field. Reference data of a
+    classification standard (an imported ETIM bundle brings hundreds of fields)
+    stays out until the form's switch asks for it — the core keeps such fields
+    filterable, only the *offered* list changes; `extra` wins over the filter so
+    the field a condition already uses stays selectable.
     """
     labels = {
         str(group.get("key")): t(str(group.get("label_key")), locale=locale)
@@ -188,6 +197,8 @@ def field_choices(
     choices: dict[str, str] = {}
     for field in fields_of(catalog):
         key = str(field.get("key"))
+        if is_reference(field) and not include_reference and key != extra:
+            continue
         section = labels.get(str(field.get("group")), str(field.get("group")))
         choices[key] = f"{section} · {field_label(field, locale)}"
     if extra and extra not in choices:
@@ -197,13 +208,21 @@ def field_choices(
 
 
 def sortable_choices(
-    catalog: dict | None, extra: str | None = None, *, locale: str | None = None
+    catalog: dict | None,
+    extra: str | None = None,
+    *,
+    locale: str | None = None,
+    include_reference: bool = False,
 ) -> dict[str, str]:
-    """Select options for the sort field picker (sortable fields only)."""
+    """Select options for the sort field picker (sortable fields only).
+
+    Same reference-data rule as `field_choices`.
+    """
     choices = {
         str(field.get("key")): field_label(field, locale)
         for field in fields_of(catalog)
         if field.get("sortable")
+        and (include_reference or not is_reference(field) or str(field.get("key")) == extra)
     }
     if extra and extra not in choices:
         unknown = t("search_form.field_unknown", locale=locale)
@@ -800,6 +819,10 @@ class SearchForm:
         self._client = client
         self._token = token
         self.sections = set(sections) if sections else set(ALL_SECTIONS)
+        #: Whether the standard vocabulary is offered in the pickers. The catalog
+        #: always carries the reference fields (a stored query must keep
+        #: validating) — only what the form *offers* changes.
+        self.show_reference = False
         self._root: _GroupEditor | None = None
         self._fulltext: Any = None
         self._limit: Any = None
@@ -811,6 +834,7 @@ class SearchForm:
                 ui.expansion(t("search_form.section_conditions"), value=True).classes("w-full"),
                 ui.column().classes("w-full gap-2 p-2"),
             ):
+                self._render_reference_switch()
                 self._root = _GroupEditor(self, new_group(), depth=1)
         if "fulltext" in self.sections:
             with (
@@ -863,6 +887,40 @@ class SearchForm:
                     .props("filled dense")
                     .classes("w-40")
                 )
+
+    # -- reference data of a classification standard -----------------------
+    @property
+    def reference_field_count(self) -> int:
+        """How many catalog fields are reference data of a standard."""
+        return sum(1 for field in fields_of(self.catalog) if is_reference(field))
+
+    def _render_reference_switch(self) -> None:
+        """Offers the standard vocabulary in the field pickers (off by default).
+
+        An imported classification standard brings hundreds of filterable fields
+        (`attributes.EF…`); they are hidden so "which of my attributes do I
+        filter by?" has an answer. The switch only changes the *offered* list —
+        the core keeps those fields filterable, so a stored search using one
+        still validates and shows its field.
+        """
+        count = self.reference_field_count
+        if not count:
+            return
+        (
+            ui.switch(t("search_form.show_reference").format(count=count))
+            .props("dense")
+            .classes("self-start")
+            .tooltip(t("search_form.show_reference_hint"))
+            .on_value_change(lambda event: self.set_show_reference(bool(event.value)))
+        )
+
+    def set_show_reference(self, show: bool) -> None:
+        """Applies the switch and re-renders the pickers depending on it."""
+        self.show_reference = show
+        if self._root is not None:
+            self._root.render()
+        if self._sort is not None:
+            self._sort.render()
 
     # -- state -------------------------------------------------------------
     def read_state(self) -> dict:
@@ -1026,7 +1084,11 @@ class _ConditionRow:
         field_key = str(self.node.get("field") or "")
         with self.container:
             ui.select(
-                field_choices(catalog, field_key or None),
+                field_choices(
+                    catalog,
+                    field_key or None,
+                    include_reference=self.form.show_reference,
+                ),
                 value=field_key or None,
                 label=t("search_form.condition_field"),
                 on_change=lambda event: self._set_field(str(event.value or "")),
@@ -1303,7 +1365,11 @@ class _SortSection:
             for row in self.rows:
                 with ui.row().classes("w-full items-center gap-2"):
                     ui.select(
-                        sortable_choices(self.form.catalog, str(row.get("field") or None)),
+                        sortable_choices(
+                            self.form.catalog,
+                            str(row.get("field") or None),
+                            include_reference=self.form.show_reference,
+                        ),
                         value=str(row.get("field") or None),
                         label=t("search_form.sort_field"),
                         on_change=lambda event, row=row: self._set_field(

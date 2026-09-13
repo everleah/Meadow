@@ -150,6 +150,18 @@ CATALOG: dict = {
             "operators": ["eq", "ne"],
             "sortable": False,
         },
+        {
+            # Reference data of an imported classification standard: offered only
+            # behind the form's switch, but always filterable (see `reference_data`).
+            "key": "attributes.EF000040",
+            "group": "attribute",
+            "label": {"en": "Width"},
+            "value_type": "number",
+            "widget": "number",
+            "operators": ["eq", "ne", "lt", "lte", "between", "is_null"],
+            "sortable": True,
+            "reference_data": True,
+        },
     ],
     "languages": [
         {"code": "de", "label": {"en": "German"}},
@@ -473,6 +485,20 @@ def test_language_and_field_choices_fall_back_to_unknown() -> None:
     ].endswith(f"({unknown})")
 
 
+def test_reference_data_is_offered_only_behind_the_switch() -> None:
+    """The standard's vocabulary stays out of the pickers until asked for."""
+    feature = "attributes.EF000040"
+    assert feature not in search_form.field_choices(CATALOG, locale="en")
+    assert feature in search_form.field_choices(CATALOG, locale="en", include_reference=True)
+    assert feature in search_form.field_choices(CATALOG, feature, locale="en")
+    assert feature not in search_form.sortable_choices(CATALOG, locale="en")
+    assert feature in search_form.sortable_choices(CATALOG, locale="en", include_reference=True)
+    assert feature in search_form.sortable_choices(CATALOG, feature, locale="en")
+    # The own attributes are unaffected either way.
+    assert "attributes.price" in search_form.field_choices(CATALOG, locale="en")
+    assert "attributes.price" in search_form.sortable_choices(CATALOG, locale="en")
+
+
 @pytest.mark.parametrize("locale", ["en", "de", "fr"])
 def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
     keys = [
@@ -527,6 +553,8 @@ def test_i18n_keys_of_the_catalog_and_form_exist(locale: str) -> None:
         "search_form.section_references",
         "search_form.section_sort",
         "search_form.section_limits",
+        "search_form.show_reference",
+        "search_form.show_reference_hint",
         "search_form.fulltext",
         "search_form.fulltext_hint",
         "search_form.limit",

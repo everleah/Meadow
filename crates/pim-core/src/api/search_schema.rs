@@ -277,6 +277,14 @@ pub struct SearchField {
     /// A computed value (maintained by rules, not by users).
     #[serde(skip_serializing_if = "is_false")]
     pub computed: bool,
+    /// Reference data of a classification standard (`attribute_definition.reference_data`).
+    ///
+    /// The field stays **filterable** (a stored query keeps validating) — the
+    /// flag only lets the client keep the standard's vocabulary out of the
+    /// offered list until the user asks for it
+    /// (`plan/detail/kategorisierung.md`, "Referenzdaten").
+    #[serde(skip_serializing_if = "is_false")]
+    pub reference_data: bool,
 }
 
 impl SearchField {
@@ -301,6 +309,7 @@ impl SearchField {
             operators: operators_for(value_type).to_vec(),
             sortable: true,
             computed: false,
+            reference_data: false,
         }
     }
 
@@ -331,6 +340,11 @@ impl SearchField {
 
     fn computed(mut self, computed: bool) -> Self {
         self.computed = computed;
+        self
+    }
+
+    fn reference_data(mut self, reference_data: bool) -> Self {
+        self.reference_data = reference_data;
         self
     }
 }
@@ -401,7 +415,7 @@ pub async fn load(db: &Db) -> Result<Catalog, ApiError> {
     let sources = CatalogSources {
         attributes: rows(
             db,
-            "SELECT name, label, type, multilingual, enum_set_id, unit_id, computed FROM attribute_definition;",
+            "SELECT name, label, type, multilingual, enum_set_id, unit_id, computed, reference_data FROM attribute_definition;",
         )
         .await?,
         enum_sets: rows(db, "SELECT id, options FROM enum_set;").await?,
@@ -504,6 +518,10 @@ pub fn build_catalog(sources: &CatalogSources) -> Catalog {
             .get("computed")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let reference_data = row
+            .get("reference_data")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let options = if value_type == ValueType::Enum {
             enum_options(row.get("enum_set_id"), sources)
         } else {
@@ -517,7 +535,8 @@ pub fn build_catalog(sources: &CatalogSources) -> Catalog {
         )
         .label(row.get("label").cloned())
         .options(options)
-        .computed(computed);
+        .computed(computed)
+        .reference_data(reference_data);
         if multilingual {
             field.multilingual = true;
             field.languages = Some(language_codes.clone());
@@ -1388,6 +1407,7 @@ mod tests {
                 json!({"name": "brand", "label": {"en": "Brand"}, "type": "enum", "enum_set_id": "enum_set:brand"}),
                 json!({"name": "link", "label": {"en": "Link"}, "type": "reference"}),
                 json!({"name": "homepage", "label": {"en": "Homepage"}, "type": "url", "multilingual": true}),
+                json!({"name": "EF000040", "label": {"en": "Width"}, "type": "number", "reference_data": true}),
             ],
             enum_sets: vec![json!({"id": "enum_set:brand", "options": ["enum_option:acme"]})],
             enum_options: vec![
@@ -1443,6 +1463,19 @@ mod tests {
         assert!(catalog.field("attributes.name").unwrap().multilingual);
         // `reference` attributes are not filterable.
         assert!(catalog.field("attributes.link").is_none());
+        // Reference data stays **filterable** — the flag only lets the client
+        // keep the standard's vocabulary out of the offered list, and a stored
+        // query using such a field must keep validating.
+        let feature = catalog.field("attributes.EF000040").unwrap();
+        assert!(feature.reference_data);
+        assert!(!price.reference_data);
+        assert!(
+            validate_query(
+                &query(Some(leaf("attributes.EF000040", "gt", json!(1)))),
+                &catalog
+            )
+            .is_empty()
+        );
         // Multilingual variants resolve through the base field.
         assert!(catalog.field("attributes.name.de").is_some());
         assert!(catalog.field("attributes.name.zz").is_none());

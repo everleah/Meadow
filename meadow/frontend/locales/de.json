@@ -573,6 +573,8 @@
   "search_form.section_references": "Referenzen",
   "search_form.section_sort": "Sortierung",
   "search_form.section_limits": "Grenzen",
+  "search_form.show_reference": "Standard-Daten in der Feldliste ({count})",
+  "search_form.show_reference_hint": "Auch die Referenzdaten eines importierten Klassifizierungsstandards (z. B. die ETIM-Merkmale `EF…`) als Filterfelder anbieten. Sie gehören nicht zu den eigenen Attributen und sind daher standardmäßig ausgeblendet — eine gespeicherte Suche, die eines nutzt, funktioniert weiter.",
   "search_form.fulltext": "Suchbegriffe",
   "search_form.fulltext_hint": "Durchsucht alle Attributwerte (der Volltextindex liegt auf dem gesamten Attributobjekt).",
   "search_form.limit": "Treffer-Limit",

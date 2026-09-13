@@ -64,6 +64,7 @@ Eine **gespeicherte Suche** ist ein Objekt vom Typ `saved_search`, das die Krite
 - **`references`**: Einschränkung über Relationen, z. B. nur Objekte, die in einer bestimmten Kategorie hängen oder eine bestimmte Vererbungsquelle haben.
 - **`sort`**, **`start`** und **`limit`**: Sortierung (nur sortierbare Felder), Offset und Begrenzung der Ergebnisliste (1–10000).
 - **Validierung:** `POST`/`PATCH /saved-searches`, `POST /saved-searches/preview`, das Ausführen **und der Grid-Filter `GET /objects?where=…`** prüfen die Query gegen den Feldkatalog und melden Fehler mit Pfad im Baum (`query.where.conditions[1].operator: …`); gespeichert wird die **kanonische** Form. Der Grid-Filter verbindet sich per UND mit den übrigen Listenfiltern. Detail: [suche-formular.md](suche-formular.md).
+- **Referenzdaten (umgesetzt 2026-09-13):** Ein Feldkatalog-Eintrag trägt `reference_data` (aus `attribute_definition.reference_data`). Das Suchformular bietet diese Felder erst nach dem Schalter **„Standard-Daten in der Feldliste (Anzahl)“** an — der Kern liefert sie aber **weiterhin filterbar** aus, damit eine gespeicherte Suche mit einem Standard-Merkmal gültig bleibt und ihr Feld sichtbar bleibt ([kategorisierung.md](kategorisierung.md)).
 
 **Ausführung:**
 

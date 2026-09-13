@@ -573,6 +573,8 @@
   "search_form.section_references": "References",
   "search_form.section_sort": "Sorting",
   "search_form.section_limits": "Limits",
+  "search_form.show_reference": "Standard data in the field list ({count})",
+  "search_form.show_reference_hint": "Also offer the reference data of an imported classification standard (e.g. the ETIM features `EF…`) as filterable fields. They are not part of your own attribute set, so they stay hidden by default — a saved search that uses one keeps working.",
   "search_form.fulltext": "Search terms",
   "search_form.fulltext_hint": "Searches all attribute values (the full-text index covers the whole attribute object).",
   "search_form.limit": "Maximum hits",
