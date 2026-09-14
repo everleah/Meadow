@@ -149,12 +149,14 @@ Ein Katalogdokument ist **keine Tabelle**: Spaltenauswahl, Trennzeichen und Head
 | `catalog_id`, `catalog_name`, `catalog_version` | Kopf des Dokuments (`CATALOG`); `CATALOG_ID` ist der Abnehmer-Schlüssel |
 | `language` | Katalogsprache (`eng`/`ger`/…, BMEcat-Codes) — **eine Sprache je Datei** |
 | `currency` | `CURRENCY` (ISO-4217, Default `EUR`) |
-| `supplier`, `buyer` | `SUPPLIER_NAME`/`BUYER_NAME` — Pflicht im ETIM-Profil, wird **nicht** erfunden |
-| `pid_attribute` | Attribut, dessen Wert `SUPPLIER_PID` wird (Fallback `code`, dann `sku`; Schema-Limit 32 Zeichen) |
-| `etim_version` | Versionsteil von `REFERENCE_FEATURE_SYSTEM_NAME` (Default `10.0` ⇒ `ETIM-10.0`) |
+| `supplier`, `buyer` | `SUPPLIER_NAME`/`BUYER_NAME` — Pflicht im ETIM-Profil, wird **nicht** erfunden || `pid_attribute` | Attribut, dessen Wert `SUPPLIER_PID` wird (Fallback `code`, dann `sku`; Schema-Limit 32 Zeichen) |
+| `etim_version` | Versionsteil von `REFERENCE_FEATURE_SYSTEM_NAME` — **Rückfall** für eine Klasse ohne registrierten Standard (sonst gewinnt das Standard-Register, [kategorisierung.md](kategorisierung.md)) |
+| `transaction` | `new_productdata` (preislos, V1) oder `new_catalog` (Kataloglieferung mit Preisen) |
+| `price_attribute`, `price_type` | Attribut für `PRICE_AMOUNT` und Preisart (`net_list`/`net_customer`/`nrp`) — nur bei `new_catalog` |
+| `order_unit`, `content_unit` | BMEcat-Einheitencodes (UN/ECE Rec 20, Default `C62`) — nur bei `new_catalog` |
 
-- **Vorgaben/Zwänge:** der Wizard schickt kein `fields`-Array (die Spaltenauswahl ist ausgeblendet) und die Formatprüfung entfällt — `bmecat` exportiert die Klasse, nicht die gewählten Felder. Alles andere (Quelle inkl. Kanal/Kollektion, `email_to`, geplante Exporte) läuft über denselben Job.
-- **Bericht statt Download-Überraschung:** der Report-Dialog zeigt Produkte/Klassen/Merkmale/„mit Wert"/„als `-`", die übersprungenen Objekte mit Grund, Pflichtmerkmale ohne Wert, Klartext-Merkmale und das XSD-Verdikt — inklusive der Zeile **„zugeordnete Taxonomieknoten ohne `code`"**, wenn Produkte deshalb nicht im Katalog landen (§11.10 in [bmecat-export.md](bmecat-export.md)).
+- **Vorgaben/Zwänge:** der Wizard schickt kein `fields`-Array (die Spaltenauswahl ist ausgeblendet) und die Formatprüfung entfällt — `bmecat` exportiert die Klasse, nicht die gewählten Felder. Bei `transaction = Kataloglieferung` erscheinen zusätzlich Preis-Attribut, Preisart und die beiden Einheitencodes (BMEcat-Codes, nicht Meadow-Symbole); der Standard verlangt dort Bestelldaten, einen Preis und einen UDX-Block je Produkt, deshalb wird ein Produkt ohne Preis übersprungen und im Bericht genannt. Alles andere (Quelle inkl. Kanal/Kollektion, `email_to`, geplante Exporte) läuft über denselben Job.
+- **Bericht statt Download-Überraschung:** der Report-Dialog zeigt Produkte/Klassen/Merkmale/„mit Wert"/„als `-`", die übersprungenen Objekte mit Grund (inkl. „kein Preis"), Pflichtmerkmale ohne Wert, Klartext-Merkmale und das XSD-Verdikt — inklusive der Zeile **„zugeordnete Taxonomieknoten ohne `code`"**, wenn Produkte deshalb nicht im Katalog landen (§11.10 in [bmecat-export.md](bmecat-export.md)), und dem **Referenz-Merkmalsystem** samt Hinweis, wenn keines registriert ist.
 - **Noch offen:** Profil als speicherbare Entität (eigene Admin-Seite nach §10 Punkt 5 der BMEcat-Planung), mehrere Sprachen/Kanäle je Lauf, Preise/Varianten (V4), Streaming für sehr große Kataloge.
 
 ## 6. Frontend (NiceGUI)

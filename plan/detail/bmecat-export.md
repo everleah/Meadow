@@ -233,7 +233,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
    **Verifiziert mit 10 Klassen** (163 Merkmale: 70 Numeric, 42 Logical, 39 Alphanumeric, 12 Range): Modell-Import `errors: []` (Knotentyp + 165 Definitionen angelegt), 10/10 Klassen angelegt, Merkmals-Import `errors: []` (10 Klassen `updated`), `GET /categories/{id}/attributes` liefert je Klasse die Zeilen mit `required: true`, und ein in die Klasse kategorisiertes Produkt führt sie sofort in `required`/`missing`, in `GET /objects/{id}?locale=` als `missing_required` und in der **Vollständigkeit** — Stufe A/B und der Standard-Import greifen also ineinander.
    **Offen in Schritt 1:** die Wertebindung (Punkt 1 oben), die XSD-Validierung eines Beispielkatalogs (Schritt 2) sowie 1.2 gegen XSD/DTD (beide Varianten liegen vor, §11.8). **Einheiten — entschieden und angewandt:** der Seed bringt **67 Einheiten** mit, darunter **alle 10** für den *10-Klassen*-Ausschnitt benötigten Symbole (`W`, `°C`, `V`, `mm²`, `kA`, `kV`, `kW`, `mm`, `A`, `kN`); der Konverter schreibt die ETIM-Abkürzung als Symbol, `--with-units --units-file <GET /units>` setzt sie nur, wenn Meadow die Einheit wirklich hat — Ergebnis: **57 der 183 Attributdefinitionen** tragen eine Einheit (z. B. `EF000008 number mm Width`). Achtung: Einheiten-Konflikte sind **selektionsabhängig** (§11.9 Befund 1), der 25-Klassen-Ausschnitt hat einen.
 2. **Spike – Schritt 2 (Export + Schema-Validierung) erledigt (2026-09-13):** `scripts/etim_export_spike.py` liest ein Produkt samt aufgelösten Klassenmerkmalen und Definitionen aus dem Kern und schreibt ein **ETIM-BMEcat-Dokument** (`version="2005"`, Namespace `…/bmecat/50`, Transaktion **`T_NEW_PRODUCTDATA`** = der preislose Pfad), das gegen `resources/etim/bmecat_etim_501.xsd` validiert wird (`uv run --with lxml …`). Ergebnis: **XSD-valid** mit 16 Klassenmerkmalen (3 mit Wert, 13 als `-` + `FVALUE_DETAILS`, Grund `UN`). Umgesetzt sind die ETIM-Regeln: **alle** Merkmale der Klasse werden übertragen, fehlende Werte als `-` mit `NA`/`MV`/`UN`, ein **Bereich als zwei `FVALUE`**, **kein `FUNIT`** (Einheit steckt in der Klassifikation) und Mehrsprachigkeit nur in der Katalogsprache (`--language`, Werte in anderer Sprache gelten als fehlend statt falsch exportiert zu werden).
-3. **V1 – Produktions-Export – umgesetzt (2026-09-13):** `format: "bmecat"` in `POST /exports` (Profil `bmecat`), Dokumentbau + XSD-Validierung im `outbound_export`-Job, Download als XML, Profilkarte/Bericht im `/export`-Wizard. Was V1 **ausdrücklich nicht** enthält: Streaming für große Kataloge, Kanal-/Mehrsprach-Ausgabe je Lauf, `MIME_ROOT`/Medien, `UDX.EDXF.*`-Zusatzfelder (Marke, Verpackungseinheiten, Logistikmaße) und Preise (`T_NEW_CATALOG`) — Details, Regeln und Verifikation in **§11.10**.
+3. **V1 – Produktions-Export – umgesetzt (2026-09-13):** `format: "bmecat"` in `POST /exports` (Profil `bmecat`), Dokumentbau + XSD-Validierung im `outbound_export`-Job, Download als XML, Profilkarte/Bericht im `/export`-Wizard. Was V1 **ausdrücklich nicht** enthält: Streaming für große Kataloge, Kanal-/Mehrsprach-Ausgabe je Lauf, `MIME_ROOT`/Medien, `UDX.EDXF.*`-Zusatzfelder (Marke, Verpackungseinheiten, Logistikmaße) und Preise (`T_NEW_CATALOG`) — Details, Regeln und Verifikation in **§11.10**. Die **Preise** kamen mit V4 nach (§11.11).
 
 **Drei Schema-Befunde aus dem Spike (die Validierung hat sie gefunden, nicht die Recherche):**
 
@@ -243,7 +243,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 4. **V1b – 1.2-Export** (`ARTICLE*`, DTD-Validierung) über dieselbe Mapping-Engine — exakt der Fall „wir kommen an 1.2 nicht vorbei“.
 5. **V2 – Import** (`T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`, Merkmale rückwärts) **und** IXF-Standardimport als eigener Job.
 6. **V3 – generisches 2005.2:** `CLASSIFICATION_SYSTEM` (+ `CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES`, ECLASS-Referenzen), `MIME_TYPE`/`MIME_PURPOSE`, `CATALOG_GROUP_SYSTEM`, `VARIANTS`.
-7. **V4 –** Preise/Varianten/Konfigurationen; **EuroCat** als Profil, sobald das **Syntax Binding** zur **EN 17015-2** veröffentlicht ist (Beobachtungsposten, kein Blocker).
+7. **V4 –** Preise/Varianten/Konfigurationen — **Preise und Basisprodukt-Referenzen umgesetzt (2026-09-13, §11.11)**; offen bleiben Kundenpreise/Staffeln (`LOWER_BOUND`), `PRODUCT_LOGISTIC_DETAILS` und Konfigurationen. **EuroCat** als Profil, sobald das **Syntax Binding** zur **EN 17015-2** veröffentlicht ist (Beobachtungsposten, kein Blocker).
 
 ### 11.7 Entscheidungen (2026-09-12)
 
@@ -336,4 +336,40 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 **Offen (bewusst nicht in V1):** Streaming/Chunking für sehr große Kataloge (das Dokument entsteht bisher im Speicher), Preise und Varianten (V4, `T_NEW_CATALOG`), BMEcat 1.2 (V1b), `MIME_INFO`/Medien, `UDX.EDXF.*`-Zusatzfelder, mehrere Kanäle/Sprachen in einem Lauf, gespeicherte Profile (V3, §10 Punkt 5) sowie die `EV…`-Wertezuordnung.
 
 **Betriebshinweis aus der Umsetzung:** `resolved_features` liefert die Merkmale **eines zugeordneten Objekts** — ein Klassenknoten selbst hat keine „eigenen" Merkmale im Sinn dieses Endpunkts (`GET /objects/<klasse>/category-attributes` ist leer). Ein Prüfskript, das die installierten Klassenmerkmale **zählen** will, nimmt deshalb `GET /config/export` (Sektion `category_attributes`) — der Bestand des ETIM-Pakets ist mit **25 Klassen / 589 Zeilen** verifiziert.
+
+### 11.11 Preise, Bestelldaten und Varianten (V4) — umgesetzt (2026-09-13)
+
+**Warum eine eigene Transaktion:** `T_NEW_PRODUCTDATA` (V1) ist der **preislose** Pfad — er beschreibt Produktdaten, nicht eine Lieferung. Für eine echte Kataloglieferung schreibt das ETIM-Profil die Transaktion **`T_NEW_CATALOG`** vor, und die ist strenger. Aus dem XSD (Zeilen 1722–1745 / 1808–1822) verifiziert:
+
+| | `T_NEW_PRODUCTDATA` (V1) | `T_NEW_CATALOG` (V4) |
+|---|---|---|
+| `PRODUCT_FEATURES` | `minOccurs="0"`, unbounded | **Pflicht**, unbounded |
+| `PRODUCT_ORDER_DETAILS` | – | **Pflicht** (`ORDER_UNIT` + `CONTENT_UNIT`, beide Pflicht) |
+| `PRODUCT_PRICE_DETAILS` | – | **Pflicht**, `maxOccurs="unbounded"` — je Block `DATETIME` (1–2, Pflicht) + `PRODUCT_PRICE+` |
+| `USER_DEFINED_EXTENSIONS` | `minOccurs="0"` | **Pflicht** — Reihenfolge: nach den Preisen |
+| `PRODUCT_REFERENCE` | optional | optional (auch hier) |
+
+Weitere verifizierte Details: `PRODUCT_PRICE/@price_type` ist ein **Pattern** `net_customer|net_list|nrp`; `PRICE_AMOUNT`/`TAX` sind Zahlen, `PRICE_CURRENCY` optional; `ORDER_UNIT`/`CONTENT_UNIT`/`PRICE_UNIT` sind `dtUNIT` — eine **geschlossene Enumeration** von BMEcat-/UN-ECE-Rec-20-Codes (`C62` = Stück, `MTR`, `KGM`, `LTR`, `MTK`, `HUR`, …), **nicht** Meadow-Einheitensymbole; `PROD_ID_TO` erlaubt bis 80 Zeichen; `udxPRODUCTDATA` hat ausschließlich optionale Kinder, ein **leerer** UDX-Block ist also gültig (`UDX.EDXF.VERSION` gehört dort nicht hin).
+
+**Profilfelder (neu):**
+
+| Feld | Bedeutung |
+|---|---|
+| `transaction` | `new_productdata` (Default, preislos) oder `new_catalog` (Kataloglieferung) |
+| `price_attribute` | Attribut, dessen Wert `PRICE_AMOUNT` wird (für `new_catalog` erforderlich) |
+| `price_type` | `net_list` (Default), `net_customer`, `nrp` |
+| `order_unit`, `content_unit` | BMEcat-Einheitencodes (Default `C62`); `content_unit` fällt auf `order_unit` zurück |
+
+**Regeln (bewusst konservativ):**
+
+- Eine **unbekannte** Transaktion oder Preisart fällt auf den Default zurück, statt zu raten — im Bericht steht, was geschrieben wurde.
+- `new_catalog` **überspringt** ein Produkt ohne Preis (der Preisblock ist dort Pflicht) und meldet es (`skipped["no price"]` + `report.unpriced`); es wird **nicht** mit einem erfundenen Preis geschrieben.
+- Der Preiswert darf ein quantifizierter Wert (`{"value": 12.5, "unit": "EUR"}`), eine Zahl oder eine numerische Zeichenkette (`"12.50"`) sein; Alphanumerik zählt als **kein** Preis.
+- `PRICE_CURRENCY` wiederholt die Katalogwährung, `DATETIME type="valid_start_date"` trägt das Erzeugungsdatum, `USER_DEFINED_EXTENSIONS` ist leer.
+- **Varianten:** ein Objekt vom Typ `variant` verweist über `PRODUCT_REFERENCE type="base_product"` auf sein Basisprodukt (`PROD_ID_TO` = dessen `SUPPLIER_PID`). Das Basisprodukt ist der **Kompositions-Elternteil** (`rel_depends_on`), den der Kern über die Referenzen des Objekts ausliefert — **es gibt kein `GET /objects/{id}/parent`** (nur das Re-Parent-`PATCH`), und die erste Fassung lief damit ins Leere (vom Live-Test gefunden). Nur Varianten werden nachgeschlagen (zwei Requests je Variante, nicht je Produkt).
+- Die preislose Transaktion bleibt **unverändert** (kein zusätzlicher UDX-Block): V1-Dokumente sind byte-identisch.
+
+**Verifikation (2026-09-13, live):** Testprodukt (+ `net_price` 99.5) und -variante (109.5, per `PATCH /objects/{id}/parent` an das Basisprodukt gehängt) plus ein klassifiziertes Produkt **ohne** Preis, an `EC000001` klassifiziert. Export A (`type=product`, `transaction: new_catalog`): 1 Produkt, 1 Preis, `ORDER_UNIT`/`CONTENT_UNIT` = `C62`, `price_type="net_list"`, `PRICE_AMOUNT` 99.5, `PRICE_CURRENCY` EUR, Validity-`DATETIME`, leerer UDX-Block, das preislose Produkt als `skipped: {no price: 1}` + `unpriced` gemeldet — **XSD-valid**. Export B (`type=variant`): 1 Produkt, 1 Preis, `PRODUCT_REFERENCE type="base_product"` mit `PROD_ID_TO = BMECAT-BASE-1` — **XSD-valid**. Automatisiert in `tests/test_bmecat.py`: Transaktionswahl, Pflichtblöcke samt **Reihenfolge**, Preisarten, Einheitencodes, Überspringen ohne Preis, Basisprodukt-Referenz, `amount_of`-Formen (String/Zahl/Mapping) und `parent_reference_id` (Root/andere Relation/Alias) sowie ein Worker-Test für den Variantenpfad.
+
+**Offen (bewusst nicht in V4):** Kundenpreise/Staffeln (`LOWER_BOUND`, mehrere `PRODUCT_PRICE`-Blöcke je Produkt), `PRODUCT_LOGISTIC_DETAILS`, `TAX` aus einem Attribut, `NO_CU_PER_OU`/`PRICE_QUANTITY`, Mengen-/Varianten-Attribute auf Produktebene (`VARIANTS`) und die Prüfung der Einheitencodes gegen die `dtUNIT`-Liste **vor** dem Schreiben (heute fängt das die XSD-Validierung im Job; die Liste selbst ist lizenziertes Artefakt und wird bewusst nicht kopiert).
 

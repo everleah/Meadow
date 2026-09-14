@@ -1,9 +1,23 @@
 """BMEcat/ETIM catalogue export (the `bmecat` format of the export job).
 
 Builds one XML document from resolved products: the **ETIM profile** of BMEcat
-2005 (namespace `…/bmecat/50`, `T_NEW_PRODUCTDATA` — the price-less transaction,
-prices are V4) as verified against the official XSD in
+2005 (namespace `…/bmecat/50`) as verified against the official XSD in
 `plan/detail/bmecat-export.md` §11.3/§11.6.
+
+Two transactions of that profile are supported, chosen by the profile's
+`transaction`:
+
+* `new_productdata` (default) — the **price-less** path: no prices, no order
+  details. It needs no price maintenance and is the V1 behaviour.
+* `new_catalog` — the full catalogue delivery. The schema makes
+  `PRODUCT_ORDER_DETAILS` (`ORDER_UNIT` + `CONTENT_UNIT`, BMEcat unit codes),
+  at least one `PRODUCT_PRICE_DETAILS` and a `USER_DEFINED_EXTENSIONS` block
+  **mandatory** per product, so a product without a price is skipped and reported
+  (`unpriced`). The price comes from the attribute named in `price_attribute`.
+
+A `variant` may point at its base product (`base_pid` →
+`PRODUCT_REFERENCE type="base_product"`), which the schema allows in both
+transactions.
 
 The module is **pure**: it maps prepared products to XML and validates the
 result; fetching objects, class features and definitions is the caller's job
@@ -59,6 +73,17 @@ PID_ATTRIBUTES = ("code", "sku")
 MAX_PID = 32
 #: `DESCRIPTION_SHORT` limit of the schema.
 MAX_DESCRIPTION = 100
+#: `PROD_ID_TO` limit of the schema (a `PRODUCT_REFERENCE` target).
+MAX_REFERENCE_ID = 80
+#: Transactions of the ETIM profile: `new_productdata` is the price-less path
+#: (V1), `new_catalog` the full catalogue delivery — it **requires**
+#: `PRODUCT_ORDER_DETAILS`, at least one `PRODUCT_PRICE_DETAILS` and a
+#: `USER_DEFINED_EXTENSIONS` block per product (verified against the XSD).
+TRANSACTIONS = ("new_productdata", "new_catalog")
+#: `price_type` of a `PRODUCT_PRICE` (`typePRICE_TYPE` of the schema).
+PRICE_TYPES = ("net_list", "net_customer", "nrp")
+#: BMEcat unit code (UN/ECE Rec 20) when the profile names none: `C62` = piece.
+DEFAULT_ORDER_UNIT = "C62"
 
 
 def escape(text: object) -> str:
@@ -143,6 +168,31 @@ def class_block(entry: object) -> tuple[str, str]:
     return str(entry or "").strip(), ""
 
 
+def amount_of(value: object) -> str | None:
+    """The `PRICE_AMOUNT` of an attribute value (`None` = no price maintained).
+
+    A quantified value (`{"value": 12.5, "unit": "EUR"}`) contributes its number;
+    a multilingual map counts in the catalogue language like every other value; a
+    numeric **string** (`"12.50"`, e.g. from an import) is passed through, because
+    the schema validates the value anyway. Anything else is no price.
+    """
+    if isinstance(value, Mapping):
+        if "value" in value:
+            return amount_of(value.get("value"))
+        for key in ("from", "to"):
+            if key in value:
+                return amount_of(value.get(key))
+        value = value.get("en", next(iter(value.values()), None))
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            float(text)
+        except ValueError:
+            return None
+        return text or None
+    return format_number(value)
+
+
 def display_name(attributes: Mapping[str, Any], language: str, fallback: str) -> str:
     """`DESCRIPTION_SHORT`: the object's label in the catalogue language."""
     raw = attributes.get("name")
@@ -167,11 +217,12 @@ def build_document(
     `classes` are the classification blocks of the object — either
     `{"code": "EC000012", "system": "ETIM-10.0"}` (the shape the export job builds
     from the installed classification standard, see
-    `plan/detail/kategorisierung.md`) or a bare class code, which then uses the
+    `plan/detail/kategorien.md`) or a bare class code, which then uses the
     profile's version — and `features` the resolved class features
     (`GET /objects/{id}/category-attributes`), each with `name` (the feature code
     an export transmits), `attribute` (the attribute carrying the value), the
     contributing `nodes` (also **codes**, see `_feature_block`) and `required`.
+    `base_pid` is optional and only used for a variant.
     """
     profile = dict(profile or {})
     language = str(profile.get("language") or "eng")
@@ -179,6 +230,17 @@ def build_document(
     etim_version = str(profile.get("etim_version") or "10.0")
     # Fallback of a class without an installed standard: the profile's version.
     default_system = f"ETIM-{etim_version}"
+    transaction = str(profile.get("transaction") or TRANSACTIONS[0]).strip().lower()
+    if transaction not in TRANSACTIONS:
+        transaction = TRANSACTIONS[0]
+    priced = transaction == "new_catalog"
+    #: Attribute carrying the price; `new_catalog` transmits no product without one.
+    price_attribute = str(profile.get("price_attribute") or "").strip()
+    price_type = str(profile.get("price_type") or PRICE_TYPES[0]).strip().lower()
+    if price_type not in PRICE_TYPES:
+        price_type = PRICE_TYPES[0]
+    order_unit = str(profile.get("order_unit") or DEFAULT_ORDER_UNIT).strip()
+    content_unit = str(profile.get("content_unit") or order_unit).strip()
     catalog_id = str(profile.get("catalog_id") or "MEADOW").strip() or "MEADOW"
     catalog_name = str(profile.get("catalog_name") or "Meadow catalogue").strip()
     catalog_version = str(profile.get("catalog_version") or "1.0").strip() or "1.0"
@@ -190,6 +252,11 @@ def build_document(
     report: dict[str, Any] = {
         "language": language,
         "etim_version": etim_version,
+        "transaction": transaction,
+        "price_type": price_type if priced else "",
+        "price_attribute": price_attribute if priced else "",
+        "order_unit": order_unit if priced else "",
+        "content_unit": content_unit if priced else "",
         "products": 0,
         "skipped": {},
         "classes": 0,
@@ -197,6 +264,8 @@ def build_document(
         "with_value": 0,
         "dash": 0,
         "bound": 0,
+        "prices": 0,
+        "references": 0,
         "by_reason": {},
         "text_values": [],
         "missing_required": [],
@@ -210,6 +279,8 @@ def build_document(
         # Filled by the caller: `node_type` -> system name of the **installed**
         # standards (empty when none is registered — the profile's version is used).
         "standards": {},
+        # Products a priced catalogue had to skip (a price is mandatory there).
+        "unpriced": [],
         "issues": [],
     }
 
@@ -238,7 +309,7 @@ def build_document(
         "      <UDX.EDXF.VERSION>5.0</UDX.EDXF.VERSION>",
         "    </USER_DEFINED_EXTENSIONS>",
         "  </HEADER>",
-        "  <T_NEW_PRODUCTDATA>",
+        f"  <{_tag(transaction)}>",
     ]
 
     def skip(reason: str) -> None:
@@ -276,6 +347,13 @@ def build_document(
         attributes = dict(product.get("attributes") or {})
         features = [dict(feature) for feature in product.get("features") or []]
         name = display_name(attributes, attribute_language, pid)
+        # `new_catalog` needs a price on every product: `PRODUCT_PRICE_DETAILS` is
+        # mandatory in that transaction, so a product without one is reported.
+        amount = amount_of(attributes.get(price_attribute)) if priced and price_attribute else None
+        if priced and amount is None:
+            skip("no price")
+            report["unpriced"].append(pid)
+            continue
         lines.append('    <PRODUCT mode="new">')
         lines.append(element("SUPPLIER_PID", pid, "      "))
         lines.append("      <PRODUCT_DETAILS>")
@@ -296,14 +374,77 @@ def build_document(
             lines.extend(block)
             report["classes"] += 1
             report["features"] += count
+        if priced:
+            lines.extend(_order_details(order_unit, content_unit))
+            lines.extend(_price_details(amount, currency, price_type, now))
+            report["prices"] += 1
+            # The transaction fixes the position of the UDX block: mandatory after
+            # the prices in `T_NEW_CATALOG` (all its children are optional, so an
+            # empty block is valid).
+            lines.append(_product_udx())
+        base = str(product.get("base_pid") or "").strip()
+        if base and base != pid:
+            lines.append('      <PRODUCT_REFERENCE type="base_product">')
+            lines.append(element("PROD_ID_TO", base[:MAX_REFERENCE_ID], "        "))
+            lines.append("      </PRODUCT_REFERENCE>")
+            report["references"] += 1
         lines.append("    </PRODUCT>")
         report["products"] += 1
 
     lines += [
-        "  </T_NEW_PRODUCTDATA>",
+        f"  </{_tag(transaction)}>",
         "</BMECAT>",
     ]
     return "\n".join(lines) + "\n", report
+
+
+def _tag(transaction: str) -> str:
+    """The XML tag of a transaction (`new_catalog` → `T_NEW_CATALOG`)."""
+    return f"T_{transaction.upper()}"
+
+
+def _order_details(order_unit: str, content_unit: str) -> list[str]:
+    """`PRODUCT_ORDER_DETAILS` — mandatory in `T_NEW_CATALOG`.
+
+    `ORDER_UNIT` and `CONTENT_UNIT` carry **BMEcat unit codes** (UN/ECE Rec 20,
+    e.g. `C62` = piece), not Meadow unit symbols: the schema enumerates them, so a
+    wrong code fails the XSD validation instead of shipping silently.
+    """
+    return [
+        "      <PRODUCT_ORDER_DETAILS>",
+        element("ORDER_UNIT", order_unit, "        "),
+        element("CONTENT_UNIT", content_unit, "        "),
+        "      </PRODUCT_ORDER_DETAILS>",
+    ]
+
+
+def _price_details(amount: str, currency: str, price_type: str, now: datetime) -> list[str]:
+    """`PRODUCT_PRICE_DETAILS` — mandatory in `T_NEW_CATALOG`.
+
+    The `DATETIME` is mandatory in the schema and becomes the generation date as
+    `valid_start_date`; `PRICE_CURRENCY` repeats the catalogue currency so a
+    consumer reading only the price block needs no fallback.
+    """
+    return [
+        "      <PRODUCT_PRICE_DETAILS>",
+        '        <DATETIME type="valid_start_date">',
+        element("DATE", f"{now:%Y-%m-%d}", "          "),
+        "        </DATETIME>",
+        f'        <PRODUCT_PRICE price_type="{price_type}">',
+        element("PRICE_AMOUNT", amount, "          "),
+        element("PRICE_CURRENCY", currency, "          "),
+        "        </PRODUCT_PRICE>",
+        "      </PRODUCT_PRICE_DETAILS>",
+    ]
+
+
+def _product_udx() -> str:
+    """The `USER_DEFINED_EXTENSIONS` block mandatory in `T_NEW_CATALOG`.
+
+    Its children are all optional, so an empty block satisfies the sequence — and
+    the element must **not** carry `UDX.EDXF.VERSION` (that belongs to the header).
+    """
+    return "      <USER_DEFINED_EXTENSIONS/>"
 
 
 def _feature_block(

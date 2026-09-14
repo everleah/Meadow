@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from meadow.worker import bmecat
-from meadow.worker.exports import _bmecat_export
+from meadow.worker.exports import _bmecat_export, parent_reference_id
 
 DEFINITIONS = {
     "EF000007": {"name": "EF000007", "type": "text", "label": {"en": "Colour"}},
@@ -117,6 +117,202 @@ def test_an_optional_feature_without_a_value_is_not_applicable() -> None:
 
     assert report["by_reason"] == {"NA": 1}
     assert report["missing_required"] == []
+
+
+# --- the priced catalogue (`transaction: "new_catalog"`) ---------------------
+#
+# The schema makes `PRODUCT_ORDER_DETAILS` (order + content unit as BMEcat unit
+# codes), at least one `PRODUCT_PRICE_DETAILS` and a `USER_DEFINED_EXTENSIONS`
+# block mandatory per product in that transaction — verified against the XSD.
+
+PRICED = {**PROFILE, "transaction": "new_catalog", "price_attribute": "net_price"}
+
+
+def test_the_price_less_transaction_stays_unchanged() -> None:
+    document, report = bmecat.build_document([_product()], DEFINITIONS, PROFILE)
+
+    assert report["transaction"] == "new_productdata"
+    # The product block stays as in V1: the header *does* carry a UDX block
+    # (`UDX.EDXF.VERSION`), the price-less transaction carries none.
+    for tag in ("PRODUCT_ORDER_DETAILS", "PRODUCT_PRICE_DETAILS", "<USER_DEFINED_EXTENSIONS/>"):
+        assert tag not in document, f"`{tag}` belongs to the priced transaction"
+    assert report["prices"] == 0
+
+
+def test_a_priced_catalogue_writes_the_mandatory_blocks_in_order() -> None:
+    product = _product(attributes={"name": "Widget", "net_price": 12.5, "EF000008": 4})
+    document, report = bmecat.build_document([product], DEFINITIONS, PRICED)
+
+    assert "<T_NEW_CATALOG>" in document
+    assert "<T_NEW_PRODUCTDATA>" not in document
+    assert report["transaction"] == "new_catalog"
+    assert report["prices"] == 1
+    # The order of the product sequence is fixed by the schema.
+    positions = [
+        document.index("<SUPPLIER_PID>"),
+        document.index("<PRODUCT_FEATURES>"),
+        document.index("<PRODUCT_ORDER_DETAILS>"),
+        document.index("<PRODUCT_PRICE_DETAILS>"),
+        document.index("<USER_DEFINED_EXTENSIONS/>"),
+    ]
+    assert positions == sorted(positions)
+    assert "<ORDER_UNIT>C62</ORDER_UNIT>" in document
+    assert "<CONTENT_UNIT>C62</CONTENT_UNIT>" in document
+    assert '<PRODUCT_PRICE price_type="net_list">' in document
+    assert "<PRICE_AMOUNT>12.5</PRICE_AMOUNT>" in document
+    assert "<PRICE_CURRENCY>EUR</PRICE_CURRENCY>" in document
+    assert '<DATETIME type="valid_start_date">' in document
+
+
+def test_a_priced_catalogue_reports_a_product_without_a_price() -> None:
+    products = [
+        _product(pid="A-1", attributes={"name": "With price", "net_price": 5}),
+        _product(pid="A-2", attributes={"name": "Without price"}),
+    ]
+    document, report = bmecat.build_document(products, DEFINITIONS, PRICED)
+
+    assert report["products"] == 1
+    assert report["skipped"] == {"no price": 1}
+    assert report["unpriced"] == ["A-2"]
+    assert "<SUPPLIER_PID>A-2<" not in document, "a mandatory block must not be missing"
+
+
+def test_the_profile_names_the_price_attribute_and_type() -> None:
+    product = _product(attributes={"name": "Widget", "list_price": {"value": 9.99, "unit": "EUR"}})
+    profile = {
+        **PRICED,
+        "price_attribute": "list_price",
+        "price_type": "net_customer",
+        "order_unit": "MTR",
+        "content_unit": "KGM",
+    }
+    document, report = bmecat.build_document([product], DEFINITIONS, profile)
+
+    # A quantified value contributes its number, not its unit map.
+    assert "<PRICE_AMOUNT>9.99</PRICE_AMOUNT>" in document
+    assert 'price_type="net_customer"' in document
+    assert "<ORDER_UNIT>MTR</ORDER_UNIT>" in document
+    assert "<CONTENT_UNIT>KGM</CONTENT_UNIT>" in document
+    assert report["price_attribute"] == "list_price"
+    assert report["price_type"] == "net_customer"
+    assert report["order_unit"] == "MTR"
+
+
+def test_an_unknown_transaction_or_price_type_falls_back_to_the_default() -> None:
+    product = _product(attributes={"name": "Widget", "net_price": 5})
+    document, report = bmecat.build_document(
+        [product], DEFINITIONS, {**PRICED, "transaction": "nope", "price_type": "gross"}
+    )
+
+    assert report["transaction"] == "new_productdata", "an unknown transaction must not guess"
+    assert "<PRODUCT_PRICE_DETAILS>" not in document
+    priced, _ = bmecat.build_document([product], DEFINITIONS, {**PRICED, "price_type": "gross"})
+    assert 'price_type="net_list"' in priced
+
+
+def test_a_variant_references_its_base_product() -> None:
+    product = _product(
+        pid="VAR-1",
+        type="variant",
+        base_pid="BASE-7",
+        attributes={"name": "Variant", "net_price": 4},
+    )
+    document, report = bmecat.build_document([product], DEFINITIONS, PRICED)
+
+    assert '<PRODUCT_REFERENCE type="base_product">' in document
+    assert "<PROD_ID_TO>BASE-7</PROD_ID_TO>" in document
+    assert report["references"] == 1
+
+
+def test_a_product_without_a_base_pid_writes_no_reference() -> None:
+    document, report = bmecat.build_document([_product()], DEFINITIONS, PRICED)
+
+    assert "PRODUCT_REFERENCE" not in document
+    assert report["references"] == 0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (12.5, "12.5"),
+        (12.0, "12"),
+        ({"value": 7, "unit": "EUR"}, "7"),
+        ({"en": 3}, "3"),
+        ("12.50", "12.50"),
+        ("", None),
+        (None, None),
+        ("abc", None),
+    ],
+)
+def test_amount_of_reads_the_price_from_every_stored_shape(
+    value: object, expected: str | None
+) -> None:
+    assert bmecat.amount_of(value) == expected
+
+
+def test_parent_reference_id_reads_the_composition_parent() -> None:
+    """The base product of a variant is its composition parent (`rel_depends_on`)."""
+    rows = [
+        {"definition_id": "rel_category_member", "out": "object:CLASS"},
+        {"definition_id": "rel_depends_on", "out": "object:BASE"},
+        {"definition_id": "related", "out": "object:OTHER"},
+    ]
+    assert parent_reference_id(rows) == "object:BASE"
+    # The object root is not a base product.
+    assert (
+        parent_reference_id([{"definition_id": "rel_depends_on", "out": "object:object_root"}])
+        == ""
+    )
+    # A fully qualified definition id and an absent parent are both fine.
+    assert (
+        parent_reference_id(
+            [{"definition_id": "relation_definition:rel_depends_on", "out": "object:BASE"}]
+        )
+        == "object:BASE"
+    )
+    assert parent_reference_id([]) == ""
+    assert parent_reference_id([{"definition_id": "rel_depends_on"}]) == ""
+
+
+async def test_a_variant_carries_its_base_product_pid() -> None:
+    """The variant path resolves the base PID through the parent's references."""
+    objects = [
+        {
+            "id": "object:VAR",
+            "type": "variant",
+            "attributes": {"sku": "VAR-1", "net_price": 5},
+        }
+    ]
+    resolved = {"VAR": {"classes": ["01M0CLASS"], "attributes": []}}
+    nodes = {"01M0CLASS": {"type": "etim_class", "attributes": {"code": "EC000012"}}}
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        # The worker passes the id as the core returned it (`object:VAR`).
+        if path == "/objects/object:VAR/references":
+            return httpx.Response(
+                200,
+                json=[
+                    {"definition_id": "rel_depends_on", "out": "object:object_root"},
+                    {"definition_id": "rel_depends_on", "out": "object:BASE"},
+                ],
+            )
+        if path == "/objects/object:BASE":
+            return httpx.Response(200, json={"id": "object:BASE", "attributes": {"sku": "BASE-9"}})
+        return await _transport(objects, resolved, nodes)(request)
+
+    parameters = _export_parameters()
+    parameters["bmecat"] = {
+        **parameters["bmecat"],
+        "transaction": "new_catalog",
+        "price_attribute": "net_price",
+    }
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+
+    result = await _bmecat_export(client, "http://core", parameters)
+
+    assert "<PROD_ID_TO>BASE-9</PROD_ID_TO>" in result["xml"]
+    assert result["report"]["references"] == 1
 
 
 def test_a_range_value_becomes_two_values() -> None:

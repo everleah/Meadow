@@ -84,8 +84,10 @@ impl Default for ExportOptions {
 ///
 /// The document header is a business statement (who delivers to whom, which
 /// catalogue in which language), so it is passed with the request. The values are
-/// written verbatim — the core does not invent a supplier name. Prices/variants
-/// stay out of V1 (`plan/detail/bmecat-export.md` §8 V4), hence `T_NEW_PRODUCTDATA`.
+/// written verbatim — the core does not invent a supplier name. `transaction`
+/// picks the ETIM transaction: `new_productdata` (default, price-less) or
+/// `new_catalog` (catalogue delivery with the mandatory order details, prices and
+/// UDX block — `plan/detail/bmecat-export.md` §11.11).
 #[derive(Debug, Clone, Default, Deserialize, serde::Serialize, ToSchema)]
 pub struct BmecatProfile {
     /// `CATALOG_ID` (e.g. `MEADOW-2026`).
@@ -123,6 +125,25 @@ pub struct BmecatProfile {
     /// standard (see `plan/detail/kategorisierung.md`).
     #[serde(default)]
     pub etim_version: Option<String>,
+    /// `new_productdata` (default, no prices) or `new_catalog` (prices, order
+    /// details and a UDX block per product — all three are **mandatory** in that
+    /// transaction, so a product without a price is skipped and reported).
+    #[serde(default)]
+    pub transaction: Option<String>,
+    /// `ORDER_UNIT` — a **BMEcat unit code** (UN/ECE Rec 20, e.g. `C62` = piece),
+    /// not a Meadow unit symbol; only used by `new_catalog` (default `C62`).
+    #[serde(default)]
+    pub order_unit: Option<String>,
+    /// `CONTENT_UNIT` (BMEcat unit code, default: `order_unit`).
+    #[serde(default)]
+    pub content_unit: Option<String>,
+    /// Attribute whose value becomes `PRICE_AMOUNT` (required by `new_catalog`;
+    /// a quantified number contributes its number).
+    #[serde(default)]
+    pub price_attribute: Option<String>,
+    /// `price_type` of `PRODUCT_PRICE`: `net_list` (default) | `net_customer` | `nrp`.
+    #[serde(default)]
+    pub price_type: Option<String>,
 }
 
 /// Structured export request for `POST /exports`.

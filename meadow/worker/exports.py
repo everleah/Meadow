@@ -17,6 +17,7 @@ import io
 import json as _json
 import logging
 import os
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -612,6 +613,8 @@ async def _bmecat_export(
                 "type": obj.get("type"),
                 "attributes": attributes,
                 "pid": bmecat.pid_of(attributes, profile),
+                # A variant references its base product when the base has a PID.
+                "base_pid": await _base_pid(active, core_url, obj, profile),
                 "classes": blocks,
                 "features": features,
             }
@@ -654,6 +657,66 @@ async def _load_class_features(
     if response.status_code != 200:
         return {}
     return response.json()
+
+
+async def _base_pid(
+    client: httpx.AsyncClient,
+    core_url: str,
+    obj: Mapping[str, Any],
+    profile: Mapping[str, Any],
+) -> str:
+    """The `SUPPLIER_PID` of the base product of a **variant** (else `""`).
+
+    BMEcat links a variant to its base product with
+    `PRODUCT_REFERENCE type="base_product"`, and the reference target is the base
+    product's PID (not its object id). The base product is the **composition
+    parent** (`rel_depends_on`), which the core exposes through the object's
+    references — there is no `GET /objects/{id}/parent` (only the re-parent PATCH).
+    Only variants are looked up, so a catalogue pays two extra requests per
+    variant, not per product.
+    """
+    if str(obj.get("type") or "") != "variant":
+        return ""
+    object_id = str(obj.get("id") or "")
+    if not object_id:
+        return ""
+    response = await client.get(f"{core_url}/objects/{object_id}/references")
+    if response.status_code != 200:
+        return ""
+    rows = response.json()
+    parent = parent_reference_id(rows if isinstance(rows, list) else [])
+    if not parent:
+        return ""
+    response = await client.get(f"{core_url}/objects/{parent}")
+    if response.status_code != 200:
+        return ""
+    parent_object = response.json()
+    if not isinstance(parent_object, dict):
+        return ""
+    return bmecat.pid_of(dict(parent_object.get("attributes") or {}), profile)
+
+
+def parent_reference_id(
+    references: Iterable[Mapping[str, Any]],
+    *,
+    composition: str = "rel_depends_on",
+    root: str = "object:object_root",
+) -> str:
+    """The composition parent id of an object from its reference rows (`""` = root).
+
+    The rows come from `GET /objects/{id}/references` (incoming *and* outgoing):
+    the parent is the `out` of the composition edge, unless that is the object
+    root (an object without a real base product). Pure, so it is unit-tested.
+    """
+    for row in references:
+        definition = str(row.get("definition_id") or "")
+        if definition.rsplit(":", 1)[-1] != composition:
+            continue
+        out = row.get("out")
+        if not isinstance(out, str) or not out or out == root:
+            continue
+        return out
+    return ""
 
 
 async def _load_standards(client: httpx.AsyncClient, core_url: str) -> dict[str, str]:

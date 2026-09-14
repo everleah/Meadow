@@ -297,6 +297,12 @@ async def export_page(request: Request) -> None:
             ui.label(t("export.bmecat_text_values").format(count=len(text_values))).classes(
                 "text-caption text-gray-500 mt-1"
             )
+        unpriced = report.get("unpriced") or []
+        if unpriced:
+            # A priced catalogue (`T_NEW_CATALOG`) needs a price per product.
+            ui.label(t("export.bmecat_unpriced").format(count=len(unpriced))).classes(
+                "text-caption text-negative mt-1"
+            )
         without_code = report.get("nodes_without_code") or []
         if without_code:
             # Assigned taxonomy nodes that cannot name a class in BMEcat (no
@@ -646,7 +652,66 @@ async def export_page(request: Request) -> None:
                 bmecat_buyer = (
                     ui.input(t("export.bmecat_buyer")).props("filled dense").classes("w-64")
                 )
+            # Transaction: the price-less product data (`T_NEW_PRODUCTDATA`) or a
+            # full catalogue delivery (`T_NEW_CATALOG`, which makes order details,
+            # prices and a UDX block mandatory per product).
+            with ui.row().classes("flex-wrap gap-6 mt-2 items-center"):
+                bmecat_transaction = (
+                    ui.select(
+                        {
+                            "new_productdata": t("export.bmecat_transaction_productdata"),
+                            "new_catalog": t("export.bmecat_transaction_catalog"),
+                        },
+                        value="new_productdata",
+                        label=t("export.bmecat_transaction"),
+                    )
+                    .props("filled dense")
+                    .classes("w-72")
+                    .tooltip(t("export.bmecat_transaction_hint"))
+                )
+            bmecat_price_row = ui.row().classes("flex-wrap gap-6 mt-2 items-center")
+            with bmecat_price_row:
+                bmecat_price_attribute = (
+                    ui.input(t("export.bmecat_price_attribute"), value="net_price")
+                    .props("filled dense")
+                    .classes("w-44")
+                    .tooltip(t("export.bmecat_price_attribute_hint"))
+                )
+                bmecat_price_type = (
+                    ui.select(
+                        {
+                            "net_list": "net_list",
+                            "net_customer": "net_customer",
+                            "nrp": "nrp",
+                        },
+                        value="net_list",
+                        label=t("export.bmecat_price_type"),
+                    )
+                    .props("filled dense")
+                    .classes("w-44")
+                )
+                bmecat_order_unit = (
+                    ui.input(t("export.bmecat_order_unit"), value="C62")
+                    .props("filled dense")
+                    .classes("w-28")
+                    .tooltip(t("export.bmecat_unit_hint"))
+                )
+                bmecat_content_unit = (
+                    ui.input(t("export.bmecat_content_unit"), value="C62")
+                    .props("filled dense")
+                    .classes("w-28")
+                    .tooltip(t("export.bmecat_unit_hint"))
+                )
             ui.label(t("export.bmecat_validity_hint")).classes("text-caption text-gray-500")
+
+        def _update_transaction_visibility(transaction: str) -> None:
+            """Prices/order details exist only in the catalogue transaction."""
+            bmecat_price_row.set_visibility(transaction == "new_catalog")
+
+        bmecat_transaction.on_value_change(
+            lambda event: _update_transaction_visibility(str(event.value))
+        )
+        _update_transaction_visibility(str(bmecat_transaction.value or "new_productdata"))
 
         def _update_format_visibility(format_: str) -> None:
             """BMEcat has a fixed mapping: no field selection, no CSV options."""
@@ -677,7 +742,8 @@ async def export_page(request: Request) -> None:
 
         def _bmecat_profile() -> dict:
             """The BMEcat profile block of the request (empty values stay unset)."""
-            return {
+            transaction = str(bmecat_transaction.value or "new_productdata")
+            profile = {
                 "catalog_id": str(bmecat_catalog_id.value or "").strip() or None,
                 "catalog_name": str(bmecat_catalog_name.value or "").strip() or None,
                 "catalog_version": str(bmecat_catalog_version.value or "").strip() or None,
@@ -688,7 +754,15 @@ async def export_page(request: Request) -> None:
                 "supplier": str(bmecat_supplier.value or "").strip() or None,
                 "buyer": str(bmecat_buyer.value or "").strip() or None,
                 "pid_attribute": str(bmecat_pid.value or "").strip() or None,
+                "transaction": transaction,
             }
+            if transaction == "new_catalog":
+                # Mandatory blocks of that transaction: prices and order details.
+                profile["price_attribute"] = str(bmecat_price_attribute.value or "").strip() or None
+                profile["price_type"] = str(bmecat_price_type.value or "").strip() or None
+                profile["order_unit"] = str(bmecat_order_unit.value or "").strip() or None
+                profile["content_unit"] = str(bmecat_content_unit.value or "").strip() or None
+            return profile
 
         def _email_recipients() -> list[str]:
             raw = str(email_input.value or "")
