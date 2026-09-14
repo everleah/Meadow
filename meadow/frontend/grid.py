@@ -31,6 +31,7 @@ from meadow.frontend.display import (
     release_badges,
     resolve_value,
     status_badge,
+    taxonomy_options,
     taxonomy_type_names,
 )
 from meadow.frontend.filters import filter_select
@@ -53,6 +54,10 @@ from meadow.frontend.url_values import media_kind, open_media_dialog
 # Maximum hits the grid search pulls per query (picker + row load); the search
 # is server-side, so the result set stays bounded regardless of dataset size.
 SEARCH_LIMIT = 100
+# Roots of a taxonomy the category view loads in one page (the core caps a
+# children page at 1000). A classification standard can carry thousands of
+# classes; the panel says so when the page is full instead of truncating quietly.
+TAXONOMY_ROOT_LIMIT = 1000
 # Debounce (ms) for the filter bar's search field: one core request per pause.
 SEARCH_DEBOUNCE_MS = 400
 # Separator between a field prefix and the language code in field names of
@@ -747,7 +752,16 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     node_id = str(object_.get("id", ""))
     attributes = object_.get("attributes") or {}
     obj_type = str(object_.get("type", ""))
-    label = resolve_value(attributes.get("name"), locale) or obj_type or node_id
+    # A taxonomy node (category, ETIM class) usually carries a `code` instead of
+    # a `name` — without the fallback a list of 5640 classes would be labelled
+    # with their object type only.
+    code = attributes.get("code")
+    label = (
+        resolve_value(attributes.get("name"), locale)
+        or (str(code) if code else "")
+        or obj_type
+        or node_id
+    )
     node: dict = {"id": node_id, "label": label, "type": obj_type}
     if object_.get("hasChildren"):
         node["lazy"] = True
@@ -810,7 +824,7 @@ def _save_download(data: bytes, filename: str, format_: str) -> None:
     asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
 
-@ui.page("/products", response_timeout=10)
+@ui.page("/products", response_timeout=20)
 async def products_page(request: Request) -> None:
     """Lists objects in the main grid with inline editing + batch save."""
     await build_shell(active="/products")
@@ -877,9 +891,10 @@ async def products_page(request: Request) -> None:
         # `taxonomy: true`): they are the nodes of the category/classification
         # trees and the valid targets of a categorisation.
         try:
-            taxonomy_types = taxonomy_type_names(await client.list_object_types(token, limit=1000))
+            object_types = await client.list_object_types(token, limit=1000)
         except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
-            taxonomy_types = taxonomy_type_names([])
+            object_types = []
+        taxonomy_types = taxonomy_type_names(object_types)
 
         async def fetch_filtered() -> list[dict]:
             """Loads the objects matching the active filters (see `active`)."""
@@ -1073,11 +1088,18 @@ async def products_page(request: Request) -> None:
         tree_nodes: list[dict] = []
 
         async def load_children(node_id: str) -> list[dict]:
-            children = await client.list_object_children(token, node_id, limit=100)
+            # `scope=composition`: the taxonomy nodes (categories, classes) hang
+            # under the same root but are the nodes of the category/classification
+            # trees — they must not appear in the product structure.
+            children = await client.list_object_children(
+                token, node_id, limit=100, scope="composition"
+            )
             return [tree_node_from_object(child, locale) for child in children]
 
         try:
-            top_children = await client.list_object_children(token, root_id, limit=100)
+            top_children = await client.list_object_children(
+                token, root_id, limit=100, scope="composition"
+            )
             tree_nodes = [tree_node_from_object(child, locale) for child in top_children]
         except Exception:  # noqa: BLE001 - degrade to a grid without the tree
             tree_nodes = []
@@ -1201,6 +1223,12 @@ async def products_page(request: Request) -> None:
         category_roots: list[dict] = []
         # Currently selected category tree root id (None = show all roots/trees).
         selected_tree: dict = {"id": None}
+        # The taxonomy (node type) shown in the category view: the nodes of a
+        # category/classification tree are objects of a `taxonomy: true` type and
+        # hang under the same universal root as the products. One taxonomy at a
+        # time — a catalogue with a classification standard installed has
+        # thousands of nodes, and mixing every tree is neither readable nor cheap.
+        taxonomy_state: dict = {"key": taxonomy_types[0] if taxonomy_types else None}
         # Special "Nicht kategorisiert" entry (lists objects with no category_member).
         uncategorized_id = "__uncategorized__"
         uncategorized_node = {"id": uncategorized_id, "label": t("grid.uncategorized")}
@@ -1212,32 +1240,31 @@ async def products_page(request: Request) -> None:
                 limit=100,
                 count_members=True,
                 definition_id=active["definition_id"],
+                scope="taxonomy",
+                object_type=taxonomy_state["key"],
             )
-            return [
-                tree_node_from_object(child, locale)
-                for child in children
-                if child.get("type") in taxonomy_types
-            ]
+            return [tree_node_from_object(child, locale) for child in children]
 
         async def load_category_roots() -> list[dict]:
-            """Loads the category tree roots with the member counts of the dimension."""
+            """Loads the roots of the shown taxonomy with the member counts of the dimension."""
             try:
                 top_children = await client.list_object_children(
                     token,
                     root_id,
-                    limit=100,
+                    limit=TAXONOMY_ROOT_LIMIT,
                     count_members=True,
                     definition_id=active["definition_id"],
+                    scope="taxonomy",
+                    object_type=taxonomy_state["key"],
                 )
             except Exception:  # noqa: BLE001 - degrade to a structure-only panel
                 return []
-            return [
-                tree_node_from_object(child, locale)
-                for child in top_children
-                if child.get("type") in taxonomy_types
-            ]
+            return [tree_node_from_object(child, locale) for child in top_children]
 
         category_roots = await load_category_roots()
+        #: Whether the taxonomy has more roots than one page (the tree then shows
+        #: the first page — the panel says so instead of silently truncating).
+        roots_truncated = len(category_roots) >= TAXONOMY_ROOT_LIMIT
 
         # Category dimension: the category relation type whose members are counted
         # in the tree and filtered by `?category=`/`?uncategorized=`. The tree and
@@ -1251,21 +1278,40 @@ async def products_page(request: Request) -> None:
 
         async def change_dimension(value: str) -> None:
             """Switches the counted/filtered category dimension and reloads the view."""
-            nonlocal category_roots
+            nonlocal category_roots, roots_truncated
             key = str(value or PRIMARY_CATEGORY_DEF)
             if key == dimension["key"]:
                 return
             dimension["key"] = key
             active["definition_id"] = None if key == PRIMARY_CATEGORY_DEF else key
             category_roots = await load_category_roots()
+            roots_truncated = len(category_roots) >= TAXONOMY_ROOT_LIMIT
+            refresh_tree_options()
+            render_tree("category")
+            if active["category"] or active["uncategorized"]:
+                await reload_grid()
+
+        async def change_taxonomy(value: str) -> None:
+            """Switches the shown taxonomy (node type) and loads its roots."""
+            nonlocal category_roots, roots_truncated
+            key = str(value or "")
+            if not key or key == taxonomy_state["key"]:
+                return
+            taxonomy_state["key"] = key
+            selected_tree["id"] = None
+            category_roots = await load_category_roots()
+            roots_truncated = len(category_roots) >= TAXONOMY_ROOT_LIMIT
+            refresh_tree_options()
+            render_tree("category")
+
+        def refresh_tree_options() -> None:
+            """Refills the root select of the category view (keeps "all trees")."""
             tree_select.options = {
                 "all": t("grid.all_trees"),
                 **{r["id"]: r["label"] for r in category_roots},
             }
+            tree_select.value = "all"
             tree_select.update()
-            render_tree("category")
-            if active["category"] or active["uncategorized"]:
-                await reload_grid()
 
         async def handle_category_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
@@ -2284,6 +2330,12 @@ async def products_page(request: Request) -> None:
                 current_tree = {"tree": None, "nodes": []}
                 return
             with host:
+                if view == "category" and roots_truncated:
+                    # The taxonomy has more roots than one page; say so instead of
+                    # showing a silently short list.
+                    ui.label(
+                        t("grid.taxonomy_truncated").format(count=len(category_roots))
+                    ).classes("text-caption text-orange-600")
                 tree = LazyTree(
                     nodes,
                     on_select=on_select,
@@ -2407,6 +2459,7 @@ async def products_page(request: Request) -> None:
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
+                    taxonomy_select.set_visibility(view == "category")
                     tree_select.set_visibility(view == "category")
                     dimension_select.set_visibility(view == "category")
                     collapse_btn.set_visibility(
@@ -2429,6 +2482,24 @@ async def products_page(request: Request) -> None:
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
                     collection_btn.on_click(lambda: set_view("collection"))
+                    # The taxonomy (node type) shown in the category view: one at a
+                    # time. Without the selector every taxonomy root — categories
+                    # *and* the thousands of classification classes — would share
+                    # one tree, which is neither readable nor a bounded query.
+                    taxonomy_select = (
+                        ui.select(
+                            taxonomy_options(object_types, locale),
+                            value=taxonomy_state["key"],
+                            label=t("categories.taxonomy"),
+                        )
+                        .props("outline dense")
+                        .classes("shrink-0")
+                        .tooltip(t("categories.taxonomy_hint"))
+                    )
+                    taxonomy_select.set_visibility(False)
+                    taxonomy_select.on_value_change(
+                        lambda e: change_taxonomy(str(e.value or ""))  # type: ignore
+                    )
                     tree_select = (
                         ui.select(
                             {

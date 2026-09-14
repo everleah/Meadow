@@ -37,6 +37,11 @@ from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
 from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_category_key
 
 ROOT_ID = OBJECT_ROOT_ID
+# Roots of one taxonomy the page loads in a single page (the core caps a children
+# page at 1000). A classification standard can carry thousands of classes, so the
+# filter (`scope=taxonomy` + `type=<taxonomy>`) runs **in the core** — a
+# client-side filter over the root's children would truncate the list silently.
+TAXONOMY_ROOT_LIMIT = 1000
 
 
 async def _category_objects(
@@ -54,19 +59,27 @@ async def _category_objects(
 
 
 async def _category_roots(
-    client: CoreClient, token: str, locale: str, definition_id: str, node_types: list[str]
+    client: CoreClient, token: str, locale: str, definition_id: str, taxonomy: str
 ) -> list[dict]:
-    """Returns the top-level nodes (children of the universal root).
+    """Returns the top-level nodes of **one** taxonomy (children of the universal root).
 
-    ``node_types`` selects which taxonomy types are shown, ``definition_id`` the
-    category relation type whose members are counted (`memberCount`).
+    ``taxonomy`` is the node type shown (`category`, `etim_class`, …) and
+    ``definition_id`` the category relation type whose members are counted
+    (`memberCount`). Both filters run in the core: the root carries the nodes of
+    *every* taxonomy (with a classification standard installed that is thousands
+    of nodes), so filtering client-side would silently truncate the list to the
+    first page.
     """
     top = await client.list_object_children(
-        token, ROOT_ID, limit=100, count_members=True, definition_id=definition_id
+        token,
+        ROOT_ID,
+        limit=TAXONOMY_ROOT_LIMIT,
+        count_members=True,
+        definition_id=definition_id,
+        scope="taxonomy",
+        object_type=taxonomy,
     )
-    return [
-        tree_node_from_object(child, locale) for child in top if child.get("type") in node_types
-    ]
+    return [tree_node_from_object(child, locale) for child in top]
 
 
 @ui.page("/categories", response_timeout=15)
@@ -98,7 +111,7 @@ async def categories_page() -> None:
 
         try:
             category_roots = await _category_roots(
-                client, token, locale, PRIMARY_CATEGORY_DEF, [nodes["key"]]
+                client, token, locale, PRIMARY_CATEGORY_DEF, nodes["key"]
             )
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("categories.load_failed")).classes("text-subtitle1 text-negative")
@@ -192,12 +205,10 @@ async def categories_page() -> None:
                 limit=100,
                 count_members=True,
                 definition_id=dimension["key"],
+                scope="taxonomy",
+                object_type=nodes["key"],
             )
-            return [
-                tree_node_from_object(child, locale)
-                for child in children
-                if child.get("type") == nodes["key"]
-            ]
+            return [tree_node_from_object(child, locale) for child in children]
 
         async def handle_category_select(e) -> None:
             node_id = e.value if hasattr(e, "value") else None
@@ -264,7 +275,7 @@ async def categories_page() -> None:
             nonlocal category_roots
             try:
                 category_roots = await _category_roots(
-                    client, token, locale, dimension["key"], [nodes["key"]]
+                    client, token, locale, dimension["key"], nodes["key"]
                 )
             except Exception:  # noqa: BLE001 - keep the cached roots on failure
                 category_roots = category_roots

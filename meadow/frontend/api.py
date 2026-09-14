@@ -829,6 +829,8 @@ class CoreClient:
         offset: int = 0,
         count_members: bool = False,
         definition_id: str | None = None,
+        scope: str | None = None,
+        object_type: str | None = None,
     ) -> list[dict]:
         """Lists an object's composition children (``rel_depends_on``).
 
@@ -837,6 +839,13 @@ class CoreClient:
         with many direct children. With ``count_members``, category children also
         carry a ``memberCount`` (objects assigned through the category relation
         type given by ``definition_id``; default: the primary type).
+
+        ``scope`` selects which children are returned: ``composition`` = the
+        product structure (**without** the taxonomy nodes) or ``taxonomy`` = only
+        the nodes of a category/classification tree. ``object_type`` narrows to
+        one type (one taxonomy at a time). Both are filtered in the core, so
+        paging and counting apply to the filtered set — the universal root carries
+        thousands of taxonomy nodes.
         """
         params: dict[str, str] = {}
         if limit is not None:
@@ -847,6 +856,10 @@ class CoreClient:
             params["count_members"] = "true"
         if definition_id:
             params["definition_id"] = definition_id
+        if scope:
+            params["scope"] = scope
+        if object_type:
+            params["type"] = object_type
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/{object_id}/children",

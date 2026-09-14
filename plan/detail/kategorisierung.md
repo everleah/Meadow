@@ -147,3 +147,31 @@ Meadow PIM unterstützt die **Kategorisierung und Gruppierung von Objekten**, oh
 **Warum so und nicht anders:** kein Zwang, Standardattribute zu verwenden (Leitlinie „einfach, nicht zu komplex“); ein Merkmal traegt weiterhin entweder ein **eigenes, gebundenes** Attribut (`standard_codes`, oben) **oder** das Standard-Attribut selbst — Letzteres, nachdem man es uebernommen hat. Referenzdaten sind **keine** System-Daten: sie lassen sich loeschen, uebernehmen oder unveraendert liegen lassen, und die MCF-Sektion `attribute_definitions` nimmt das Kennzeichen mit (`konfiguration-export-import.md`).
 
 **Umsetzung:** Konverter `scripts/etim_ixf_to_mef.py` setzt `reference_data: true` an jedes Merkmal (die Klassen-Knotentyp-Attribute `code`/`description` bleiben eigene), die reine Regel liegt in `meadow/frontend/reference_data.py` (6 Tests in `tests/test_reference_data.py`), und der Feldkatalog des Suchformulars traegt das Kennzeichen mit (`search_schema.rs`, `search_form.py`).
+
+## Der Strukturbaum enthält **keine** Taxonomieknoten — und die Baum-Abfragen sind begrenzt (2026-09-14)
+
+**Befund (live gemessen, vollständiger ETIM-Standard installiert).** Der Kompositionsbaum (`rel_depends_on`) hat am Universal-Root **5694** Kinder — davon **5648 Taxonomieknoten** (8 `category`, 5640 `etim_class`) und nur 46 echte Strukturobjekte (Produkte, Testobjekte). Die Taxonomieknoten hängen bewusst unter demselben Root wie die Objekte (die Wurzel eines Baums = die Kinder des Roots **dieses Typs**), aber daraus folgten drei Fehler:
+
+1. **Der Strukturbaum zeigte sie mit** — Produkte und Klassifikationsklassen in einer Liste. Taxonomieknoten gehören in **ihr** Baum-Panel (Kategorien/Klassifikation), nicht in die Produktstruktur.
+2. **`?count_members=true` war quadratisch.** Die Knotenzählung rief **je Kind** `category_member_keys` auf, und jeder Aufruf las *alle* Kompositionskanten und lief einen Subtree ab: 100 Taxonomiekinder am Root ≈ **8 s**, nur für die Kategorie-Ansicht.
+3. **Der Typfilter lief clientseitig** (`if child.get("type") in taxonomy_types`) und schnitt stillschweigend ab: `/categories` und die Kategorie-Ansicht im Grid sahen nur die **ersten 100** Root-Kinder, also je nach Id-Reihenfolge eine zufällige Teilmenge mehrerer Taxonomien.
+
+**Kontrakt (Kern):** `GET /objects/{id}/children` filtert im Kern.
+
+| Parameter | Bedeutung |
+| --- | --- |
+| `scope=all` (Default) / `composition` / `taxonomy` | `composition` = alles **außer** Taxonomieknoten (die Produktstruktur), `taxonomy` = nur Taxonomieknoten, `all` = unverändert |
+| `type=<Objekttyp>` | nur Kinder dieses Typs — **eine** Taxonomie statt aller Bäume |
+| `count_members=true` + `definition_id=` | `memberCount` je Taxonomiekind, jetzt in **einem** Durchgang statt je Knoten |
+
+Unbekanntes `scope` ⇒ `400` (nie still ignorieren). Damit ist „Taxonomieknoten stehen nicht im Strukturbaum“ eine **Kernaussage**, nicht eine Frontend-Konvention.
+
+**Der Filter *muss* die Record-Link-Traversierung sein** (`AND in.type NOT IN $taxonomy` bzw. `AND in.type = $node_type`), **nicht** `in IN (SELECT VALUE id FROM object WHERE …)`: gemessen am Root braucht die Subquery-Form **31,7 s** (der Planer wertet sie pro Kandidatenzeile aus), wärend `in.type …` **0,12 s** für dieselbe Seite ohne Taxonomieknoten liefert (`idx_ref_out_def` treibt den Zugriff weiterhin). Die Batch-Zählung (`category_member_counts`) liest beide Kantenmengen **je einmal** und summiert die Subtrees in Rust (`subtree_member_counts`, rein und getestet).
+
+**Frontend-Konsequenzen:**
+
+- `/products` **Strukturbaum**: `scope=composition` — Produkte/Struktur ohne Taxonomieknoten.
+- `/products` **Kategorie-Ansicht**: neuer **Taxonomie-Umschalter** (Knotentyp) neben Wurzel- und Dimensionsauswahl; Wurzeln und Kinder kommen mit `scope=taxonomy&type=<Taxonomie>`. Ist die Taxonomie größer als eine Seite (1000), sagt das Panel das („Es werden die ersten N Knoten gezeigt“) statt still zu kürzen.
+- `/categories`: lädt die Wurzeln der gewählten Taxonomie über denselben Filter (vorher: erste 100 Root-Kinder, gemischt über alle Taxonomien).
+- **Objekt-Picker**: leitet den Scope aus den erlaubten Zieltypen ab — sind **alle** Zieltypen Taxonomien, wird der Taxonomiebaum gezeigt, sonst die Komposition (vorher: alle Root-Kinder, also Produkte *und* Klassen in jedem Picker).
+- Baumknoten-Label: fällt auf `code` zurück, wenn kein `name` existiert — eine Liste aus 5640 Klassen ist sonst nicht lesbar (`EC000012` statt „etim_class“).

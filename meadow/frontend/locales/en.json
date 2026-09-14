@@ -1083,6 +1083,7 @@
   "grid.collection": "Collections",
   "grid.collection_reload": "Reload selected collection",
   "grid.all_trees": "All trees",
+  "grid.taxonomy_truncated": "Showing the first {count} nodes of this taxonomy.",
   "grid.category_dimension": "Dimension",
   "grid.category_dimension_hint": "Category relation whose assignments are counted and filtered (the category tree itself is shared).",
   "grid.uncategorized": "Not categorized",

@@ -239,7 +239,9 @@ async def product_form(object_id: str) -> None:
         # A leaf has nothing to consolidate, so the action is only offered for
         # nodes that actually have children.
         try:
-            has_children = bool(await client.list_object_children(token, object_id, limit=1))
+            has_children = bool(
+                await client.list_object_children(token, object_id, limit=1, scope="composition")
+            )
         except Exception:  # noqa: BLE001 - the action is simply not offered
             has_children = False
 

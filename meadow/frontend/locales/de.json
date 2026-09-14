@@ -1083,6 +1083,7 @@
   "grid.collection": "Collections",
   "grid.collection_reload": "Ausgewählte Collection aktualisieren",
   "grid.all_trees": "Alle Bäume",
+  "grid.taxonomy_truncated": "Es werden die ersten {count} Knoten dieser Taxonomie gezeigt.",
   "grid.category_dimension": "Dimension",
   "grid.category_dimension_hint": "Kategorierelation, deren Zuordnungen gezählt und gefiltert werden (der Kategorienbaum selbst ist gemeinsam).",
   "grid.uncategorized": "Nicht kategorisiert",

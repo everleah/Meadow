@@ -1171,6 +1171,39 @@ pub struct ChildrenListParams {
     /// an unknown or non-category type is rejected with `400`.
     #[serde(default)]
     pub definition_id: Option<String>,
+    /// Which children to return: `all` (default), `composition` (everything
+    /// **except** the taxonomy nodes) or `taxonomy` (only taxonomy nodes).
+    /// Taxonomy nodes are the nodes of the category/classification trees and
+    /// hang under the same root, but they are not part of the product structure.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Only children of this object type (e.g. `product`, `category`,
+    /// `etim_class`) — one taxonomy at a time instead of every tree.
+    #[serde(default, rename = "type")]
+    pub type_: Option<String>,
+}
+
+/// Which children a caller wants: the whole tree, the composition structure or a
+/// taxonomy's nodes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ChildScope {
+    All,
+    Composition,
+    Taxonomy,
+}
+
+impl ChildScope {
+    /// Parses the `scope` parameter (`all` when absent or empty).
+    fn parse(value: Option<&str>) -> Result<Self, ApiError> {
+        match value.map(str::trim) {
+            None | Some("") | Some("all") => Ok(Self::All),
+            Some("composition") => Ok(Self::Composition),
+            Some("taxonomy") => Ok(Self::Taxonomy),
+            Some(other) => Err(ApiError::bad_request(format!(
+                "unknown `scope` `{other}` (expected all | composition | taxonomy)"
+            ))),
+        }
+    }
 }
 
 /// Lists the direct composition children of an object.
@@ -1178,10 +1211,20 @@ pub struct ChildrenListParams {
 /// Each child is returned as its object (`id`/`type`/`status`/`attributes`) plus
 /// a `hasChildren` flag so the structure tree can show the expand arrow without
 /// loading the whole subtree (lazy loading); `?limit`/`?offset` paginate nodes
-/// with many direct children. With `?count_members=true`, category children also
-/// carry a `memberCount` for the category tree's counter — counting the members
-/// of the category relation type given by `?definition_id` (default: the
-/// built-in primary type), so additional categorisations have their own counter.
+/// with many direct children.
+///
+/// `?scope=composition` returns the product structure (every child **except** the
+/// taxonomy nodes) and `?scope=taxonomy` only the nodes of a category or
+/// classification tree; `?type=` narrows to one object type. The filter runs in
+/// SurrealQL, so paging and counting apply to the filtered set — the universal
+/// root carries thousands of taxonomy nodes, and a client-side filter would both
+/// truncate the page and (with `count_members`) count subtrees nobody renders.
+///
+/// With `?count_members=true`, category children also carry a `memberCount` for
+/// the category tree's counter — counting the members of the category relation
+/// type given by `?definition_id` (default: the built-in primary type), so
+/// additional categorisations have their own counter. All counts of a page are
+/// computed in **one pass** (see `category_member_counts`).
 ///
 /// Accepts an editor JWT or the `X-Api-Key` service account (the bulk worker
 /// walks the tree for `consolidate_inheritance`).
@@ -1207,22 +1250,54 @@ pub async fn list_object_children(
         return Err(ApiError::not_found(format!("object `{id}` not found")));
     }
 
-    // Direct children of the parent (paginated).
-    let children_sql = "
-        LET $parent = type::record('object', $key);
-        SELECT in AS child FROM reference
-        WHERE out = $parent AND definition_id = 'rel_depends_on'
-        ORDER BY in LIMIT $limit START $offset;
-    ";
-    let mut response = state
+    let scope = ChildScope::parse(params.scope.as_deref())?;
+    let node_type = params
+        .type_
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    // Direct children of the parent (paginated). The type filter is pushed into
+    // the SQL so `LIMIT`/`START` count the filtered set — but it must use the
+    // **record-link traversal** `in.type`, never `in IN (SELECT VALUE id FROM
+    // object WHERE …)`: measured on the universal root (5694 composition edges,
+    // 5648 of them taxonomy nodes) the subquery shape needs **31.7 s**, because the
+    // planner evaluates that subquery per candidate row, while `in.type …` answers
+    // in 0.7 s (the `idx_ref_out_def` index still drives the lookup).
+    let mut children_sql = String::from(
+        "LET $parent = type::record('object', $key);
+         SELECT in AS child FROM reference
+         WHERE out = $parent AND definition_id = 'rel_depends_on'",
+    );
+    let taxonomy = match scope {
+        ChildScope::All => None,
+        _ => Some(crate::api::object_types::taxonomy_types(&state.db).await?),
+    };
+    match scope {
+        ChildScope::All => {}
+        ChildScope::Composition => children_sql.push_str(" AND in.type NOT IN $taxonomy"),
+        ChildScope::Taxonomy => children_sql.push_str(" AND in.type IN $taxonomy"),
+    }
+    if node_type.is_some() {
+        children_sql.push_str(" AND in.type = $node_type");
+    }
+    children_sql.push_str(" ORDER BY in LIMIT $limit START $offset;");
+
+    let mut query = state
         .db
         .inner()
         .query(children_sql)
         .bind(("key", key.to_owned()))
         .bind(("limit", params.limit.unwrap_or(1000).clamp(1, 1000) as i64))
-        .bind(("offset", params.offset as i64))
-        .await?
-        .check()?;
+        .bind(("offset", params.offset as i64));
+    if let Some(taxonomy) = &taxonomy {
+        query = query.bind(("taxonomy", json!(taxonomy)));
+    }
+    if let Some(node_type) = &node_type {
+        query = query.bind(("node_type", node_type.clone()));
+    }
+    let mut response = query.await?.check()?;
     let child_rows: Vec<Value> = response.take(1)?;
     let child_ids: Vec<String> = child_rows
         .iter()
@@ -1293,19 +1368,36 @@ pub async fn list_object_children(
         let definition =
             resolve_category_definition(&state.db, params.definition_id.as_deref()).await?;
         let taxonomy = crate::api::object_types::taxonomy_types(&state.db).await?;
-        let mut counted: Vec<Value> = Vec::new();
-        for mut value in result {
-            let node_type = value
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if taxonomy.iter().any(|t| t == node_type) {
-                let cid = value.get("id").and_then(Value::as_str).unwrap_or("");
-                let keys = category_member_keys(&state.db, cid, &definition).await?;
-                value["memberCount"] = json!(keys.len());
-            }
-            counted.push(value);
-        }
+        let taxonomy_children: Vec<String> = result
+            .iter()
+            .filter(|value| {
+                let node_type = value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                taxonomy.iter().any(|entry| entry == node_type)
+            })
+            .filter_map(|value| value.get("id").and_then(Value::as_str))
+            .map(key_of)
+            .collect();
+        // **One** pass for the whole page: the per-node variant walked every
+        // composition edge once per child, which took ~8 s for the root's 100
+        // taxonomy children (measured with the full ETIM bundle installed).
+        let counts = category_member_counts(&state.db, &taxonomy_children, &definition).await?;
+        let counted: Vec<Value> = result
+            .into_iter()
+            .map(|mut value| {
+                let node_key = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(key_of)
+                    .unwrap_or_default();
+                if let Some(count) = counts.get(&node_key) {
+                    value["memberCount"] = json!(count);
+                }
+                value
+            })
+            .collect();
         return Ok(Json(counted));
     }
     Ok(Json(result))
@@ -1436,6 +1528,98 @@ pub async fn category_member_keys(
         }
     }
     Ok(result)
+}
+
+/// Number of objects assigned to each node's composition subtree, for several
+/// nodes in **one pass** — the batch variant of [`category_member_keys`].
+///
+/// Why it exists: a tree level with `count_members=true` asked per child, and
+/// every call re-read **all** composition edges and walked one subtree. For the
+/// universal root with the full ETIM bundle installed (5648 taxonomy children)
+/// that was ~8 s per page of 100 nodes — more than the frontend's page timeout.
+/// Here the edges (once) and the assignments (once) are read into maps and every
+/// requested subtree is walked in memory (see [`subtree_member_counts`]).
+///
+/// Returns `{bare node key: member count}`.
+pub async fn category_member_counts(
+    db: &Db,
+    node_ids: &[String],
+    definition: &str,
+) -> Result<HashMap<String, usize>, ApiError> {
+    if node_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Composition edges (child -> parent or parent -> children), once.
+    let mut response = db
+        .inner()
+        .query(
+            "SELECT in AS child, out AS parent FROM reference \
+             WHERE definition_id = 'rel_depends_on';",
+        )
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for row in &rows {
+        let (Some(child), Some(parent)) = (
+            row.get("child").and_then(Value::as_str).map(key_of),
+            row.get("parent").and_then(Value::as_str).map(key_of),
+        ) else {
+            continue;
+        };
+        children.entry(parent).or_default().push(child);
+    }
+    // Assignments of the requested category relation type, once.
+    let mut response = db
+        .inner()
+        .query("SELECT in AS member, out AS node FROM reference WHERE definition_id = $def;")
+        .bind(("def", definition.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut assigned: HashMap<String, Vec<String>> = HashMap::new();
+    for row in &rows {
+        let (Some(member), Some(node)) = (
+            row.get("member").and_then(Value::as_str).map(key_of),
+            row.get("node").and_then(Value::as_str).map(key_of),
+        ) else {
+            continue;
+        };
+        assigned.entry(node).or_default().push(member);
+    }
+    Ok(subtree_member_counts(node_ids, &children, &assigned))
+}
+
+/// Distinct members per requested subtree, computed over in-memory maps.
+///
+/// Pure and unit-tested: an iterative walk with a visited set, so a cycle (or a
+/// node shared by two branches, which a broken `depends_on` edge could produce)
+/// terminates, and a member assigned to several nodes **inside one subtree** is
+/// counted once — the same number the per-node variant returned.
+pub(crate) fn subtree_member_counts(
+    nodes: &[String],
+    children: &HashMap<String, Vec<String>>,
+    assigned: &HashMap<String, Vec<String>>,
+) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::with_capacity(nodes.len());
+    for node in nodes {
+        let mut seen_nodes: HashSet<&str> = HashSet::new();
+        let mut members: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![node.as_str()];
+        while let Some(current) = stack.pop() {
+            if !seen_nodes.insert(current) {
+                continue;
+            }
+            if let Some(found) = assigned.get(current) {
+                members.extend(found.iter().map(String::as_str));
+            }
+            if let Some(next) = children.get(current) {
+                stack.extend(next.iter().map(String::as_str));
+            }
+        }
+        counts.insert(node.clone(), members.len());
+    }
+    counts
 }
 
 /// Returns the bare object keys that are members of a materialized collection
@@ -1586,6 +1770,79 @@ pub async fn reparent_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_scope_parses_the_documented_values() {
+        assert_eq!(ChildScope::parse(None).expect("default"), ChildScope::All);
+        assert_eq!(ChildScope::parse(Some("")).expect("empty"), ChildScope::All);
+        assert_eq!(
+            ChildScope::parse(Some("all")).expect("all"),
+            ChildScope::All
+        );
+        assert_eq!(
+            ChildScope::parse(Some(" composition ")).expect("composition"),
+            ChildScope::Composition
+        );
+        assert_eq!(
+            ChildScope::parse(Some("taxonomy")).expect("taxonomy"),
+            ChildScope::Taxonomy
+        );
+        assert!(ChildScope::parse(Some("structure")).is_err());
+    }
+
+    /// `parent -> children` for `root -> [a, b]`, `a -> [c]`.
+    fn tree() -> HashMap<String, Vec<String>> {
+        HashMap::from([
+            ("root".to_owned(), vec!["a".to_owned(), "b".to_owned()]),
+            ("a".to_owned(), vec!["c".to_owned()]),
+        ])
+    }
+
+    #[test]
+    fn subtree_member_counts_adds_the_descendants() {
+        // Two members on `c`, one on `b`, none on `a`/`root` directly.
+        let assigned = HashMap::from([
+            ("c".to_owned(), vec!["m1".to_owned(), "m2".to_owned()]),
+            ("b".to_owned(), vec!["m3".to_owned()]),
+        ]);
+        let counts = subtree_member_counts(
+            &[
+                "root".to_owned(),
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+            ],
+            &tree(),
+            &assigned,
+        );
+        assert_eq!(counts.get("root"), Some(&3));
+        assert_eq!(counts.get("a"), Some(&2), "only the subtree of `a`");
+        assert_eq!(counts.get("b"), Some(&1));
+        assert_eq!(counts.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn subtree_member_counts_counts_a_member_once_per_subtree() {
+        // The same object categorised in a node *and* its child: one member.
+        let assigned = HashMap::from([
+            ("a".to_owned(), vec!["m1".to_owned()]),
+            ("c".to_owned(), vec!["m1".to_owned(), "m2".to_owned()]),
+        ]);
+        let counts = subtree_member_counts(&["a".to_owned(), "c".to_owned()], &tree(), &assigned);
+        assert_eq!(counts.get("a"), Some(&2));
+        assert_eq!(counts.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn subtree_member_counts_survives_a_cycle() {
+        let children = HashMap::from([
+            ("a".to_owned(), vec!["b".to_owned()]),
+            ("b".to_owned(), vec!["a".to_owned()]),
+        ]);
+        let assigned = HashMap::from([("b".to_owned(), vec!["m1".to_owned()])]);
+        let counts = subtree_member_counts(&["a".to_owned()], &children, &assigned);
+        assert_eq!(counts.get("a"), Some(&1));
+    }
 
     #[test]
     fn role_of_defaults_to_link() {

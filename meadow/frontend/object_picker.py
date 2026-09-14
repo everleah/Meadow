@@ -19,14 +19,17 @@ joins).
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Awaitable, Callable, Iterable
 
 from nicegui import ui
 
 from meadow.frontend.api import CoreClient
-from meadow.frontend.display import completeness_badge, resolve_value
+from meadow.frontend.display import completeness_badge, resolve_value, taxonomy_type_names
 from meadow.frontend.i18n import t
 from meadow.frontend.lazy_tree import LazyTree
+
+log = logging.getLogger(__name__)
 
 #: Universal root of the composition tree (start node of the structure tab).
 OBJECT_ROOT_ID = "object:object_root"
@@ -193,6 +196,9 @@ async def open_structure_picker(
             try:
                 roots = await load(root_id)
             except Exception:  # noqa: BLE001 - degrade to an empty tree
+                # Never silently: a picker that cannot load its tree is a broken
+                # dialog, and swallowing the reason makes it undiagnosable.
+                log.exception("picker %r: could not load the structure tree", title)
                 tree_host.clear()
                 with tree_host:
                     ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
@@ -259,6 +265,17 @@ async def open_object_picker(
     """
     allowed_types = {str(target) for target in (target_types or []) if target}
     excluded = {str(entry) for entry in exclude_ids if entry}
+    taxonomy_cache: dict[str, set[str]] = {}
+
+    async def _taxonomy_types() -> set[str]:
+        """The taxonomy node types, loaded once per dialog (lazy + cached)."""
+        if "types" not in taxonomy_cache:
+            try:
+                rows = await client.list_object_types(token, limit=1000)
+            except Exception:  # noqa: BLE001 - degrade to "no taxonomy"
+                rows = []
+            taxonomy_cache["types"] = set(taxonomy_type_names(rows))
+        return taxonomy_cache["types"]
 
     def node_for(child: dict) -> dict:
         """Maps an object to a tree node (allowed = selectable)."""
@@ -266,9 +283,15 @@ async def open_object_picker(
         node_type = str(child.get("type"))
         attributes = child.get("attributes") or {}
         allowed = node_id not in excluded and (not allowed_types or node_type in allowed_types)
+        # A taxonomy node (category, ETIM class) carries a `code` instead of a
+        # `name`; without the fallback thousands of classes would be labelled with
+        # their object type.
+        code = attributes.get("code")
         return {
             "id": node_id,
-            "label": resolve_value(attributes.get("name"), locale) or node_type,
+            "label": resolve_value(attributes.get("name"), locale)
+            or (str(code) if code else "")
+            or node_type,
             "type": node_type,
             "allowed": allowed,
             "selectable": allowed,
@@ -276,7 +299,23 @@ async def open_object_picker(
         }
 
     async def load_children(node_id: str) -> list[dict]:
-        children = await client.list_object_children(token, node_id, limit=100)
+        # A taxonomy target (picking a category or a class) walks the taxonomy
+        # tree; everything else picks from the composition. Without the split the
+        # picker would show the thousands of taxonomy nodes that hang under the
+        # same root next to the products.
+        # The await must be **outside** the comprehension: `await` inside a
+        # generator expression produces an async generator, which `all()` cannot
+        # iterate (`TypeError: 'async_generator' object is not an iterator`).
+        taxonomy = await _taxonomy_types()
+        picks_taxonomy = bool(allowed_types) and all(
+            node_type in taxonomy for node_type in allowed_types
+        )
+        children = await client.list_object_children(
+            token,
+            node_id,
+            limit=100,
+            scope="taxonomy" if picks_taxonomy else "composition",
+        )
         return [node_for(child) for child in children]
 
     async def search(query: str) -> list[dict]:
