@@ -36,6 +36,7 @@ import json
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -578,7 +579,24 @@ def bundle_manifest(
     }
 
 
+def configure_console() -> None:
+    """Makes symbol lists printable on a Windows console.
+
+    ETIM units contain characters a cp1252 console cannot encode (`⋅`, `°`,
+    `µm`) — printing must never abort the conversion, so the streams fall back to
+    UTF-8 with `errors="replace"` (same helper as
+    `scripts/install_standard_bundle.py`).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # pragma: no cover - exotic stream
+            continue
+        with suppress(ValueError, OSError):  # pragma: no cover - exotic stream
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str]) -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ixf", type=Path, help="IXF export to read")
     parser.add_argument("--out-dir", type=Path, default=Path(".tmp/etim"), help="output folder")

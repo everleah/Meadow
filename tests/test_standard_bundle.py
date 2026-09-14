@@ -13,6 +13,8 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
@@ -156,16 +158,144 @@ def test_manifest_and_document_must_agree_on_the_standard() -> None:
 def test_missing_units_compares_the_bundle_with_the_target() -> None:
     manifest = {
         "units_needed": {
-            "EU1": {"symbol": "mm", "en": "Millimetre"},
-            "EU2": {"symbol": "VA", "en": "Voltampere"},
+            "EU1": {"symbol": "mm", "en": "Millimetre", "used_by": 85},
+            "EU2": {"symbol": "VA", "en": "Voltampere", "used_by": 2},
             "EU3": {"symbol": "", "en": "no symbol"},
         }
     }
     assert installer.missing_units(manifest, {"mm"}) == [
-        {"code": "EU2", "symbol": "VA", "en": "Voltampere"}
+        {"code": "EU2", "symbol": "VA", "en": "Voltampere", "used_by": 2}
     ]
     assert installer.missing_units(manifest, {"mm", "VA"}) == []
     assert installer.missing_units({}, {"mm"}) == []
+
+
+class FakeClient:
+    """Records the requests the installer makes (no core, no worker needed)."""
+
+    def __init__(self, existing: list[dict] | None = None) -> None:
+        self.posts: list[tuple[str, dict]] = []
+        self.existing = existing or []
+        self.job_run_id = "job_run:1"
+
+    def _response(self, path: str, payload) -> httpx.Response:
+        return httpx.Response(
+            200, json=payload, request=httpx.Request("POST", f"http://test{path}")
+        )
+
+    def post(self, path: str, *, params=None, headers=None, json=None) -> httpx.Response:
+        self.posts.append((path, dict(params or {})))
+        self.job_run_id = "job_run:1"
+        return self._response(path, {"job_run_id": self.job_run_id, "sections": {}, "errors": []})
+
+    def get(self, path: str, *, params=None, headers=None) -> httpx.Response:
+        # `existing_keys` pages through `GET /objects`; one page is enough here.
+        rows = self.existing if int((params or {}).get("start", 0)) == 0 else []
+        return self._response(path, rows)
+
+    def path_params(self, path: str) -> list[dict]:
+        return [params for called, params in self.posts if called == path]
+
+
+def write_bundle(root: Path) -> Path:
+    """A minimal bundle: model, one class, one class-feature section."""
+    bundle = root / "etim-10.0"
+    bundle.mkdir()
+    manifest = {
+        "format": installer.BUNDLE_FORMAT,
+        "name": "etim-10.0",
+        "standard": "ETIM",
+        "standard_version": "10.0",
+        "source": "TEST",
+        "node_type": "etim_class",
+        "class_key": "code",
+        "counts": {"classes": 1, "features": 1, "feature_groups": 0, "class_features": 1},
+        "units_needed": {},
+        "documents": [
+            {"file": "model.mcf.json", "kind": "mcf", "sections": ["object_types"]},
+            {"file": "classes.mef.json", "kind": "mef", "objects": 1},
+            {"file": "features.mcf.json", "kind": "mcf", "sections": ["category_attributes"]},
+        ],
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    model = {
+        "format": "mcf",
+        "sections": {
+            "object_types": [],
+            "classification_standards": [{"code": "etim", "version": "10.0"}],
+            "attribute_definitions": [],
+        },
+    }
+    (bundle / "model.mcf.json").write_text(json.dumps(model), encoding="utf-8")
+    (bundle / "classes.mef.json").write_text(
+        json.dumps({"format": "mef", "objects": [{"type": "etim_class", "attributes": {}}]}),
+        encoding="utf-8",
+    )
+    (bundle / "features.mcf.json").write_text(
+        json.dumps({"format": "mcf", "sections": {"category_attributes": []}}), encoding="utf-8"
+    )
+    return bundle
+
+
+def test_the_bulk_import_upserts_by_the_class_key(tmp_path: Path) -> None:
+    """A re-import of an installed bundle must not collide with the unique key.
+
+    Without `match_by_key` the worker cannot match existing objects and posts new
+    ones — the full ETIM bundle failed 25 of 5640 objects with `409 Conflict` on
+    the second run (`plan/detail/bmecat-export.md` §11.9).
+    """
+    bundle = write_bundle(tmp_path)
+    client = FakeClient()
+
+    result = installer.install(client, {}, installer.read_manifest(bundle), bundle, bulk=True)
+
+    assert client.path_params("/imports") == [{"match_by_key": "code"}]
+    assert result["errors"] == 0
+    # The class-feature section needs the nodes the job has not written yet.
+    assert "run the installer again" in str(result["steps"][2].get("skipped"))
+    assert [path for path, _ in client.posts] == ["/config/import", "/imports", "/config/import"]
+
+
+def test_a_bundle_without_bulk_posts_the_nodes_one_by_one(tmp_path: Path) -> None:
+    bundle = write_bundle(tmp_path)
+    client = FakeClient()
+
+    result = installer.install(client, {}, installer.read_manifest(bundle), bundle, bulk=False)
+
+    assert client.path_params("/imports") == [], "no job without `--bulk`"
+    assert result["created_objects"] == 1
+    assert result["steps"][2].get("skipped") is None, "without a job the section is applied"
+
+
+def test_large_sections_are_uploaded_in_row_chunks() -> None:
+    """A full standard's class-feature section must not go in one request.
+
+    The ETIM 10.0 bundle has 76 625 rows / 10 MB in that section: one
+    `POST /config/import` outlived the client timeout and wrote nothing.
+    """
+    payload = {
+        "format": "mcf",
+        "source": "TEST",
+        "sections": {
+            "object_types": [{"name": "product"}],
+            "category_attributes": [{"id": index} for index in range(12000)],
+        },
+    }
+
+    chunks = installer.section_chunks(payload, 5000)
+
+    attribute_chunks = [chunk for chunk in chunks if "category_attributes" in chunk["sections"]]
+    assert [len(chunk["sections"]["category_attributes"]) for chunk in attribute_chunks] == [
+        5000,
+        5000,
+        2000,
+    ]
+    assert all(chunk["format"] == "mcf" and chunk["source"] == "TEST" for chunk in chunks)
+    # Small sections travel together — the model document stays one request.
+    small = [chunk for chunk in chunks if "object_types" in chunk["sections"]]
+    assert len(small) == 1 and small[0]["sections"]["object_types"] == [{"name": "product"}]
+    assert installer.section_chunks(payload, 0) == [payload]
+    assert len(installer.section_chunks(payload, 20000)) == 1
 
 
 def test_read_manifest_rejects_foreign_documents(tmp_path: Path) -> None:

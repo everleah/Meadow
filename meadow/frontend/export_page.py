@@ -123,9 +123,38 @@ async def export_page(request: Request) -> None:
                 return await client.list_languages(token)
             if coro_type == "attribute_groups":
                 return await client.list_attribute_groups(token)
+            if coro_type == "attribute_definitions":
+                return await _all_attribute_definitions()
             return await client.list_attribute_definitions(token, limit=1000)
         except Exception:  # noqa: BLE001 - degrade so the wizard still opens
             return []
+
+    async def _all_attribute_definitions() -> list[dict]:
+        """Every attribute definition, **paged** — not just the first 1000.
+
+        A catalogue with an imported classification standard has tens of thousands
+        of definitions (ETIM 10.0: 17 379). One capped page silently truncated the
+        selection to the first 1000 — the reference switch then offered 1000 of
+        17 379 features and its count was wrong. The grouped renderer keeps them
+        out of the DOM while the switch is off, so the load cost stays bounded, and
+        the pages are fetched in **batches** (18 sequential requests kept the page
+        waiting ~15 s; each batch costs one round trip).
+        """
+        definitions: list[dict] = []
+        batch = 8
+        start = 0
+        while True:
+            pages = await asyncio.gather(
+                *(
+                    client.list_attribute_definitions(token, limit=1000, start=start + index * 1000)
+                    for index in range(batch)
+                )
+            )
+            for page in pages:
+                definitions.extend(page)
+                if len(page) < 1000:
+                    return definitions
+            start += batch * 1000
 
     object_types = await _safe("object_types")
     collections = await _safe("collections")

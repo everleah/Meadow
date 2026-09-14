@@ -36,8 +36,18 @@ Jede Einheit gehört zu genau einer **Dimension** (physikalische Größe). Jede 
 | Kraft                | `N`                   | `kN`, `MN`                                          |
 | Druck                | `Pa`                  | `kPa`, `MPa`, `bar`, `mbar`, `psi`                  |
 | Temperatur           | `K`                   | `°C`, `°F`                                          |
+| Elektrischer Widerstand | `Ohm`              | –                                                   |
+| Scheinleistung       | `VA`                  | –                                                   |
+| Lichtstrom           | `lm`                  | –                                                   |
+| Lichtstärke          | –                     | (offen, s. Hinweis unten)                           |
+| Winkel               | `rad`                 | `°`                                                 |
+| Längendichte         | `kg/m`                | `kg/km`                                             |
 
-Die vollständige Liste (alle SI-Basis- und abgeleiteten Einheiten sowie die üblichen Darstellungen inkl. Präfixen) wird **per Default mit dem System ausgeliefert** und liegt in der Tabelle `unit`.
+Die vollständige Liste (alle SI-Basis- und abgeleiteten Einheiten sowie die üblichen Darstellungen inkl. Präfixen) wird **per Default mit dem System ausgeliefert** und liegt in der Tabelle `unit`. **Stand: 74 Einheiten in 18 Dimensionen** (Seed, `crates/pim-core/src/seed.rs`).
+
+**Ergänzt am 2026-09-13 für den ETIM-Standard:** Der BMEcat-/ETIM-Standard nennt Einheiten, die im ursprünglichen Katalog fehlten. Aufgenommen wurden die fünf, die der 25-Klassen-Ausschnitt des ETIM-Pakets braucht: `Ohm` (Widerstand), `VA` (Scheinleistung), `lm` (Lichtstrom), `°` (Winkel, kanonisch `rad`) und `kg/km` (Längendichte, kanonisch `kg/m`). **`VA` bekommt bewusst eine eigene Dimension** (nicht `power`/`W`): Wirk- und Scheinleistung sind ohne Leistungsfaktor nicht ineinander umrechenbar, und ein PIM darf das nicht vortäuschen — `GET /units/convert?from=VA&to=W` antwortet deshalb mit `400`. Für `°`/`kg/km` gibt es dagegen eine echte Umrechnung (`180 ° = π rad`, `2 kg/km = 0,002 kg/m`).
+
+**Noch offen (Vollbestand des Standards):** Der **komplette** ETIM-10.0-Bestand nennt **188** Einheiten; **132** davon fehlen weiterhin (u. a. `%`, `1/min`, `m³/h`, `dB`, `dB(A)`, `m/s²`, `l/min`, `Ah`, `Nm`, `N/m`, `m/s`, `W/(m⋅K)`, `lm/W`, `g/m²`, `kg/m³`, `cd`, `lx`, `px`, `kByte`, `Bft`, `mH2O`). Die meisten sind Quotienten-/Präfixvarianten bekannter Dimensionen (`l/min` → Volumenstrom, `m/s` → Geschwindigkeit, `N/mm²` → Druck, `Ah` → Ladung), einige sind **logarithmisch** und damit gar nicht linear umrechenbar (`dB`, `dB(A)`, `dB(C)`, `dBµV`, `dBm`, `dBi`), andere sind Zähl-/Bewertungsgrößen (`px`, `DPI`, `Bd`, `Bft`, `PSU`, `AirWatt`, `W-Th-C`). Ein „Einheiten-Standardpaket“ müsste für jede dieser Einheiten Dimension + kanonischen Bezug + Faktor festlegen (der IXF liefert **keinen** Faktor) — bewusst **nicht** im Schnellschuss geraten: eine falsche Zahl würde Werte still verfälschen. Bis dahin meldet der Installer die Lücke als Warnung (`units_needed`), und betroffene Attributdefinitionen tragen einfach **keine** Einheit (Anzeige ohne Symbol; der BMEcat-Export ist nicht betroffen, weil er bewusst **kein** `FUNIT` schreibt).
 
 **Abgrenzung:** Währungen (z. B. `EUR`, `USD`) sind **kein** Teil des Einheiten-Systems; Preis- und Währungsformatierung bleiben getrennt (über `babel`, siehe [frontend.md](frontend.md)).
 

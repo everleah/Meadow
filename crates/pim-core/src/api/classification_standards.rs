@@ -31,6 +31,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
@@ -221,34 +222,42 @@ async fn resolve_standard(db: &Db, reference: &str) -> Result<Option<Value>, Api
 
 /// Number of class nodes of a type and feature rows hanging off them.
 async fn counts_for(db: &Db, node_type: &str) -> Result<(i64, i64), ApiError> {
-    // Two queries instead of a subquery: the class keys are the natural join key
-    // and `category_id` stores them as native records.
     let mut response = db
         .inner()
-        .query("SELECT VALUE id FROM object WHERE type = $type AND deleted_at IS NONE;")
+        .query(
+            "SELECT VALUE type::string(id) FROM object WHERE type = $type AND deleted_at IS NONE;",
+        )
         .bind(("type", node_type.to_owned()))
         .await?
         .check()?;
-    let keys: Vec<Value> = response.take(0)?;
+    let keys: Vec<String> = response.take(0)?;
     let classes = keys.len() as i64;
     if classes == 0 {
         return Ok((0, 0));
     }
+    // Counted by **grouping** and summing in Rust. The obvious `WHERE category_id
+    // IN $keys` does not scale: with 5640 class keys the query did not return
+    // within 300 s (measured with the full ETIM bundle), because the planner keeps
+    // looking the record list up per row. A grouped scan is linear and needs no
+    // index. Record ids may come back quoted, so both sides are normalised.
     let mut response = db
         .inner()
         .query(
-            "SELECT count() AS total FROM category_attribute \
-             WHERE category_id IN array::map($keys, |$k| type::record($k)) GROUP ALL;",
+            "SELECT type::string(category_id) AS class_id, count() AS total \
+             FROM category_attribute GROUP BY class_id;",
         )
-        .bind(("keys", Value::Array(keys)))
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(0)?;
+    let class_ids: HashSet<String> = keys.iter().map(|key| key.replace('`', "")).collect();
     let features = rows
-        .first()
-        .and_then(|row| row.get("total"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+        .iter()
+        .filter_map(|row| {
+            let id = row.get("class_id").and_then(Value::as_str)?;
+            let total = row.get("total").and_then(Value::as_i64)?;
+            class_ids.contains(&id.replace('`', "")).then_some(total)
+        })
+        .sum();
     Ok((classes, features))
 }
 

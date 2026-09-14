@@ -28,6 +28,7 @@ import argparse
 import json
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import httpx
@@ -37,6 +38,78 @@ CORE_URL = "http://127.0.0.1:8080"
 BUNDLE_FORMAT = "meadow-standard-bundle"
 #: `GET /objects` caps the page size at 1000.
 PAGE = 1000
+#: Rows per `POST /config/import` request. A full standard's class-feature section
+#: has tens of thousands of rows; one request would time out (see `section_chunks`).
+SECTION_CHUNK = 5000
+#: Byte budget per request. The class-feature section of a standard bundle is
+#: **nested** (`{class, features: [...]}`, ~13\.6 features per class for ETIM 10.0),
+#: so a row cap alone is not enough — 5000 such rows are ~9 MB.
+SECTION_CHUNK_BYTES = 750_000
+
+
+def configure_console() -> None:
+    """Makes symbol lists printable on a Windows console.
+
+    The bundles name units such as `W/(m⋅K)`, `°` or `µm`; a cp1252 console
+    raises `UnicodeEncodeError` on those characters (found with the full ETIM
+    10.0 bundle). Printing must never abort an install, so the streams fall back
+    to UTF-8 with `errors="replace"`.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # pragma: no cover - exotic stream
+            continue
+        with suppress(ValueError, OSError):  # pragma: no cover - exotic stream
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def _count(value) -> int:
+    """Counts one section counter (`len` of the affected rows the core returns)."""
+    return len(value) if isinstance(value, list) else int(value or 0)
+
+
+def section_chunks(
+    payload: dict, rows_per_request: int, *, max_bytes: int = SECTION_CHUNK_BYTES
+) -> list[dict]:
+    """Splits an MCF document so no request carries more than `rows_per_request` rows.
+
+    The class-feature section of a **full** standard is huge (ETIM 10.0: 5640
+    class rows that expand to 76 625 rows / 10 MB) — one request outlives any
+    sensible timeout (found live: `ReadTimeout` after 15 minutes **and no rows
+    written**). Chunking therefore counts **rows and bytes**: a class row carries
+    all its features. Each request holds the document envelope plus **one** slice,
+    and `mode=merge` merges per row, so the split stays idempotent. `0` disables it.
+    """
+    if rows_per_request <= 0:
+        return [payload]
+    envelope = {
+        key: value
+        for key, value in payload.items()
+        if key != "sections" and not isinstance(value, list)
+    }
+    small: dict[str, object] = {}
+    chunks: list[dict] = []
+    for name, value in (payload.get("sections") or {}).items():
+        if not isinstance(value, list) or len(value) <= rows_per_request:
+            # Small sections stay together: one request for the model document.
+            small[name] = value
+            continue
+        bucket: list[object] = []
+        size = 0
+        for row in value:
+            row_size = len(json.dumps(row, ensure_ascii=False))
+            if bucket and (len(bucket) >= rows_per_request or size + row_size > max_bytes):
+                chunks.append({"sections": {name: bucket}})
+                bucket, size = [], 0
+            bucket.append(row)
+            size += row_size
+        if bucket:
+            chunks.append({"sections": {name: bucket}})
+    if small:
+        chunks.insert(0, {"sections": small})
+    if not chunks:
+        return [payload]
+    return [{**envelope, **chunk} for chunk in chunks]
 
 
 def read_manifest(bundle_dir: Path) -> dict:
@@ -52,6 +125,11 @@ def read_manifest(bundle_dir: Path) -> dict:
     return manifest
 
 
+def used_by(item: dict) -> int:
+    """Sort key for the unit warning: how many class features use the unit."""
+    return int(item.get("used_by") or 0)
+
+
 def missing_units(manifest: dict, available: set[str]) -> list[dict]:
     """The units the bundle needs but the target does not have.
 
@@ -59,7 +137,12 @@ def missing_units(manifest: dict, available: set[str]) -> list[dict]:
     the features concerned stay unit-less instead of pointing at a wrong unit.
     """
     return [
-        {"code": code, "symbol": str(info.get("symbol") or ""), "en": str(info.get("en") or "")}
+        {
+            "code": code,
+            "symbol": str(info.get("symbol") or ""),
+            "en": str(info.get("en") or ""),
+            "used_by": int(info.get("used_by") or 0),
+        }
         for code, info in sorted((manifest.get("units_needed") or {}).items())
         if info.get("symbol") and info["symbol"] not in available
     ]
@@ -124,6 +207,7 @@ def install(
     *,
     dry_run: bool = False,
     bulk: bool = False,
+    section_chunk: int = SECTION_CHUNK,
 ) -> dict:
     """Applies the bundle documents in manifest order (idempotent).
 
@@ -131,7 +215,8 @@ def install(
     worker upserts by business key, which is what makes the full standard
     installable at all); the class-feature section is then skipped, because it
     resolves nodes that the job has not created yet — re-running the installer
-    afterwards applies it (the installer is idempotent).
+    afterwards applies it (the installer is idempotent). Large MCF sections are
+    uploaded in `section_chunk`-row requests (`section_chunks`).
     """
     result: dict = {
         "steps": [],
@@ -167,26 +252,52 @@ def install(
             elif dry_run:
                 step["dry_run"] = True
             else:
-                response = client.post(
-                    "/config/import", params={"mode": "merge"}, headers=headers, json=payload
-                )
-                response.raise_for_status()
-                body = response.json()
-                step["sections"] = {
-                    name: {
-                        key: len(value) for key, value in section.items() if isinstance(value, list)
-                    }
-                    for name, section in (body.get("sections") or {}).items()
-                }
-                step["errors"] = len(body.get("errors") or [])
-                result["errors"] += step["errors"]
+                requests = section_chunks(payload, section_chunk)
+                if len(requests) > 1:
+                    step["chunks"] = len(requests)
+                counted: dict[str, dict[str, int]] = {}
+                chunk_errors = 0
+                for index, chunk in enumerate(requests, start=1):
+                    if len(requests) > 1:
+                        rows = sum(
+                            len(value)
+                            for value in (chunk.get("sections") or {}).values()
+                            if isinstance(value, list)
+                        )
+                        size = len(json.dumps(chunk.get("sections"), ensure_ascii=False)) // 1024
+                        print(
+                            f"    {path.name}: chunk {index}/{len(requests)} "
+                            f"({rows} rows, {size} KB)"
+                        )
+                    response = client.post(
+                        "/config/import", params={"mode": "merge"}, headers=headers, json=chunk
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                    for name, section in (body.get("sections") or {}).items():
+                        target = counted.setdefault(name, {})
+                        for key, value in section.items():
+                            target[key] = target.get(key, 0) + _count(value)
+                    chunk_errors += len(body.get("errors") or [])
+                step["sections"] = counted
+                step["errors"] = chunk_errors
+                result["errors"] += chunk_errors
         elif document.get("kind") == "mef":
             objects = payload.get("objects") or []
             step["objects"] = len(objects)
             if bulk:
                 queued_nodes = True
                 if not dry_run:
-                    response = client.post("/imports", headers=headers, json=payload)
+                    # `match_by_key` makes the job **upsert** by the class key
+                    # instead of creating: without it a re-import of an installed
+                    # bundle collides with the unique key (`409` per object, found
+                    # with the full ETIM bundle).
+                    response = client.post(
+                        "/imports",
+                        params={"match_by_key": class_key},
+                        headers=headers,
+                        json=payload,
+                    )
                     if response.status_code >= 300:
                         result["errors"] += 1
                         step["error"] = response.text[:200]
@@ -326,15 +437,28 @@ def install_one(
     available = {str(row.get("symbol")) for row in rows if isinstance(row, dict)}
     missing = missing_units(manifest, available)
     if missing:
-        print(f"  warning: units missing in the target: {[item['symbol'] for item in missing]}")
+        # A wall of 130 symbols helps nobody; the count and the most-used ones do.
+        symbols = [str(item["symbol"]) for item in sorted(missing, key=used_by, reverse=True)]
+        shown = ", ".join(symbols[:10])
+        more = f" (+{len(symbols) - 10} more)" if len(symbols) > 10 else ""
+        print(f"  warning: {len(missing)} units missing in the target: {shown}{more}")
         if args.strict_units:
             raise SystemExit("aborting (--strict-units)")
     else:
         print("  all needed units are present")
-    return install(client, headers, manifest, bundle_dir, dry_run=args.dry_run, bulk=args.bulk)
+    return install(
+        client,
+        headers,
+        manifest,
+        bundle_dir,
+        dry_run=args.dry_run,
+        bulk=args.bulk,
+        section_chunk=args.section_chunk,
+    )
 
 
 def main(argv: list[str]) -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--bundle", type=Path, default=Path(".tmp/bundle-etim"), help="one bundle folder"
@@ -364,6 +488,13 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--strict-units", action="store_true", help="abort when a needed unit is missing"
+    )
+    parser.add_argument(
+        "--section-chunk",
+        type=int,
+        default=SECTION_CHUNK,
+        help="rows per `POST /config/import` request (0 = one request; the full ETIM "
+        "standard needs chunks)",
     )
     args = parser.parse_args(argv[1:])
 

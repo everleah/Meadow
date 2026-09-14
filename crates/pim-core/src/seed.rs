@@ -85,9 +85,10 @@ UPDATE object_type:collection SET taxonomy = false;
 UPDATE object_type SET taxonomy = false WHERE taxonomy IS NONE;
 "#;
 
-/// Unit catalog covering the 13 dimensions documented in
-/// `plan/detail/einheiten.md` (SI base/derived units, prefixes, and
-/// imperial/US customary units).
+/// Unit catalog covering the 18 dimensions documented in
+/// `plan/detail/einheiten.md` (SI base/derived units, prefixes, imperial/US
+/// customary units, and the extra dimensions the ETIM standard needs:
+/// resistance, apparent power, luminous flux, angle, linear density).
 const UNITS: &[UnitSeed] = &[
     // length (canonical: m)
     UnitSeed {
@@ -771,6 +772,83 @@ const UNITS: &[UnitSeed] = &[
         offset: "255.37222222222223",
         de: "Grad Fahrenheit",
         en: "degree Fahrenheit",
+    },
+    // resistance (canonical: Ohm). The ETIM symbol is `Ohm`, not `Ω`.
+    UnitSeed {
+        key: "unit_Ohm",
+        symbol: "Ohm",
+        dimension: "resistance",
+        canonical: None,
+        factor: "1.0",
+        offset: "0.0",
+        de: "Ohm",
+        en: "ohm",
+    },
+    // apparent power (canonical: VA). A dimension of its own: volt-ampere cannot
+    // be converted into `power` (W) without a power factor, and a PIM must not
+    // pretend otherwise.
+    UnitSeed {
+        key: "unit_VA",
+        symbol: "VA",
+        dimension: "apparent_power",
+        canonical: None,
+        factor: "1.0",
+        offset: "0.0",
+        de: "Voltampere",
+        en: "volt-ampere",
+    },
+    // luminous flux (canonical: lm)
+    UnitSeed {
+        key: "unit_lm",
+        symbol: "lm",
+        dimension: "luminous_flux",
+        canonical: None,
+        factor: "1.0",
+        offset: "0.0",
+        de: "Lumen",
+        en: "lumen",
+    },
+    // angle (canonical: rad); `°` is the ETIM representation (e.g. beam angle)
+    UnitSeed {
+        key: "unit_rad",
+        symbol: "rad",
+        dimension: "angle",
+        canonical: None,
+        factor: "1.0",
+        offset: "0.0",
+        de: "Radiant",
+        en: "radian",
+    },
+    UnitSeed {
+        key: "unit_deg",
+        symbol: "°",
+        dimension: "angle",
+        canonical: Some("unit_rad"),
+        factor: "0.017453292519943295",
+        offset: "0.0",
+        de: "Grad (Winkel)",
+        en: "degree",
+    },
+    // linear density (canonical: kg/m); ETIM uses `kg/km` (cable data)
+    UnitSeed {
+        key: "unit_kg_m",
+        symbol: "kg/m",
+        dimension: "linear_density",
+        canonical: None,
+        factor: "1.0",
+        offset: "0.0",
+        de: "Kilogramm pro Meter",
+        en: "kilogram per metre",
+    },
+    UnitSeed {
+        key: "unit_kg_km",
+        symbol: "kg/km",
+        dimension: "linear_density",
+        canonical: Some("unit_kg_m"),
+        factor: "0.001",
+        offset: "0.0",
+        de: "Kilogramm pro Kilometer",
+        en: "kilogram per kilometre",
     },
 ];
 
