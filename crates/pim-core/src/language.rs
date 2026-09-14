@@ -82,9 +82,59 @@ pub(crate) fn resolve_label(
     }
 }
 
+/// Resolves an object's display label from its `attributes`: the `name` value
+/// (scalar or multilingual), falling back to `code`.
+///
+/// The `code` fallback exists for **taxonomy nodes** (categories, classification
+/// classes): they carry `code`/`description` instead of `name`, and without the
+/// fallback a picker or search hit of an ETIM class was labelled with its
+/// *object type* — a list of thousands of classes is then indistinguishable.
+pub(crate) fn resolve_object_label(
+    locale: Option<&str>,
+    chain: Option<&[String]>,
+    attributes: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    resolve_label(locale, chain, attributes.get("name"))
+        .or_else(|| resolve_label(locale, chain, attributes.get("code")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_object_label_falls_back_to_the_code() {
+        let chain = vec!["en".to_owned(), "root".to_owned()];
+        let named: serde_json::Map<String, Value> =
+            serde_json::json!({ "name": "Headphones", "code": "SKU-1" })
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+        assert_eq!(
+            resolve_object_label(Some("en"), Some(&chain), &named).as_deref(),
+            Some("Headphones")
+        );
+
+        // A taxonomy node has a `code` instead of a `name` (ETIM class `EC…`).
+        let coded: serde_json::Map<String, Value> = serde_json::json!({
+            "code": "EC012373",
+            "description": "Orifice",
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+        assert_eq!(
+            resolve_object_label(Some("en"), Some(&chain), &coded).as_deref(),
+            Some("EC012373")
+        );
+
+        // Neither: the caller falls back to the object type.
+        let bare: serde_json::Map<String, Value> = serde_json::json!({ "width": 12 })
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(resolve_object_label(Some("en"), Some(&chain), &bare), None);
+    }
 
     #[test]
     fn resolve_value_exact_then_fallback_chain() {

@@ -171,7 +171,39 @@ Unbekanntes `scope` ⇒ `400` (nie still ignorieren). Damit ist „Taxonomieknot
 **Frontend-Konsequenzen:**
 
 - `/products` **Strukturbaum**: `scope=composition` — Produkte/Struktur ohne Taxonomieknoten.
-- `/products` **Kategorie-Ansicht**: neuer **Taxonomie-Umschalter** (Knotentyp) neben Wurzel- und Dimensionsauswahl; Wurzeln und Kinder kommen mit `scope=taxonomy&type=<Taxonomie>`. Ist die Taxonomie größer als eine Seite (1000), sagt das Panel das („Es werden die ersten N Knoten gezeigt“) statt still zu kürzen.
+- `/products` **Kategorie-Ansicht**: neuer **Taxonomie-Umschalter** (Knotentyp) neben Wurzel- und Dimensionsauswahl; Wurzeln und Kinder kommen mit `scope=taxonomy&type=<Taxonomie>`. Eine Taxonomie, die größer als eine Seite ist, wird **geblättert** (siehe unten) statt still gekürzt.
 - `/categories`: lädt die Wurzeln der gewählten Taxonomie über denselben Filter (vorher: erste 100 Root-Kinder, gemischt über alle Taxonomien).
 - **Objekt-Picker**: leitet den Scope aus den erlaubten Zieltypen ab — sind **alle** Zieltypen Taxonomien, wird der Taxonomiebaum gezeigt, sonst die Komposition (vorher: alle Root-Kinder, also Produkte *und* Klassen in jedem Picker).
 - Baumknoten-Label: fällt auf `code` zurück, wenn kein `name` existiert — eine Liste aus 5640 Klassen ist sonst nicht lesbar (`EC000012` statt „etim_class“).
+
+## Taxonomiebaum: Paging und Server-Suche (2026-09-14)
+
+**Problem.** Der Kontrakt oben hat das stille Kürzen beendet, aber eine Taxonomie mit **5640** Klassen bleibt ohne Paging/Suche unbenutzbar: die Kategorie-Ansicht zeigte die ersten 1000 Wurzelknoten („es werden die ersten N gezeigt“), Klasse 1001 war nur per Scrollen … also gar nicht erreichbar.
+
+**Entscheidung:** die Panels blättern **seitenweise** (`taxonomy_tree.PAGE_SIZE = 200`, reine Helfer in `meadow/frontend/taxonomy_tree.py`) und suchen **serverseitig** über die ganze Taxonomie. Kein Kürzen, keine versteckten Knoten.
+
+| Baustein | Verhalten |
+| --- | --- |
+| Seiten | `has_more(loaded)` = „eine weitere Seite kann folgen“ (volle Seite = *vielleicht*, kurze Seite = Ende). Der Baum trägt dann hinten einen Knoten **„Weitere Knoten laden …“** (`MORE_ID = "__more__"`, nie eine Objekt-Id); ein Klick darauf hängt die nächste Seite an (`append_page`, dedupliziert). |
+| Suche | Tippen im Filterfeld ersetzt den Baum durch die **Treffer** der ganzen Taxonomie (`GET /objects/picker`) plus Bildunterschrift „N Treffer für „…“ im ganzen Baum“. Leeren stellt den (unverändert nachgeladenen) Baum wieder her. |
+| Kleine Taxonomie | Bleibt **clientseitig** gefiltert (`filter_tree_nodes`) — für 8 Kategorien ist die Baumansicht mit Hierarchie besser als eine flache Trefferliste (`uses_server_search(query, paged=…)`). |
+
+**Vier gemessene Fallstricke** (nur so ist die Suche korrekt und schnell):
+
+1. **Der Fulltext-Index trifft nur ganze Token.** `attributes @@ 'EC0123'` findet **0** der 61 passenden Klassen, `attributes @@ 'EC012373'` findet genau eine. Ein Teil-Code braucht daher einen **Präfix-Vergleich** (`attributes.code >= <Präfix> AND < <Präfix+1>`, die letzte Stelle um einen Codepoint erhöht — `prefix_upper_bound`, rein und getestet). Gemessen: 61 Treffer in **30 ms** über die 5640 Klassen (kein Index auf `attributes.code`, also ein Scan — bei 5,7 k Objekten unkritisch).
+2. **`OR` mit einem Fulltext-Ausdruck degeneriert.** `(attributes @@ 'EC0123' OR string::starts_with(attributes.code, 'EC0123'))` liefert in SurrealDB 3.2 plötzlich **5640** Zeilen statt 61 (die Fulltext-Seite trifft dann *jedes* Objekt; mit `… OR false` stimmt es wieder, das wird aber konstant gefaltet). Teil- und Volltextsuche sind deshalb **zwei getrennte Abfragen**, deren Treffer im Kern zusammengeführt werden (Präfix-Treffer zuerst, dann die Volltext-Treffer nach `score`).
+3. **`string::starts_with(NONE, …)` ist ein Fehler** („Argument 1 was the wrong type“), sobald ein Objekt kein `code` hat — der Präfix-Vergleich (`>=`/`<`) tut das nicht.
+4. **`completeness` kostet ~0,3 s *je Treffer*** (`completeness::compute`), gemessen: 5 Treffer mit `?locale=` = **1,4 s**, ohne `?locale=` = **9 ms**. Die Baumsuche zeigt keinen Vollständigkeits-Badge und ruft deshalb `?completeness=false` (das Label bleibt mit `locale` korrekt aufgelöst); die Treffer-Zahl bleibt trotzdem begrenzt (`SEARCH_LIMIT` = 100).
+
+**Kern-Kontrakt (`GET /objects/picker`)** — für den Referenz-Picker unverändert, additiv:
+
+| Parameter | Bedeutung |
+| --- | --- |
+| `code_prefix=true` | zusätzlich **Teil-Codes**: `EC0123` findet alle Klassen `EC0123…` (Präfix-Range, in Kleinschreibung zusätzlich großgeschrieben, damit die Suche wie der Volltext case-insensitiv ist) |
+| `completeness=false` | keinen Vollständigkeits-Wert je Treffer berechnen (Pflicht für Aufrufer mit vielen Treffern) |
+
+Die Suche tippt **jeder** Aufrufer selbst an: der Referenz-Picker und die Filterleiste des Grids (`SEARCH_LIMIT` = 100, `debounce` 400 ms) nutzen weiter nur den Volltext — ein Teil-Code findet dort also nichts. Das ist eine **offene Lücke** (dieselben zwei Parameter würden sie schließen), kein Versehen.
+
+**Weitere offene Punkte:** die Trefferliste ist flach (keine Hierarchie; ein „im Baum aufklappen“ bräuchte einen Ancestors-Endpunkt), und der Filter wirkt auf die Ansicht, in der er getippt wurde (Umschalten Struktur ↔ Kategorie rendert den Baum ungefiltert, der Suchtext bleibt im Feld stehen).
+
+**Umsetzung:** `meadow/frontend/taxonomy_tree.py` (rein, 8 Tests in `tests/test_taxonomy_tree.py`), Einbindung in `grid.py` (Kategorie-Ansicht von `/products`) und `categories.py` (`/categories`); Kern: `api/objects.rs` (`picker` mit `code_prefix`/`completeness`, `code_prefix_hits`, `prefix_upper_bound` — 2 Unit-Tests) und `language.rs::resolve_object_label` (Name → `code` → Objekttyp).

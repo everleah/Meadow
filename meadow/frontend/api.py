@@ -922,17 +922,30 @@ class CoreClient:
         types: list[str] | None = None,
         locale: str | None = None,
         limit: int = 20,
+        code_prefix: bool = False,
+        completeness: bool = True,
     ) -> list[dict]:
         """Searches objects by label for the reference picker.
 
         With ``locale`` each hit also carries a ``completeness`` value for that
-        language (the picker badges how complete the target is).
+        language (the picker badges how complete the target is); a caller that
+        lists many hits without a badge passes ``completeness=False`` (the
+        per-hit computation costs ~0.3 s in the core).
+
+        ``code_prefix=True`` additionally matches a **partial** ``code``
+        (``EC0123`` → every class ``EC0123…``): the core's full-text index only
+        matches whole tokens, so a partial code finds nothing otherwise. Used by
+        the taxonomy tree's search.
         """
         params: dict[str, str] = {"q": q, "limit": str(limit)}
         if types:
             params["types"] = ",".join(types)
         if locale:
             params["locale"] = locale
+        if code_prefix:
+            params["code_prefix"] = "true"
+        if not completeness:
+            params["completeness"] = "false"
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects/picker",

@@ -21,10 +21,11 @@ from __future__ import annotations
 
 from nicegui import app, ui
 
-from meadow.frontend import config
+from meadow.frontend import config, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.display import dimension_options, taxonomy_options, taxonomy_type_names
 from meadow.frontend.grid import (
+    SEARCH_LIMIT,
     filter_tree_nodes,
     resolve_value,
     status_badge,
@@ -37,11 +38,6 @@ from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
 from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_category_key
 
 ROOT_ID = OBJECT_ROOT_ID
-# Roots of one taxonomy the page loads in a single page (the core caps a children
-# page at 1000). A classification standard can carry thousands of classes, so the
-# filter (`scope=taxonomy` + `type=<taxonomy>`) runs **in the core** — a
-# client-side filter over the root's children would truncate the list silently.
-TAXONOMY_ROOT_LIMIT = 1000
 
 
 async def _category_objects(
@@ -59,21 +55,23 @@ async def _category_objects(
 
 
 async def _category_roots(
-    client: CoreClient, token: str, locale: str, definition_id: str, taxonomy: str
+    client: CoreClient, token: str, locale: str, definition_id: str, taxonomy: str, offset: int = 0
 ) -> list[dict]:
-    """Returns the top-level nodes of **one** taxonomy (children of the universal root).
+    """Returns **one page** of the top-level nodes of a taxonomy.
 
     ``taxonomy`` is the node type shown (`category`, `etim_class`, …) and
     ``definition_id`` the category relation type whose members are counted
     (`memberCount`). Both filters run in the core: the root carries the nodes of
     *every* taxonomy (with a classification standard installed that is thousands
     of nodes), so filtering client-side would silently truncate the list to the
-    first page.
+    first page. The page size is `taxonomy_tree.PAGE_SIZE` — the panel offers a
+    "load more" node and a server search instead of one truncated page.
     """
     top = await client.list_object_children(
         token,
         ROOT_ID,
-        limit=TAXONOMY_ROOT_LIMIT,
+        limit=taxonomy_tree.PAGE_SIZE,
+        offset=offset,
         count_members=True,
         definition_id=definition_id,
         scope="taxonomy",
@@ -136,6 +134,13 @@ async def categories_page() -> None:
         selected_category: dict = {"id": None, "label": "", "type": "", "status": ""}
         selected_tree: dict = {"id": None}
         current_tree: dict = {"tree": None, "nodes": []}
+        #: More roots of this taxonomy are unloaded (the tree carries a "load more"
+        #: node then) — a classification standard has thousands of them.
+        roots_has_more: dict = {"value": taxonomy_tree.has_more(len(category_roots))}
+        #: Server-side search hits shown instead of the tree (empty = show the tree).
+        tree_override: list[dict] = []
+        #: The query the current `tree_override` was loaded for.
+        tree_query: dict = {"value": ""}
 
         # --- multilingual name editing (product-form style) ------------------
         # The category `name` is a ``{lang: value}`` map. The inline field edits
@@ -212,6 +217,10 @@ async def categories_page() -> None:
 
         async def handle_category_select(e) -> None:
             node_id = e.value if hasattr(e, "value") else None
+            if node_id == taxonomy_tree.MORE_ID:
+                # The trailing node of a paged taxonomy: append the next page.
+                await load_more_roots()
+                return
             if not node_id:
                 selected_category.update({"id": None, "label": "", "type": "", "status": ""})
                 await render_detail()
@@ -236,12 +245,30 @@ async def categories_page() -> None:
             if host is None:
                 return
             host.clear()
-            nodes = category_roots
-            if selected_tree["id"]:
-                filtered = [r for r in category_roots if r["id"] == selected_tree["id"]]
-                if filtered:
-                    nodes = filtered
+            if tree_override:
+                # Server-side search hits: flat, no hierarchy to load.
+                nodes = tree_override
+            else:
+                roots = category_roots
+                if selected_tree["id"]:
+                    filtered = [r for r in category_roots if r["id"] == selected_tree["id"]]
+                    if filtered:
+                        roots = filtered
+                nodes = taxonomy_tree.tree_nodes(
+                    roots,
+                    more_label=(
+                        t("grid.taxonomy_more")
+                        if roots_has_more["value"] and not selected_tree["id"]
+                        else None
+                    ),
+                )
             with host:
+                if tree_override:
+                    ui.label(
+                        t("grid.taxonomy_results").format(
+                            count=len(tree_override), query=tree_query["value"]
+                        )
+                    ).classes("text-caption text-orange-600")
                 tree = LazyTree(
                     nodes or [],
                     on_select=handle_category_select,
@@ -266,10 +293,62 @@ async def categories_page() -> None:
             if current_tree["tree"] is not None:
                 current_tree["tree"].collapse()
 
-        def apply_tree_filter(value: str) -> None:
+        async def search_taxonomy(query: str) -> None:
+            """Loads the server-side search hits of the shown taxonomy.
+
+            `GET /objects/picker` searches the whole object set, so a node is found
+            by its code **or** description even when it sits far beyond the loaded
+            page: the full-text index matches whole tokens, `code_prefix=true` adds
+            the partial code (`EC0123`). `completeness=false` skips the badge (it
+            costs ~0.3 s per hit in the core and the tree shows none).
+            """
+            current = nodes["key"]
+            try:
+                hits = await client.picker_search(
+                    token,
+                    query,
+                    types=[current] if current else None,
+                    locale=locale,
+                    limit=SEARCH_LIMIT,
+                    code_prefix=True,
+                    completeness=False,
+                )
+            except Exception:  # noqa: BLE001 - keep the tree on failure
+                ui.notify(t("grid.taxonomy_search_failed"), color="negative")
+                return
+            tree_override[:] = taxonomy_tree.search_nodes(hits)
+            tree_query["value"] = query
+            render_tree()
+
+        async def apply_tree_filter(value: str) -> None:
+            """Filters the tree — server-side for a **paged** taxonomy."""
+            query = (value or "").strip()
+            if taxonomy_tree.uses_server_search(query, paged=roots_has_more["value"]):
+                await search_taxonomy(query)
+                return
+            if tree_override or tree_query["value"]:
+                tree_override.clear()
+                tree_query["value"] = ""
+                render_tree()
+                return
             tree = current_tree["tree"]
             if tree is not None:
-                tree.set_nodes(filter_tree_nodes(current_tree["nodes"], value or ""))
+                tree.set_nodes(filter_tree_nodes(current_tree["nodes"], query))
+
+        async def on_filter_change(event) -> None:
+            """The NiceGUI `value_change` callback of the filter input."""
+            await apply_tree_filter(str(getattr(event, "value", "") or ""))
+
+        async def load_more_roots() -> None:
+            """Appends the next page of taxonomy roots (the "load more" node)."""
+            nonlocal category_roots
+            page = await _category_roots(
+                client, token, locale, dimension["key"], nodes["key"], offset=len(category_roots)
+            )
+            category_roots = taxonomy_tree.append_page(category_roots, page)
+            roots_has_more["value"] = taxonomy_tree.has_more(len(category_roots))
+            refresh_tree_options()
+            render_tree()
 
         async def reload_tree() -> None:
             nonlocal category_roots
@@ -279,12 +358,17 @@ async def categories_page() -> None:
                 )
             except Exception:  # noqa: BLE001 - keep the cached roots on failure
                 category_roots = category_roots
+            roots_has_more["value"] = taxonomy_tree.has_more(len(category_roots))
+            refresh_tree_options()
+            render_tree()
+
+        def refresh_tree_options() -> None:
+            """Refills the root select (the loaded pages of the shown taxonomy)."""
             tree_select.options = {
                 "all": t("grid.all_trees"),
                 **{r["id"]: r["label"] for r in category_roots},
             }
             tree_select.update()
-            render_tree()
 
         async def change_taxonomy(value: str) -> None:
             """Switches the taxonomy **node type** and re-loads its tree."""
@@ -294,6 +378,9 @@ async def categories_page() -> None:
             nodes["key"] = key
             selected_category.update({"id": None, "label": "", "type": "", "status": ""})
             selected_tree["id"] = None
+            tree_override.clear()
+            tree_query["value"] = ""
+            filter_input.set_value("")
             await reload_tree()
             await render_detail()
 
@@ -764,7 +851,7 @@ async def categories_page() -> None:
                         "flat dense shrink-0"
                     ).tooltip(t("grid.collapse_all"))
                 host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
-                filter_input.on_value_change(lambda e: apply_tree_filter(e.value or ""))
+                filter_input.on_value_change(on_filter_change)
                 render_tree()
             with splitter.after, ui.column().classes("w-full h-full pl-3"):
                 detail_host = ui.column().classes("w-full h-full")

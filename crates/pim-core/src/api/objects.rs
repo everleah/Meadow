@@ -3,7 +3,7 @@
 //! Every object is part of the composition tree: creating an object also
 //! creates its `depends_on` edge to the universal root.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
@@ -1002,15 +1002,124 @@ pub struct ObjectPickerParams {
     /// Maximum number of hits (capped at 1000).
     #[serde(default = "default_limit")]
     pub limit: u32,
+    /// Also match objects whose `code` starts with the term (`EC0123` → all
+    /// classes `EC0123…`).
+    ///
+    /// The full-text index matches **whole** tokens, so a partial code finds
+    /// nothing (measured: `attributes @@ 'EC0123'` → 0 of the 61 matching
+    /// classes). This is an **extra** query (a range scan over `attributes.code`,
+    /// ~30 ms across the 5640 ETIM classes), because a full-text match cannot be
+    /// combined with another condition via `OR` (see `code_prefix_hits`).
+    #[serde(default)]
+    pub code_prefix: bool,
+    /// Attach each hit's `completeness` for `locale` (default `true`).
+    ///
+    /// The per-hit computation costs ~0.3 s (measured on the ETIM bundle), so a
+    /// caller that lists many hits *without* showing the badge turns it off.
+    #[serde(default = "default_true")]
+    pub completeness: bool,
+}
+
+/// `true` — the default for optional booleans (`serde` needs a function).
+fn default_true() -> bool {
+    true
+}
+
+/// The exclusive upper bound of the range that matches a code prefix.
+///
+/// `"EC0123"` → `"EC0124"`: every string starting with the prefix is `>=` the
+/// prefix and `<` its incremented form (the standard range trick, valid because
+/// the comparison is lexicographic on code points). `None` for an empty prefix
+/// (no usable restriction) and for a prefix of only maximum code points.
+fn prefix_upper_bound(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        if let Some(next) = char::from_u32(u32::from(last) + 1) {
+            chars.push(next);
+            return Some(chars.into_iter().collect());
+        }
+    }
+    None
+}
+
+/// Objects whose `code` attribute starts with a code-style term.
+///
+/// Why a separate query: `attributes @@ $q` matches whole tokens only, and it must
+/// not share an `OR` with another condition — in SurrealDB 3.2 the full-text side
+/// then matches **every** row (measured on the ETIM bundle:
+/// `(attributes @@ 'EC0123' OR string::starts_with(attributes.code, 'EC0123'))`
+/// → 5640 rows instead of 61; `… OR false` is fine because it is constant-folded).
+///
+/// The match is the plain comparison `code >= <prefix>` / `< <prefix + 1>`:
+/// unlike `string::starts_with`, it does not fail on objects without a `code`
+/// (SurrealDB reports `Argument 1 was the wrong type. Expected \`string\` but
+/// found \`NONE\``). The term is matched as typed **and** upper-cased, because the
+/// codes of the shipped bundle are upper-case while the full-text search is
+/// case-insensitive — a lower-case term must not behave differently.
+async fn code_prefix_hits(
+    state: &AppState,
+    query: &str,
+    types: &[String],
+    limit: i64,
+) -> Result<Vec<Value>, ApiError> {
+    let mut terms = vec![query.to_owned()];
+    let upper = query.to_uppercase();
+    if upper != query {
+        terms.push(upper);
+    }
+
+    let mut hits: Vec<Value> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for term in terms {
+        let Some(high) = prefix_upper_bound(&term) else {
+            continue;
+        };
+        let mut sql = String::from(
+            "SELECT * FROM object WHERE attributes.code >= $low \
+             AND attributes.code < $high AND deleted_at IS NONE",
+        );
+        if !types.is_empty() {
+            sql.push_str(" AND type IN $types");
+        }
+        sql.push_str(" ORDER BY attributes.code LIMIT $limit");
+        let mut request = state
+            .db
+            .inner()
+            .query(sql)
+            .bind(("low", term))
+            .bind(("high", high));
+        if !types.is_empty() {
+            request = request.bind(("types", types.to_vec()));
+        }
+        let mut response = request.bind(("limit", limit)).await?.check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        for row in rows {
+            let key = row
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if seen.insert(key) {
+                hits.push(row);
+            }
+        }
+        if hits.len() >= usize::try_from(limit).unwrap_or(usize::MAX) {
+            break;
+        }
+    }
+    Ok(hits)
 }
 
 /// Searches for objects by label to pick a reference target.
 ///
 /// Returns compact hits (`id`, `type`, `label`, `status`); the label is the
-/// resolved multilingual `name` for `?locale=`. With `?locale=` each hit also
-/// carries a `completeness` value for that language, so a picker can show
-/// whether the target still misses required attributes. Used by the reference
-/// and relation pickers.
+/// resolved multilingual `name` for `?locale=`, falling back to the `code` (a
+/// taxonomy class has no `name`). With `?locale=` each hit also carries a
+/// `completeness` value for that language, so a picker can show whether the
+/// target still misses required attributes (`?completeness=false` skips it — the
+/// tree's search lists many hits and shows no badge). `?code_prefix=true`
+/// additionally matches a partial `code` (`EC0123`). Used by the reference and
+/// relation pickers and by the taxonomy tree's search.
 #[utoipa::path(
     get,
     path = "/objects/picker",
@@ -1040,6 +1149,13 @@ pub async fn picker(
         })
         .unwrap_or_default();
 
+    // Code hits first: a caller that searches a code wants the exact prefix match
+    // on top of the description matches.
+    let mut objects: Vec<Value> = Vec::new();
+    if params.code_prefix {
+        objects = code_prefix_hits(&state, query, &types, limit).await?;
+    }
+
     let mut sql = String::from(
         "SELECT *, search::score(1) AS score FROM object \
          WHERE attributes @@ $q AND deleted_at IS NONE",
@@ -1053,7 +1169,23 @@ pub async fn picker(
         request = request.bind(("types", types));
     }
     let mut response = request.bind(("limit", limit)).await?.check()?;
-    let objects: Vec<Value> = response.take(0)?;
+    let text_objects: Vec<Value> = response.take(0)?;
+    let mut seen: HashSet<String> = objects
+        .iter()
+        .filter_map(|object| object.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    for object in text_objects {
+        let key = object
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if seen.insert(key) {
+            objects.push(object);
+        }
+    }
+    objects.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
 
     let locale = params
         .locale
@@ -1088,10 +1220,10 @@ pub async fn picker(
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let label = crate::language::resolve_label(
+        let label = crate::language::resolve_object_label(
             locale.as_deref(),
             chain.as_deref().map(|v| v.as_slice()),
-            attributes.get("name"),
+            &attributes,
         )
         .unwrap_or_else(|| object_type.clone());
         let mut hit = json!({
@@ -1100,10 +1232,10 @@ pub async fn picker(
             "label": label,
             "status": &status,
         });
-        if let Some(locale) = &locale {
-            // Few hits per query (default 20), so the per-object computation is
-            // cheap; `compute_batch` would need the ancestors to be part of the
-            // hit list (see `list_objects`).
+        // The per-hit computation costs ~0.3 s (measured on the ETIM bundle), which
+        // is fine for the reference picker's few hits but not for a caller that
+        // lists many of them — `?completeness=false` skips it.
+        if let Some(locale) = locale.as_deref().filter(|_| params.completeness) {
             let result = crate::completeness::compute(
                 &state.cache,
                 &state.db,
@@ -1737,6 +1869,41 @@ mod tests {
         Completeness {
             percent,
             missing: missing.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn prefix_upper_bound_increments_the_last_character() {
+        assert_eq!(prefix_upper_bound("EC0123").as_deref(), Some("EC0124"));
+        // No carry: the upper bound is the prefix with its *last* code point
+        // incremented, so `EC0129` ends at `EC012:` (not at `EC0130`).
+        assert_eq!(prefix_upper_bound("EC0129").as_deref(), Some("EC012:"));
+        assert_eq!(prefix_upper_bound("A").as_deref(), Some("B"));
+        // An empty prefix restricts nothing.
+        assert_eq!(prefix_upper_bound(""), None);
+    }
+
+    #[test]
+    fn prefix_upper_bound_covers_every_string_with_the_prefix() {
+        for low in ["EC0123", "EC0129", "A"] {
+            let high = prefix_upper_bound(low).unwrap_or_default();
+            for code in [
+                low.to_owned(),
+                format!("{low}0"),
+                format!("{low}A"),
+                format!("{low}ZZZ"),
+            ] {
+                assert!(
+                    code.as_str() >= low && code.as_str() < high.as_str(),
+                    "{code} must match the prefix {low}"
+                );
+            }
+            for code in ["EC0122", "EC0124", "EC01244", "EC012", "ED0123", "EC012:0"] {
+                assert!(
+                    !(code >= low && code < high.as_str()),
+                    "{code} must not match the prefix {low}"
+                );
+            }
         }
     }
 
