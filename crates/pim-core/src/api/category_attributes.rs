@@ -405,7 +405,7 @@ pub async fn list_object_category_attributes(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let features = resolved_features(&state.db, key).await?;
+    let features = resolved_features(&state.cache, &state.db, key).await?;
     // The classes the object is assigned to (the block id of an export).
     let relations = category_relation_keys(&state.db).await?;
     let classes = assigned_node_keys(&state.db, key, &relations).await?;

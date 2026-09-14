@@ -879,6 +879,22 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_object_ancestors(self, token: str, object_id: str) -> list[dict]:
+        """Returns the path from the outermost ancestor down to the object.
+
+        Each entry is the object document plus ``hasChildren`` — the same shape as
+        ``list_object_children``, so a tree panel can render the path with
+        ``tree_node_from_object``. The universal root is not part of the path: it
+        is the parent of every tree's top level, not a node of it.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/objects/{object_id}/ancestors",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def batch_update(self, token: str, items: list[dict]) -> list[dict]:
         """Applies staged grid edits in a single batch call."""
         async with _api_client() as client:

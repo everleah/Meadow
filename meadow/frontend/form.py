@@ -484,7 +484,14 @@ async def product_form(object_id: str) -> None:
                     return
                 try:
                     hits = await client.picker_search(
-                        token, q, types=target_types, locale=locale, limit=10
+                        token,
+                        q,
+                        types=target_types,
+                        locale=locale,
+                        limit=10,
+                        # A partial `code` finds the target too (`EC0123`); the
+                        # core's full-text index matches whole tokens only.
+                        code_prefix=True,
                     )
                 except Exception:  # noqa: BLE001 - degrade to no hits
                     return

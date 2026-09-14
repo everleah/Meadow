@@ -179,6 +179,10 @@ pub fn router(state: AppState) -> Router {
             get(api::references::list_object_children),
         )
         .route(
+            "/objects/{id}/ancestors",
+            get(api::references::list_object_ancestors),
+        )
+        .route(
             "/objects/{id}/parent",
             axum::routing::patch(api::references::reparent_object),
         )

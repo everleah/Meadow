@@ -1403,6 +1403,114 @@ pub async fn list_object_children(
     Ok(Json(result))
 }
 
+/// Maximum number of levels walked when resolving an object's ancestor path
+/// (a taxonomy is a hierarchy of classes, not thousands of levels deep).
+const MAX_ANCESTOR_DEPTH: usize = 64;
+
+/// Returns the path from the outermost composition ancestor down to the object.
+///
+/// The tree panels use it to show a search hit **in its hierarchy**: a hit may
+/// sit below a class that is far beyond the loaded page (or outside the shown
+/// taxonomy roots), and a flat hit list cannot show where it belongs. The list
+/// starts at the top-most ancestor and **ends with the object itself**, so the
+/// caller can render the whole path without merging its own node.
+///
+/// Each entry is the object document plus a `hasChildren` flag (same shape as
+/// `GET /objects/{id}/children`), so the tree marks expandable nodes lazily. The
+/// universal root is not part of the path — it is the parent of every tree's
+/// top level, not a node of it.
+#[utoipa::path(
+    get,
+    path = "/objects/{id}/ancestors",
+    responses(
+        (status = 200, description = "Ancestor path (root-most first, object last)", body = Vec<Value>),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 404, description = "Object not found", body = Value)
+    )
+)]
+pub async fn list_object_ancestors(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let key = parse_object_key(&id)?;
+    if fetch_object(&state.db, key).await?.is_none() {
+        return Err(ApiError::not_found(format!("object `{id}` not found")));
+    }
+
+    // Walk up the `depends_on` chain (one query per level; taxonomy depth is
+    // small). A repeated key means broken data, so the walk stops instead of
+    // looping — the path stays bounded either way.
+    let mut keys: Vec<String> = vec![key.to_owned()];
+    let mut current = key.to_owned();
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        match parent_key(&state.db, &current).await? {
+            None => break,
+            Some(parent) if parent == "object_root" => break,
+            Some(parent) => {
+                if keys.contains(&parent) {
+                    break;
+                }
+                keys.push(parent.clone());
+                current = parent;
+            }
+        }
+    }
+    // Root-most first, the requested object last.
+    keys.reverse();
+
+    let object_sql = "
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        SELECT * FROM object WHERE id IN $recs AND deleted_at IS NONE;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(object_sql)
+        .bind(("keys", keys.clone()))
+        .await?
+        .check()?;
+    let objects: Vec<Value> = response.take(1)?;
+
+    // Which of the path nodes are themselves parents (have children)?
+    let has_sql = "
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        SELECT out AS parent FROM reference
+        WHERE definition_id = 'rel_depends_on' AND out IN $recs;
+    ";
+    let mut response = state
+        .db
+        .inner()
+        .query(has_sql)
+        .bind(("keys", keys.clone()))
+        .await?
+        .check()?;
+    let parent_rows: Vec<Value> = response.take(1)?;
+    let parent_set: HashSet<String> = parent_rows
+        .iter()
+        .filter_map(|row| row.get("parent").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+
+    let by_id: HashMap<String, Value> = objects
+        .into_iter()
+        .filter_map(|obj| {
+            let id = obj.get("id").and_then(Value::as_str)?.to_owned();
+            Some((id, obj))
+        })
+        .collect();
+    let result: Vec<Value> = keys
+        .iter()
+        .filter_map(|node_key| {
+            let id = format!("object:{node_key}");
+            let mut value = by_id.get(&id)?.clone();
+            value["hasChildren"] = json!(parent_set.contains(&id));
+            Some(value)
+        })
+        .collect();
+    Ok(Json(result))
+}
+
 /// Returns the composition tree rooted at the Universal-Root as nested
 /// `{ id, children: [...] }` nodes. Used by the grid's structure navigation.
 #[utoipa::path(

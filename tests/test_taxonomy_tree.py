@@ -9,6 +9,8 @@ from meadow.frontend.taxonomy_tree import (
     append_page,
     has_more,
     more_node,
+    path_chain,
+    path_nodes,
     search_nodes,
     tree_nodes,
     uses_server_search,
@@ -85,3 +87,52 @@ def test_uses_server_search_only_for_a_paged_tree_with_a_query() -> None:
     assert uses_server_search("EC012373", paged=False) is False
     assert uses_server_search("EC012373", paged=True) is True
     assert taxonomy_tree.PAGE_SIZE == PAGE_SIZE
+
+
+def test_path_nodes_nests_the_branch_and_keeps_the_last_node_lazy() -> None:
+    """The ancestor path becomes one branch; only the hit stays expandable."""
+    path = [
+        {"id": "object:root_child", "label": "G", "type": "etim_class", "lazy": True},
+        {"id": "object:middle", "label": "M", "type": "etim_class", "lazy": True},
+        {"id": "object:hit", "label": "H", "type": "etim_class", "lazy": True},
+    ]
+    nodes = path_nodes(path)
+    assert len(nodes) == 1
+    top = nodes[0]
+    assert top["id"] == "object:root_child"
+    # An intermediate node must not stay lazy: a lazy expansion would replace the
+    # branch with the node's paged children from the core.
+    assert "lazy" not in top
+    middle = top["children"][0]
+    assert middle["id"] == "object:middle"
+    assert "lazy" not in middle
+    hit = middle["children"][0]
+    assert hit["id"] == "object:hit"
+    assert hit["lazy"] is True
+    assert "children" not in hit
+
+
+def test_path_nodes_of_a_single_node_is_that_node() -> None:
+    """A flat hit (a direct child of the root) is the whole path."""
+    nodes = path_nodes([{"id": "object:ec", "label": "EC000012"}])
+    assert nodes == [{"id": "object:ec", "label": "EC000012"}]
+
+
+def test_path_nodes_of_an_empty_path_is_empty() -> None:
+    assert path_nodes([]) == []
+
+
+def test_path_chain_walks_the_nested_branch() -> None:
+    """The chain is the branch's node list, root-most first."""
+    nested = path_nodes(
+        [
+            {"id": "object:a", "label": "A", "lazy": True},
+            {"id": "object:b", "label": "B", "lazy": True},
+            {"id": "object:c", "label": "C"},
+        ]
+    )
+    chain = path_chain(nested)
+    assert [node["id"] for node in chain] == ["object:a", "object:b", "object:c"]
+    # The caller expands all but the last node and labels the caption with the hit.
+    assert chain[-1]["label"] == "C"
+    assert path_chain([]) == []

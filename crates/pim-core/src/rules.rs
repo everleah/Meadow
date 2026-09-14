@@ -332,6 +332,7 @@ pub async fn load_active_rules(
 /// Returns an empty outcome when no rules apply or when a transport failure
 /// degrades to "skip rules".
 pub async fn evaluate_for_write(
+    cache: &crate::cache::MetaCache,
     db: &Db,
     client: &RulesClient,
     object_view: &Value,
@@ -356,7 +357,7 @@ pub async fn evaluate_for_write(
     // the rules are known (so the extra queries only run when rules exist).
     let missing_features = match context.missing_features {
         Some(names) => names.to_vec(),
-        None => missing_class_features(db, object_view).await?,
+        None => missing_class_features(cache, db, object_view).await?,
     };
     let context = EvaluationContext {
         missing_features: Some(&missing_features),
@@ -393,7 +394,11 @@ pub async fn evaluate_for_write(
 /// `object_view` is the resolved candidate view sent to the rules, so a value
 /// that is set (own or inherited) counts as satisfied. Objects without an id
 /// (create) have no classes yet.
-async fn missing_class_features(db: &Db, object_view: &Value) -> Result<Vec<String>, ApiError> {
+async fn missing_class_features(
+    cache: &crate::cache::MetaCache,
+    db: &Db,
+    object_view: &Value,
+) -> Result<Vec<String>, ApiError> {
     let Some(id) = object_view
         .get("id")
         .and_then(Value::as_str)
@@ -402,7 +407,8 @@ async fn missing_class_features(db: &Db, object_view: &Value) -> Result<Vec<Stri
         return Ok(Vec::new());
     };
     let required =
-        crate::class_features::class_required_names(db, crate::class_features::key_of(id)).await?;
+        crate::class_features::class_required_names(cache, db, crate::class_features::key_of(id))
+            .await?;
     if required.is_empty() {
         return Ok(Vec::new());
     }

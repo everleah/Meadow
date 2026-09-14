@@ -253,6 +253,7 @@ pub async fn create_object(
         "attributes": Value::Object(eval_attributes),
     });
     let outcome = crate::rules::evaluate_for_write(
+        &state.cache,
         &state.db,
         &state.rules,
         &candidate,
@@ -1383,6 +1384,7 @@ async fn apply_object_update(
 
     // validation + computed (save mode)
     let outcome = crate::rules::evaluate_for_write(
+        &state.cache,
         &state.db,
         &state.rules,
         &candidate,
@@ -1410,6 +1412,7 @@ async fn apply_object_update(
     // workflow_guard (transition mode) when the status changes
     if status_changed {
         let guard = crate::rules::evaluate_for_write(
+            &state.cache,
             &state.db,
             &state.rules,
             &candidate,

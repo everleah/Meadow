@@ -21,6 +21,7 @@ pub struct MetaCache {
     multilingual_names: RwLock<Option<Arc<Vec<String>>>>,
     inheritable_names: RwLock<Option<Arc<Vec<String>>>>,
     url_attributes: RwLock<Option<Arc<Vec<UrlAttribute>>>>,
+    feature_bindings: RwLock<Option<Arc<HashMap<String, String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
 }
 
@@ -79,17 +80,66 @@ impl MetaCache {
         Ok(chain)
     }
 
+    /// Bindings from a standard's feature code to the attribute that carries
+    /// its value (`attribute_definition.standard_codes`, e.g. `{"etim":
+    /// "EF000123"}` → attribute name), cached.
+    ///
+    /// With a classification standard installed **every** feature definition
+    /// carries a binding (17 397 definitions, ETIM 10.0), so loading them per
+    /// call cost ~0.3 s on read paths that run per object (grid with `?locale=`,
+    /// picker badges, rules).
+    pub async fn feature_bindings(
+        &self,
+        db: &Db,
+    ) -> Result<Arc<HashMap<String, String>>, ApiError> {
+        if let Some(bindings) = self.feature_bindings.read().await.clone() {
+            return Ok(bindings);
+        }
+        let bindings = Arc::new(load_feature_bindings(db).await?);
+        *self.feature_bindings.write().await = Some(bindings.clone());
+        Ok(bindings)
+    }
+
     /// Invalidates cached attribute names after attribute-definition writes.
     pub async fn invalidate_attribute_definitions(&self) {
         *self.multilingual_names.write().await = None;
         *self.inheritable_names.write().await = None;
         *self.url_attributes.write().await = None;
+        *self.feature_bindings.write().await = None;
     }
 
     /// Invalidates cached fallback chains after language-tree changes.
     pub async fn invalidate_language_tree(&self) {
         self.fallback_chains.write().await.clear();
     }
+}
+
+/// Bindings from a standard's feature code to the attribute that carries its
+/// value (`attribute_definition.standard_codes`, e.g. `{"etim": "EF000123"}` →
+/// attribute name).
+///
+/// A code claimed twice keeps the first binding instead of flapping (the write
+/// path rejects duplicates, but old data may still carry one).
+async fn load_feature_bindings(db: &Db) -> Result<HashMap<String, String>, ApiError> {
+    let sql =
+        "SELECT name, standard_codes FROM attribute_definition WHERE standard_codes IS NOT NONE;";
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut bindings: HashMap<String, String> = HashMap::new();
+    for row in rows {
+        let Some(name) = row.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(codes) = row.get("standard_codes").and_then(Value::as_object) else {
+            continue;
+        };
+        for code in codes.values().filter_map(Value::as_str) {
+            bindings
+                .entry(code.to_owned())
+                .or_insert_with(|| name.to_owned());
+        }
+    }
+    Ok(bindings)
 }
 
 async fn load_multilingual_names(db: &Db) -> Result<Vec<String>, ApiError> {

@@ -106,7 +106,8 @@ pub async fn compute(
     let mut required = required_names(db, object_type).await?;
     // Class features (Stage B): the mandatory attributes of the object's
     // taxonomy classes count as required too.
-    let class_required = crate::class_features::class_required_names(db, key_of(object_id)).await?;
+    let class_required =
+        crate::class_features::class_required_names(cache, db, key_of(object_id)).await?;
     crate::class_features::merge_names(&mut required, &class_required);
     compute_with_required(cache, db, object_id, locale, own_attributes, &required).await
 }
@@ -211,7 +212,8 @@ pub(crate) async fn compute_batch(
         .map(|(object_id, _, _)| key_of(object_id).to_owned())
         .collect();
     let class_required_by_key =
-        crate::class_features::class_required_names_batch(db, &object_keys, &parent_by_key).await?;
+        crate::class_features::class_required_names_batch(cache, db, &object_keys, &parent_by_key)
+            .await?;
     let fallback_chain: Option<Arc<Vec<String>>> = match locale {
         Some(locale) => Some(cache.fallback_chain(db, locale).await?),
         None => None,

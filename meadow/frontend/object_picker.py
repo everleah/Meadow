@@ -326,7 +326,14 @@ async def open_object_picker(
         hits are dropped so the search tab offers the same set as the tree.
         """
         found = await client.picker_search(
-            token, query, types=sorted(allowed_types) or None, locale=locale, limit=20
+            token,
+            query,
+            types=sorted(allowed_types) or None,
+            locale=locale,
+            limit=20,
+            # A partial `code` must find the target too (`EC0123`): the core's
+            # full-text index matches whole tokens only.
+            code_prefix=True,
         )
         return [
             hit

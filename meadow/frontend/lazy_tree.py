@@ -69,6 +69,19 @@ class LazyTree(Tree):
         self._props["nodes"] = nodes
         super().update()
 
+    def set_path(self, nodes: list[dict], expanded: list[str]) -> None:
+        """Show a nested node list with the given nodes expanded.
+
+        Used by the "show a search hit in the tree" path: the nodes are the
+        hit's ancestor branch (nested, see `taxonomy_tree.path_nodes`) and must
+        be visible without clicking through the hierarchy, so the path nodes are
+        passed through the ``expanded`` prop as well — the same explicit re-send
+        as in [`set_nodes`], because `update()` is a no-op here.
+        """
+        self._props["nodes"] = nodes
+        self._props["expanded"] = list(expanded)
+        super().update()
+
     def collapse(self, node_keys: list[str] | None = None) -> Self:
         """Collapse the tree on the client without re-sending the node list.
 

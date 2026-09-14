@@ -223,6 +223,7 @@ async fn guard_release(
     release_status: &str,
 ) -> Result<(), ApiError> {
     let guard = crate::rules::evaluate_for_write(
+        &state.cache,
         &state.db,
         &state.rules,
         object_view,

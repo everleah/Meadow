@@ -22,9 +22,11 @@
 //! `depends_on` parent map (see `completeness::compute_batch`).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::cache::MetaCache;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -158,32 +160,17 @@ pub(crate) fn ancestor_chain(node_key: &str, parents: &HashMap<String, String>) 
 /// class feature without being renamed after the standard
 /// (`plan/detail/bmecat-export.md` §11.7). An attribute that is *named* like the
 /// code needs no entry — the feature name is the fallback in
-/// [`resolved_features`]. Only definitions carrying a binding are loaded (a small
-/// set), so this stays cheap for a catalogue with thousands of standard features.
-pub(crate) async fn feature_bindings(db: &Db) -> Result<HashMap<String, String>, ApiError> {
-    let mut response = db
-        .inner()
-        .query("SELECT name, standard_codes FROM attribute_definition WHERE standard_codes IS NOT NONE;")
-        .await?
-        .check()?;
-    let rows: Vec<Value> = response.take(0)?;
-    let mut bindings: HashMap<String, String> = HashMap::new();
-    for row in rows {
-        let Some(name) = row.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(codes) = row.get("standard_codes").and_then(Value::as_object) else {
-            continue;
-        };
-        for code in codes.values().filter_map(Value::as_str) {
-            // The write path rejects a code claimed twice; should old data still
-            // carry one, the first binding wins instead of flapping.
-            bindings
-                .entry(code.to_owned())
-                .or_insert_with(|| name.to_owned());
-        }
-    }
-    Ok(bindings)
+/// [`resolved_features`].
+///
+/// The bindings are loaded through [`crate::cache::MetaCache::feature_bindings`]
+/// (cached, invalidated with the attribute definitions): with a classification
+/// standard installed **every** feature definition carries a binding, so the
+/// query is 17 397 rows / ~0.3 s and must not run per object.
+pub(crate) async fn feature_bindings(
+    cache: &MetaCache,
+    db: &Db,
+) -> Result<Arc<HashMap<String, String>>, ApiError> {
+    cache.feature_bindings(db).await
 }
 
 /// The attribute that carries a feature's value: the **binding** wins, otherwise
@@ -234,12 +221,13 @@ pub(crate) struct ResolvedFeature {
 /// Returns the features sorted by name; a feature required by one class and
 /// optional in another counts as required.
 pub(crate) async fn resolved_features(
+    cache: &MetaCache,
     db: &Db,
     object_key: &str,
 ) -> Result<Vec<ResolvedFeature>, ApiError> {
     let relations = category_relation_keys(db).await?;
     let assigned = assigned_node_keys(db, object_key, &relations).await?;
-    let bindings = feature_bindings(db).await?;
+    let bindings = feature_bindings(cache, db).await?;
     let mut features: HashMap<String, ResolvedFeature> = HashMap::new();
     let mut seen_nodes: HashSet<String> = HashSet::new();
     for node in assigned {
@@ -271,11 +259,12 @@ pub(crate) async fn resolved_features(
 /// its classes). Used by the completeness computation: it counts **values**, so a
 /// feature bound to an own attribute contributes that attribute's name.
 pub(crate) async fn class_required_names(
+    cache: &MetaCache,
     db: &Db,
     object_key: &str,
 ) -> Result<Vec<String>, ApiError> {
     let mut names: Vec<String> = Vec::new();
-    for feature in resolved_features(db, object_key).await? {
+    for feature in resolved_features(cache, db, object_key).await? {
         if feature.required && !names.contains(&feature.attribute) {
             names.push(feature.attribute);
         }
@@ -290,6 +279,7 @@ pub(crate) async fn class_required_names(
 /// has it. Two bulk queries (categorisation edges, feature rows) plus the
 /// in-memory ancestor walk keep this cheap for large result sets.
 pub(crate) async fn class_required_names_batch(
+    cache: &MetaCache,
     db: &Db,
     object_keys: &[String],
     parents: &HashMap<String, String>,
@@ -302,7 +292,7 @@ pub(crate) async fn class_required_names_batch(
     if relations.is_empty() {
         return Ok(out);
     }
-    let bindings = feature_bindings(db).await?;
+    let bindings = feature_bindings(cache, db).await?;
     // Assignments of the whole batch: object key -> class node keys.
     let mut response = db
         .inner()

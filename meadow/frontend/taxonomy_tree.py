@@ -111,6 +111,42 @@ def search_nodes(hits: Iterable[Mapping]) -> list[dict]:
     return nodes
 
 
+def path_nodes(path: Iterable[dict]) -> list[dict]:
+    """Nests a root-first node path so the tree shows it as one branch.
+
+    The nodes are the ancestor path of a search hit (root-most first, the hit
+    itself last — `GET /objects/{id}/ancestors`). Every node carries the next one
+    as its inline ``children``, so the branch is visible without a server
+    round-trip; only the last node keeps its ``lazy`` flag, and its subtree is
+    loaded on demand like any other tree node. Intermediate nodes are
+    deliberately **not** lazy: a lazy expansion would fetch that node's *paged*
+    children from the core and replace the branch.
+    """
+    nodes = [dict(node) for node in path]
+    if not nodes:
+        return []
+    for parent, child in zip(nodes, nodes[1:], strict=False):
+        parent.pop("lazy", None)
+        parent["children"] = [child]
+    return [nodes[0]]
+
+
+def path_chain(nodes: Iterable[dict]) -> list[dict]:
+    """The nodes of a nested [`path_nodes`] branch, root-most first.
+
+    The caller expands every node but the last one (its keys, so the target node
+    of the path is visible without clicking through the hierarchy) and labels the
+    caption with the last node — the hit.
+    """
+    chain: list[dict] = []
+    node: Mapping | None = next(iter(nodes), None)
+    while node is not None:
+        chain.append(dict(node))
+        children = node.get("children") or []
+        node = children[0] if children else None
+    return chain
+
+
 def uses_server_search(query: str, *, paged: bool) -> bool:
     """Whether a typed query must be answered by the server.
 

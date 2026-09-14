@@ -141,6 +141,8 @@ async def categories_page() -> None:
         tree_override: list[dict] = []
         #: The query the current `tree_override` was loaded for.
         tree_query: dict = {"value": ""}
+        #: Ancestor branch of a hit the user opened in the tree (empty = normal tree).
+        tree_path: list[dict] = []
 
         # --- multilingual name editing (product-form style) ------------------
         # The category `name` is a ``{lang: value}`` map. The inline field edits
@@ -215,12 +217,8 @@ async def categories_page() -> None:
             )
             return [tree_node_from_object(child, locale) for child in children]
 
-        async def handle_category_select(e) -> None:
-            node_id = e.value if hasattr(e, "value") else None
-            if node_id == taxonomy_tree.MORE_ID:
-                # The trailing node of a paged taxonomy: append the next page.
-                await load_more_roots()
-                return
+        async def select_category(node_id: str | None) -> None:
+            """Selects a tree node (also used by the search hit list)."""
             if not node_id:
                 selected_category.update({"id": None, "label": "", "type": "", "status": ""})
                 await render_detail()
@@ -241,20 +239,35 @@ async def categories_page() -> None:
             )
             await render_detail()
 
+        async def handle_category_select(e) -> None:
+            node_id = e.value if hasattr(e, "value") else None
+            if node_id == taxonomy_tree.MORE_ID:
+                # The trailing node of a paged taxonomy: append the next page.
+                await load_more_roots()
+                return
+            await select_category(node_id)
+
         def render_tree() -> None:
             if host is None:
                 return
             host.clear()
-            if tree_override:
+            # A tree is only built when the panel shows the hierarchy; the flat
+            # search hit list is rendered as rows (select a hit or open it in the
+            # tree).
+            tree: LazyTree | None = None
+            hit_list = bool(tree_override) and not tree_path
+            if tree_path:
+                node_list = tree_path
+            elif hit_list:
                 # Server-side search hits: flat, no hierarchy to load.
-                nodes = tree_override
+                node_list = tree_override
             else:
                 roots = category_roots
                 if selected_tree["id"]:
                     filtered = [r for r in category_roots if r["id"] == selected_tree["id"]]
                     if filtered:
                         roots = filtered
-                nodes = taxonomy_tree.tree_nodes(
+                node_list = taxonomy_tree.tree_nodes(
                     roots,
                     more_label=(
                         t("grid.taxonomy_more")
@@ -263,31 +276,59 @@ async def categories_page() -> None:
                     ),
                 )
             with host:
-                if tree_override:
+                chain = taxonomy_tree.path_chain(tree_path) if tree_path else []
+                if chain:
+                    ui.label(t("grid.taxonomy_path").format(label=chain[-1]["label"])).classes(
+                        "text-caption text-orange-600"
+                    )
+                elif hit_list:
                     ui.label(
                         t("grid.taxonomy_results").format(
                             count=len(tree_override), query=tree_query["value"]
                         )
                     ).classes("text-caption text-orange-600")
-                tree = LazyTree(
-                    nodes or [],
-                    on_select=handle_category_select,
-                    load_children=load_category_children,
-                    virtual_scroll=True,
-                ).classes("w-full")
-                tree.add_slot(
-                    "default-header",
-                    '<span :props="props">{{ props.node.label }}'
-                    '<small v-if="props.node.type" class="text-caption text-gray-500">'
-                    " &middot; {{ props.node.type }}</small>"
-                    '<small v-if="props.node.count !== undefined" '
-                    'class="text-caption text-gray-500">'
-                    " &middot; {{ props.node.count }}</small></span>",
-                )
-                if not nodes:
-                    ui.label(t("categories.no_categories")).classes("text-caption text-gray-500")
+                if hit_list:
+                    with ui.column().classes("w-full gap-0"):
+                        for hit in tree_override:
+                            with (
+                                ui.row()
+                                .classes("items-center gap-1 w-full py-0")
+                                .style("flex-wrap: nowrap")
+                            ):
+                                ui.button(
+                                    str(hit["label"]),
+                                    on_click=lambda n=hit: select_category(str(n["id"])),  # type: ignore
+                                ).props("flat dense no-caps align=left").classes(
+                                    "grow justify-start text-left"
+                                )
+                                ui.button(
+                                    icon="account_tree",
+                                    on_click=lambda n=hit: show_in_tree(str(n["id"])),  # type: ignore
+                                ).props("flat dense").tooltip(t("grid.taxonomy_in_tree"))
+                else:
+                    tree = LazyTree(
+                        node_list or [],
+                        on_select=handle_category_select,
+                        load_children=load_category_children,
+                        virtual_scroll=True,
+                    ).classes("w-full")
+                    tree.add_slot(
+                        "default-header",
+                        '<span :props="props">{{ props.node.label }}'
+                        '<small v-if="props.node.type" class="text-caption text-gray-500">'
+                        " &middot; {{ props.node.type }}</small>"
+                        '<small v-if="props.node.count !== undefined" '
+                        'class="text-caption text-gray-500">'
+                        " &middot; {{ props.node.count }}</small></span>",
+                    )
+                    if tree_path:
+                        tree.set_path(node_list, [str(node["id"]) for node in chain[:-1]])
+                    elif not node_list:
+                        ui.label(t("categories.no_categories")).classes(
+                            "text-caption text-gray-500"
+                        )
             current_tree["tree"] = tree
-            current_tree["nodes"] = nodes
+            current_tree["nodes"] = node_list
 
         def collapse_all() -> None:
             if current_tree["tree"] is not None:
@@ -317,7 +358,25 @@ async def categories_page() -> None:
                 ui.notify(t("grid.taxonomy_search_failed"), color="negative")
                 return
             tree_override[:] = taxonomy_tree.search_nodes(hits)
+            tree_path.clear()
             tree_query["value"] = query
+            render_tree()
+
+        async def show_in_tree(node_id: str) -> None:
+            """Shows a search hit in its hierarchy (`GET .../ancestors`).
+
+            A hit can sit below a class that is far beyond the loaded page (or
+            outside the shown taxonomy) — a flat hit list cannot say where it
+            belongs. The tree renders the hit's ancestor branch then, expanded down
+            to the node; clearing the filter brings the normal tree back.
+            """
+            try:
+                path = await client.list_object_ancestors(token, node_id)
+            except Exception:  # noqa: BLE001 - keep the hit list on failure
+                ui.notify(t("grid.taxonomy_path_failed"), color="negative")
+                return
+            nodes_list = [tree_node_from_object(node, locale) for node in path]
+            tree_path[:] = taxonomy_tree.path_nodes(nodes_list)
             render_tree()
 
         async def apply_tree_filter(value: str) -> None:
@@ -326,8 +385,9 @@ async def categories_page() -> None:
             if taxonomy_tree.uses_server_search(query, paged=roots_has_more["value"]):
                 await search_taxonomy(query)
                 return
-            if tree_override or tree_query["value"]:
+            if tree_override or tree_query["value"] or tree_path:
                 tree_override.clear()
+                tree_path.clear()
                 tree_query["value"] = ""
                 render_tree()
                 return
@@ -379,6 +439,7 @@ async def categories_page() -> None:
             selected_category.update({"id": None, "label": "", "type": "", "status": ""})
             selected_tree["id"] = None
             tree_override.clear()
+            tree_path.clear()
             tree_query["value"] = ""
             filter_input.set_value("")
             await reload_tree()
