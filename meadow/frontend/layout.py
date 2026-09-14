@@ -38,6 +38,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.enum_sets", "/enum-sets", True),
     ("nav.channels", "/channels", True),
     ("nav.saved_searches", "/saved-searches", True),
+    ("nav.export_profiles", "/export-profiles", True),
     ("nav.config", "/config", True),
     ("nav.system_settings", "/system-settings", True),
     ("nav.system_logs", "/system-logs", True),

@@ -399,6 +399,25 @@ DEFINE FIELD OVERWRITE created_at ON TABLE import_document TYPE datetime DEFAULT
 DEFINE FIELD IF NOT EXISTS created_by ON TABLE import_document TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_import_document_created ON TABLE import_document FIELDS created_at;
 
+-- Export profiles: the saved configurations of the export wizard
+-- (`plan/detail/bmecat-export.md` §5). A profile is the `ExportRequest`
+-- **without `source`** — format, field list, locales, options and the `bmecat`
+-- block — so the *how* of an export survives a catalogue migration (the MCF
+-- section `export_profiles` carries it, `konfiguration-export-import.md`). The
+-- record key is derived from `name` (`Meadow BMEcat 1.2` → `meadow-bmecat-1-2`),
+-- so a round trip into an empty catalogue rebuilds the same keys.
+DEFINE TABLE IF NOT EXISTS export_profile;
+DEFINE FIELD IF NOT EXISTS name ON TABLE export_profile TYPE string;
+DEFINE FIELD IF NOT EXISTS format ON TABLE export_profile TYPE string;
+DEFINE FIELD IF NOT EXISTS notes ON TABLE export_profile TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS parameters ON TABLE export_profile TYPE object DEFAULT {};
+DEFINE FIELD OVERWRITE created_at ON TABLE export_profile TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE export_profile TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS created_by ON TABLE export_profile TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE export_profile TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_export_profile_name ON TABLE export_profile FIELDS name UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_export_profile_format ON TABLE export_profile FIELDS format;
+
 -- Full-text search: one shared analyzer plus an index over the flexible
 -- `attributes` object. Per-field indexes can be added for hot fields later.
 DEFINE ANALYZER IF NOT EXISTS meadow_std TOKENIZERS blank,class FILTERS lowercase;

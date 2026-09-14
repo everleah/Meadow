@@ -10,6 +10,7 @@ pub mod config;
 pub mod connector_schema;
 pub mod connectors;
 pub mod enum_sets;
+pub mod export_profiles;
 pub mod exports;
 pub mod groups;
 pub mod health;
@@ -79,6 +80,11 @@ use utoipa::OpenApi;
         classification_standards::create_classification_standard,
         classification_standards::update_classification_standard,
         classification_standards::delete_classification_standard,
+        export_profiles::list_export_profiles,
+        export_profiles::get_export_profile,
+        export_profiles::create_export_profile,
+        export_profiles::update_export_profile,
+        export_profiles::delete_export_profile,
         category_attributes::list_category_attributes,
         category_attributes::create_category_attribute,
         category_attributes::update_category_attribute,
@@ -201,6 +207,9 @@ use utoipa::OpenApi;
         classification_standards::ListStandards,
         classification_standards::CreateStandard,
         classification_standards::UpdateStandard,
+        export_profiles::ListExportProfiles,
+        export_profiles::CreateExportProfile,
+        export_profiles::UpdateExportProfile,
         objects::WriteObjectQuery,
         keys::ByKeyParams,
         objects::BySourceParams,

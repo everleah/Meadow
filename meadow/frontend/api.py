@@ -2685,6 +2685,88 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_export_profiles(self, token: str, *, format: str | None = None) -> list[dict]:
+        """Lists the saved export profiles (``GET /export-profiles``, editor+).
+
+        A profile is the export configuration without the ``source``: the format
+        plus the field list, locales, options and ``bmecat`` block. The wizard
+        loads one to prefill its form and can save the current settings back.
+        """
+        params = {"format": format} if format else {}
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/export-profiles",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def create_export_profile(
+        self,
+        token: str,
+        *,
+        name: str,
+        format: str,
+        notes: str | None = None,
+        parameters: dict | None = None,
+    ) -> dict:
+        """Creates a saved export profile (``POST /export-profiles``, admin)."""
+        payload: dict[str, object] = {"name": name, "format": format}
+        if notes:
+            payload["notes"] = notes
+        if parameters is not None:
+            payload["parameters"] = parameters
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/export-profiles",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_export_profile(
+        self,
+        token: str,
+        profile_id: str,
+        *,
+        format: str | None = None,
+        notes: str | None = None,
+        parameters: dict | None = None,
+    ) -> dict:
+        """Updates a saved export profile (``PATCH /export-profiles/{id}``, admin).
+
+        ``name`` is immutable; an empty ``notes`` clears the field.
+        """
+        payload: dict[str, object] = {}
+        if format is not None:
+            payload["format"] = format
+        if notes is not None:
+            payload["notes"] = notes
+        if parameters is not None:
+            payload["parameters"] = parameters
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/export-profiles/{profile_id}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_export_profile(self, token: str, profile_id: str) -> None:
+        """Deletes a saved export profile (``DELETE /export-profiles/{id}``, admin)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/export-profiles/{profile_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
     async def create_export(
         self,
         token: str,

@@ -159,11 +159,29 @@ Ein Katalogdokument ist **keine Tabelle**: Spaltenauswahl, Trennzeichen und Head
 
 - **Vorgaben/Zwänge:** der Wizard schickt kein `fields`-Array (die Spaltenauswahl ist ausgeblendet) und die Formatprüfung entfällt — `bmecat` exportiert die Klasse, nicht die gewählten Felder. Bei `transaction = Kataloglieferung` erscheinen zusätzlich Preis-Attribut, Preisart und die beiden Einheitencodes (BMEcat-Codes, nicht Meadow-Symbole); der Standard verlangt dort Bestelldaten, einen Preis und einen UDX-Block je Produkt, deshalb wird ein Produkt ohne Preis übersprungen und im Bericht genannt. **BMEcat 1.2 (V1b, 2026-09-13)** hängt an denselben Feldern: die Wahl **„1.2"** blendet die **Schema-Variante** ein, **deaktiviert** die Transaktionswahl (1.2 kennt keine preislose Lieferung) und zeigt die Preiszeile immer; das vertikale Layout der Karte bleibt dabei erhalten (kein nacktes Control). Alles andere (Quelle inkl. Kanal/Kollektion, `email_to`, geplante Exporte) läuft über denselben Job.
 - **Bericht statt Download-Überraschung:** der Report-Dialog zeigt zuerst den **Dialekt** („BMEcat 1.2 (DTD), Transaktion new_catalog") und dann Produkte/Klassen/Merkmale/„mit Wert"/„als `-`", die übersprungenen Objekte mit Grund (inkl. „kein Preis"), Pflichtmerkmale ohne Wert, Klartext-Merkmale sowie das **Schema-Verdikt** der gewählten Version — inklusive der Zeile **„zugeordnete Taxonomieknoten ohne `code`"**, wenn Produkte deshalb nicht im Katalog landen (§11.10 in [bmecat-export.md](bmecat-export.md)), dem **Referenz-Merkmalsystem** samt Hinweis, wenn keines registriert ist, und den **Hinweisen** (`issues`) zu Inhalten, die der Dialekt nicht ausdrücken kann — bei 1.2 die nicht schreibbare Basisprodukt-Referenz (§11.12).
-- **Noch offen:** Profil als speicherbare Entität (eigene Admin-Seite nach §10 Punkt 5 der BMEcat-Planung), mehrere Sprachen/Kanäle je Lauf, 1.2-`VARIANTS`, Streaming für sehr große Kataloge.
+- **Noch offen:** mehrere Sprachen/Kanäle je Lauf, 1.2-`VARIANTS`, Streaming für sehr große Kataloge.
+
+### 5.7 Gespeicherte Export-Profile (`/export-profiles`, umgesetzt 2026-09-14)
+
+Ein Export wiederholt sich: dieselben Spalten, dieselbe Sprache, dieselben Optionen, derselbe Katalogkopf. Deshalb ist die Konfiguration eine **eigene Entität** — `export_profile`, der `ExportRequest` **ohne `source`**: `format` plus `parameters` (`fields`, `locales`, `options`, `bmecat`). Das **Was** (Quelle) bleibt eine Entscheidung pro Lauf, das **Wie** ist das Wiederverwendbare.
+
+| Endpunkt | Rolle | Zweck |
+|---|---|---|
+| `GET /export-profiles` | `editor+` | Liste (optional `?format=`), gefüllt das Auswahlfeld des Wizards |
+| `GET /export-profiles/{id}` | `editor+` | Ein Profil — per Record-Key, `id` oder **Name** |
+| `POST /export-profiles` | `admin` | Anlegen (`name` ist der Schlüssel, unveränderlich) |
+| `PATCH /export-profiles/{id}` | `admin` | Format, Notiz, Parameter (`notes: ""` löscht) |
+| `DELETE /export-profiles/{id}` | `admin` | Löschen (keine Exportdaten betroffen) |
+
+- **Admin-Seite `/export-profiles`** (neu, `admin`, Nav-Eintrag „Export-Profile"): Tabelle (Name, Format, Parameter-Zusammenfassung, Notiz, geändert), Dialog mit Name/Format/Notiz und den **Parametern als JSON** — bewusst als JSON, weil der Assistent genau den Rumpf schreibt, den `POST /exports` erwartet, und ein Operator ihn so herauskopieren kann. Ungültiges JSON und eine falsche Wurzel werden vor dem Senden gemeldet, die Kernfehler (unbekanntes Format, unbekannter Parameter-Schlüssel, doppelter Name) kommen als Meldung zurück.
+- **Wizard `/export`:** Karte **„Gespeichertes Profil"** ganz oben. Die Auswahl **füllt das Formular** (Format, Locale-Mehrfachauswahl, Optionen inkl. „Vererbte Werte", Spaltenauswahl, BMEcat-Block inkl. Dialekt und Schema-Variante — auch die Sichtbarkeiten wie Preiszeile/Schema-Variante werden nachgezogen); **„Als Profil speichern"** (`admin`) legt den Ist-Stand ab und wählt das neue Profil aus. Die E-Mail-Empfänger bleiben außen vor (pro Lieferung), und Felder, die die aktuelle Quelle nicht anbietet, werden **gezählt und gemeldet** statt still zu verschwinden.
+- **Portabel:** die MCF-Sektion `export_profiles` nimmt die Profile mit ([konfiguration-export-import.md](konfiguration-export-import.md) §4.11) — ein Umzug Staging → Prod hätte sonst die Daten, aber nicht die Art zu exportieren.
+- **Noch offen:** mehrere Profile je Kanal verwalten/umschalten, Historie/Versionierung, `source` als Bestandteil („gespeicherter Lauf").
 
 ## 6. Frontend (NiceGUI)
 
 - Neue Seite **`/export`** (Wizard, `editor+`-Rolle):
+  0. **Gespeichertes Profil** (§5.7) — Auswahl lädt Format, Sprachen, Optionen, Spalten und BMEcat-Block; „Als Profil speichern" (admin) legt den Ist-Stand ab. Die **Quelle** ist bewusst nicht Teil eines Profils.
   1. **Quelle** (Select: Typ / Kategorie-Baum / Collection / gespeicherte Suche / Grid-Auswahl; abhängig davon Detailselektor).
   2. **Felder** — **gruppiert nach Attributgruppe** (Basis-Felder zuerst, je Gruppe eine `ui.expansion` mit Anzahl und Sammel-Checkbox, „Attribute ohne Gruppe" zuletzt); gezeigt werden **nur die Attribute, die der gewählte Objekttyp erlaubt** (`applicable_types`, leere Liste = alle Typen — die Quellen Collection/Suche/Kanal legen keinen Typ fest, dort bleiben alle sichtbar, mit Hinweiszeile). Die Checkbox zeigt `Label (name)`, weil der Spaltenname bei einem importierten Standard der Merkmalscode ist. Die Auswahl bleibt beim Umschalten der Quelle erhalten (Zustand außerhalb des Renderers); gerendert wird von `meadow/frontend/export_fields.py` (rein, getestet).
   3. **Format + Sprache + Optionen** — Format-Select (CSV/XLSX/JSON/**BMEcat**), **Locale-Mehrfachauswahl**, Optionen (Header, Trenner, quantifizierte Werte, `include_system`). Bei Format **BMEcat** entfallen Feldauswahl und CSV-Optionen; stattdessen erscheint die Profilkarte (§5.6).
@@ -171,6 +189,7 @@ Ein Katalogdokument ist **keine Tabelle**: Spaltenauswahl, Trennzeichen und Head
 - Im **Product-Grid** (`/products`): „Export-Auswahl / Export-Filter" Aktion.
 - Auf der **Collections-Seite** (`/saved-searches`): „Exportieren"-Button + „Mitglieder hinzufügen"-Import-Dialog.
 - Neue Seite **`/import`** (tabellarischer Import, `editor+`): Upload (CSV/XLSX/**MEF-JSON**) → Parse-Status → je nach Datei **Spalten-Mapping** (CSV/XLSX, mit Arbeitsblatt-Auswahl bei Mehrblatt) oder **MEF-Zusammenfassung** → Default-Objekttyp / Business-Schlüssel / `match_by_id` / Quelle / `emit_events` → **Vorschau** und **Import** mit Report-Dialog. i18n-Keys `import.*`.
+- Neue Seite **`/export-profiles`** (Profile, `admin`, §5.7): Tabelle + Dialog (Parameter als JSON) + Löschen mit Rückfrage. i18n-Keys `export_profiles.*` und `export.profile_*`.
 - In der Karte **„Recent exports"** (auf `/export`): Download pro Lauf; für Admins zusätzlich **Löschen** pro Zeile und **„Alle löschen"** (`DELETE /jobs/runs/{run_id}`, admin).
 - i18n-Keys (`export.*`, `import.*`, `collection.import_members`) in en/de/fr.
 

@@ -1,4 +1,4 @@
-# BMEcat-Export & -Import / externe Klassifikationsstandards
+﻿# BMEcat-Export & -Import / externe Klassifikationsstandards
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)); ergänzt Abschnitt 4 ([Datenmodell](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 9 (Ausbau), aufbauend auf dem MEF/MCF-Export/Import (Phase 6/9)
@@ -82,6 +82,8 @@ Ein BMEcat-Export braucht eine **Konfiguration**, sonst ist das Mapping im Code 
 
 **Aktueller Stand der Lücke:** Profile existieren heute nicht; der MEF-Export (`exports.rs`) kennt nur Feldlisten je Format (CSV/XLSX/JSON), keine Zielstruktur-Mappings.
 
+**Umgesetzt (2026-09-14, §11.13):** die Entität existiert als **`export_profile`** (`GET/POST /export-profiles`, `GET/PATCH/DELETE /export-profiles/{id}`, admin für Schreiben), pflegbar über die Admin-Seite **`/export-profiles`** und **im MCF** als eigene Sektion (`export_profiles`). Ein Profil ist der `ExportRequest` **ohne `source`**: `format` + `parameters` (`fields`, `locales`, `options`, `bmecat`). Die im Entwurf genannten Feld-/Ziel-Mappings pro Attribut sind **nicht** Teil davon — das Mapping liegt im Worker (`meadow/worker/bmecat.py`) und ist durch den Standard fixiert; ein Profil transportiert nur die Einstellungen, die ein Anwender im Assistenten trifft.
+
 ## 6. Import (BMEcat → Meadow)
 
 - **Modi:** `T_NEW_CATALOG`, `T_UPDATE_PRODUCTS`, `T_DELETE_PRODUCTS` (Umfang/Regeln noch zu verifizieren) — V1 nur `T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`.
@@ -119,7 +121,7 @@ Ein BMEcat-Export braucht eine **Konfiguration**, sonst ist das Mapping im Code 
 2. **ETIM xChange als primäres Ziel** (mit ETIM-Verweis-Merkmalen) oder „generisches BMEcat" mit ETIM als einem Klassifikationssystem? Vorschlag: ETIM-xChange-konform als V1-Ziel, generisch als Profiloption.
 3. **Sprachstrategie:** eine Datei je Sprache (Standard-konform) oder mehrsprachige UDX-Lösung? Vorschlag: Datei je Sprache.
 4. **Preise/Varianten** in V1 oder erst V4? Vorschlag: erst V4.
-5. **Wo liegt das Profil-UI** (`/export`-Wizard vs. eigene Admin-Seite `/export-profiles`)? Vorschlag: eigene Admin-Seite + Wizard wählt das Profil.
+5. **Wo liegt das Profil-UI** (`/export`-Wizard vs. eigene Admin-Seite `/export-profiles`)? Vorschlag: eigene Admin-Seite + Wizard wählt das Profil. → **entschieden und umgesetzt (§11.13):** beides — `/export-profiles` (Tabelle, Dialog mit JSON-Parameterfeld, Löschen) **und** im Wizard ein Auswahlfeld, das das Formular füllt, plus "Als Profil speichern" (admin). Der MCF-Abschnitt macht die Profile portabel.
 6. **ETIM-Zugang:** liegt ein `client_id`/`client_secret` für die ETIM-API bzw. ein CMT-Export vor? Ohne Datenquelle bleibt der Spike bei einem manuell erfassten Ausschnitt.
 
 ## 11. Verifizierte Grundlagen & Korrekturen (Recherche-Nachtrag 2026-09-12)
@@ -415,3 +417,28 @@ Automatisiert in `tests/test_bmecat.py` (49 Tests): Artikelvokabular (und dass *
 
 **Offen (bewusst nicht in V1b):** `FEATURE/VARIANTS` (die 1.2-Variantenmechanik), `CLASSIFICATION_SYSTEM`/`CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES`/`CATALOG_GROUP_SYSTEM` (das 1.2-Klassifikationssystem selbst mitzuliefern — der Weg für ECLASS/eigene Standards, §11.8), `EAN`, `MIME_INFO`, `FORDER`/`FDESCR`, `TERRITORY`/`PRICE_FLAG`/`AGREEMENT`, `ARTICLE_TO_CATALOGGROUP_MAP` (Navigationszuordnung) sowie die Import-Seite von 1.2 (`T_NEW_CATALOG`/`T_UPDATE_*`, V2).
 
+
+### 11.13 Gespeicherte Export-Profile (V3) — umgesetzt (2026-09-14)
+
+**Was ein Profil ist:** der `ExportRequest` **ohne `source`** — `format` plus `parameters` mit den Schlüsseln `fields`, `locales`, `options`, `bmecat`. Die *Quelle* (Typ/Kategorie/Collection/Suche/Kanal/Auswahl) bleibt eine Entscheidung pro Lauf, das *Wie* ist das Wiederverwendbare. Der Aufbau ist damit derselbe wie in §5 beschrieben, nur ohne die dort skizzierten Feld-/Ziel-Mappings pro Attribut: **das Mapping ist im Worker fixiert** (`meadow/worker/bmecat.py`), das Profil trägt die Einstellungen, die ein Anwender im Assistenten trifft.
+
+**Kern (neu):**
+
+- Tabelle `export_profile` (Schema in `crates/pim-core/src/schema.rs`): `name` (unique, zugleich der Record-Key), `format`, `notes option<string>`, `parameters object`, `created_by`/`updated_by`, `created_at`/`updated_at`.
+- `crates/pim-core/src/api/export_profiles.rs`: `GET /export-profiles` (editor+, optional `?format=`), `GET/PATCH/DELETE /export-profiles/{id}` (admin für Schreiben, Audits `export_profile_created|updated|deleted`). Ein Profil ist per Record-Key, per `id` **oder** per Name adressierbar (`record_key("Meadow BMEcat 1.2") = meadow-bmecat-1-2`), damit ein Aufrufer zurückgeben kann, was er bekommen hat.
+- Validierung ist geschlossen: unbekanntes Format ⇒ 400, unbekannter Parameter-Schlüssel ⇒ 400 (ein Tippfehler soll nicht still verloren gehen), `fields`/`locales` müssen String-Arrays sein (Duplikate und Leerstrings werden entfernt), `options`/`bmecat` Objekte. Doppelter Name ⇒ 409. `notes: ""` **löscht** das Feld (explizites `UNSET`, weil ein `option<string>` kein JSON-`null` annimmt — dieselbe Regel wie im Objekt-PATCH).
+- MCF-Sektion **`export_profiles`** (`crates/pim-core/src/api/config/export_profiles.rs`): `mode=merge` legt fehlende an und aktualisiert geänderte, `mode=replace` löscht Profile, die nicht im Dokument stehen (`record_in_use` ⇒ nie blockiert), `dry_run` schreibt nichts. Ein Eintrag mit unbekanntem Format oder kaputten Parametern wird als **Fehler** gemeldet und übersprungen, der Rest läuft.
+
+**Frontend (neu):**
+
+- `/export-profiles` (`meadow/frontend/export_profiles.py`): Tabelle (Name, Format, Parameter-Zusammenfassung, Notiz, geändert), Dialog zum Anlegen/Bearbeiten (Name unveränderlich, Format, Notiz, **Parameter als JSON** — der Assistent schreibt genau das, was `POST /exports` erwartet), Löschen mit Rückfrage.
+- `/export` (`meadow/frontend/export_page.py`): Karte „Gespeichertes Profil" ganz oben — Auswahl lädt Format, Sprachen, Optionen, Spaltenauswahl und den BMEcat-Block; „Als Profil speichern" (admin) legt den Ist-Stand ab. Die E-Mail-Empfänger werden **nicht** mitgespeichert (pro Lieferung). Nicht angebotene Felder eines Profils (andere Objektart) werden gezählt und gemeldet, statt still zu verschwinden.
+
+**Zwei Fehler, die erst diese Sektion sichtbar gemacht hat (beide behoben):**
+
+1. **SurrealDB quotet Record-Keys, die es quoten muss** — ein Key mit Bindestrich kommt als ``classification_standard:`etim-10-0` `` bzw. ``export_profile:`meadow-bmecat` `` zurück. Wurde so ein `id` wieder an `type::record(table, key)` gegeben, adressierte es einen **anderen** (nicht existierenden) Datensatz: `PATCH /export-profiles/{id}` antwortete 404, und im MCF-Import meldete `mode=replace` eine **Löschung, die nie stattfand**, bzw. ein `update`, das nichts änderte (die Idempotenz-Prüfung blieb dabei unauffällig, weil sie nur vergleicht). Fix an einer Stelle: `id_of()` in `config.rs` entfernt die Quotierung, `find_profile`/`resolve_standard` akzeptieren alle drei Schreibweisen (`key`, `table:key`, ``table:`key` ``).
+2. **`?counts=true`** aus §11.9 bleibt die Regel: auch die Profil-Liste zählt nicht in SQL, sondern liefert Rohzeilen.
+
+**Verifikation (2026-09-14, live gegen Kern + Worker + Frontend):** Anlegen per API (201), Name-Auflösung (`GET /export-profiles/etim-katalog-de`), 409 bei doppeltem Namen, 400 bei `format: pdf` und bei `parameters.sorce`, 401 ohne Token, PATCH per zurückgegebenem `id` (200), `notes: ""` löscht (Feld danach abwesend), „kein Feld" ⇒ 400. MCF-Rundlauf: `dry_run` und ein zweiter `merge` ⇒ `skipped`, ein geänderter Eintrag ⇒ `updated` **und der Wert ist danach wirklich geändert**, `replace` **löscht** das nicht gelistete Profil, ein Eintrag mit `format: pdf` ⇒ Report-Fehler ohne Abbruch. **Ende-zu-Ende:** die Parameter des gespeicherten Profils an `POST /exports` gegeben (Auswahlquelle, `2005`, `new_catalog`, `net_price`) ⇒ **1 Produkt, 1 Klasse, 16 Merkmale, 1 Preis, XSD-valides Dokument (3.9 KB)**. Im Browser: `/export-profiles` listet, legt an (ungültiges JSON ⇒ Fehlermeldung, gültiges ⇒ „Profil gespeichert"), der Doppelklick öffnet den Dialog mit gesperrtem Namen, Löschen mit Rückfrage wirkt; im Assistenten lädt die Auswahl „ETIM Katalog DE" das Formular (Format BMECAT, Katalog-/Preisfelder, Sprache `eng`, „Vererbte Werte" an) und „Als Profil speichern" legt ein Profil an und wählt es aus. Gates: 128 Kern-Tests / 394 Pytest grün.
+
+**Offen (V3-Rest):** eigenes UI zum Umschalten zwischen Profilen mehrerer Kanäle, Profil-Versionierung/Historie, `source` als optionaler Bestandteil („gespeicherter Lauf"), Rechte-Feinschliff (heute admin für Schreiben, editor+ für Lesen).

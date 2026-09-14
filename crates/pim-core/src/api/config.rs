@@ -25,8 +25,10 @@ use crate::error::ApiError;
 // section helpers stay private to this module, so the file sits inside `config/`).
 mod category_attributes;
 mod classification_standards;
+mod export_profiles;
 use category_attributes::{apply_category_attributes, category_attributes_section};
 use classification_standards::{apply_classification_standards, classification_standards_section};
+use export_profiles::{apply_export_profiles, export_profiles_section};
 
 /// Query parameters for `GET /config/export`.
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
@@ -54,6 +56,7 @@ const SECTIONS: &[&str] = &[
     "attribute_definitions",
     "relation_definitions",
     "business_rules",
+    "export_profiles",
     "category_attributes",
 ];
 
@@ -491,6 +494,7 @@ pub async fn export_config(
                 relation_definitions_section(&state.db, include_system).await?
             }
             "business_rules" => business_rules_section(&state.db).await?,
+            "export_profiles" => export_profiles_section(&state.db).await?,
             "category_attributes" => category_attributes_section(&state.db).await?,
             _ => unreachable!("sections were validated by parse_sections"),
         };
@@ -701,11 +705,18 @@ struct Resolve {
 }
 
 /// Extracts the bare record key (`table:key` → `key`) from a record `id`.
+///
+/// SurrealDB **quotes** a key that needs it (`` classification_standard:`etim-10-0`
+/// `` — a dash is one such case, which any keyed record with a version or a
+/// composited name has). The surrounding backticks are part of the serialised id,
+/// not of the value: `type::record(table, id_of(…))` would otherwise address a
+/// different (non-existent) record, so a `replace` would report a deletion that
+/// never happened and an `update` would change nothing.
 fn id_of(record: &Value, table: &str) -> String {
     record
         .get("id")
         .and_then(Value::as_str)
-        .map(|id| bare(id, table).unwrap_or(id).to_owned())
+        .map(|id| bare(id, table).unwrap_or(id).trim_matches('`').to_owned())
         .unwrap_or_default()
 }
 
@@ -1077,6 +1088,10 @@ async fn record_in_use(db: &crate::db::Db, section: &str, row: &Value) -> Result
             // Business rules are not referenced in a blocking way by objects.
             Ok(false)
         }
+        "export_profiles" => {
+            // An export profile configures a run, it is never referenced by data.
+            Ok(false)
+        }
         _ => Ok(true),
     }
 }
@@ -1101,6 +1116,7 @@ async fn replace_target_only(
         "attribute_definitions" => ("attribute_definition", None),
         "relation_definitions" => ("relation_definition", Some("system != true")),
         "business_rules" => ("business_rule", None),
+        "export_profiles" => ("export_profile", None),
         _ => return Ok(()),
     };
     let field = key_field(section);
@@ -2026,6 +2042,7 @@ async fn apply_document(
                 apply_relation_definitions(db, mode, &entries, &mut report).await?
             }
             "business_rules" => apply_business_rules(db, mode, &entries, &mut report).await?,
+            "export_profiles" => apply_export_profiles(db, mode, &entries, &mut report).await?,
             "category_attributes" => {
                 apply_category_attributes(db, mode, &entries, &mut report).await?
             }
@@ -2185,6 +2202,18 @@ mod tests {
         assert_eq!(bare("unit:unit_mm", "unit"), Some("unit_mm"));
         assert_eq!(bare("unit_mm", "unit"), None);
         assert_eq!(bare("object:01M0", "unit"), None);
+    }
+
+    #[test]
+    fn id_of_strips_the_quoting_surreal_adds() {
+        // A keyed record with a dash comes back quoted: without the stripping,
+        // `replace` reported a deletion and `update` a change that never happened.
+        let quoted = json!({ "id": "classification_standard:`etim-10-0`" });
+        assert_eq!(id_of(&quoted, "classification_standard"), "etim-10-0");
+        let plain = json!({ "id": "unit:unit_m" });
+        assert_eq!(id_of(&plain, "unit"), "unit_m");
+        let bare_id = json!({ "id": "etim-10-0" });
+        assert_eq!(id_of(&bare_id, "classification_standard"), "etim-10-0");
     }
 
     #[test]

@@ -100,6 +100,17 @@ pub fn router(state: AppState) -> Router {
                 .delete(api::classification_standards::delete_classification_standard),
         )
         .route(
+            "/export-profiles",
+            get(api::export_profiles::list_export_profiles)
+                .post(api::export_profiles::create_export_profile),
+        )
+        .route(
+            "/export-profiles/{id}",
+            get(api::export_profiles::get_export_profile)
+                .patch(api::export_profiles::update_export_profile)
+                .delete(api::export_profiles::delete_export_profile),
+        )
+        .route(
             "/channels/{id}",
             get(api::channels::get_channel)
                 .patch(api::channels::update_channel)

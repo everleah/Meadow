@@ -418,6 +418,29 @@ async def export_page(request: Request) -> None:
         ui.label(t("export.title")).classes("text-h4")
         ui.label(t("export.subtitle")).classes("text-subtitle1")
 
+        # --- Saved profile ------------------------------------------------
+        # A profile carries the *how* (format, fields, languages, options, BMEcat
+        # block), never the *what*: the source stays a per-run decision. Loading
+        # one fills the form below, saving one stores the current settings
+        # (`/export-profiles` maintains them, the MCF section `export_profiles`
+        # makes them portable).
+        with ui.card().classes("w-full mt-4"):
+            ui.label(t("export.profile_section")).classes("text-subtitle1")
+            with ui.row().classes("items-center gap-2 mt-2"):
+                profile_select = (
+                    ui.select(
+                        {"": t("export.profile_none")},
+                        value="",
+                        label=t("export.profile"),
+                    )
+                    .props("filled dense")
+                    .classes("w-72")
+                )
+                save_profile_button = ui.button(
+                    t("export.profile_save"), icon="bookmark_add"
+                ).props("flat")
+            ui.label(t("export.profile_hint")).classes("text-caption text-gray-500")
+
         # --- Source --------------------------------------------------------
         with ui.card().classes("w-full mt-4"):
             ui.label(t("export.source_section")).classes("text-subtitle1")
@@ -852,6 +875,190 @@ async def export_page(request: Request) -> None:
         def _email_recipients() -> list[str]:
             raw = str(email_input.value or "")
             return [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
+
+        # --- Saved profiles ------------------------------------------------
+        # A profile is the request *without* `source` (format, fields, locales,
+        # options, `bmecat`), so loading one fills this form and saving one stores
+        # what is configured. `/export-profiles` maintains the stored ones.
+        profiles: list[dict] = []
+        try:
+            profiles = await client.list_export_profiles(token)
+        except Exception:  # noqa: BLE001 - the wizard works without profiles
+            profiles = []
+
+        def _profile_parameters() -> dict:
+            """The current settings as profile parameters (`source` excluded)."""
+            options = {
+                "header": bool(header_switch.value),
+                "separator": str(separator_select.value or ","),
+                "include_system": bool(include_system_switch.value),
+                "resolve_inheritance": bool(inherit_switch.value),
+            }
+            parameters: dict = {
+                "fields": _selected_fields(),
+                "locales": _locale_values(),
+                # The e-mail recipients are per delivery, not part of a reusable
+                # profile, so they stay out of the stored options.
+                "options": options,
+            }
+            if _format() == "bmecat":
+                parameters["bmecat"] = _bmecat_profile()
+            return parameters
+
+        def _sort_profiles() -> None:
+            profiles.sort(key=lambda row: str(row.get("name") or "").lower())
+
+        def _refresh_profile_options(selected: str = "") -> None:
+            options = {"": t("export.profile_none")}
+            options.update({str(p.get("id") or ""): str(p.get("name") or "") for p in profiles})
+            profile_select.options = options
+            profile_select.value = selected if selected in options else ""
+            profile_select.update()
+
+        def _apply_bmecat_profile(bmecat: dict) -> None:
+            """Fills the BMEcat card from a profile block (absent keys stay as-is)."""
+            for widget, key in (
+                (bmecat_catalog_id, "catalog_id"),
+                (bmecat_catalog_name, "catalog_name"),
+                (bmecat_catalog_version, "catalog_version"),
+                (bmecat_currency, "currency"),
+                (bmecat_supplier, "supplier"),
+                (bmecat_buyer, "buyer"),
+                (bmecat_pid, "pid_attribute"),
+                (bmecat_price_attribute, "price_attribute"),
+                (bmecat_price_type, "price_type"),
+                (bmecat_order_unit, "order_unit"),
+                (bmecat_content_unit, "content_unit"),
+            ):
+                value = bmecat.get(key)
+                if value:
+                    widget.set_value(str(value))
+            # The profile stores the ISO 639-2/B code the core writes (`eng`),
+            # while the select is keyed by the catalogue's data language (`en`).
+            language = str(bmecat.get("language") or "")
+            for code in data_languages:
+                if BMECAT_LANGUAGES.get(code, code) == language:
+                    bmecat_language.set_value(code)
+                    break
+            version = str(bmecat.get("version") or "")
+            if version in ("2005", "1.2"):
+                bmecat_format_version.set_value(version)
+            variant = str(bmecat.get("schema_variant") or "")
+            if variant in ("dtd", "xsd"):
+                bmecat_schema_variant.set_value(variant)
+            transaction = str(bmecat.get("transaction") or "")
+            if transaction in ("new_productdata", "new_catalog"):
+                bmecat_transaction.set_value(transaction)
+            _update_transaction_visibility()
+
+        def _apply_profile(profile: dict, *, notify: bool = True) -> None:
+            parameters = profile.get("parameters")
+            parameters = parameters if isinstance(parameters, dict) else {}
+            fmt = str(profile.get("format") or "csv").lower()
+            if fmt in FORMATS:
+                format_select.set_value(fmt)
+            locales = parameters.get("locales")
+            if isinstance(locales, list) and locales:
+                locale_select.set_value([str(code) for code in locales])
+            options = parameters.get("options")
+            if isinstance(options, dict):
+                header_switch.set_value(bool(options.get("header", True)))
+                separator = str(options.get("separator") or ",")
+                if separator in (",", ";"):
+                    separator_select.set_value(separator)
+                include_system_switch.set_value(bool(options.get("include_system", False)))
+                inherit_switch.set_value(bool(options.get("resolve_inheritance", False)))
+            fields = parameters.get("fields")
+            wanted = {str(name) for name in fields} if isinstance(fields, list) else set()
+            if isinstance(fields, list):
+                # The profile replaces the selection: a field it does not list
+                # is unticked (base fields stay on by default).
+                field_state.clear()
+                for name in wanted:
+                    field_state[name] = True
+                render_fields.refresh()
+                offered = set(visible_fields)
+                unavailable = sorted(wanted - offered)
+                if unavailable:
+                    ui.notify(
+                        t("export.profile_unavailable").format(count=len(unavailable)),
+                        type="warning",
+                    )
+            bmecat = parameters.get("bmecat")
+            if isinstance(bmecat, dict):
+                _apply_bmecat_profile(bmecat)
+            if notify:
+                ui.notify(
+                    t("export.profile_loaded").format(name=profile.get("name") or ""),
+                    type="positive",
+                )
+
+        #: Set while the save dialog re-selects the profile it just created, so
+        #: that switching to it is not reported as a second, separate action.
+        profile_state: dict[str, bool] = {"quiet": False}
+
+        def _on_profile_selected(profile_id: str) -> None:
+            if not profile_id:
+                return
+            profile = next((p for p in profiles if str(p.get("id")) == profile_id), None)
+            if profile is not None:
+                _apply_profile(profile, notify=not profile_state.pop("quiet", False))
+
+        profile_select.on_value_change(lambda event: _on_profile_selected(str(event.value or "")))
+
+        async def open_save_profile_dialog() -> None:
+            if not auth.is_admin():
+                ui.notify(t("export.profile_admin_only"), type="warning")
+                return
+            with (
+                ui.dialog() as dialog,
+                ui.card().classes("w-[34rem] max-w-[94vw]"),
+            ):
+                ui.label(t("export.profile_save")).classes("text-subtitle1")
+                name_input = (
+                    ui.input(t("export.profile_name")).props("filled dense").classes("w-full")
+                )
+                notes_input = (
+                    ui.input(t("export.profile_notes")).props("filled dense").classes("w-full")
+                )
+                ui.label(t("export.profile_save_hint")).classes("text-caption text-gray-500")
+
+                async def _save() -> None:
+                    name = str(name_input.value or "").strip()
+                    if not name:
+                        ui.notify(t("export.profile_name_required"), type="warning")
+                        return
+                    try:
+                        created = await client.create_export_profile(
+                            token,
+                            name=name,
+                            format=_format(),
+                            notes=str(notes_input.value or ""),
+                            parameters=_profile_parameters(),
+                        )
+                    except CoreError as exc:
+                        ui.notify(t("export.profile_save_failed").format(err=exc), type="negative")
+                        return
+                    dialog.close()
+                    nonlocal profiles
+                    created_id = str(created.get("id") or "")
+                    profiles = [p for p in profiles if str(p.get("id")) != created_id]
+                    profiles.append(created)
+                    _sort_profiles()
+                    # Selecting the new profile applies it, which is the state it
+                    # was saved from - so no second "profile loaded" message.
+                    profile_state["quiet"] = True
+                    _refresh_profile_options(created_id)
+                    ui.notify(t("export.profile_saved"), type="positive")
+
+                with ui.row().classes("w-full justify-end mt-2 gap-2"):
+                    ui.button(t("grid.close"), on_click=dialog.close).props("flat")
+                    ui.button(t("export.profile_save"), on_click=_save).props("unelevated")
+            dialog.open()
+
+        save_profile_button.on_click(open_save_profile_dialog)
+        _sort_profiles()
+        _refresh_profile_options()
 
         async def on_preview() -> None:
             kind = str(kind_select.value)

@@ -13,6 +13,7 @@ from meadow.frontend import (
     connectors,  # noqa: F401  (registers the /connectors page)
     enum_sets,  # noqa: F401  (registers the /enum-sets page)
     export_page,  # noqa: F401  (registers the /export page)
+    export_profiles,  # noqa: F401  (registers the /export-profiles page)
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
@@ -55,6 +56,7 @@ _IMPLEMENTED_ROUTES = {
     "/channels",
     "/config",
     "/export",
+    "/export-profiles",
     "/import",
 }
 

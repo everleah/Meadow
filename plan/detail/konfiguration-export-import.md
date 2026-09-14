@@ -36,6 +36,8 @@ Jede Entität hat einen **stabilen Schlüssel** (nicht die lokale ULID), über d
 | `attribute_definition` | `name` | `unit`, `display_unit`, `enum_set`, `group_ids`, `applicable_types`/`required_types` |
 | `relation_definition` | `name` (Key `rel_<name>`) | `attributes` (edge attributes), `source_types`/`target_types` |
 | `business_rule` | `name` | `applies_to` (Objekttypen), `dependencies` (Attribute) |
+| `classification_standard` | `code` + `version` | `node_type` → Objekttyp (Taxonomie) |
+| `export_profile` | `name` (Record-Key `meadow-bmecat-1-2`) | – (Selbstauskunft: Format + Parameter des Export-Assistenten) |
 
 **Nicht Teil der Konfiguration** (Instanz-/Betriebsbezug):
 - `object` (Instanzdaten per MEF); Kategorie-/Collection-*Bäume* sind Objekte und damit Daten.
@@ -317,6 +319,8 @@ Diese Sektion sagt, **welcher Standard in welcher Version** in den Katalog gelad
 | `attribute_definitions` | `name` | `group_ids`→Gruppenname, `unit`/`display_unit`→Symbol, `enum_set`→Set-Name, `applicable_types`/`required_types`→Objekttyp-Name, `computed_rule`→Regel-Name (Phase 2) |
 | `relation_definitions` | `name` (`rel_<name>`) | `source_types`/`target_types`→Objekttyp-Name, `attributes`→Attributname (Phase 2) |
 | `business_rules` | `name` | `applies_to`→Objekttyp-Name, `dependencies`→Attributname (Phase 2) |
+| `export_profiles` | `name` (Record-Key aus dem Namen) | – (nur Parameter, keine Referenzen) |
+| `category_attributes` | `class` + `attribute` | `class`→Taxonomieknoten-Code/-Key, `attribute`→Attributname |
 
 **Konflikt-/Sicherheitsregeln (verbindlich):**
 
@@ -333,6 +337,21 @@ Diese Sektion sagt, **welcher Standard in welcher Version** in den Katalog gelad
 **Idempotenz:** `merge` ist idempotent – erneuter Import derselben MCF erzeugt `created=0`/`updated=0`. `dry_run` erzeugt nur den Plan, keine Änderung.
 
 **`replace`-Modus (optional):** löscht zuerst nur **eigene** Einträge der jeweiligen Sektion (nicht `system`), dann Neuaufbau. Nur sinnvoll, wenn keine Objekte die Definitionen verwenden (sonst `409`/blockiert). Empfehlung: Default = `merge`.
+
+### 4.11 Sektion `export_profiles` (gespeicherte Export-Profile)
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `name` | string | Anzeigename **und** stabiler Schlüssel (`Meadow BMEcat 1.2` → `meadow-bmecat-1-2`), unveränderlich |
+| `format` | string | `csv` \| `xlsx` \| `json` \| `bmecat` |
+| `notes` | string? | Freitext |
+| `parameters` | object | `POST /exports` **ohne `source`**: `fields`, `locales`, `options`, `bmecat` |
+
+Ein Profil ist die wiederverwendbare Konfiguration des Export-Assistenten (`bmecat-export.md` §5, §11.13). Es trägt das **Wie**, nie das **Was**: die Quelle wird pro Lauf gewählt, deshalb ist sie kein Feld dieser Sektion. Ein Umzug Staging → Prod nimmt die Profile mit — sonst hätte die Zielumgebung die Daten, aber nicht die Art, wie exportiert wird.
+
+**Validierung (geschlossen, gilt für CRUD und MCF):** unbekanntes Format ⇒ 400/Report-Fehler, unbekannter Parameter-Schlüssel ⇒ 400/Report-Fehler (ein Tippfehler würde sonst still verloren gehen), `fields`/`locales` müssen Arrays von Strings sein (Duplikate und Leerstrings werden entfernt), `options`/`bmecat` Objekte. Ein Eintrag ohne `name` oder mit ungültigem `format` wird **gemeldet und übersprungen** — der Rest des Dokuments läuft weiter.
+
+**Idempotenz:** `merge` mit unverändertem Eintrag ⇒ `skipped`; `replace` löscht Profile, die nicht im Dokument stehen (ein Profil wird von keinen Daten referenziert, ist also nie „in use"). Verwaltet wird die Tabelle über `/export-profiles` (admin) im Frontend, gelesen von jedem Editor über `GET /export-profiles`.
 
 ## 8. Referenz-/ID-Mapping über Umgebungen
 

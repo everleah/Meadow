@@ -198,10 +198,14 @@ pub(crate) async fn find_standard(
 
 /// Loads a standard by `code@version`, by record key or by record id.
 async fn resolve_standard(db: &Db, reference: &str) -> Result<Option<Value>, ApiError> {
+    // SurrealDB quotes a record key that needs it (`` classification_standard:`etim-10-0`
+    // `` — a dash is one such case), so the backticks of an `id` the API returned
+    // are stripped before the key is used again.
     let trimmed = reference.trim();
     let bare = trimmed
         .strip_prefix("classification_standard:")
-        .unwrap_or(trimmed);
+        .unwrap_or(trimmed)
+        .trim_matches('`');
     if let Some((code, version)) = bare.split_once('@')
         && let Some(found) = find_standard(db, code, version).await?
     {
