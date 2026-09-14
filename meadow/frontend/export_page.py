@@ -38,7 +38,7 @@ from meadow.frontend.export_fields import (
 )
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker
 from meadow.frontend.reference_data import reference_names, visible_in_picker
 
@@ -83,7 +83,7 @@ def _fmt_dt(value: object) -> str:
         return str(value)
 
 
-@ui.page("/export", response_timeout=15)
+@ui.page("/export", response_timeout=PAGE_TIMEOUT)
 async def export_page(request: Request) -> None:
     """The structured export wizard page."""
     await build_shell(active="/export")

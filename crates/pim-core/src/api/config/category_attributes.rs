@@ -114,19 +114,14 @@ pub(super) async fn category_attributes_section(
         });
     }
     let keys_by_type = key_attribute_by_type(db).await?;
-    // The class nodes carry `type` (to find the key attribute) and `attributes`
-    // (the key value itself); loaded in one query. The ids must be turned into
-    // records (`type::record`) — a plain string list never matches `record<object>`.
-    let node_keys: Vec<String> = by_class
-        .keys()
-        .map(|id| record_key(id).to_owned())
-        .collect();
+    // The class nodes are read by **type**, not by an id list: with a
+    // classification standard installed the section carries thousands of classes,
+    // and `id IN array::map(<ids>, …)` needed a lookup per table row (measured:
+    // 5640 keys → 110 s). The type filter scans the 5.7 k objects instead (0.16 s).
+    // Every class node is a taxonomy node, so the class ids are a subset of it.
     let nodes = query_rows(
         db,
-        &format!(
-            "SELECT * FROM object WHERE id IN array::map({}, |$k| type::record('object', $k));",
-            sql_string_list(node_keys)
-        ),
+        "SELECT id, type, attributes FROM object WHERE type IN (SELECT VALUE name FROM object_type WHERE taxonomy = true);",
     )
     .await?;
     let nodes_by_id: HashMap<String, Value> = nodes

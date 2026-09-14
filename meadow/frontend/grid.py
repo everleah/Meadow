@@ -36,7 +36,7 @@ from meadow.frontend.display import (
 )
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 from meadow.frontend.range_values import format_range
@@ -820,7 +820,7 @@ def _save_download(data: bytes, filename: str, format_: str) -> None:
     asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
 
-@ui.page("/products", response_timeout=20)
+@ui.page("/products", response_timeout=PAGE_TIMEOUT)
 async def products_page(request: Request) -> None:
     """Lists objects in the main grid with inline editing + batch save."""
     await build_shell(active="/products")

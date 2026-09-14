@@ -22,7 +22,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 ROLES = ("superadmin", "admin", "editor", "viewer")
 STATUSES = ("active", "suspended")
@@ -48,7 +48,7 @@ def _password_badge(user: dict) -> str:
     return '<span class="px-2 py-0.5 rounded text-xs bg-positive text-white">ok</span>'
 
 
-@ui.page("/users", response_timeout=15)
+@ui.page("/users", response_timeout=PAGE_TIMEOUT)
 async def users_page() -> None:
     await build_shell(active="/users")
     if not auth.is_admin():

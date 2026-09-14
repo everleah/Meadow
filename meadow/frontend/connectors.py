@@ -47,7 +47,7 @@ from meadow.frontend.connector_form import (
 )
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 #: Connector types used only when the schema endpoint is unreachable (the schema
 #: from `GET /connector-types` is the source of truth for types and labels).
@@ -110,7 +110,7 @@ def _parse_parameters(text: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
-@ui.page("/connectors", response_timeout=15)
+@ui.page("/connectors", response_timeout=PAGE_TIMEOUT)
 async def connectors_page() -> None:
     await build_shell(active="/connectors")
     if not auth.is_admin():

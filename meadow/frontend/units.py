@@ -16,7 +16,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
@@ -27,7 +27,7 @@ def _label(value: object, locale: str) -> str:
     return str(value or "")
 
 
-@ui.page("/units", response_timeout=15)
+@ui.page("/units", response_timeout=PAGE_TIMEOUT)
 async def units_page() -> None:
     await build_shell(active="/units")
     if not auth.is_admin():

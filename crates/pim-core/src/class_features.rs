@@ -318,10 +318,28 @@ pub(crate) async fn class_required_names_batch(
     if assigned.is_empty() {
         return Ok(out);
     }
-    // Feature rows of every contributing class (incl. ancestors), loaded once.
+    // Feature rows of the **contributing** classes only (the assigned nodes and
+    // their ancestors). Loading the whole table instead costs ~2 s per call with a
+    // classification standard installed (ETIM 10.0: **76 625** rows / 6.8 MB,
+    // measured) — even when a single object of the batch is categorised, which is
+    // what made `/objects/stats` and a page of products take seconds.
+    let mut wanted_nodes: Vec<String> = Vec::new();
+    let mut seen_nodes: HashSet<String> = HashSet::new();
+    for nodes in assigned.values() {
+        for node in nodes {
+            for chain_node in ancestor_chain(node, parents) {
+                if seen_nodes.insert(chain_node.clone()) {
+                    wanted_nodes.push(chain_node);
+                }
+            }
+        }
+    }
     let mut response = db
         .inner()
-        .query("SELECT category_id, attribute, required FROM category_attribute;")
+        .query(format!(
+            "SELECT category_id, attribute, required FROM category_attribute\n             WHERE category_id IN {};",
+            crate::api::keys::record_list_literal("object", wanted_nodes.iter().map(String::as_str))
+        ))
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(0)?;

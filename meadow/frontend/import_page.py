@@ -24,7 +24,7 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 #: Import job types whose runs we poll (the `inbound_import` worker result).
 _TERMINAL_STATUSES = ("success", "failed", "retry")
@@ -73,7 +73,7 @@ async def _wait_run(client: CoreClient, token: str, run_id: str) -> dict:
     return {"status": "failed", "error": "timeout"}
 
 
-@ui.page("/import", response_timeout=15)
+@ui.page("/import", response_timeout=PAGE_TIMEOUT)
 async def import_page() -> None:
     """The tabular import page."""
     await build_shell(active="/import")

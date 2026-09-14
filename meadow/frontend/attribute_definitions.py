@@ -14,7 +14,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.filters import filter_select
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
 from meadow.frontend.range_values import NUMERIC_TYPES
 
@@ -25,7 +25,7 @@ ATTR_TYPES = ("text", "url", "number", "range", "boolean", "date", "enum", "refe
 STANDARDS = {"etim": "ETIM", "eclass": "ECLASS", "unspsc": "UNSPSC"}
 
 
-@ui.page("/attribute-definitions", response_timeout=15)
+@ui.page("/attribute-definitions", response_timeout=PAGE_TIMEOUT)
 async def attribute_definitions_page() -> None:
     await build_shell(active="/attribute-definitions")
     locale = current_locale()

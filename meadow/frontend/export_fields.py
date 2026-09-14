@@ -16,11 +16,18 @@ from collections.abc import Callable, Iterable, Mapping
 
 
 def attribute_names(definitions: Iterable[Mapping[str, object]]) -> list[str]:
-    """The distinct attribute definition names in the order they arrive."""
+    """The distinct attribute definition names in the order they arrive.
+
+    The dedup runs against a set: an imported classification standard brings
+    17 379 definitions, and a list membership test over them cost 1.6 s per page
+    build (`/export`) instead of milliseconds.
+    """
     names: list[str] = []
+    seen: set[str] = set()
     for definition in definitions:
         name = str(definition.get("name") or "")
-        if name and name not in names:
+        if name and name not in seen:
+            seen.add(name)
             names.append(name)
     return names
 
@@ -32,8 +39,10 @@ def group_members(
 
     An attribute may belong to several groups: it then appears in each of them
     (the product form does the same) while staying a single field in the export.
+    The per-group dedup uses a set for the same reason as `attribute_names`.
     """
     grouped: dict[str, list[str]] = {}
+    seen_by_group: dict[str, set[str]] = {}
     ungrouped: list[str] = []
     for definition in definitions:
         name = str(definition.get("name") or "")
@@ -45,7 +54,9 @@ def group_members(
             continue
         for group_id in group_ids:
             members = grouped.setdefault(group_id, [])
-            if name not in members:
+            seen = seen_by_group.setdefault(group_id, set())
+            if name not in seen:
+                seen.add(name)
                 members.append(name)
     return grouped, ungrouped
 

@@ -23,7 +23,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 #: Known job types (mirrors the core's `VALID_JOB_TYPES`).
 JOB_TYPES = (
@@ -90,7 +90,7 @@ def _run_job_label(run: dict) -> str:
     return "ad-hoc"
 
 
-@ui.page("/jobs", response_timeout=15)
+@ui.page("/jobs", response_timeout=PAGE_TIMEOUT)
 async def jobs_page() -> None:
     await build_shell(active="/jobs")
     if not auth.is_admin():

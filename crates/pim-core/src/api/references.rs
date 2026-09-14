@@ -1308,34 +1308,20 @@ pub async fn list_object_children(
     }
 
     // Fetch the child objects (so the client can resolve labels without the full tree).
-    let keys: Vec<String> = child_ids.iter().map(|id| key_of(id)).collect();
-    let object_sql = "
-        LET $recs = array::map($keys, |$k| type::record('object', $k));
-        SELECT * FROM object WHERE id IN $recs AND deleted_at IS NONE;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(object_sql)
-        .bind(("keys", keys.clone()))
-        .await?
-        .check()?;
-    let objects: Vec<Value> = response.take(1)?;
+    // A **record list literal** keeps this at index speed: with `array::map` a
+    // 1000-child page took 16.6 s (measured), the literal takes 0.18 s.
+    let literal =
+        crate::api::keys::record_list_literal("object", child_ids.iter().map(String::as_str));
+    let object_sql = format!("SELECT * FROM object WHERE id IN {literal} AND deleted_at IS NONE;");
+    let mut response = state.db.inner().query(object_sql).await?.check()?;
+    let objects: Vec<Value> = response.take(0)?;
 
     // Which of the children are themselves parents (have children)?
-    let has_sql = "
-        LET $recs = array::map($keys, |$k| type::record('object', $k));
-        SELECT out AS parent FROM reference
-        WHERE definition_id = 'rel_depends_on' AND out IN $recs;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(has_sql)
-        .bind(("keys", keys))
-        .await?
-        .check()?;
-    let parent_rows: Vec<Value> = response.take(1)?;
+    let has_sql = format!(
+        "SELECT out AS parent FROM reference\n         WHERE definition_id = 'rel_depends_on' AND out IN {literal};"
+    );
+    let mut response = state.db.inner().query(has_sql).await?.check()?;
+    let parent_rows: Vec<Value> = response.take(0)?;
     let parent_set: HashSet<String> = parent_rows
         .iter()
         .filter_map(|row| row.get("parent").and_then(Value::as_str).map(str::to_owned))
@@ -1460,33 +1446,19 @@ pub async fn list_object_ancestors(
     // Root-most first, the requested object last.
     keys.reverse();
 
-    let object_sql = "
-        LET $recs = array::map($keys, |$k| type::record('object', $k));
-        SELECT * FROM object WHERE id IN $recs AND deleted_at IS NONE;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(object_sql)
-        .bind(("keys", keys.clone()))
-        .await?
-        .check()?;
-    let objects: Vec<Value> = response.take(1)?;
+    // Record list literals (see `keys::record_list_literal`): the ancestor path is
+    // tiny, but the shape must not become the quadratic `array::map` variant.
+    let literal = crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+    let object_sql = format!("SELECT * FROM object WHERE id IN {literal} AND deleted_at IS NONE;");
+    let mut response = state.db.inner().query(object_sql).await?.check()?;
+    let objects: Vec<Value> = response.take(0)?;
 
     // Which of the path nodes are themselves parents (have children)?
-    let has_sql = "
-        LET $recs = array::map($keys, |$k| type::record('object', $k));
-        SELECT out AS parent FROM reference
-        WHERE definition_id = 'rel_depends_on' AND out IN $recs;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(has_sql)
-        .bind(("keys", keys.clone()))
-        .await?
-        .check()?;
-    let parent_rows: Vec<Value> = response.take(1)?;
+    let has_sql = format!(
+        "SELECT out AS parent FROM reference\n         WHERE definition_id = 'rel_depends_on' AND out IN {literal};"
+    );
+    let mut response = state.db.inner().query(has_sql).await?.check()?;
+    let parent_rows: Vec<Value> = response.take(0)?;
     let parent_set: HashSet<String> = parent_rows
         .iter()
         .filter_map(|row| row.get("parent").and_then(Value::as_str).map(str::to_owned))
@@ -1612,19 +1584,20 @@ pub async fn category_member_keys(
     definition: &str,
 ) -> Result<Vec<String>, ApiError> {
     let category_keys = subtree_keys(db, category_id).await?;
-    let sql = "
-        LET $cats = array::map($keys, |$k| type::record('object', $k));
-        SELECT in AS member FROM reference
-        WHERE definition_id = $def AND out IN $cats;
-    ";
+    // Record list literal, not `array::map` (the subtree of a root node carries
+    // thousands of keys — see `keys::record_list_literal`).
+    let literal =
+        crate::api::keys::record_list_literal("object", category_keys.iter().map(String::as_str));
+    let sql = format!(
+        "SELECT in AS member FROM reference\n         WHERE definition_id = $def AND out IN {literal};"
+    );
     let mut response = db
         .inner()
         .query(sql)
-        .bind(("keys", category_keys))
         .bind(("def", definition.to_owned()))
         .await?
         .check()?;
-    let rows: Vec<Value> = response.take(1)?;
+    let rows: Vec<Value> = response.take(0)?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut result: Vec<String> = Vec::new();
     for row in &rows {

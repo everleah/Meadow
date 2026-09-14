@@ -14,7 +14,7 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 LEVELS = ("DEBUG", "INFO", "WARN", "ERROR", "CRITICAL")
 CATEGORIES = ("app", "job", "rule", "auth", "integration")
@@ -30,7 +30,7 @@ def _source_badge(source: str) -> str:
     return f'<span class="px-2 py-0.5 rounded text-xs {classes}">{source}</span>'
 
 
-@ui.page("/system-settings", response_timeout=15)
+@ui.page("/system-settings", response_timeout=PAGE_TIMEOUT)
 async def settings_page() -> None:
     await build_shell(active="/system-settings")
     if not auth.is_admin():

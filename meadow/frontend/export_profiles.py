@@ -27,7 +27,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.export_page import FORMATS
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 
 def _fmt_dt(value: object) -> str:
@@ -69,7 +69,7 @@ def _summarize(parameters: object) -> str:
     return " | ".join(parts) or t("export_profiles.no_parameters")
 
 
-@ui.page("/export-profiles", response_timeout=15)
+@ui.page("/export-profiles", response_timeout=PAGE_TIMEOUT)
 async def export_profiles_page() -> None:
     await build_shell(active="/export-profiles")
     if not auth.is_admin():

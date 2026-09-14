@@ -15,7 +15,7 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
@@ -26,7 +26,7 @@ def _label(value: object, locale: str) -> str:
     return str(value or "")
 
 
-@ui.page("/enum-sets", response_timeout=15)
+@ui.page("/enum-sets", response_timeout=PAGE_TIMEOUT)
 async def enum_sets_page() -> None:
     await build_shell(active="/enum-sets")
     if not auth.is_admin():

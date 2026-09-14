@@ -32,7 +32,7 @@ from meadow.frontend import (
 from meadow.frontend.api import CoreClient
 from meadow.frontend.grid import status_badge
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import NAV_ITEMS, build_shell
+from meadow.frontend.layout import NAV_ITEMS, PAGE_TIMEOUT, build_shell
 
 #: Routes that have a real page and must be skipped by the placeholder
 #: registration.
@@ -61,7 +61,7 @@ _IMPLEMENTED_ROUTES = {
 }
 
 
-@ui.page("/", response_timeout=15)
+@ui.page("/", response_timeout=PAGE_TIMEOUT)
 async def home() -> None:
     """Dashboard: work overview (objects, completeness, recent activity/jobs)."""
     await build_shell(active="/")

@@ -17,7 +17,7 @@ from meadow.frontend.api import CoreClient
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 SERVICES = ("pim-core", "pim-worker", "pim-frontend")
 CATEGORIES = ("app", "job", "rule", "auth", "integration")
@@ -53,7 +53,7 @@ def _json_pretty(value: object) -> str:
         return str(value)
 
 
-@ui.page("/system-logs", response_timeout=15)
+@ui.page("/system-logs", response_timeout=PAGE_TIMEOUT)
 async def logs_page() -> None:
     await build_shell(active="/system-logs")
     if not auth.is_admin():

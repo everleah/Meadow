@@ -43,22 +43,15 @@ fn key_of(record_id: &str) -> &str {
 /// Attribute names required for the given object type. This is `required_types`
 /// on `attribute_definition` **plus** the type's `key_attributes` (a key that a
 /// type declares counts as mandatory for that type, per the object-type model).
-pub(crate) async fn required_names(db: &Db, object_type: &str) -> Result<Vec<String>, ApiError> {
-    let sql = "SELECT VALUE name FROM attribute_definition WHERE $type IN required_types";
-    let mut response = db
-        .inner()
-        .query(sql)
-        .bind(("type", object_type.to_owned()))
-        .await?
-        .check()?;
-    let mut names: Vec<String> = response.take(0)?;
-    let keys = crate::api::object_types::key_attributes_for(db, object_type).await?;
-    for key in keys {
-        if !names.contains(&key) {
-            names.push(key);
-        }
-    }
-    Ok(names)
+///
+/// Cached per type ([`MetaCache::required_names`]) — the read paths ask for it
+/// per object, and the lookup is not free.
+pub(crate) async fn required_names(
+    cache: &MetaCache,
+    db: &Db,
+    object_type: &str,
+) -> Result<std::sync::Arc<Vec<String>>, ApiError> {
+    cache.required_names(db, object_type).await
 }
 
 /// Splits `required` into (set, missing) for an object.
@@ -103,7 +96,10 @@ pub async fn compute(
     locale: Option<&str>,
     own_attributes: &Map<String, Value>,
 ) -> Result<Completeness, ApiError> {
-    let mut required = required_names(db, object_type).await?;
+    let mut required = required_names(cache, db, object_type)
+        .await?
+        .as_ref()
+        .clone();
     // Class features (Stage B): the mandatory attributes of the object's
     // taxonomy classes count as required too.
     let class_required =
@@ -186,11 +182,14 @@ pub(crate) async fn compute_batch(
         return Ok(out);
     }
 
-    // Required names per type, resolved once per type.
+    // Required names per type, resolved once per type (cached across calls).
     let mut required_by_type: HashMap<String, Vec<String>> = HashMap::new();
     for (_, otype, _) in items {
         if !required_by_type.contains_key(otype) {
-            required_by_type.insert(otype.clone(), required_names(db, otype).await?);
+            required_by_type.insert(
+                otype.clone(),
+                required_names(cache, db, otype).await?.as_ref().clone(),
+            );
         }
     }
     // Only `inheritable` attribute names can be filled from ancestors (matching
@@ -205,6 +204,15 @@ pub(crate) async fn compute_batch(
         attrs_by_key.insert(key_of(object_id).to_owned(), own.clone());
     }
     let parent_by_key = load_parent_map(db).await?;
+    // Attributes of the batch's **ancestors** (they are not part of `items` when a
+    // caller passes one page of objects). Without them `resolve_missing_in_memory`
+    // stops at the first unknown parent and the page would under-report inherited
+    // values — that is why `list_objects` used to compute completeness per row.
+    // One extra query, deduplicated across the batch.
+    let ancestor_attrs = load_ancestor_attributes(db, &parent_by_key, &attrs_by_key).await?;
+    for (key, attrs) in ancestor_attrs {
+        attrs_by_key.entry(key).or_insert(attrs);
+    }
     // Class features (Stage B): mandatory class attributes per object, resolved
     // from the categorisation edges plus the parent map we already have.
     let object_keys: Vec<String> = items
@@ -272,6 +280,59 @@ pub(crate) async fn compute_batch(
         );
     }
     Ok(out)
+}
+
+/// Loads the attributes of every ancestor of the given objects that is not part of
+/// `known` (the batch itself). Walks the in-memory parent map and reads the
+/// remaining keys in **one** query, so a partial batch resolves inheritance with
+/// the same result as the per-object walk in [`crate::inheritance`].
+async fn load_ancestor_attributes(
+    db: &Db,
+    parent_by_key: &HashMap<String, String>,
+    known: &HashMap<String, Map<String, Value>>,
+) -> Result<Vec<(String, Map<String, Value>)>, ApiError> {
+    let mut wanted: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = known.keys().cloned().collect();
+    for key in known.keys() {
+        let mut current = key.clone();
+        for _ in 0..MAX_DEPTH {
+            let Some(parent) = parent_by_key.get(&current) else {
+                break;
+            };
+            if !seen.insert(parent.clone()) {
+                break;
+            }
+            wanted.push(parent.clone());
+            current = parent.clone();
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Record list literal, not `array::map`: a page with many distinct parents can
+    // reach thousands of keys (see `keys::record_list_literal` for the numbers).
+    let sql = format!(
+        "SELECT id, attributes FROM object WHERE id IN {};",
+        crate::api::keys::record_list_literal("object", wanted.iter().map(String::as_str))
+    );
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let key = row
+                .get("id")
+                .and_then(Value::as_str)
+                .map(key_of)?
+                .to_owned();
+            let attrs = row
+                .get("attributes")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            Some((key, attrs))
+        })
+        .collect())
 }
 
 /// Resolves the given `missing` (inheritable) attribute names from an in-memory

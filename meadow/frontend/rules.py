@@ -24,7 +24,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker
 
 #: Known rule types (matches the core's VALID_RULE_TYPES).
@@ -99,7 +99,7 @@ def _json_pretty(value: object) -> str:
         return str(value)
 
 
-@ui.page("/rules", response_timeout=15)
+@ui.page("/rules", response_timeout=PAGE_TIMEOUT)
 async def rules_page() -> None:
     await build_shell(active="/rules")
     if not auth.is_admin():

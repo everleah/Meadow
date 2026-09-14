@@ -22,6 +22,7 @@ pub struct MetaCache {
     inheritable_names: RwLock<Option<Arc<Vec<String>>>>,
     url_attributes: RwLock<Option<Arc<Vec<UrlAttribute>>>>,
     feature_bindings: RwLock<Option<Arc<HashMap<String, String>>>>,
+    required_names: RwLock<HashMap<String, Arc<Vec<String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
 }
 
@@ -106,12 +107,65 @@ impl MetaCache {
         *self.inheritable_names.write().await = None;
         *self.url_attributes.write().await = None;
         *self.feature_bindings.write().await = None;
+        // The per-type required names come from `attribute_definition.required_types`.
+        self.required_names.write().await.clear();
+    }
+
+    /// Attribute names an object of `object_type` must carry: the definitions with
+    /// `required_types` for that type plus the type's declared `key_attributes`
+    /// (cached **per type**).
+    ///
+    /// Both parts are two small queries, but the read paths ask for them **per
+    /// object** (`list_objects`, picker, completeness), and with a classification
+    /// standard installed (17 397 attribute definitions) that lookup dominated a
+    /// page: 1000 rows spent ~2.8 s in it alone. The cache is cleared by the
+    /// attribute-definition and object-type writes.
+    pub async fn required_names(
+        &self,
+        db: &Db,
+        object_type: &str,
+    ) -> Result<Arc<Vec<String>>, ApiError> {
+        if let Some(names) = self.required_names.read().await.get(object_type).cloned() {
+            return Ok(names);
+        }
+        let names = Arc::new(load_required_names(db, object_type).await?);
+        self.required_names
+            .write()
+            .await
+            .insert(object_type.to_owned(), names.clone());
+        Ok(names)
+    }
+
+    /// Invalidates the cached per-type required names after object-type writes
+    /// (`key_attributes` belongs to the type registry).
+    pub async fn invalidate_object_types(&self) {
+        self.required_names.write().await.clear();
     }
 
     /// Invalidates cached fallback chains after language-tree changes.
     pub async fn invalidate_language_tree(&self) {
         self.fallback_chains.write().await.clear();
     }
+}
+
+/// Required attribute names of an object type (`attribute_definition.required_types`
+/// plus the type's `key_attributes`).
+async fn load_required_names(db: &Db, object_type: &str) -> Result<Vec<String>, ApiError> {
+    let sql = "SELECT VALUE name FROM attribute_definition WHERE $type IN required_types";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("type", object_type.to_owned()))
+        .await?
+        .check()?;
+    let mut names: Vec<String> = response.take(0)?;
+    let keys = crate::api::object_types::key_attributes_for(db, object_type).await?;
+    for key in keys {
+        if !names.contains(&key) {
+            names.push(key);
+        }
+    }
+    Ok(names)
 }
 
 /// Bindings from a standard's feature code to the attribute that carries its

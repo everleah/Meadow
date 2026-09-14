@@ -13,7 +13,7 @@ from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_structure_picker
 
 
@@ -24,7 +24,7 @@ def _parent_key(parent: object | None) -> str | None:
     return None
 
 
-@ui.page("/languages", response_timeout=15)
+@ui.page("/languages", response_timeout=PAGE_TIMEOUT)
 async def languages_page() -> None:
     await build_shell(active="/languages")
     locale = current_locale()

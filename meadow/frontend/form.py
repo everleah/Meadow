@@ -42,7 +42,7 @@ from meadow.frontend.display import (
 )
 from meadow.frontend.enums import enum_options
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
 from meadow.frontend.range_values import range_bounds, range_value
 from meadow.frontend.reference_data import visible_in_form
@@ -166,7 +166,7 @@ def _consolidation_value(value: object, locale: str) -> str:
     return resolve_value(value, locale) or "–"
 
 
-@ui.page("/products/{object_id}", response_timeout=15)
+@ui.page("/products/{object_id}", response_timeout=PAGE_TIMEOUT)
 async def product_form(object_id: str) -> None:
     """Opens a single object for deep editing."""
     await build_shell(active="/products")

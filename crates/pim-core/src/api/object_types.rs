@@ -351,6 +351,8 @@ pub async fn create_object_type(
         },
     )
     .await;
+    // The type registry feeds the cached required names (`key_attributes`).
+    state.cache.invalidate_object_types().await;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -465,6 +467,7 @@ pub async fn update_object_type(
         },
     )
     .await;
+    state.cache.invalidate_object_types().await;
     Ok(Json(record))
 }
 
@@ -533,6 +536,7 @@ pub async fn delete_object_type(
         },
     )
     .await;
+    state.cache.invalidate_object_types().await;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from nicegui import ui
 
+from meadow.frontend.layout import PAGE_TIMEOUT
 
-@ui.page("/groups", response_timeout=15)
+
+@ui.page("/groups", response_timeout=PAGE_TIMEOUT)
 async def groups_page() -> None:
     ui.navigate.to("/users")

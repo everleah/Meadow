@@ -21,7 +21,7 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
 
 
@@ -77,7 +77,7 @@ def _standard_badge(standard: dict | None) -> str:
     )
 
 
-@ui.page("/object-types", response_timeout=15)
+@ui.page("/object-types", response_timeout=PAGE_TIMEOUT)
 async def object_types_page() -> None:
     await build_shell(active="/object-types")
     if not auth.is_admin():

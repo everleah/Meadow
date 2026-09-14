@@ -24,6 +24,48 @@ fn key_of(record_id: &str) -> &str {
         .unwrap_or(record_id)
 }
 
+/// Renders a SurrealDB **record list literal** (`[object:a, object:b]`) from record
+/// keys, for `WHERE id IN <list>`.
+///
+/// The shape decides the runtime: `id IN array::map($keys, |$k| type::record('object', $k))`
+/// is evaluated **per candidate row**, which is quadratic. Measured on this
+/// dataset (5694 objects): 100 keys → 1,9 s, 1000 keys → 16,6 s, 5658 keys →
+/// 110 s — while the literal record list drives the id index (1000 keys →
+/// 0,18 s, 5658 → 0,08 s). Use this helper instead of `array::map` for any
+/// id-list filter.
+///
+/// Only plain identifiers (`[A-Za-z0-9_-]`) are rendered; anything else is
+/// **dropped**. That keeps the query text free of attacker-controlled input
+/// (a `?ids=` parameter passes user strings through here) and loses nothing:
+/// object record keys are generated ULIDs or explicit seed keys
+/// (`plan/detail/datenmodell.md`), so a key outside that charset cannot exist.
+pub(crate) fn record_list_literal<'a>(
+    table: &str,
+    keys: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut literal = String::from("[");
+    let mut first = true;
+    for key in keys {
+        let key = key_of(key);
+        if key.is_empty()
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            continue;
+        }
+        if !first {
+            literal.push_str(", ");
+        }
+        literal.push_str(table);
+        literal.push(':');
+        literal.push_str(key);
+        first = false;
+    }
+    literal.push(']');
+    literal
+}
+
 /// Validates the definition-level constraints for a business key.
 ///
 /// `is_key: true` requires `type == "text"` and forbids `multilingual`
@@ -202,5 +244,27 @@ mod tests {
     fn non_key_definitions_skip_validation() {
         assert!(validate_key_definition("number", true, false).is_ok());
         assert!(validate_key_definition("text", true, false).is_ok());
+    }
+
+    #[test]
+    fn record_list_literal_renders_records_and_strips_the_table_prefix() {
+        let literal = record_list_literal("object", ["object:abc", "def", "object_root"]);
+        assert_eq!(literal, "[object:abc, object:def, object:object_root]");
+    }
+
+    #[test]
+    fn record_list_literal_drops_keys_that_are_not_plain_identifiers() {
+        // A `?ids=` parameter passes user input through here: anything that is not
+        // a ULID/seed-key charset must never reach the query text.
+        let literal = record_list_literal(
+            "object",
+            ["abc", "x'); DELETE object; --", "weird key", "", "ok-1"],
+        );
+        assert_eq!(literal, "[object:abc, object:ok-1]");
+    }
+
+    #[test]
+    fn record_list_literal_of_nothing_is_an_empty_list() {
+        assert_eq!(record_list_literal("object", [] as [&str; 0]), "[]");
     }
 }

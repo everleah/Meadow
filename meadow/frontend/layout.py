@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -10,6 +12,14 @@ from meadow.frontend.auth import is_admin, logout
 from meadow.frontend.i18n import current_locale, set_locale, supported_locales, t
 from meadow.frontend.password import open_change_password_dialog, refresh_banner
 from meadow.frontend.theme import MEADOW_LOGO, NAV_GRADIENT_BOTTOM, NAV_GRADIENT_TOP
+
+#: Seconds a page build may take before NiceGUI answers with a **500**.
+#:
+#: **Hard rule: a slow core must never turn into a 500.** The data reads are tuned
+#: to stay in the low milliseconds, but a cold cache or a core that is still
+#: starting must not kill the page — hence this generous ceiling instead of the
+#: former per-page 15 s. Every page sets it; `PIM_PAGE_TIMEOUT` overrides it.
+PAGE_TIMEOUT = float(os.environ.get("PIM_PAGE_TIMEOUT", "60"))
 
 #: Keep the drawer language selector text readable on the dark gradient.
 ui.add_css(

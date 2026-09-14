@@ -32,7 +32,7 @@ from meadow.frontend.grid import (
     tree_node_from_object,
 )
 from meadow.frontend.i18n import current_locale, t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
 from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_category_key
@@ -80,7 +80,7 @@ async def _category_roots(
     return [tree_node_from_object(child, locale) for child in top]
 
 
-@ui.page("/categories", response_timeout=15)
+@ui.page("/categories", response_timeout=PAGE_TIMEOUT)
 async def categories_page() -> None:
     await build_shell(active="/categories")
     locale = current_locale()

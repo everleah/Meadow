@@ -31,7 +31,7 @@ from meadow.frontend import auth, search_form
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 #: Query used when the catalog is unavailable (no fields to offer).
 FALLBACK_QUERY: dict = {"where": {"op": "and", "conditions": []}, "limit": 1000}
@@ -82,7 +82,7 @@ def _interval_of(row: dict) -> str:
     return str(row.get("attributes", {}).get("refresh_interval") or "")
 
 
-@ui.page("/saved-searches", response_timeout=15)
+@ui.page("/saved-searches", response_timeout=PAGE_TIMEOUT)
 async def saved_searches_page() -> None:
     await build_shell(active="/saved-searches")
     if not auth.is_admin():

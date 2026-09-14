@@ -668,25 +668,16 @@ pub async fn list_objects(
     if params.object_type.is_some() {
         conditions.push("type = $type".to_owned());
     }
-    if params.ancestor.is_some() {
-        conditions
-            .push("id IN array::map($ancestor_ids, |$k| type::record('object', $k))".to_owned());
-    }
-    if params.category.is_some() {
-        conditions.push(
-            "id IN array::map($category_member_ids, |$k| type::record('object', $k))".to_owned(),
-        );
-    }
-    if params.collection.is_some() {
-        conditions.push(
-            "id IN array::map($collection_member_ids, |$k| type::record('object', $k))".to_owned(),
-        );
-    }
-    if params.released_for.is_some() {
-        conditions.push(
-            "id IN (SELECT VALUE object_id FROM release WHERE channel = $released_for AND status = $release_status)"
-                .to_owned(),
-        );
+    // Id-list filters (`?ancestor=`, `?category=`, `?collection=`, `?ids=`) are
+    // rendered as **record list literals**: `id IN array::map($keys, …)` is
+    // evaluated per candidate row and made a 1000-key filter take 16.6 s (and a
+    // root subtree 110 s); the literal uses the id index (0.18 s). The lists are
+    // therefore resolved before the SQL is built.
+    if let Some(ancestor) = &params.ancestor {
+        let keys = crate::api::references::subtree_keys(&state.db, ancestor).await?;
+        let literal =
+            crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+        conditions.push(format!("id IN {literal}"));
     }
     // The category filters work on a single category relation type: the built-in
     // primary type by default, or the one requested via `definition_id`. An
@@ -701,6 +692,28 @@ pub async fn list_objects(
             .await?,
         );
     }
+    if let Some(category) = &params.category {
+        let definition = category_definition
+            .as_deref()
+            .unwrap_or(crate::api::references::PRIMARY_CATEGORY_DEFINITION);
+        let keys =
+            crate::api::references::category_member_keys(&state.db, category, definition).await?;
+        let literal =
+            crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+        conditions.push(format!("id IN {literal}"));
+    }
+    if let Some(collection) = &params.collection {
+        let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;
+        let literal =
+            crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+        conditions.push(format!("id IN {literal}"));
+    }
+    if params.released_for.is_some() {
+        conditions.push(
+            "id IN (SELECT VALUE object_id FROM release WHERE channel = $released_for AND status = $release_status)"
+                .to_owned(),
+        );
+    }
     if params.uncategorized {
         // "Nicht kategorisiert" is per taxonomy: every taxonomy node type is
         // excluded (plus the universal root), so a classification hierarchy does
@@ -710,9 +723,8 @@ pub async fn list_objects(
                 .to_owned(),
         );
     }
-    let mut object_ids: Vec<String> = Vec::new();
     if let Some(ids) = &params.ids {
-        object_ids = ids
+        let object_ids: Vec<String> = ids
             .split(',')
             .filter_map(|key| {
                 let key = key.trim();
@@ -723,8 +735,11 @@ pub async fn list_objects(
             })
             .collect();
         if !object_ids.is_empty() {
-            conditions
-                .push("id IN array::map($object_ids, |$k| type::record('object', $k))".to_owned());
+            let literal = crate::api::keys::record_list_literal(
+                "object",
+                object_ids.iter().map(String::as_str),
+            );
+            conditions.push(format!("id IN {literal}"));
         }
     }
     // Advanced search (`?where=`): the same condition tree the search form
@@ -764,18 +779,6 @@ pub async fn list_objects(
     if let Some(object_type) = &params.object_type {
         query = query.bind(("type", object_type.clone()));
     }
-    if let Some(ancestor) = &params.ancestor {
-        let keys = crate::api::references::subtree_keys(&state.db, ancestor).await?;
-        query = query.bind(("ancestor_ids", keys));
-    }
-    if let Some(category) = &params.category {
-        let definition = category_definition
-            .as_deref()
-            .unwrap_or(crate::api::references::PRIMARY_CATEGORY_DEFINITION);
-        let keys =
-            crate::api::references::category_member_keys(&state.db, category, definition).await?;
-        query = query.bind(("category_member_ids", keys));
-    }
     if let Some(definition) = &category_definition {
         query = query.bind(("category_definition", definition.clone()));
     }
@@ -783,10 +786,6 @@ pub async fn list_objects(
         let mut taxonomy_types = crate::api::object_types::taxonomy_types(&state.db).await?;
         taxonomy_types.push("root".to_owned());
         query = query.bind(("taxonomy_types", taxonomy_types));
-    }
-    if let Some(collection) = &params.collection {
-        let keys = crate::api::references::collection_member_keys(&state.db, collection).await?;
-        query = query.bind(("collection_member_ids", keys));
     }
     if let Some(released_for) = &params.released_for {
         query = query.bind((
@@ -803,9 +802,6 @@ pub async fn list_objects(
                 .unwrap_or("published")
                 .to_owned(),
         ));
-    }
-    if !object_ids.is_empty() {
-        query = query.bind(("object_ids", object_ids));
     }
     for (key, value) in &filter_params {
         query = query.bind((key.as_str(), value.clone()));
@@ -826,8 +822,40 @@ pub async fn list_objects(
     // Completeness (with inheritance) is only computed when the caller needs it:
     // for the `completeness` field of the response and/or for the completeness
     // filters. `locale` may be absent — the filter then uses the default values.
+    //
+    // **One batch for the whole page**, not one computation per row: the per-row
+    // variant issued ~6 queries per object (~25 ms with a classification standard
+    // installed), so a 1000-row page spent 18 s in it and the `missing_required`
+    // filter (which scans up to 1000 rows) made the grid unusable.
+    // `compute_batch` resolves the required names per type (cached), reads the
+    // `depends_on` map and the ancestors' attributes once and walks the chains in
+    // memory — the same result, without the round-trips.
     if locale.is_some() || completeness_filter {
-        let locale_ref = locale.as_deref();
+        let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+            .iter()
+            .map(|object| {
+                (
+                    object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    object
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    object
+                        .get("attributes")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        let results =
+            crate::completeness::compute_batch(&state.cache, &state.db, &items, locale.as_deref())
+                .await?;
         let mut kept: Vec<Value> = Vec::new();
         for mut object in objects {
             let object_id = object
@@ -835,28 +863,13 @@ pub async fn list_objects(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let object_type = object
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let own_attributes = object
-                .get("attributes")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            let result = crate::completeness::compute(
-                &state.cache,
-                &state.db,
-                &object_id,
-                &object_type,
-                locale_ref,
-                &own_attributes,
-            )
-            .await?;
+            let Some(result) = results.get(&object_id) else {
+                kept.push(object);
+                continue;
+            };
             if completeness_filter
                 && !passes_completeness_filter(
-                    &result,
+                    result,
                     params.completeness_lt,
                     params.missing_required,
                 )

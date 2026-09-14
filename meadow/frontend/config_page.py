@@ -22,7 +22,7 @@ from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
-from meadow.frontend.layout import build_shell
+from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
 #: The MCF sections in dependency order (same as the core `/config/export`).
 SECTIONS = (
@@ -67,7 +67,7 @@ def _section_detail(report: dict) -> str:
     return "\n".join(lines) if lines else t("config.no_changes")
 
 
-@ui.page("/config", response_timeout=15)
+@ui.page("/config", response_timeout=PAGE_TIMEOUT)
 async def config_page() -> None:
     await build_shell(active="/config")
     if not auth.is_admin():
