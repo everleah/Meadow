@@ -237,6 +237,29 @@ DEFINE FIELD IF NOT EXISTS updated_by ON TABLE category_attribute TYPE option<st
 DEFINE INDEX IF NOT EXISTS idx_category_attribute_unique ON TABLE category_attribute FIELDS category_id, attribute UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_category_attribute_name ON TABLE category_attribute FIELDS attribute;
 
+-- Classification standards: the registry of the external classification
+-- standards (ETIM, ECLASS, …) this catalogue was loaded with. The class nodes,
+-- their features and the feature attribute definitions arrive through a standard
+-- bundle (MCF + MEF, `plan/detail/bmecat-export.md` §11.9); this table records
+-- **which standard in which version, from which source, over which node type** —
+-- the BMEcat export names `REFERENCE_FEATURE_SYSTEM_NAME` (`ETIM-10.0`) from
+-- here instead of trusting a free-text profile field, and the MCF section
+-- `classification_standards` makes the record portable. One row per
+-- (code, version); several versions may be registered (update path), the newest
+-- per code is `current`. See `plan/detail/kategorisierung.md`.
+DEFINE TABLE IF NOT EXISTS classification_standard;
+DEFINE FIELD IF NOT EXISTS code ON TABLE classification_standard TYPE string;
+DEFINE FIELD IF NOT EXISTS version ON TABLE classification_standard TYPE string;
+DEFINE FIELD IF NOT EXISTS name ON TABLE classification_standard TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS source ON TABLE classification_standard TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS node_type ON TABLE classification_standard TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS notes ON TABLE classification_standard TYPE option<string>;
+DEFINE FIELD OVERWRITE created_at ON TABLE classification_standard TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE classification_standard TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS updated_by ON TABLE classification_standard TYPE option<string>;
+DEFINE INDEX IF NOT EXISTS idx_standard_code_version ON TABLE classification_standard FIELDS code, version UNIQUE;
+DEFINE INDEX IF NOT EXISTS idx_standard_node_type ON TABLE classification_standard FIELDS node_type;
+
 -- Users: technical table, separate from business objects.
 DEFINE TABLE IF NOT EXISTS user;
 DEFINE FIELD IF NOT EXISTS username ON TABLE user TYPE string;

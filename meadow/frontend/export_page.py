@@ -304,6 +304,17 @@ async def export_page(request: Request) -> None:
             ui.label(t("export.bmecat_nodes_without_code").format(count=len(without_code))).classes(
                 "text-caption text-orange-600 mt-1"
             )
+        systems = report.get("feature_systems") or []
+        if systems:
+            # Which reference feature system the blocks name — taken from the
+            # **installed** standard of the class nodes (or the profile fallback).
+            ui.label(t("export.bmecat_systems").format(names=", ".join(map(str, systems)))).classes(
+                "text-caption mt-1"
+            )
+            if not report.get("standards"):
+                ui.label(t("export.bmecat_systems_fallback")).classes(
+                    "text-caption text-orange-600"
+                )
         validation = report.get("validation") or {}
         if validation.get("validated"):
             key = "export.bmecat_valid" if validation.get("valid") else "export.bmecat_invalid"

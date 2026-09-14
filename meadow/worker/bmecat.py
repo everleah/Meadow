@@ -129,6 +129,20 @@ def pid_of(attributes: Mapping[str, Any], profile: Mapping[str, Any]) -> str:
     return ""
 
 
+def class_block(entry: object) -> tuple[str, str]:
+    """One product class as `(code, reference feature system)`.
+
+    A product's `classes` carries either a **mapping** (`{"code": "EC000012",
+    "system": "ETIM-10.0"}` — the shape the export job builds from the installed
+    classification standard) or a bare class code, which then falls back to the
+    profile's version (`ETIM-<etim_version>`).
+    """
+    if isinstance(entry, Mapping):
+        code = str(entry.get("code") or "").strip()
+        return code, str(entry.get("system") or "").strip()
+    return str(entry or "").strip(), ""
+
+
 def display_name(attributes: Mapping[str, Any], language: str, fallback: str) -> str:
     """`DESCRIPTION_SHORT`: the object's label in the catalogue language."""
     raw = attributes.get("name")
@@ -149,9 +163,12 @@ def build_document(
 ) -> tuple[str, dict[str, Any]]:
     """Builds the BMEcat document plus a report of what was written.
 
-    Each product is `{"pid", "name", "attributes", "classes", "features"}`:
-    `classes` are the taxonomy **codes** the object is assigned to and `features`
-    the resolved class features
+    Each product is `{"pid", "type", "attributes", "classes", "features"}`:
+    `classes` are the classification blocks of the object — either
+    `{"code": "EC000012", "system": "ETIM-10.0"}` (the shape the export job builds
+    from the installed classification standard, see
+    `plan/detail/kategorisierung.md`) or a bare class code, which then uses the
+    profile's version — and `features` the resolved class features
     (`GET /objects/{id}/category-attributes`), each with `name` (the feature code
     an export transmits), `attribute` (the attribute carrying the value), the
     contributing `nodes` (also **codes**, see `_feature_block`) and `required`.
@@ -160,6 +177,8 @@ def build_document(
     language = str(profile.get("language") or "eng")
     attribute_language = ATTRIBUTE_LANGUAGES.get(language, language.split("-")[0])
     etim_version = str(profile.get("etim_version") or "10.0")
+    # Fallback of a class without an installed standard: the profile's version.
+    default_system = f"ETIM-{etim_version}"
     catalog_id = str(profile.get("catalog_id") or "MEADOW").strip() or "MEADOW"
     catalog_name = str(profile.get("catalog_name") or "Meadow catalogue").strip()
     catalog_version = str(profile.get("catalog_version") or "1.0").strip() or "1.0"
@@ -182,9 +201,15 @@ def build_document(
         "text_values": [],
         "missing_required": [],
         "unclassified": [],
+        # The `REFERENCE_FEATURE_SYSTEM_NAME` values actually written — one per
+        # class block, so a catalogue with two standards shows both.
+        "feature_systems": [],
         # Filled by the caller (`meadow/worker/exports.py`): assigned taxonomy
         # nodes without a business key — they cannot be a reference feature group.
         "nodes_without_code": [],
+        # Filled by the caller: `node_type` -> system name of the **installed**
+        # standards (empty when none is registered — the profile's version is used).
+        "standards": {},
         "issues": [],
     }
 
@@ -236,7 +261,11 @@ def build_document(
             skip("supplier pid too long")
             report["issues"].append(f"{pid}: supplier PID longer than {MAX_PID} characters")
             continue
-        classes = [str(code) for code in product.get("classes") or [] if str(code)]
+        classes = [
+            block
+            for block in (class_block(entry) for entry in product.get("classes") or [])
+            if block[0]
+        ]
         if not classes:
             # The ETIM profile identifies the class; a product without one cannot
             # be transmitted (it stays in the catalogue, just not in this file).
@@ -252,16 +281,16 @@ def build_document(
         lines.append("      <PRODUCT_DETAILS>")
         lines.append(element("DESCRIPTION_SHORT", name[:MAX_DESCRIPTION], "        "))
         lines.append("      </PRODUCT_DETAILS>")
-        for code in classes:
+        for code, system in classes:
             block, count = _feature_block(
                 code,
-                classes,
+                [code for code, _ in classes],
+                system or default_system,
                 pid,
                 features,
                 attributes,
                 definitions,
                 attribute_language,
-                etim_version,
                 report,
             )
             lines.extend(block)
@@ -280,12 +309,12 @@ def build_document(
 def _feature_block(
     class_code: str,
     class_codes: Sequence[str],
+    system: str,
     pid: str,
     features: Sequence[Mapping[str, Any]],
     attributes: Mapping[str, Any],
     definitions: Mapping[str, Mapping[str, Any]],
     language: str,
-    etim_version: str,
     report: dict[str, Any],
 ) -> tuple[list[str], int]:
     """One `PRODUCT_FEATURES` block per class.
@@ -295,11 +324,16 @@ def _feature_block(
     was inherited from an ancestor and belongs to every block (it is part of each
     class's effective feature set). A feature of *another* assigned class is not
     repeated here.
+
+    `system` is the `REFERENCE_FEATURE_SYSTEM_NAME` of the block — the installed
+    classification standard of the class (`ETIM-10.0`), not a free-text guess.
     """
     assigned = {str(code) for code in class_codes}
+    if system not in report["feature_systems"]:
+        report["feature_systems"].append(system)
     lines = [
         "      <PRODUCT_FEATURES>",
-        element("REFERENCE_FEATURE_SYSTEM_NAME", f"ETIM-{etim_version}", "        "),
+        element("REFERENCE_FEATURE_SYSTEM_NAME", system, "        "),
         element("REFERENCE_FEATURE_GROUP_ID", class_code, "        "),
     ]
     count = 0

@@ -89,6 +89,17 @@ pub fn router(state: AppState) -> Router {
             get(api::channels::list_channels).post(api::channels::create_channel),
         )
         .route(
+            "/classification-standards",
+            get(api::classification_standards::list_classification_standards)
+                .post(api::classification_standards::create_classification_standard),
+        )
+        .route(
+            "/classification-standards/{id}",
+            get(api::classification_standards::get_classification_standard)
+                .patch(api::classification_standards::update_classification_standard)
+                .delete(api::classification_standards::delete_classification_standard),
+        )
+        .route(
             "/channels/{id}",
             get(api::channels::get_channel)
                 .patch(api::channels::update_channel)

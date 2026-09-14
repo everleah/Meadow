@@ -5,6 +5,7 @@ pub mod attribute_groups;
 pub mod auth;
 pub mod category_attributes;
 pub mod channels;
+pub mod classification_standards;
 pub mod config;
 pub mod connector_schema;
 pub mod connectors;
@@ -73,6 +74,11 @@ use utoipa::OpenApi;
         channels::list_object_releases,
         channels::set_object_release,
         channels::delete_object_release,
+        classification_standards::list_classification_standards,
+        classification_standards::get_classification_standard,
+        classification_standards::create_classification_standard,
+        classification_standards::update_classification_standard,
+        classification_standards::delete_classification_standard,
         category_attributes::list_category_attributes,
         category_attributes::create_category_attribute,
         category_attributes::update_category_attribute,
@@ -192,6 +198,9 @@ use utoipa::OpenApi;
         channels::CreateChannel,
         channels::UpdateChannel,
         channels::SetRelease,
+        classification_standards::ListStandards,
+        classification_standards::CreateStandard,
+        classification_standards::UpdateStandard,
         objects::WriteObjectQuery,
         keys::ByKeyParams,
         objects::BySourceParams,

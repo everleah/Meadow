@@ -249,6 +249,7 @@ def _transport(
     resolved: dict[str, dict],
     nodes: dict[str, dict],
     seen: list[str] | None = None,
+    standards: list[dict] | None = None,
 ):
     async def transport(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -258,6 +259,8 @@ def _transport(
             return httpx.Response(200, json=[])
         if path == "/languages":
             return httpx.Response(200, json=[])
+        if path == "/classification-standards":
+            return httpx.Response(200, json=standards or [])
         if path.startswith("/objects/object:"):
             rest = path[len("/objects/object:") :]
             if rest.endswith("/category-attributes"):
@@ -279,6 +282,55 @@ def _export_parameters() -> dict:
         "options": {},
         "bmecat": {"catalog_id": "MEADOW-TEST", "supplier": "ACME"},
     }
+
+
+async def test_the_installed_standard_names_the_class_block() -> None:
+    """The reference feature system comes from the registry, not from a guess."""
+    objects = [{"id": "object:1", "type": "product", "attributes": {"sku": "A-1"}}]
+    resolved = {"1": {"classes": ["01M0CLASS"], "attributes": []}}
+    nodes = {"01M0CLASS": {"type": "etim_class", "attributes": {"code": "EC000012"}}}
+    standards = [
+        {
+            "code": "etim",
+            "version": "11.0",
+            "node_type": "etim_class",
+            "current": True,
+            "feature_system_name": "ETIM-11.0",
+        },
+        {
+            "code": "etim",
+            "version": "10.0",
+            "node_type": "etim_class",
+            "current": False,
+            "feature_system_name": "ETIM-10.0",
+        },
+    ]
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_transport(objects, resolved, nodes, standards=standards))
+    )
+
+    result = await _bmecat_export(client, "http://core", _export_parameters())
+
+    assert (
+        "<REFERENCE_FEATURE_SYSTEM_NAME>ETIM-11.0</REFERENCE_FEATURE_SYSTEM_NAME>" in result["xml"]
+    )
+    assert result["report"]["feature_systems"] == ["ETIM-11.0"], "the current version wins"
+    assert result["report"]["standards"] == {"etim_class": "ETIM-11.0"}
+
+
+async def test_an_unregistered_class_falls_back_to_the_profile_version() -> None:
+    objects = [{"id": "object:1", "type": "product", "attributes": {"sku": "A-1"}}]
+    resolved = {"1": {"classes": ["01M0CLASS"], "attributes": []}}
+    nodes = {"01M0CLASS": {"type": "shop_category", "attributes": {"code": "CAT-1"}}}
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_transport(objects, resolved, nodes)))
+
+    result = await _bmecat_export(client, "http://core", _export_parameters())
+
+    # `_export_parameters()` sets no `etim_version`, so the module default applies.
+    assert (
+        "<REFERENCE_FEATURE_SYSTEM_NAME>ETIM-10.0</REFERENCE_FEATURE_SYSTEM_NAME>" in result["xml"]
+    )
+    assert result["report"]["standards"] == {}, "nothing is registered for that node type"
 
 
 async def test_the_block_id_is_the_class_code_not_the_node_key() -> None:

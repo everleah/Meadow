@@ -66,6 +66,17 @@ def _taxonomy_badge(taxonomy: bool) -> str:
     return "—"
 
 
+def _standard_badge(standard: dict | None) -> str:
+    """Badge for the object type that holds a registered standard's classes."""
+    if not standard:
+        return "—"
+    return (
+        '<span class="px-2 py-0.5 rounded text-xs bg-primary text-white">'
+        + str(standard.get("feature_system_name") or standard.get("name") or "")
+        + "</span>"
+    )
+
+
 @ui.page("/object-types", response_timeout=15)
 async def object_types_page() -> None:
     await build_shell(active="/object-types")
@@ -99,6 +110,19 @@ async def object_types_page() -> None:
         if str(d.get("type")) == "text" and not bool(d.get("multilingual")) and d.get("name")
     }
 
+    # Registered classification standards (ETIM, ECLASS…): they explain which
+    # vocabulary is reference data and which object type holds the class nodes.
+    # A missing endpoint (older core) degrades to an empty list.
+    try:
+        standards = await client.list_classification_standards(token, counts=True)
+    except Exception:  # noqa: BLE001
+        standards = []
+    standards_by_type = {
+        str(row.get("node_type")): row
+        for row in standards
+        if row.get("node_type") and row.get("current")
+    }
+
     with ui.column().classes("w-full p-6"):
         ui.label(t("object_types.title")).classes("text-h4")
         ui.label(t("object_types.subtitle")).classes("text-subtitle1")
@@ -121,6 +145,7 @@ async def object_types_page() -> None:
                     "label_attr": _label_attr_of(r),
                     "system": _system_badge(bool(r.get("system"))),
                     "taxonomy": _taxonomy_badge(bool(r.get("taxonomy"))),
+                    "standard": _standard_badge(standards_by_type.get(str(r.get("name")))),
                     "updated": str(r.get("updated_at") or ""),
                 }
                 for r in types
@@ -146,6 +171,11 @@ async def object_types_page() -> None:
             },
             {"headerName": t("object_types.col_system"), "field": "system", "width": 140},
             {"headerName": t("object_types.col_taxonomy"), "field": "taxonomy", "width": 130},
+            {
+                "headerName": t("object_types.col_standard"),
+                "field": "standard",
+                "width": 190,
+            },
             {"headerName": t("object_types.col_updated"), "field": "updated", "width": 200},
         ]
         grid = ui.aggrid(
@@ -155,7 +185,9 @@ async def object_types_page() -> None:
                 "rowSelection": {"mode": "singleRow"},
             },
             html_columns=[
-                i for i, col in enumerate(column_defs) if col["field"] in ("system", "taxonomy")
+                i
+                for i, col in enumerate(column_defs)
+                if col["field"] in ("system", "taxonomy", "standard")
             ],
         ).classes("w-full")
 
@@ -173,6 +205,44 @@ async def object_types_page() -> None:
             ui.button(t("object_types.reload"), icon="refresh", on_click=lambda: reload()).props(
                 "flat"
             )
+
+        if standards:
+            with ui.card().classes("w-full mt-4"):
+                ui.label(t("object_types.standards_title")).classes("text-subtitle2")
+                ui.label(t("object_types.standards_hint")).classes(
+                    "text-caption text-gray-600 mt-1"
+                )
+                for row in sorted(
+                    standards,
+                    key=lambda r: (
+                        str(r.get("code")),
+                        not bool(r.get("current")),
+                        str(r.get("version")),
+                    ),
+                ):
+                    system = str(row.get("feature_system_name") or "")
+                    with ui.row().classes("items-baseline gap-2 mt-2"):
+                        ui.badge(system or str(row.get("name") or "")).props(
+                            "color=primary" if row.get("current") else "outline"
+                        )
+                        if not row.get("current"):
+                            ui.badge(t("object_types.standards_older")).props("outline")
+                        details = [
+                            str(row.get("name") or ""),
+                            str(row.get("node_type") or ""),
+                        ]
+                        if row.get("class_count") is not None:
+                            details.append(
+                                t("object_types.standards_counts").format(
+                                    classes=row.get("class_count"),
+                                    features=row.get("feature_count"),
+                                )
+                            )
+                        if row.get("source"):
+                            details.append(str(row["source"]))
+                        ui.label(" · ".join(part for part in details if part)).classes(
+                            "text-caption text-gray-600"
+                        )
 
         def _set_filter(value: str) -> None:
             filters["name"] = value

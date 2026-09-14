@@ -133,7 +133,13 @@ def install(
     resolves nodes that the job has not created yet — re-running the installer
     afterwards applies it (the installer is idempotent).
     """
-    result: dict = {"steps": [], "created_objects": 0, "skipped_objects": 0, "errors": 0}
+    result: dict = {
+        "steps": [],
+        "created_objects": 0,
+        "skipped_objects": 0,
+        "errors": 0,
+        "warnings": 0,
+    }
     node_type = str(manifest.get("node_type") or "")
     class_key = str(manifest.get("class_key") or "code")
     known: set[str] | None = None
@@ -143,6 +149,14 @@ def install(
         path = bundle_dir / str(document.get("file"))
         payload = json.loads(path.read_text(encoding="utf-8"))
         step: dict = {"file": path.name, "kind": document.get("kind")}
+        # The manifest and the `classification_standards` entry of the model
+        # document both name the standard's version; a divergence would make the
+        # installer report something the export does not use.
+        warning = standard_mismatch(manifest, payload, document.get("sections") or [])
+        if warning:
+            step["warning"] = warning
+            result["warnings"] += 1
+            print(f"  warning: {path.name}: {warning}")
         started = time.monotonic()
         if document.get("kind") == "mcf":
             sections = list(document.get("sections") or [])
@@ -200,7 +214,104 @@ def install(
             step["skipped"] = "unknown document kind"
         step["seconds"] = round(time.monotonic() - started, 2)
         result["steps"].append(step)
+
+    # Register the standard itself (idempotent, `merge`). The manifest always knew
+    # the standard and version; the `classification_standards` section is what the
+    # export reads, so the installer writes it even for bundles whose documents
+    # predate the section (`standard_mismatch` reports a divergence above).
+    document = standard_document(manifest)
+    if document is not None:
+        step = {"file": "manifest.json", "kind": "standard"}
+        started = time.monotonic()
+        entries = document["sections"]["classification_standards"]
+        if dry_run:
+            step["dry_run"] = True
+        else:
+            response = client.post(
+                "/config/import", params={"mode": "merge"}, headers=headers, json=document
+            )
+            response.raise_for_status()
+            body = response.json()
+            section = (body.get("sections") or {}).get("classification_standards") or {}
+            step["sections"] = {
+                "classification_standards": {
+                    key: len(value) for key, value in section.items() if isinstance(value, list)
+                }
+            }
+            step["errors"] = len(body.get("errors") or [])
+            result["errors"] += step["errors"]
+        step["entry"] = entries[0]
+        step["seconds"] = round(time.monotonic() - started, 2)
+        result["steps"].append(step)
     return result
+
+
+def standard_document(manifest: dict) -> dict | None:
+    """The `classification_standards` document derived from the bundle manifest.
+
+    Returns `None` when the manifest carries no `standard_version` — a version is
+    never invented, the export then falls back to its explicit profile field.
+    """
+    standard = str(manifest.get("standard") or "").strip()
+    version = str(manifest.get("standard_version") or "").strip()
+    if not standard or not version:
+        return None
+    entry = {
+        "code": standard.lower(),
+        "version": version,
+        "name": standard,
+    }
+    if manifest.get("source"):
+        entry["source"] = str(manifest["source"])
+    if manifest.get("node_type"):
+        entry["node_type"] = str(manifest["node_type"])
+    return {
+        "format": "mcf",
+        "version": "1.0",
+        "source": "meadow-standard-bundle",
+        "sections": {"classification_standards": [entry]},
+    }
+
+
+def standard_mismatch(
+    manifest: dict, payload: dict, declared_sections: list[str] | None = None
+) -> str | None:
+    """Compares the manifest's standard with the document's registry entry.
+
+    The `classification_standards` section is what the export names (the
+    reference feature system of a class block), the manifest what the installer
+    reports. A bundle whose documents disagree with its manifest is broken, so
+    the installer says so instead of installing quietly.
+
+    Only the **model** document is expected to carry the entry — it defines the
+    class node type; a feature document legitimately contains only
+    `category_attributes`. Returns `None` when there is nothing to compare (a
+    bundle without a version, or a document that is not the model).
+    """
+    version = str(manifest.get("standard_version") or "")
+    if not version:
+        return None
+    sections = payload.get("sections")
+    entries = (sections or {}).get("classification_standards") or []
+    if isinstance(entries, list) and entries:
+        entry = entries[0] if isinstance(entries[0], dict) else {}
+        declared = str(entry.get("version") or "")
+        if declared != version:
+            return (
+                f"manifest says {manifest.get('standard')} {version}, "
+                f"the document {entry.get('code') or '?'} {declared or '?'}"
+            )
+        return None
+    # An MCF document is recognised by its `sections` object (the envelope has no
+    # `kind` field); the model document is the one carrying `object_types`.
+    declared = list(declared_sections or [])
+    declares_types = "object_types" in declared or "object_types" in (sections or {})
+    if declares_types:
+        return (
+            "the model document declares no `classification_standards` entry "
+            "(the standard is registered from the manifest)"
+        )
+    return None
 
 
 def install_one(

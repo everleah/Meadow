@@ -115,7 +115,12 @@ pub struct BmecatProfile {
     /// the schema limits the value to 32 characters).
     #[serde(default)]
     pub pid_attribute: Option<String>,
-    /// `REFERENCE_FEATURE_SYSTEM_NAME` version part (default `10.0` ⇒ `ETIM-10.0`).
+    /// `REFERENCE_FEATURE_SYSTEM_NAME` version part **fallback** (default `10.0`).
+    ///
+    /// The version usually comes from the **installed** classification standard of
+    /// the class nodes (`classification_standard`, `GET /classification-standards`);
+    /// this field only applies to a class whose node type has no registered
+    /// standard (see `plan/detail/kategorisierung.md`).
     #[serde(default)]
     pub etim_version: Option<String>,
 }

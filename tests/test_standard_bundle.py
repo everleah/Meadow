@@ -76,10 +76,81 @@ def test_manifest_describes_the_documents_in_install_order() -> None:
     assert [step["kind"] for step in manifest["documents"]] == ["mcf", "mef", "mcf"]
     assert manifest["documents"][0]["sections"] == [
         "object_types",
+        "classification_standards",
         "attribute_groups",
         "attribute_definitions",
     ]
     assert manifest["documents"][2]["sections"] == ["category_attributes"]
+
+
+def test_the_converter_declares_the_standard_it_converted() -> None:
+    """The model document says which standard in which version it carries."""
+    selection = generator.Selection(
+        classes=[], features={}, publication={"name": "TEST-EXPORT", "number": "10"}
+    )
+
+    assert generator.standard_version(selection) == "10.0"
+    assert generator.standard_entries(selection, node_type="etim_class") == [
+        {
+            "code": generator.STANDARD_CODE,
+            "version": "10.0",
+            "name": generator.STANDARD_NAME,
+            "source": "TEST-EXPORT",
+            "node_type": "etim_class",
+        }
+    ]
+    # Without a release number in the IXF header no version is invented.
+    empty = generator.Selection(classes=[], features={}, publication={})
+    assert generator.standard_entries(empty, node_type="etim_class") == []
+
+
+def test_the_installer_registers_the_manifest_as_a_registry_entry() -> None:
+    document = installer.standard_document(
+        {
+            "standard": "ETIM",
+            "standard_version": "10.0",
+            "source": "TEST-EXPORT",
+            "node_type": "etim_class",
+        }
+    )
+
+    assert document is not None
+    assert document["sections"]["classification_standards"] == [
+        {
+            "code": "etim",
+            "version": "10.0",
+            "name": "ETIM",
+            "source": "TEST-EXPORT",
+            "node_type": "etim_class",
+        }
+    ]
+    # A version is never invented: the export then uses its explicit profile field.
+    assert installer.standard_document({"standard": "ETIM", "standard_version": ""}) is None
+    assert installer.standard_document({"standard": "", "standard_version": "10.0"}) is None
+
+
+def test_manifest_and_document_must_agree_on_the_standard() -> None:
+    manifest = {"standard": "ETIM", "standard_version": "10.0"}
+    matching = {"sections": {"classification_standards": [{"version": "10.0"}]}}
+    assert installer.standard_mismatch(manifest, matching) is None
+
+    # The model document (it declares `object_types`) must carry the entry.
+    model = {"format": "mcf", "sections": {"object_types": []}}
+    assert "no `classification_standards`" in (installer.standard_mismatch(manifest, model) or "")
+    # A feature document legitimately carries only `category_attributes`.
+    features = {"format": "mcf", "sections": {"category_attributes": []}}
+    assert installer.standard_mismatch(manifest, features) is None
+    assert installer.standard_mismatch(
+        manifest, {"sections": {}}, ["object_types", "attribute_definitions"]
+    ), "the manifest's document order counts as the model too"
+
+    other = {"sections": {"classification_standards": [{"version": "11.0"}]}}
+    message = installer.standard_mismatch(manifest, other) or ""
+    assert "manifest says ETIM 10.0" in message and "11.0" in message
+
+    # Nothing to compare: a bundle without a version, or a document without sections.
+    assert installer.standard_mismatch({"standard_version": ""}, model) is None
+    assert installer.standard_mismatch(manifest, {"objects": []}) is None
 
 
 def test_missing_units_compares_the_bundle_with_the_target() -> None:

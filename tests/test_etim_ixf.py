@@ -247,9 +247,13 @@ def test_manifest_names_the_group_section(ixf_file: Path) -> None:
     model_doc = manifest["documents"][0]
     assert model_doc["sections"] == [
         "object_types",
+        "classification_standards",
         "attribute_groups",
         "attribute_definitions",
     ]
+    # The model document carries the standard it was built from, so the registry
+    # entry travels with the package (`tests/test_standard_bundle.py`).
+    assert model_doc["sections"].count("classification_standards") == 1
 
 
 def test_feature_rows_are_required_and_ordered(ixf_file: Path) -> None:

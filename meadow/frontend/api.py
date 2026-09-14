@@ -2667,6 +2667,24 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_classification_standards(
+        self, token: str, *, counts: bool = False
+    ) -> list[dict]:
+        """Lists the registered classification standards (`GET /classification-standards`).
+
+        ``counts`` adds the live number of class nodes and feature rows of the
+        standard's node type (two extra queries in the core).
+        """
+        params = {"counts": "true"} if counts else {}
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/classification-standards",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def create_export(
         self,
         token: str,

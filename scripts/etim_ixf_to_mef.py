@@ -54,6 +54,13 @@ TYPE_MAP = {"Logical": "boolean", "Numeric": "number", "Alphanumeric": "text", "
 BUNDLE_FORMAT = "meadow-standard-bundle"
 BUNDLE_VERSION = "1.0"
 
+#: The standard this converter builds packages for (IXF is ETIM's exchange
+#: format). The MCF section `classification_standards` records it, so the export
+#: names the reference feature system (`ETIM-10.0`) from installed facts
+#: (`plan/detail/kategorisierung.md`, registry table `classification_standard`).
+STANDARD_CODE = "etim"
+STANDARD_NAME = "ETIM"
+
 
 def local(tag: str) -> str:
     """Strips the `{namespace}` prefix from an ElementTree tag."""
@@ -283,6 +290,32 @@ def read_ixf(
     return selection
 
 
+def standard_version(selection: Selection) -> str:
+    """The ETIM version of the export (`Header/Publication/Number` + `.0`)."""
+    number = selection.publication.get("number", "")
+    return f"{number}.0" if number else ""
+
+
+def standard_entries(selection: Selection, *, node_type: str) -> list[dict]:
+    """The `classification_standards` entries of the bundle.
+
+    Empty when the IXF header carries no release number: a version is never
+    invented, and the export then falls back to its explicit profile field.
+    """
+    version = standard_version(selection)
+    if not version:
+        return []
+    return [
+        {
+            "code": STANDARD_CODE,
+            "version": version,
+            "name": STANDARD_NAME,
+            "source": selection.publication.get("name", ""),
+            "node_type": node_type,
+        }
+    ]
+
+
 def build_model_document(
     selection: Selection,
     *,
@@ -445,6 +478,7 @@ def build_model_document(
         "created_at": datetime.now(UTC).isoformat(),
         "sections": {
             "object_types": [node_definition],
+            "classification_standards": standard_entries(selection, node_type=node_type),
             "attribute_groups": group_entries,
             "attribute_definitions": [code_definition, description_definition, *definitions],
         },
@@ -507,14 +541,13 @@ def bundle_manifest(
     class_key: str = "code",
 ) -> dict:
     """The manifest describing the bundle's documents and what they need."""
-    number = selection.publication.get("number", "")
     class_features = sum(len(entry.features) for entry in selection.classes)
     return {
         "format": BUNDLE_FORMAT,
         "format_version": BUNDLE_VERSION,
         "name": name,
-        "standard": "ETIM",
-        "standard_version": f"{number}.0" if number else "",
+        "standard": STANDARD_NAME,
+        "standard_version": standard_version(selection),
         "source": selection.publication.get("name", ""),
         "created_at": datetime.now(UTC).isoformat(),
         "node_type": node_type,
@@ -532,7 +565,12 @@ def bundle_manifest(
             {
                 "file": "model.mcf.json",
                 "kind": "mcf",
-                "sections": ["object_types", "attribute_groups", "attribute_definitions"],
+                "sections": [
+                    "object_types",
+                    "classification_standards",
+                    "attribute_groups",
+                    "attribute_definitions",
+                ],
             },
             {"file": "classes.mef.json", "kind": "mef", "objects": len(selection.classes)},
             {"file": "features.mcf.json", "kind": "mcf", "sections": ["category_attributes"]},
@@ -600,6 +638,8 @@ def main(argv: list[str]) -> int:
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"bundle: {manifest['name']} {manifest['standard_version']} -> {args.out_dir}")
+    if not manifest["standard_version"]:
+        print("note: the IXF header has no release number - no standard registry entry written")
     print(f"classes={report['classes']} features={report['features']} out={args.out_dir}")
     print(f"feature groups: {report['feature_groups']}")
     print(f"types={dict(report['type_histogram'])}")

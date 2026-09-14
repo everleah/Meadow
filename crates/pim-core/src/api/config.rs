@@ -24,7 +24,9 @@ use crate::error::ApiError;
 // The class-feature section lives in its own file (ConfigReport/Mode and the
 // section helpers stay private to this module, so the file sits inside `config/`).
 mod category_attributes;
+mod classification_standards;
 use category_attributes::{apply_category_attributes, category_attributes_section};
+use classification_standards::{apply_classification_standards, classification_standards_section};
 
 /// Query parameters for `GET /config/export`.
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
@@ -48,6 +50,7 @@ const SECTIONS: &[&str] = &[
     "attribute_groups",
     "enum_sets",
     "object_types",
+    "classification_standards",
     "attribute_definitions",
     "relation_definitions",
     "business_rules",
@@ -74,7 +77,7 @@ fn parse_sections(raw: Option<&str>) -> Result<Vec<String>, ApiError> {
 }
 
 /// Runs a simple (bind-free) SELECT and returns all rows.
-async fn query_rows(db: &crate::db::Db, sql: &str) -> Result<Vec<Value>, ApiError> {
+pub(crate) async fn query_rows(db: &crate::db::Db, sql: &str) -> Result<Vec<Value>, ApiError> {
     let mut response = db.inner().query(sql).await?.check()?;
     Ok(response.take(0)?)
 }
@@ -480,6 +483,7 @@ pub async fn export_config(
             "attribute_groups" => attribute_groups_section(&state.db).await?,
             "enum_sets" => enum_sets_section(&state.db).await?,
             "object_types" => object_types_section(&state.db, include_system).await?,
+            "classification_standards" => classification_standards_section(&state.db).await?,
             "attribute_definitions" => {
                 attribute_definitions_section(&state.db, &group_map, &unit_map, &enum_map).await?
             }
@@ -2012,6 +2016,9 @@ async fn apply_document(
             }
             "enum_sets" => apply_enum_sets(db, mode, &entries, &mut resolve, &mut report).await?,
             "object_types" => apply_object_types(db, mode, &entries, &mut report).await?,
+            "classification_standards" => {
+                apply_classification_standards(db, mode, &entries, &mut report).await?
+            }
             "attribute_definitions" => {
                 apply_attribute_definitions(db, mode, &entries, &resolve, &mut report).await?
             }

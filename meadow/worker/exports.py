@@ -550,6 +550,10 @@ async def _bmecat_export(
         str(definition.get("name")): definition
         for definition in await _load_definitions(active, core_url)
     }
+    # Which reference feature system does a class block name? The **installed**
+    # standard decides (`GET /classification-standards`, `current` per code); the
+    # profile's `etim_version` is only the fallback of an unregistered class.
+    standards = await _load_standards(active, core_url)
     objects = await _resolve_objects(
         active,
         core_url,
@@ -557,18 +561,22 @@ async def _bmecat_export(
         resolve_inheritance=bool(options.get("resolve_inheritance")),
     )
 
-    class_codes: dict[str, str] = {}
+    #: Node key -> (business key `code`, object type) of the assigned classes and
+    #: of every node a feature comes from. One lookup per node, cached.
+    class_nodes: dict[str, tuple[str, str]] = {}
 
-    async def class_code(key: str) -> str:
-        """The business key (`code`) of a node — empty when it has none."""
-        if key not in class_codes:
+    async def class_node(key: str) -> tuple[str, str]:
+        """The `code` and the object type of a taxonomy node — `("", "")` unknown."""
+        if key not in class_nodes:
             response = await active.get(f"{core_url}/objects/object:{key}")
-            code = ""
+            code, node_type = "", ""
             if response.status_code == 200:
-                attributes = response.json().get("attributes") or {}
+                body = response.json()
+                attributes = body.get("attributes") or {}
                 code = str(attributes.get("code") or "").strip()
-            class_codes[key] = code
-        return class_codes[key]
+                node_type = str(body.get("type") or "").strip()
+            class_nodes[key] = (code, node_type)
+        return class_nodes[key]
 
     products: list[dict[str, Any]] = []
     without_code: set[str] = set()
@@ -576,20 +584,25 @@ async def _bmecat_export(
         attributes = dict(obj.get("attributes") or {})
         resolved = await _load_class_features(active, core_url, str(obj.get("id") or ""))
         keys = [str(key) for key in resolved.get("classes") or []]
-        codes = {key: await class_code(key) for key in keys}
-        without_code.update(key for key, code in codes.items() if not code)
-        # The block ids: the assigned classes that have a business key.
-        blocks = list(dict.fromkeys(code for code in codes.values() if code))
-        # The features carry the **node keys** of the classes that define them;
-        # the export identifies a class by its business key (`code`), so the
-        # membership test compares codes (a key without a code — an ancestor of
-        # another dimension — stays as-is and counts as inherited).
+        # One block per assigned class **with a business key**; the block names the
+        # reference feature system of the standard installed for that node type.
+        blocks: list[dict[str, str]] = []
+        for key in keys:
+            code, node_type = await class_node(key)
+            if not code:
+                without_code.add(key)
+                continue
+            blocks.append({"code": code, "system": standards.get(node_type, "")})
+        # The features carry the **node keys** of the classes that define them; the
+        # export identifies a class by its business key (`code`), so the membership
+        # test compares codes (a key without a code — an ancestor of another
+        # dimension — stays as-is and counts as inherited).
         features: list[dict[str, Any]] = []
         for feature in resolved.get("attributes") or []:
             entry = dict(feature)
             nodes: list[str] = []
             for node in feature.get("nodes") or []:
-                code = await class_code(str(node))
+                code, _ = await class_node(str(node))
                 nodes.append(code or str(node))
             entry["nodes"] = nodes
             features.append(entry)
@@ -606,6 +619,7 @@ async def _bmecat_export(
 
     document, report = bmecat.build_document(products, definitions, profile)
     report["nodes_without_code"] = sorted(without_code)
+    report["standards"] = standards
     report["validation"] = bmecat.validate(document)
     logger.info(
         "bmecat export wrote %d products (%d classes, %d features, validation=%s)",
@@ -640,6 +654,31 @@ async def _load_class_features(
     if response.status_code != 200:
         return {}
     return response.json()
+
+
+async def _load_standards(client: httpx.AsyncClient, core_url: str) -> dict[str, str]:
+    """`node_type` -> reference feature system of the **installed** standards.
+
+    The registry (`GET /classification-standards`) knows which standard in which
+    version was loaded for a node type; only the `current` version per standard
+    counts (the newest — installing an update replaces the feature set by business
+    key). A core without a registered standard, or an older core, yields an empty
+    map: the profile's `etim_version` is then the fallback.
+    """
+    response = await client.get(f"{core_url}/classification-standards")
+    if response.status_code != 200:
+        return {}
+    payload = response.json()
+    rows = payload if isinstance(payload, list) else payload.get("items") or []
+    systems: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("current"):
+            continue
+        node_type = str(row.get("node_type") or "").strip()
+        name = str(row.get("feature_system_name") or "").strip()
+        if node_type and name:
+            systems[node_type] = name
+    return systems
 
 
 def build_export_handler(

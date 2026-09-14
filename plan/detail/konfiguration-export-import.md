@@ -87,6 +87,9 @@ JSON, passend zum Datenexport (MEF), mit eigenem Kopf und Sektionen.
       { "name": "product", "label": { "de": "Produkt", "en": "Product" }, "description": "", "key_attributes": ["sku"], "label_attribute": "name", "taxonomy": false, "system": false },
       { "name": "etim_class", "label": { "de": "ETIM-Klasse", "en": "ETIM class" }, "description": "", "key_attributes": ["etim_code"], "label_attribute": "name", "taxonomy": true, "system": false }
     ],
+    "classification_standards": [
+      { "code": "etim", "version": "10.0", "name": "ETIM", "source": "ETIM-10.0-ALL-SECTORS-IXF-NO-CHANGE-CODES-METRIC-EI", "node_type": "etim_class" }
+    ],
     "attribute_definitions": [
       { "name": "sku", "label": { "de": "SKU", "en": "SKU" }, "type": "text", "group_ids": ["technical"], "multilingual": false, "inheritable": false, "is_key": true, "applicable_types": ["product"], "required_types": ["product"], "computed": false }
     ],
@@ -284,7 +287,20 @@ Die Merkmale der Taxonomie-Klassen ([kategorisierung.md](kategorisierung.md), St
 
 **Vorbedingungen:** admin/superadmin; `format_version` unterstützt; Dokument-Validierung ok.
 
-1. **Abhängigkeits-Reihenfolge:** `languages → channels → units → attribute_groups → enum_sets → object_types → attribute_definitions → relation_definitions → business_rules → category_attributes` (die Klassen-Merkmale zuletzt: sie setzen Attributdefinitionen **und** die Klassenknoten = Daten voraus). Die **Kanäle** stehen wie die Sprachen früh, weil sie keine Abhängigkeiten haben; die **Freigaben selbst sind Daten** (`release`) und gehören nicht ins MCF.
+1. **Abhängigkeits-Reihenfolge:** `languages → channels → units → attribute_groups → enum_sets → object_types → classification_standards → attribute_definitions → relation_definitions → business_rules → category_attributes` (die Klassen-Merkmale zuletzt: sie setzen Attributdefinitionen **und** die Klassenknoten = Daten voraus). Die **Kanäle** stehen wie die Sprachen früh, weil sie keine Abhängigkeiten haben; die **Freigaben selbst sind Daten** (`release`) und gehören nicht ins MCF. Das **Standard-Register** folgt `object_types`, weil es den Knotentyp benennt (ein unbekannter Typ ist eine Warnung, kein Fehler vor dem Import des Typs).
+
+### 4.10 Sektion `classification_standards` (installierte Klassifikationsstandards)
+
+| Feld | Typ | Beschreibung |
+|---|---|---|
+| `code` | string | Standard-Code (`etim`), zusammen mit `version` der stabile Schlüssel |
+| `version` | string | Version wie der Standard sie schreibt (`10.0`) |
+| `name` | string? | Anzeigename (Default: Großschreibung des Codes) |
+| `source` | string? | Artefakt, aus dem das Paket gebaut wurde (z. B. der IXF-Exportname) |
+| `node_type` | string? | Objekttyp der Klassenknoten (`etim_class`); ein unbekannter/nicht-Taxonomie-Typ wird als **Warnung** gemeldet und trotzdem übernommen |
+| `notes` | string? | Freitext |
+
+Diese Sektion sagt, **welcher Standard in welcher Version** in den Katalog geladen wurde — die Klassenknoten und Merkmale selbst reisen als Daten (MEF) bzw. Modell (MCF) eines **Standardpakets** (`bmecat-export.md` §11.9). Der BMEcat-Export liest daraus `REFERENCE_FEATURE_SYSTEM_NAME` (`ETIM-10.0`); der Konverter schreibt den Eintrag in `model.mcf.json`, der Installer registriert das Manifest (idempotent) und warnt bei Abweichung. Record-Key = `code` + `version` (deterministisch), ein Re-Import ist daher ein `skipped`. Details: [kategorisierung.md](kategorisierung.md) (Standard-Register).
 2. **Zweiphasig:**
    - **Phase 1 (Erzeugen/Aktualisieren nach stabilem Schlüssel):** je Sektion je Eintrag den stabilen Schlüssel im Ziel auflösen → `find` oder `create`. Referenzen auf noch nicht angelegte Entitäten (Forward-Referenzen: `object_type.key_attributes`/`label_attribute`, `attribute_definition.computed_rule`, `relation_definition.attributes`, `business_rule.dependencies`) werden als **ausstehend** registriert.
    - **Phase 2 (Querverweis-Auflösung):** Nachdem alle Entitäten existieren, werden die ausstehenden Referenzen auf die Ziel-IDs gemappt und an den Datensätzen aktualisiert.
