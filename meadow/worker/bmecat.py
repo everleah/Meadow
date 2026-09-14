@@ -55,7 +55,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 #: Namespace of the ETIM BMEcat 5.0 schema.
 NS = "https://www.etim-international.com/bmecat/50"
@@ -63,6 +63,25 @@ NS = "https://www.etim-international.com/bmecat/50"
 BMECAT_VERSION = "2005"
 #: Default path of the schema (gitignored licensed artefact; override with `BMECAT_XSD`).
 DEFAULT_XSD = Path("resources/etim/bmecat_etim_501.xsd")
+#: The BMEcat versions this module writes (`plan/detail/bmecat-export.md` §11.12).
+VERSIONS = ("2005", "1.2")
+#: Namespace per version and schema variant.
+#:
+#: A **1.2** document satisfies *either* the DTD *or* the XSD variant: the
+#: namespace is `#FIXED` in both artefacts (`§11.8`). The default is the classic
+#: DTD variant (Rev. A); the XSD variant exists for a receiver that validates
+#: with it (it carries identity constraints, which some parsers reject).
+NAMESPACES = {
+    ("2005", "xsd"): NS,
+    ("1.2", "dtd"): "http://www.bmecat.org/bmecat/1.2/bmecat_new_catalog",
+    ("1.2", "xsd"): "http://www.bmecat.org/XMLSchema/1.2/bmecat_new_catalog",
+}
+#: Schema artefact per version and variant (licensed, therefore gitignored).
+SCHEMA_FILES = {
+    ("2005", "xsd"): DEFAULT_XSD,
+    ("1.2", "dtd"): Path("resources/bmecat/bmecat_new_catalog_1_2.dtd"),
+    ("1.2", "xsd"): Path("resources/bmecat/bmecat_new_catalog_1_2.xsd"),
+}
 #: Object types that become a `PRODUCT` (everything else is skipped and reported).
 PRODUCT_TYPES = ("product", "variant")
 #: BMEcat catalogue language -> the attribute language code of a value map.
@@ -71,8 +90,12 @@ ATTRIBUTE_LANGUAGES = {"eng": "en", "ger": "de", "dut": "nl", "fre": "fr", "spa"
 PID_ATTRIBUTES = ("code", "sku")
 #: `SUPPLIER_PID` limit of the schema.
 MAX_PID = 32
-#: `DESCRIPTION_SHORT` limit of the schema.
+#: `DESCRIPTION_SHORT` limit used for the ETIM profile (the schema allows 150).
 MAX_DESCRIPTION = 100
+#: `DESCRIPTION_SHORT` limit of the **1.2** schema (80 — much tighter than 2005).
+MAX_DESCRIPTION_12 = 80
+#: `SUPPLIER_NAME`/`BUYER_NAME` limit of both schemas.
+MAX_NAME = 50
 #: `PROD_ID_TO` limit of the schema (a `PRODUCT_REFERENCE` target).
 MAX_REFERENCE_ID = 80
 #: Transactions of the ETIM profile: `new_productdata` is the price-less path
@@ -206,57 +229,68 @@ def display_name(attributes: Mapping[str, Any], language: str, fallback: str) ->
     return text or fallback
 
 
-def build_document(
-    products: Iterable[Mapping[str, Any]],
-    definitions: Mapping[str, Mapping[str, Any]],
-    profile: Mapping[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Builds the BMEcat document plus a report of what was written.
+def _context(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The profile values both document builders share, resolved and defaulted.
 
-    Each product is `{"pid", "type", "attributes", "classes", "features"}`:
-    `classes` are the classification blocks of the object — either
-    `{"code": "EC000012", "system": "ETIM-10.0"}` (the shape the export job builds
-    from the installed classification standard, see
-    `plan/detail/kategorien.md`) or a bare class code, which then uses the
-    profile's version — and `features` the resolved class features
-    (`GET /objects/{id}/category-attributes`), each with `name` (the feature code
-    an export transmits), `attribute` (the attribute carrying the value), the
-    contributing `nodes` (also **codes**, see `_feature_block`) and `required`.
-    `base_pid` is optional and only used for a variant.
+    One place decides what a missing or unknown value means (version, schema
+    variant, transaction, price source, units, header fields), so the two
+    builders cannot drift apart.
     """
-    profile = dict(profile or {})
+    version = str(profile.get("version") or VERSIONS[0]).strip()
+    if version not in VERSIONS:
+        version = VERSIONS[0]
+    variant = str(profile.get("schema_variant") or "dtd").strip().lower()
+    if variant not in ("dtd", "xsd"):
+        variant = "dtd"
     language = str(profile.get("language") or "eng")
-    attribute_language = ATTRIBUTE_LANGUAGES.get(language, language.split("-")[0])
     etim_version = str(profile.get("etim_version") or "10.0")
-    # Fallback of a class without an installed standard: the profile's version.
-    default_system = f"ETIM-{etim_version}"
     transaction = str(profile.get("transaction") or TRANSACTIONS[0]).strip().lower()
     if transaction not in TRANSACTIONS:
         transaction = TRANSACTIONS[0]
-    priced = transaction == "new_catalog"
-    #: Attribute carrying the price; `new_catalog` transmits no product without one.
-    price_attribute = str(profile.get("price_attribute") or "").strip()
     price_type = str(profile.get("price_type") or PRICE_TYPES[0]).strip().lower()
     if price_type not in PRICE_TYPES:
         price_type = PRICE_TYPES[0]
     order_unit = str(profile.get("order_unit") or DEFAULT_ORDER_UNIT).strip()
-    content_unit = str(profile.get("content_unit") or order_unit).strip()
-    catalog_id = str(profile.get("catalog_id") or "MEADOW").strip() or "MEADOW"
-    catalog_name = str(profile.get("catalog_name") or "Meadow catalogue").strip()
-    catalog_version = str(profile.get("catalog_version") or "1.0").strip() or "1.0"
-    currency = str(profile.get("currency") or "EUR").strip().upper() or "EUR"
-    supplier = str(profile.get("supplier") or "Meadow supplier").strip()
-    buyer = str(profile.get("buyer") or "Meadow buyer").strip()
-    now = datetime.now(UTC)
-
-    report: dict[str, Any] = {
+    return {
+        "version": version,
+        "variant": variant,
+        "namespace": NAMESPACES.get((version, variant), NS),
         "language": language,
+        "attribute_language": ATTRIBUTE_LANGUAGES.get(language, language.split("-")[0]),
         "etim_version": etim_version,
+        # Fallback of a class without an installed standard: the profile's version.
+        "default_system": f"ETIM-{etim_version}",
         "transaction": transaction,
-        "price_type": price_type if priced else "",
-        "price_attribute": price_attribute if priced else "",
-        "order_unit": order_unit if priced else "",
-        "content_unit": content_unit if priced else "",
+        # BMEcat 1.2 knows no price-less transaction: order details and at least one
+        # price block are mandatory there (`ARTICLE_PRICE_DETAILS+`).
+        "priced": transaction == "new_catalog" or version == "1.2",
+        "price_attribute": str(profile.get("price_attribute") or "").strip(),
+        "price_type": price_type,
+        "order_unit": order_unit,
+        "content_unit": str(profile.get("content_unit") or order_unit).strip(),
+        "catalog_id": str(profile.get("catalog_id") or "MEADOW").strip() or "MEADOW",
+        "catalog_name": str(profile.get("catalog_name") or "Meadow catalogue").strip(),
+        "catalog_version": str(profile.get("catalog_version") or "1.0").strip() or "1.0",
+        "currency": str(profile.get("currency") or "EUR").strip().upper() or "EUR",
+        "supplier": str(profile.get("supplier") or "Meadow supplier").strip(),
+        "buyer": str(profile.get("buyer") or "Meadow buyer").strip(),
+        "now": datetime.now(UTC),
+    }
+
+
+def _new_report(context: Mapping[str, Any]) -> dict[str, Any]:
+    """The report every document builder fills (same shape for both versions)."""
+    priced = bool(context["priced"])
+    return {
+        "version": context["version"],
+        "variant": context["variant"],
+        "language": context["language"],
+        "etim_version": context["etim_version"],
+        "transaction": context["transaction"] if context["version"] != "1.2" else "new_catalog",
+        "price_type": context["price_type"] if priced else "",
+        "price_attribute": context["price_attribute"] if priced else "",
+        "order_unit": context["order_unit"] if priced else "",
+        "content_unit": context["content_unit"] if priced else "",
         "products": 0,
         "skipped": {},
         "classes": 0,
@@ -284,6 +318,242 @@ def build_document(
         "issues": [],
     }
 
+
+def _skip(report: dict[str, Any], reason: str) -> None:
+    """Counts one skipped product under a reason."""
+    skipped = report["skipped"]
+    skipped[reason] = skipped.get(reason, 0) + 1
+
+
+class _Entry(NamedTuple):
+    """A product that passed the checks, ready to be written as one element."""
+
+    pid: str
+    name: str
+    amount: str
+    classes: list[tuple[str, str]]
+    attributes: dict[str, Any]
+    features: list[dict[str, Any]]
+    base_pid: str
+
+
+def _prepare(
+    product: Mapping[str, Any], context: Mapping[str, Any], report: dict[str, Any]
+) -> _Entry | None:
+    """Validates one product and reports why it cannot be written (`None` = skip).
+
+    Shared by both document builders, so the skip rules cannot drift apart: the
+    object type must be a product, the `SUPPLIER_PID` must exist and fit the
+    schema (32 characters), at least one class must carry a business key and — in
+    a priced delivery — a price must be maintained.
+    """
+    object_type = str(product.get("type") or "")
+    if object_type and object_type not in PRODUCT_TYPES:
+        _skip(report, f"type {object_type}")
+        return None
+    pid = str(product.get("pid") or "")
+    if not pid:
+        _skip(report, "no supplier pid")
+        report["issues"].append(
+            f"{product.get('id')}: no supplier PID (a `code`/`sku` attribute is required)"
+        )
+        return None
+    if len(pid) > MAX_PID:
+        _skip(report, "supplier pid too long")
+        report["issues"].append(f"{pid}: supplier PID longer than {MAX_PID} characters")
+        return None
+    classes = [
+        block
+        for block in (class_block(entry) for entry in product.get("classes") or [])
+        if block[0]
+    ]
+    if not classes:
+        # The ETIM profile identifies the class; a product without one cannot be
+        # transmitted (it stays in the catalogue, just not in this file).
+        _skip(report, "not classified")
+        report["unclassified"].append(pid)
+        return None
+    attributes = dict(product.get("attributes") or {})
+    price_attribute = str(context["price_attribute"])
+    amount = (
+        amount_of(attributes.get(price_attribute))
+        if context["priced"] and price_attribute
+        else None
+    )
+    if context["priced"] and amount is None:
+        # Order details and a price block are mandatory in the priced transactions.
+        _skip(report, "no price")
+        report["unpriced"].append(pid)
+        return None
+    return _Entry(
+        pid=pid,
+        name=display_name(attributes, str(context["attribute_language"]), pid),
+        amount=amount or "",
+        classes=classes,
+        attributes=attributes,
+        features=[dict(feature) for feature in product.get("features") or []],
+        base_pid=str(product.get("base_pid") or "").strip(),
+    )
+
+
+def _build_12(
+    products: Iterable[Mapping[str, Any]],
+    definitions: Mapping[str, Mapping[str, Any]],
+    context: Mapping[str, Any],
+    report: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Builds a **BMEcat 1.2** document (`T_NEW_CATALOG`, `ARTICLE`).
+
+    Verified against `bmecat_new_catalog_1_2.dtd` (+ the included
+    `bmecat_base_1_2.dtd`, §11.8/§11.12):
+
+    * `HEADER (GENERATOR_INFO?, CATALOG, BUYER?, AGREEMENT*, SUPPLIER, USER_DEFINED_EXTENSIONS?)`
+      with `CATALOG (LANGUAGE, CATALOG_ID, CATALOG_VERSION, CATALOG_NAME?, DATETIME?, …)`
+      — `LANGUAGE` exactly once, so 1.2 is **one language per document**.
+    * `T_NEW_CATALOG (…, ARTICLE*, …)` with
+      `ARTICLE (SUPPLIER_AID, ARTICLE_DETAILS, ARTICLE_FEATURES*,
+      ARTICLE_ORDER_DETAILS, ARTICLE_PRICE_DETAILS+, …)`.
+      `ARTICLE_ORDER_DETAILS` and **at least one** `ARTICLE_PRICE_DETAILS` are
+      mandatory (a price-less 1.2 delivery does not exist), so a product without a
+      price is skipped and reported like in the priced 2005 transaction.
+    * `ARTICLE_FEATURES (REFERENCE_FEATURE_SYSTEM_NAME?, …, FEATURE*)` — the same
+      feature content as 2005, and `FEATURE` is optional there (the ETIM profile
+      makes the block mandatory); the feature children are identical.
+
+    Two 1.2 limits differ from the ETIM profile and are applied here:
+    `DESCRIPTION_SHORT` is **80** characters (2005: 150) and `ARTICLE_REFERENCE`
+    knows no `base_product` qualifier (see below).
+    """
+    now = context["now"]
+    lines: list[str] = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<BMECAT xmlns="{context["namespace"]}" version="1.2">',
+        "  <HEADER>",
+        "    <GENERATOR_INFO>Meadow PIM</GENERATOR_INFO>",
+        "    <CATALOG>",
+        element("LANGUAGE", context["language"], "      "),
+        element("CATALOG_ID", context["catalog_id"], "      "),
+        element("CATALOG_VERSION", context["catalog_version"], "      "),
+        element("CATALOG_NAME", context["catalog_name"], "      "),
+        '      <DATETIME type="generation_date">',
+        element("DATE", f"{now:%Y-%m-%d}", "        "),
+        "      </DATETIME>",
+        element("CURRENCY", context["currency"], "      "),
+        "    </CATALOG>",
+        "    <BUYER>",
+        element("BUYER_NAME", str(context["buyer"])[:MAX_NAME], "      "),
+        "    </BUYER>",
+        "    <SUPPLIER>",
+        element("SUPPLIER_NAME", str(context["supplier"])[:MAX_NAME], "      "),
+        "    </SUPPLIER>",
+        "  </HEADER>",
+        "  <T_NEW_CATALOG>",
+    ]
+
+    for product in sorted(products, key=lambda item: str(item.get("pid") or "")):
+        entry = _prepare(product, context, report)
+        if entry is None:
+            continue
+        lines.append('    <ARTICLE mode="new">')
+        lines.append(element("SUPPLIER_AID", entry.pid, "      "))
+        lines.append("      <ARTICLE_DETAILS>")
+        lines.append(element("DESCRIPTION_SHORT", entry.name[:MAX_DESCRIPTION_12], "        "))
+        lines.append("      </ARTICLE_DETAILS>")
+        codes = [code for code, _ in entry.classes]
+        for code, system in entry.classes:
+            block, count = _feature_block(
+                code,
+                codes,
+                system or str(context["default_system"]),
+                entry.pid,
+                entry.features,
+                entry.attributes,
+                definitions,
+                str(context["attribute_language"]),
+                report,
+                wrapper="ARTICLE_FEATURES",
+            )
+            lines.extend(block)
+            report["classes"] += 1
+            report["features"] += count
+        lines.extend(
+            _order_details(
+                str(context["order_unit"]),
+                str(context["content_unit"]),
+                wrapper="ARTICLE_ORDER_DETAILS",
+            )
+        )
+        lines.extend(
+            _price_details(
+                entry.amount,
+                str(context["currency"]),
+                str(context["price_type"]),
+                now,
+                wrapper="ARTICLE_PRICE_DETAILS",
+                price="ARTICLE_PRICE",
+            )
+        )
+        report["prices"] += 1
+        if entry.base_pid and entry.base_pid != entry.pid:
+            # 1.2 has no `base_product` reference: `REFERENCE_QUALIFIERS` lists
+            # `sparepart|similar|followup|mandatory|select|others|accessories|
+            # diff_orderunit|consists_of` (DTD and XSD agree), and 1.2 expresses a
+            # variant through `FEATURE/VARIANTS` — which this export does not write
+            # yet. A wrong qualifier would corrupt the meaning, so the link is
+            # dropped **and reported** instead.
+            report["issues"].append(
+                f"{entry.pid}: BMEcat 1.2 cannot reference a base product "
+                f"(`{entry.base_pid}`) — `base_product` is a 2005 qualifier"
+            )
+        lines.append("    </ARTICLE>")
+        report["products"] += 1
+
+    lines += ["  </T_NEW_CATALOG>", "</BMECAT>"]
+    return "\n".join(lines) + "\n", report
+
+
+def build_document(
+    products: Iterable[Mapping[str, Any]],
+    definitions: Mapping[str, Mapping[str, Any]],
+    profile: Mapping[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Builds the BMEcat document plus a report of what was written.
+
+    Each product is `{"pid", "type", "attributes", "classes", "features"}`:
+    `classes` are the classification blocks of the object — either
+    `{"code": "EC000012", "system": "ETIM-10.0"}` (the shape the export job builds
+    from the installed classification standard, see
+    `plan/detail/kategorien.md`) or a bare class code, which then uses the
+    profile's version — and `features` the resolved class features
+    (`GET /objects/{id}/category-attributes`), each with `name` (the feature code
+    an export transmits), `attribute` (the attribute carrying the value), the
+    contributing `nodes` (also **codes**, see `_feature_block`) and `required`.
+    `base_pid` is optional and only used for a variant.
+    """
+    profile = dict(profile or {})
+    context = _context(profile)
+    report = _new_report(context)
+    if context["version"] == "1.2":
+        # BMEcat 1.2 has its own element vocabulary (`ARTICLE`, §11.12).
+        return _build_12(products, definitions, context, report)
+
+    # --- BMEcat 2005, the ETIM profile ---------------------------------------
+    language = context["language"]
+    attribute_language = context["attribute_language"]
+    default_system = context["default_system"]
+    transaction = context["transaction"]
+    priced = context["priced"]
+    price_type = context["price_type"]
+    order_unit = context["order_unit"]
+    content_unit = context["content_unit"]
+    catalog_id = context["catalog_id"]
+    catalog_name = context["catalog_name"]
+    catalog_version = context["catalog_version"]
+    currency = context["currency"]
+    supplier = context["supplier"]
+    buyer = context["buyer"]
+    now = context["now"]
+
     lines: list[str] = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<BMECAT xmlns="{NS}" version="{BMECAT_VERSION}">',
@@ -303,7 +573,7 @@ def build_document(
         element("BUYER_NAME", buyer[:50], "      "),
         "    </BUYER>",
         "    <SUPPLIER>",
-        element("SUPPLIER_NAME", supplier, "      "),
+        element("SUPPLIER_NAME", supplier[:MAX_NAME], "    "),
         "    </SUPPLIER>",
         "    <USER_DEFINED_EXTENSIONS>",
         "      <UDX.EDXF.VERSION>5.0</UDX.EDXF.VERSION>",
@@ -312,60 +582,24 @@ def build_document(
         f"  <{_tag(transaction)}>",
     ]
 
-    def skip(reason: str) -> None:
-        skipped = report["skipped"]
-        skipped[reason] = skipped.get(reason, 0) + 1
-
     for product in sorted(products, key=lambda item: str(item.get("pid") or "")):
-        object_type = str(product.get("type") or "")
-        if object_type and object_type not in PRODUCT_TYPES:
-            skip(f"type {object_type}")
+        entry = _prepare(product, context, report)
+        if entry is None:
             continue
-        pid = str(product.get("pid") or "")
-        if not pid:
-            skip("no supplier pid")
-            report["issues"].append(
-                f"{product.get('id')}: no supplier PID (a `code`/`sku` attribute is required)"
-            )
-            continue
-        if len(pid) > MAX_PID:
-            skip("supplier pid too long")
-            report["issues"].append(f"{pid}: supplier PID longer than {MAX_PID} characters")
-            continue
-        classes = [
-            block
-            for block in (class_block(entry) for entry in product.get("classes") or [])
-            if block[0]
-        ]
-        if not classes:
-            # The ETIM profile identifies the class; a product without one cannot
-            # be transmitted (it stays in the catalogue, just not in this file).
-            skip("not classified")
-            report["unclassified"].append(pid)
-            continue
-
-        attributes = dict(product.get("attributes") or {})
-        features = [dict(feature) for feature in product.get("features") or []]
-        name = display_name(attributes, attribute_language, pid)
-        # `new_catalog` needs a price on every product: `PRODUCT_PRICE_DETAILS` is
-        # mandatory in that transaction, so a product without one is reported.
-        amount = amount_of(attributes.get(price_attribute)) if priced and price_attribute else None
-        if priced and amount is None:
-            skip("no price")
-            report["unpriced"].append(pid)
-            continue
+        pid = entry.pid
+        attributes = entry.attributes
         lines.append('    <PRODUCT mode="new">')
         lines.append(element("SUPPLIER_PID", pid, "      "))
         lines.append("      <PRODUCT_DETAILS>")
-        lines.append(element("DESCRIPTION_SHORT", name[:MAX_DESCRIPTION], "        "))
+        lines.append(element("DESCRIPTION_SHORT", entry.name[:MAX_DESCRIPTION], "        "))
         lines.append("      </PRODUCT_DETAILS>")
-        for code, system in classes:
+        for code, system in entry.classes:
             block, count = _feature_block(
                 code,
-                [code for code, _ in classes],
+                [code for code, _ in entry.classes],
                 system or default_system,
                 pid,
-                features,
+                entry.features,
                 attributes,
                 definitions,
                 attribute_language,
@@ -376,16 +610,15 @@ def build_document(
             report["features"] += count
         if priced:
             lines.extend(_order_details(order_unit, content_unit))
-            lines.extend(_price_details(amount, currency, price_type, now))
+            lines.extend(_price_details(entry.amount, currency, price_type, now))
             report["prices"] += 1
             # The transaction fixes the position of the UDX block: mandatory after
             # the prices in `T_NEW_CATALOG` (all its children are optional, so an
             # empty block is valid).
             lines.append(_product_udx())
-        base = str(product.get("base_pid") or "").strip()
-        if base and base != pid:
+        if entry.base_pid and entry.base_pid != pid:
             lines.append('      <PRODUCT_REFERENCE type="base_product">')
-            lines.append(element("PROD_ID_TO", base[:MAX_REFERENCE_ID], "        "))
+            lines.append(element("PROD_ID_TO", entry.base_pid[:MAX_REFERENCE_ID], "        "))
             lines.append("      </PRODUCT_REFERENCE>")
             report["references"] += 1
         lines.append("    </PRODUCT>")
@@ -403,38 +636,49 @@ def _tag(transaction: str) -> str:
     return f"T_{transaction.upper()}"
 
 
-def _order_details(order_unit: str, content_unit: str) -> list[str]:
-    """`PRODUCT_ORDER_DETAILS` — mandatory in `T_NEW_CATALOG`.
+def _order_details(
+    order_unit: str, content_unit: str, wrapper: str = "PRODUCT_ORDER_DETAILS"
+) -> list[str]:
+    """The order details block — mandatory in the priced transactions.
 
     `ORDER_UNIT` and `CONTENT_UNIT` carry **BMEcat unit codes** (UN/ECE Rec 20,
-    e.g. `C62` = piece), not Meadow unit symbols: the schema enumerates them, so a
-    wrong code fails the XSD validation instead of shipping silently.
+    e.g. `C62` = piece), not Meadow unit symbols: in the ETIM profile the schema
+    enumerates them, and a wrong code fails the XSD validation instead of shipping
+    silently. (The 1.2 **DTD** is laxer here — `#PCDATA` — which is why the plan
+    warns that a 1.2 XSD validation is stricter than the DTD one.)
     """
     return [
-        "      <PRODUCT_ORDER_DETAILS>",
+        f"      <{wrapper}>",
         element("ORDER_UNIT", order_unit, "        "),
         element("CONTENT_UNIT", content_unit, "        "),
-        "      </PRODUCT_ORDER_DETAILS>",
+        f"      </{wrapper}>",
     ]
 
 
-def _price_details(amount: str, currency: str, price_type: str, now: datetime) -> list[str]:
-    """`PRODUCT_PRICE_DETAILS` — mandatory in `T_NEW_CATALOG`.
+def _price_details(
+    amount: str,
+    currency: str,
+    price_type: str,
+    now: datetime,
+    wrapper: str = "PRODUCT_PRICE_DETAILS",
+    price: str = "PRODUCT_PRICE",
+) -> list[str]:
+    """The price block — mandatory in the priced transactions.
 
-    The `DATETIME` is mandatory in the schema and becomes the generation date as
-    `valid_start_date`; `PRICE_CURRENCY` repeats the catalogue currency so a
-    consumer reading only the price block needs no fallback.
+    The `DATETIME` becomes the generation date as `valid_start_date` (mandatory in
+    2005, optional in 1.2, but written in both); `PRICE_CURRENCY` repeats the
+    catalogue currency so a consumer reading only the price block needs no fallback.
     """
     return [
-        "      <PRODUCT_PRICE_DETAILS>",
+        f"      <{wrapper}>",
         '        <DATETIME type="valid_start_date">',
         element("DATE", f"{now:%Y-%m-%d}", "          "),
         "        </DATETIME>",
-        f'        <PRODUCT_PRICE price_type="{price_type}">',
+        f'        <{price} price_type="{price_type}">',
         element("PRICE_AMOUNT", amount, "          "),
         element("PRICE_CURRENCY", currency, "          "),
-        "        </PRODUCT_PRICE>",
-        "      </PRODUCT_PRICE_DETAILS>",
+        f"        </{price}>",
+        f"      </{wrapper}>",
     ]
 
 
@@ -457,8 +701,9 @@ def _feature_block(
     definitions: Mapping[str, Mapping[str, Any]],
     language: str,
     report: dict[str, Any],
+    wrapper: str = "PRODUCT_FEATURES",
 ) -> tuple[list[str], int]:
-    """One `PRODUCT_FEATURES` block per class.
+    """One class block per class (`PRODUCT_FEATURES` in 2005, `ARTICLE_FEATURES` in 1.2).
 
     A feature belongs to the class that defines it (`nodes`, **class codes**); a
     feature whose defining classes are all **outside** the product's own classes
@@ -473,7 +718,7 @@ def _feature_block(
     if system not in report["feature_systems"]:
         report["feature_systems"].append(system)
     lines = [
-        "      <PRODUCT_FEATURES>",
+        f"      <{wrapper}>",
         element("REFERENCE_FEATURE_SYSTEM_NAME", system, "        "),
         element("REFERENCE_FEATURE_GROUP_ID", class_code, "        "),
     ]
@@ -513,23 +758,29 @@ def _feature_block(
                 report["text_values"].append(code)
         lines.append("        </FEATURE>")
         count += 1
-    lines.append("      </PRODUCT_FEATURES>")
+    lines.append(f"      </{wrapper}>")
     return lines, count
 
 
-def schema_path() -> Path | None:
-    """The XSD to validate against (`BMECAT_XSD`, else the resolved default)."""
+def schema_path(version: str = BMECAT_VERSION, variant: str = "dtd") -> Path | None:
+    """The schema to validate against (`BMECAT_XSD`, else the version's artefact).
+
+    `BMECAT_XSD` overrides the resolved default and may point at an **XSD or a
+    DTD** — the file name decides how it is used (see `validate`).
+    """
     configured = os.environ.get("BMECAT_XSD")
-    path = Path(configured) if configured else DEFAULT_XSD
+    path = Path(configured) if configured else SCHEMA_FILES.get((version, variant), DEFAULT_XSD)
     return path if path.is_file() else None
 
 
 def validate(xml: str, path: Path | None = None) -> dict[str, Any]:
-    """Validates the document against the ETIM XSD (best effort).
+    """Validates the document against the BMEcat schema of its version (best effort).
 
-    `lxml` and the licensed schema are not guaranteed to be present, so a missing
-    schema or library is **reported** (`validated: false` + `reason`) instead of
-    failing the export — the same honesty rule as the unit checks elsewhere.
+    An XSD is validated with `XMLSchema`, a `.dtd` with `DTD` (BMEcat 1.2 ships
+    both variants). `lxml` and the licensed schema are not guaranteed to be
+    present, so a missing schema or library is **reported** (`validated: false` +
+    `reason`) instead of failing the export — the same honesty rule as the unit
+    checks elsewhere.
     """
     schema_file = path or schema_path()
     if schema_file is None:
@@ -539,9 +790,12 @@ def validate(xml: str, path: Path | None = None) -> dict[str, Any]:
     except ImportError as exc:  # pragma: no cover - depends on the environment
         return {"validated": False, "reason": f"lxml not installed ({exc})"}
     try:
-        schema = etree.XMLSchema(etree.parse(str(schema_file)))
         document = etree.fromstring(xml.encode("utf-8"))
-    except etree.XMLSyntaxError as exc:
+        if schema_file.suffix.lower() == ".dtd":
+            schema = etree.DTD(str(schema_file))
+        else:
+            schema = etree.XMLSchema(etree.parse(str(schema_file)))
+    except (etree.XMLSyntaxError, etree.DTDParseError) as exc:
         return {"validated": False, "valid": False, "errors": [str(exc)]}
     if schema.validate(document):
         return {"validated": True, "valid": True, "schema": str(schema_file)}
@@ -555,11 +809,19 @@ def validate(xml: str, path: Path | None = None) -> dict[str, Any]:
 
 __all__ = [
     "ATTRIBUTE_LANGUAGES",
+    "BMECAT_VERSION",
     "DEFAULT_XSD",
     "MAX_PID",
+    "NAMESPACES",
     "NS",
+    "PRICE_TYPES",
     "PRODUCT_TYPES",
+    "SCHEMA_FILES",
+    "TRANSACTIONS",
+    "VERSIONS",
+    "amount_of",
     "build_document",
+    "class_block",
     "display_name",
     "element",
     "escape",

@@ -623,7 +623,12 @@ async def _bmecat_export(
     document, report = bmecat.build_document(products, definitions, profile)
     report["nodes_without_code"] = sorted(without_code)
     report["standards"] = standards
-    report["validation"] = bmecat.validate(document)
+    # The document's own version decides the schema to check it against (2005 is an
+    # XSD, 1.2 ships a DTD and an XSD — `BMECAT_XSD` overrides both).
+    report["validation"] = bmecat.validate(
+        document,
+        bmecat.schema_path(str(report.get("version") or ""), str(report.get("variant") or "")),
+    )
     logger.info(
         "bmecat export wrote %d products (%d classes, %d features, validation=%s)",
         report["products"],

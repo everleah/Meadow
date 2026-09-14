@@ -144,6 +144,15 @@ pub struct BmecatProfile {
     /// `price_type` of `PRODUCT_PRICE`: `net_list` (default) | `net_customer` | `nrp`.
     #[serde(default)]
     pub price_type: Option<String>,
+    /// BMEcat version: `2005` (default, the ETIM profile) or `1.2` (legacy
+    /// delivery, `T_NEW_CATALOG` with `ARTICLE` — verified against the 1.2 DTD/XSD).
+    /// BMEcat 1.2 has no price-less transaction, so `price_attribute` is required.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Schema variant for **1.2**: `dtd` (default, Rev. A) or `xsd`. A 1.2 document
+    /// satisfies only one of them (the namespace is `#FIXED` in both artefacts).
+    #[serde(default)]
+    pub schema_variant: Option<String>,
 }
 
 /// Structured export request for `POST /exports`.

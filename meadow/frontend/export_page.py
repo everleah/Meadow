@@ -274,7 +274,14 @@ async def export_page(request: Request) -> None:
         asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
     def _render_bmecat_report(report: dict) -> None:
-        """Summary of a BMEcat run: counters, skips and the XSD verdict."""
+        """Summary of a BMEcat run: dialect, counters, skips and the schema verdict."""
+        version = str(report.get("version") or "2005")
+        variant = str(report.get("variant") or "dtd").upper()
+        ui.label(
+            t("export.bmecat_dialect").format(
+                version=version, variant=variant, transaction=report.get("transaction") or ""
+            )
+        ).classes("text-caption mt-1")
         with ui.row().classes("flex-wrap gap-2 mt-1"):
             for key in ("products", "classes", "features", "with_value", "dash"):
                 ui.badge(f"{t(f'export.bmecat_{key}')}: {int(report.get(key) or 0)}").props(
@@ -322,6 +329,15 @@ async def export_page(request: Request) -> None:
                     "text-caption text-orange-600"
                 )
         validation = report.get("validation") or {}
+        issues = report.get("issues") or []
+        if issues:
+            # Notes about content the chosen dialect cannot express (reported
+            # instead of written wrongly into the file).
+            ui.label(t("export.bmecat_issues").format(count=len(issues))).classes(
+                "text-caption text-orange-600 mt-1"
+            )
+            for issue in issues[:10]:
+                ui.label(str(issue)).classes("text-caption text-gray-600")
         if validation.get("validated"):
             key = "export.bmecat_valid" if validation.get("valid") else "export.bmecat_invalid"
             colour = "text-positive" if validation.get("valid") else "text-negative"
@@ -619,7 +635,7 @@ async def export_page(request: Request) -> None:
                     .classes("w-64")
                 )
                 bmecat_catalog_version = (
-                    ui.input(t("export.bmecat_version"), value="1.0")
+                    ui.input(t("export.bmecat_catalog_version"), value="1.0")
                     .props("filled dense")
                     .classes("w-28")
                 )
@@ -651,6 +667,35 @@ async def export_page(request: Request) -> None:
                 )
                 bmecat_buyer = (
                     ui.input(t("export.bmecat_buyer")).props("filled dense").classes("w-64")
+                )
+            # The dialect: the ETIM profile (2005) or the legacy 1.2 `ARTICLE`
+            # delivery (which exists as a DTD *and* as an XSD variant).
+            with ui.row().classes("flex-wrap gap-6 mt-2 items-center"):
+                bmecat_format_version = (
+                    ui.select(
+                        {
+                            "2005": t("export.bmecat_format_2005"),
+                            "1.2": t("export.bmecat_format_12"),
+                        },
+                        value="2005",
+                        label=t("export.bmecat_format_version"),
+                    )
+                    .props("filled dense")
+                    .classes("w-72")
+                    .tooltip(t("export.bmecat_format_hint"))
+                )
+                bmecat_schema_variant = (
+                    ui.select(
+                        {
+                            "dtd": t("export.bmecat_variant_dtd"),
+                            "xsd": t("export.bmecat_variant_xsd"),
+                        },
+                        value="dtd",
+                        label=t("export.bmecat_schema_variant"),
+                    )
+                    .props("filled dense")
+                    .classes("w-72")
+                    .tooltip(t("export.bmecat_variant_hint"))
                 )
             # Transaction: the price-less product data (`T_NEW_PRODUCTDATA`) or a
             # full catalogue delivery (`T_NEW_CATALOG`, which makes order details,
@@ -704,14 +749,21 @@ async def export_page(request: Request) -> None:
                 )
             ui.label(t("export.bmecat_validity_hint")).classes("text-caption text-gray-500")
 
-        def _update_transaction_visibility(transaction: str) -> None:
-            """Prices/order details exist only in the catalogue transaction."""
-            bmecat_price_row.set_visibility(transaction == "new_catalog")
+        def _update_transaction_visibility(_: object = None) -> None:
+            """Prices/order details exist only in a catalogue delivery.
 
-        bmecat_transaction.on_value_change(
-            lambda event: _update_transaction_visibility(str(event.value))
-        )
-        _update_transaction_visibility(str(bmecat_transaction.value or "new_productdata"))
+            BMEcat 1.2 knows no price-less transaction at all, so it always needs
+            the price fields and its transaction is fixed to `new_catalog`.
+            """
+            is_12 = str(bmecat_format_version.value or "2005") == "1.2"
+            priced = is_12 or str(bmecat_transaction.value or "") == "new_catalog"
+            bmecat_price_row.set_visibility(priced)
+            bmecat_schema_variant.set_visibility(is_12)
+            bmecat_transaction.set_enabled(not is_12)
+
+        bmecat_format_version.on_value_change(_update_transaction_visibility)
+        bmecat_transaction.on_value_change(_update_transaction_visibility)
+        _update_transaction_visibility()
 
         def _update_format_visibility(format_: str) -> None:
             """BMEcat has a fixed mapping: no field selection, no CSV options."""
@@ -742,6 +794,7 @@ async def export_page(request: Request) -> None:
 
         def _bmecat_profile() -> dict:
             """The BMEcat profile block of the request (empty values stay unset)."""
+            version = str(bmecat_format_version.value or "2005")
             transaction = str(bmecat_transaction.value or "new_productdata")
             profile = {
                 "catalog_id": str(bmecat_catalog_id.value or "").strip() or None,
@@ -755,9 +808,12 @@ async def export_page(request: Request) -> None:
                 "buyer": str(bmecat_buyer.value or "").strip() or None,
                 "pid_attribute": str(bmecat_pid.value or "").strip() or None,
                 "transaction": transaction,
+                "version": version,
             }
-            if transaction == "new_catalog":
-                # Mandatory blocks of that transaction: prices and order details.
+            if version == "1.2":
+                profile["schema_variant"] = str(bmecat_schema_variant.value or "dtd")
+            if version == "1.2" or transaction == "new_catalog":
+                # Mandatory blocks of those transactions: prices and order details.
                 profile["price_attribute"] = str(bmecat_price_attribute.value or "").strip() or None
                 profile["price_type"] = str(bmecat_price_type.value or "").strip() or None
                 profile["order_unit"] = str(bmecat_order_unit.value or "").strip() or None

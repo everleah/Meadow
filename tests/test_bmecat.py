@@ -8,6 +8,8 @@ and `FVALUE_DETAILS` for a missing value. `plan/detail/bmecat-export.md` §11.3.
 
 from __future__ import annotations
 
+import importlib.util
+
 import httpx
 import pytest
 
@@ -248,6 +250,129 @@ def test_amount_of_reads_the_price_from_every_stored_shape(
     value: object, expected: str | None
 ) -> None:
     assert bmecat.amount_of(value) == expected
+
+
+# --- BMEcat 1.2 (`ARTICLE`, the legacy delivery format) ---------------------
+# Verified against `resources/bmecat/bmecat_new_catalog_1_2.dtd` (which includes
+# `bmecat_base_1_2.dtd`): the vocabulary is `ARTICLE`, `SUPPLIER_AID` and
+# `ARTICLE_*`, order details + prices are mandatory and the header carries
+# `LANGUAGE` exactly once. The DTD and the XSD variant are two namespaces.
+
+DTPLUS = {
+    **PROFILE,
+    "version": "1.2",
+    "price_attribute": "net_price",
+    "schema_variant": "dtd",
+}
+
+
+def test_the_12_document_uses_the_article_vocabulary() -> None:
+    product = _product(attributes={"name": "Widget", "net_price": 12.5, "EF000008": 4})
+    document, report = bmecat.build_document([product], DEFINITIONS, DTPLUS)
+
+    assert report["version"] == "1.2"
+    assert report["variant"] == "dtd"
+    assert report["transaction"] == "new_catalog", "1.2 has no price-less transaction"
+    assert (
+        '<BMECAT xmlns="http://www.bmecat.org/bmecat/1.2/bmecat_new_catalog" version="1.2">'
+        in document
+    )
+    assert "<T_NEW_CATALOG>" in document
+    assert '<ARTICLE mode="new">' in document
+    assert "<SUPPLIER_AID>A-1</SUPPLIER_AID>" in document
+    assert "<ARTICLE_FEATURES>" in document
+    assert "<ARTICLE_ORDER_DETAILS>" in document
+    assert "<ARTICLE_PRICE_DETAILS>" in document
+    assert '<ARTICLE_PRICE price_type="net_list">' in document
+    # The 1.2 vocabulary never mixes with the 2005 element names.
+    for tag in ("<PRODUCT ", "<SUPPLIER_PID>", "<PRODUCT_FEATURES>", "<PRODUCT_PRICE_DETAILS>"):
+        assert tag not in document, f"`{tag}` is not part of BMEcat 1.2"
+    # `LANGUAGE` carries no `default` attribute in 1.2 and exists exactly once.
+    assert document.count("<LANGUAGE>") == 1
+    assert report["prices"] == 1
+
+
+def test_the_12_document_needs_a_price_and_reports_the_missing_one() -> None:
+    products = [
+        _product(pid="A-1", attributes={"name": "With price", "net_price": 5}),
+        _product(pid="A-2", attributes={"name": "Without price"}),
+    ]
+    document, report = bmecat.build_document(products, DEFINITIONS, DTPLUS)
+
+    assert report["products"] == 1
+    assert report["skipped"] == {"no price": 1}
+    assert report["unpriced"] == ["A-2"]
+    assert "<SUPPLIER_AID>A-2<" not in document
+
+
+def test_the_12_xsd_variant_switches_the_namespace() -> None:
+    product = _product(attributes={"name": "Widget", "net_price": 5})
+    document, report = bmecat.build_document(
+        [product], DEFINITIONS, {**DTPLUS, "schema_variant": "xsd"}
+    )
+
+    assert report["variant"] == "xsd"
+    assert 'xmlns="http://www.bmecat.org/XMLSchema/1.2/bmecat_new_catalog"' in document, (
+        "a 1.2 document satisfies only one of the two variants"
+    )
+
+
+def test_an_unknown_version_falls_back_to_the_etim_profile() -> None:
+    document, report = bmecat.build_document(
+        [_product()], DEFINITIONS, {**PROFILE, "version": "1.1", "schema_variant": "nope"}
+    )
+
+    assert report["version"] == "2005"
+    assert report["variant"] == "dtd"
+    assert "<T_NEW_PRODUCTDATA>" in document
+
+
+def test_the_schema_path_follows_the_version_and_variant() -> None:
+    assert bmecat.schema_path("2005", "xsd") == bmecat.DEFAULT_XSD
+    assert str(bmecat.schema_path("1.2", "dtd") or "").endswith("bmecat_new_catalog_1_2.dtd")
+    assert str(bmecat.schema_path("1.2", "xsd") or "").endswith("bmecat_new_catalog_1_2.xsd")
+
+
+def test_a_12_variant_cannot_reference_its_base_product_and_says_so() -> None:
+    product = _product(
+        pid="VAR-1",
+        type="variant",
+        base_pid="BASE-7",
+        attributes={"name": "Variant", "net_price": 4},
+    )
+    document, report = bmecat.build_document([product], DEFINITIONS, DTPLUS)
+
+    # `REFERENCE_QUALIFIERS` of 1.2 has no `base_product` (2005 only), and a wrong
+    # qualifier would corrupt the meaning — so the link is dropped, not guessed.
+    assert "ARTICLE_REFERENCE" not in document
+    assert report["references"] == 0
+    assert any("BASE-7" in issue for issue in report["issues"])
+
+
+def test_the_12_description_stops_at_eighty_characters() -> None:
+    product = _product(attributes={"name": "x" * 120, "net_price": 1})
+    document, _ = bmecat.build_document([product], DEFINITIONS, DTPLUS)
+
+    assert f"<DESCRIPTION_SHORT>{'x' * 80}</DESCRIPTION_SHORT>" in document
+    assert "x" * 81 not in document
+
+
+def test_a_12_document_validates_against_the_dtd() -> None:
+    """The real licensed DTD (it pulls in `bmecat_base_1_2.dtd` via a SYSTEM entity)."""
+    if importlib.util.find_spec("lxml") is None:  # pragma: no cover - optional extra
+        pytest.skip("lxml is not installed")
+    path = bmecat.schema_path("1.2", "dtd")
+    if path is None:  # pragma: no cover - the artefact is gitignored
+        pytest.skip("the licensed BMEcat 1.2 DTD is not present")
+    product = _product(
+        attributes={"name": "Widget", "net_price": 12.5, "code": "A-1", "EF000008": 4}
+    )
+    product["classes"] = ["EC000012", "EC000013"]
+    document, _ = bmecat.build_document([product], DEFINITIONS, DTPLUS)
+
+    result = bmecat.validate(document, path)
+
+    assert result["valid"], result.get("errors")
 
 
 def test_parent_reference_id_reads_the_composition_parent() -> None:

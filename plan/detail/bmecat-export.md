@@ -2,9 +2,9 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)); ergänzt Abschnitt 4 ([Datenmodell](../meadow-pim-architektur.md#4-datenmodell))
 - **Relevante Phasen:** Phase 9 (Ausbau), aufbauend auf dem MEF/MCF-Export/Import (Phase 6/9)
-- **Stand:** Entwurf (Planung, **keine** Implementierung); Recherche **verifiziert** am 2026-09-12 gegen die amtlichen Artefakte (§11.1, `resources/etim/`); offen: BMEcat-1.2-DTD, vollständige IXF-Abschnitte, Syntax Binding zu EuroCat (EN 17015-2)
+- **Stand:** **V1, V4 (Preise/Varianten) und V1b (BMEcat 1.2) umgesetzt** (§11.10–§11.12, 2026-09-13); offen: BMEcat-Import (V2), gespeicherte Profile (V3), `T_UPDATE_*`, EuroCat-Syntax-Binding (EN 17015-2), vollständige IXF-Abschnitte
 - **Verwandt:** [kategorisierung.md](kategorisierung.md) (Taxonomie-Typen, Klassen-Merkmale), [datenexport-import-ui.md](datenexport-import-ui.md) (Export-Wizard), [konfiguration-export-import.md](konfiguration-export-import.md) (MCF), [einheiten.md](einheiten.md)
-- **Artefakte:** BMEcat-/ETIM-Schema, Guideline, Beispielkataloge und der ETIM-10.0-IXF-Export liegen lokal in `resources/etim/` (nicht versioniert, Lizenz — s. §11.1)
+- **Artefakte:** BMEcat-/ETIM-Schema, Guideline, Beispielkataloge und der ETIM-10.0-IXF-Export liegen lokal in `resources/etim/` (nicht versioniert, Lizenz — s. §11.1); der BMEcat-Standard selbst (1.2 DTD/XSD, 2005.2) in `resources/bmecat/`
 
 ## 1. Ziel & Nicht-Ziele
 
@@ -115,7 +115,7 @@ Ein BMEcat-Export braucht eine **Konfiguration**, sonst ist das Mapping im Code 
 
 ## 10. Offene Entscheidungen (vor V1 zu klären)
 
-1. **Zielversion:** BMEcat **2005.1** (aktuell, `PRODUCT`) oder zusätzlich **1.2** (`ARTICLE`)? Vorschlag: 2005.1 zuerst, 1.2 nur bei konkretem Abnehmer.
+1. **Zielversion:** BMEcat **2005.1** (aktuell, `PRODUCT`) oder zusätzlich **1.2** (`ARTICLE`)? Vorschlag: 2005.1 zuerst, 1.2 nur bei konkretem Abnehmer. → **entschieden und umgesetzt (§11.12):** beides zuerst, 2005 als Default, 1.2 als Dialekt-Option mit DTD- und XSD-Variante.
 2. **ETIM xChange als primäres Ziel** (mit ETIM-Verweis-Merkmalen) oder „generisches BMEcat" mit ETIM als einem Klassifikationssystem? Vorschlag: ETIM-xChange-konform als V1-Ziel, generisch als Profiloption.
 3. **Sprachstrategie:** eine Datei je Sprache (Standard-konform) oder mehrsprachige UDX-Lösung? Vorschlag: Datei je Sprache.
 4. **Preise/Varianten** in V1 oder erst V4? Vorschlag: erst V4.
@@ -240,7 +240,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 1. **`BUYER` ist im ETIM-Profil Pflicht** (und steht vor `SUPPLIER`) — ein Katalog ohne Käuferblock ist schema-invalid.
 2. **`SUPPLIER_PID` ist auf 32 Zeichen begrenzt** ⇒ der interne Record-Key (`object:…`, 33 Zeichen mit ULID) ist **kein** gültiger PID; der Export braucht ein **Business-Key-Attribut** (SKU/Code) und muss ohne dieses Attribut mit klarer Meldung abbrechen.
 3. **`USER_DEFINED_EXTENSIONS` im Produktblock ist `udxPRODUCTDATA`** — `UDX.EDXF.VERSION` ist dort **nicht** erlaubt (nur im `udxHEADER`); Produkt-UDX darf nur die dort definierten Felder tragen (z. B. `MIME_INFO`, `BRAND_NAME`, `PACKING_UNITS`).
-4. **V1b – 1.2-Export** (`ARTICLE*`, DTD-Validierung) über dieselbe Mapping-Engine — exakt der Fall „wir kommen an 1.2 nicht vorbei“.
+4. **V1b – 1.2-Export** (`ARTICLE*`, DTD-Validierung) über dieselbe Mapping-Engine — exakt der Fall „wir kommen an 1.2 nicht vorbei“ — **umgesetzt (2026-09-13, §11.12)**: Dialekt-Option `version`/`schema_variant` am selben Format, DTD- **und** XSD-Variante validiert, Basisprodukt-Referenz als Bericht statt falschem Qualifier.
 5. **V2 – Import** (`T_NEW_CATALOG`/`T_UPDATE_PRODUCTS`, Merkmale rückwärts) **und** IXF-Standardimport als eigener Job.
 6. **V3 – generisches 2005.2:** `CLASSIFICATION_SYSTEM` (+ `CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES`, ECLASS-Referenzen), `MIME_TYPE`/`MIME_PURPOSE`, `CATALOG_GROUP_SYSTEM`, `VARIANTS`.
 7. **V4 –** Preise/Varianten/Konfigurationen — **Preise und Basisprodukt-Referenzen umgesetzt (2026-09-13, §11.11)**; offen bleiben Kundenpreise/Staffeln (`LOWER_BOUND`), `PRODUCT_LOGISTIC_DETAILS` und Konfigurationen. **EuroCat** als Profil, sobald das **Syntax Binding** zur **EN 17015-2** veröffentlicht ist (Beobachtungsposten, kein Blocker).
@@ -333,7 +333,7 @@ Die Sektionen des Exports wurden mit `scripts/inspect_etim_ixf.py` (Streaming, `
 
 **Verifikation (2026-09-13, live gegen den laufenden Kern):** Testprodukt → `POST /references` (`rel_category_member`) an die ETIM-Klasse **EC000001** (9 Pflichtmerkmale aus `features.mcf.json`), Werte für ein `range`-Merkmal (`{"from": 5, "to": 10}`) und ein numerisches (`25.5`), Export mit `format: "bmecat"`: **1 `PRODUCT`, 1 Block mit `REFERENCE_FEATURE_GROUP_ID = EC000001`, 9 `FEATURE`-Elemente** (2 mit Wert, 7 als `-` + `UN`), **XSD-valid**; `GET /exports/{run_id}/file` → `200`, `application/xml; charset=utf-8`, `meadow-export-bmecat.xml`; die 13 unklassifizierten und 21 PID-losen Produkte des Bestands erscheinen als Reportzahlen statt als Fehler. Im Browser: Formatwahl **BMEcat** tauscht die Karten (Feldauswahl/CSV-Optionen aus, Profilkarte an), der Report-Dialog zeigt Badges, Skip-Zeile, Pflichtmerkmal-Liste, Knoten-ohne-`code`-Hinweis und „Valid against the ETIM schema", der Download funktioniert. Automatisiert: `tests/test_bmecat.py` (23 Tests) deckt Kopfreihenfolge, Block je Klasse, vererbte Merkmale, `-`/`UN`/`NA`, `range`→zwei `FVALUE`, Katalogsprache, gebundenes eigenes Attribut, Skip-/Reportfälle, Determinismus/Escaping, die Auflösungsebene (Klassencode statt Knotenschlüssel, Knoten ohne `code`, Merkmal einer Oberklasse) und die „validiert nie mit Exception"-Zusage ab; die Python-Gates laufen mit **362 Tests** grün, Rust unverändert (116).
 
-**Offen (bewusst nicht in V1):** Streaming/Chunking für sehr große Kataloge (das Dokument entsteht bisher im Speicher), Preise und Varianten (V4, `T_NEW_CATALOG`), BMEcat 1.2 (V1b), `MIME_INFO`/Medien, `UDX.EDXF.*`-Zusatzfelder, mehrere Kanäle/Sprachen in einem Lauf, gespeicherte Profile (V3, §10 Punkt 5) sowie die `EV…`-Wertezuordnung.
+**Offen (bewusst nicht in V1):** Streaming/Chunking für sehr große Kataloge (das Dokument entsteht bisher im Speicher), `MIME_INFO`/Medien, `UDX.EDXF.*`-Zusatzfelder, mehrere Kanäle/Sprachen in einem Lauf, gespeicherte Profile (V3, §10 Punkt 5) sowie die `EV…`-Wertezuordnung. Preise/Bestelldaten/Varianten kamen mit V4 (§11.11), BMEcat 1.2 mit V1b (§11.12).
 
 **Betriebshinweis aus der Umsetzung:** `resolved_features` liefert die Merkmale **eines zugeordneten Objekts** — ein Klassenknoten selbst hat keine „eigenen" Merkmale im Sinn dieses Endpunkts (`GET /objects/<klasse>/category-attributes` ist leer). Ein Prüfskript, das die installierten Klassenmerkmale **zählen** will, nimmt deshalb `GET /config/export` (Sektion `category_attributes`) — der Bestand des ETIM-Pakets ist mit **25 Klassen / 589 Zeilen** verifiziert.
 
@@ -372,4 +372,36 @@ Weitere verifizierte Details: `PRODUCT_PRICE/@price_type` ist ein **Pattern** `n
 **Verifikation (2026-09-13, live):** Testprodukt (+ `net_price` 99.5) und -variante (109.5, per `PATCH /objects/{id}/parent` an das Basisprodukt gehängt) plus ein klassifiziertes Produkt **ohne** Preis, an `EC000001` klassifiziert. Export A (`type=product`, `transaction: new_catalog`): 1 Produkt, 1 Preis, `ORDER_UNIT`/`CONTENT_UNIT` = `C62`, `price_type="net_list"`, `PRICE_AMOUNT` 99.5, `PRICE_CURRENCY` EUR, Validity-`DATETIME`, leerer UDX-Block, das preislose Produkt als `skipped: {no price: 1}` + `unpriced` gemeldet — **XSD-valid**. Export B (`type=variant`): 1 Produkt, 1 Preis, `PRODUCT_REFERENCE type="base_product"` mit `PROD_ID_TO = BMECAT-BASE-1` — **XSD-valid**. Automatisiert in `tests/test_bmecat.py`: Transaktionswahl, Pflichtblöcke samt **Reihenfolge**, Preisarten, Einheitencodes, Überspringen ohne Preis, Basisprodukt-Referenz, `amount_of`-Formen (String/Zahl/Mapping) und `parent_reference_id` (Root/andere Relation/Alias) sowie ein Worker-Test für den Variantenpfad.
 
 **Offen (bewusst nicht in V4):** Kundenpreise/Staffeln (`LOWER_BOUND`, mehrere `PRODUCT_PRICE`-Blöcke je Produkt), `PRODUCT_LOGISTIC_DETAILS`, `TAX` aus einem Attribut, `NO_CU_PER_OU`/`PRICE_QUANTITY`, Mengen-/Varianten-Attribute auf Produktebene (`VARIANTS`) und die Prüfung der Einheitencodes gegen die `dtUNIT`-Liste **vor** dem Schreiben (heute fängt das die XSD-Validierung im Job; die Liste selbst ist lizenziertes Artefakt und wird bewusst nicht kopiert).
+
+### 11.12 BMEcat 1.2 (V1b) — umgesetzt (2026-09-13)
+
+**Keine zweite Pipeline:** 1.2 ist eine **Dialekt-Option derselben Export-Pipeline** — `format: "bmecat"` plus zwei Profilfelder. Alles Gemeinsame (Objekt-/Klassendaten holen, Merkmale auflösen, Skip-Regeln, Berichtsform) bleibt ein Code-Pfad: `meadow/worker/bmecat.py` entscheidet in `_context(profile)` über Version und Schema-Variante, `_prepare(...)` prüft **beide** Dokumentarten identisch (Typ, PID, Klasse, Preis), und `build_document` verzweigt erst am Elementvokabular (`_build_12` vs. die 2005-Route). Die Helfer (`_feature_block`, `_order_details`, `_price_details`) sind über den Elementnamen parametrisiert (`PRODUCT_FEATURES`/`ARTICLE_FEATURES`, `PRODUCT_ORDER_DETAILS`/`ARTICLE_ORDER_DETAILS`, `PRODUCT_PRICE_DETAILS`/`ARTICLE_PRICE_DETAILS`), damit die beiden Dialekte nicht auseinanderdriften.
+
+**Profilfelder (neu):**
+
+| Feld | Bedeutung |
+|---|---|
+| `version` | `2005` (Default, ETIM-Profil) oder `1.2` (klassische `ARTICLE`-Datei) |
+| `schema_variant` | nur für 1.2: `dtd` (Default, Rev. A) oder `xsd` — wählt Namespace **und** Validierungsartefakt |
+
+**Regeln für 1.2 (`_build_12`):**
+
+- Kopf: `CATALOG (LANGUAGE, CATALOG_ID, CATALOG_VERSION, CATALOG_NAME, DATETIME@generation_date, CURRENCY)`, dann `BUYER` (optional im Standard, von uns immer geschrieben), dann `SUPPLIER`; **kein** `UDX.EDXF.VERSION` (das ist eine 2005-Zutat). `LANGUAGE` trägt **kein** `default`-Attribut — 1.2 kennt eine Sprache je Dokument.
+- `T_NEW_CATALOG` + `ARTICLE mode="new"` (`mode` ist im DTD `#FIXED 'new'`) mit `SUPPLIER_AID`, `ARTICLE_DETAILS/DESCRIPTION_SHORT`, je Klasse `ARTICLE_FEATURES`, `ARTICLE_ORDER_DETAILS`, `ARTICLE_PRICE_DETAILS`.
+- **1.2 hat keine preislose Transaktion** (`ARTICLE_ORDER_DETAILS` und `ARTICLE_PRICE_DETAILS+` sind Pflicht) ⇒ `transaction` wird dort auf `new_catalog` festgelegt, und ein Produkt **ohne** Preis wird übersprungen und gemeldet (`skipped["no price"]`, `report.unpriced`) — dieselbe Regel wie in der 2005-Kataloglieferung, nicht durch einen erfundenen Preis „gelöst".
+- `DATETIME type="valid_start_date"` im Preisblock und `type="generation_date"` im Kopf sind beide im 1.2-Vokabular (`generation_date|agreement_start_date|agreement_end_date|valid_start_date|valid_end_date`).
+- **Feldlängen weichen von 2005 ab und werden eingehalten:** `DESCRIPTION_SHORT` ist in 1.2 **80** Zeichen (im ETIM-Profil 150, wir schreiben dort bis 100), `SUPPLIER_NAME`/`BUYER_NAME` 50, `SUPPLIER_AID` 32, `CATALOG_ID` 20, `FNAME`/`FVALUE` 60.
+
+**Ein 1.2-Befund, der die Umsetzung korrigiert hat (aus der XSD/DTD, nicht geraten):** `ARTICLE_REFERENCE/@type` hat in 1.2 das Vokabular `sparepart|similar|followup|mandatory|select|others|accessories|diff_orderunit|consists_of` — **`base_product` fehlt** (das ist eine 2005-Zutat; DTD und XSD stimmen darin überein). 1.2 drückt Varianten über `FEATURE/VARIANTS (VARIANT (FVALUE, SUPPLIER_AID_SUPPLEMENT))` **innerhalb** des Merkmals aus. Konsequenz: die Basisprodukt-Referenz wird für 1.2 **nicht** geschrieben und **als Hinweis im Bericht** gemeldet (`issues`, mit PID und Basis-PID) — ein „irgendwie ähnlicher" Qualifier (`consists_of`) würde die Bedeutung verfälschen, und ein stiller Verlust wäre schlimmer als ein sichtbarer Hinweis. `VARIANTS` selbst bleibt offen (eigene Ausbaustufe, siehe unten).
+
+**Validierung, verifiziert am 2026-09-13:**
+
+- `schema_path(version, variant)` wählt das Artefakt: 2005 → `resources/etim/bmecat_etim_501.xsd`, 1.2/`dtd` → `resources/bmecat/bmecat_new_catalog_1_2.dtd`, 1.2/`xsd` → `resources/bmecat/bmecat_new_catalog_1_2.xsd`; `BMECAT_XSD` überschreibt weiterhin. `validate()` liest die Endung: `.dtd` ⇒ `lxml.etree.DTD`, sonst `XMLSchema`. **Die 1.2-DTD lädt die Basis-DTD über eine relative `SYSTEM`-Entity (`%BASE;` → `bmecat_base_1_2.dtd`) — `lxml` löst sie relativ zum DTD-Pfad auf, das funktioniert ohne `XML_CATALOG` (live geprüft).**
+- Die **Identity-Constraints der 1.2-XSD** (`xsd:unique`/`xsd:key` auf `REFERENCE_FEATURE_SYSTEM_NAME`, `FVALUE`, `@type` …) werden von `libxml2` **nicht** durchgesetzt: ein Dokument mit **zwei** `ARTICLE_FEATURES`-Blöcken (also zweimal derselbe `REFERENCE_FEATURE_SYSTEM_NAME`) validiert ohne Beanstandung. Für 1.2-Exporte mit mehreren Klassen ist das der praktische Weg; wer die Constraints braucht, validiert zusätzlich mit einem anderen Prozessor.
+- Fehlt Schema **oder** `lxml`, bleibt es bei `validation.validated = false` mit Grund — kein Abbruch (unverändert gegenüber V1).
+
+**Verifikation (2026-09-13, live gegen Kern + Worker):** Testprodukt `BMECAT12-1` und Variante `BMECAT12-V1` (per `PATCH /objects/{id}/parent` an das Basisprodukt gehängt), beide an eine ETIM-Klasse des installierten Standards klassifiziert, `net_price` 12.5, Export mit `version: "1.2"`, `schema_variant: "dtd"`: **2 `ARTICLE`, 2 `ARTICLE_FEATURES` (`REFERENCE_FEATURE_SYSTEM_NAME = ETIM-10.0`, `REFERENCE_FEATURE_GROUP_ID = EC000012`, 16 Merkmale je Block), `ARTICLE_ORDER_DETAILS` (`C62`/`C62`), `ARTICLE_PRICE_DETAILS` mit `ARTICLE_PRICE price_type="net_list"` (12.5 EUR)** — **DTD-valid**, `report.version = "1.2"`, `report.variant = "dtd"`, `report.transaction = "new_catalog"`, `references = 0` und der Basisprodukt-Hinweis unter `issues`. Derselbe Lauf mit `schema_variant: "xsd"` (anderer Namespace): **XSD-valid**. Im Browser: die Formatwahl **BMEcat** zeigt die Karte, „BMEcat-Version" schaltet auf 1.2 ⇒ **Schema-Variante erscheint**, die Transaktion wird **deaktiviert** (1.2 ist immer eine Kataloglieferung) und die Preiszeile **eingeblendet**; das vertikale Layout bleibt auch in der 1.2-Ansicht intakt (kein nacktes Control).
+Automatisiert in `tests/test_bmecat.py` (49 Tests): Artikelvokabular (und dass **kein** 2005-Elementname durchrutscht), `LANGUAGE` genau einmal ohne `default`, Pflichtpreis samt Skip, XSD-Namespace-Umschaltung, Rückfall auf 2005 bei unbekannter Version, `schema_path`, Beschreibungsschnitt 80, 1.2-Basisprodukt-Hinweis **und** die Validierung eines echten 1.2-Dokuments gegen die lizenzierte DTD (`resources/bmecat`, skip-fähig, wenn das Artefakt fehlt).
+
+**Offen (bewusst nicht in V1b):** `FEATURE/VARIANTS` (die 1.2-Variantenmechanik), `CLASSIFICATION_SYSTEM`/`CLASSIFICATION_SYSTEM_FEATURE_TEMPLATES`/`CATALOG_GROUP_SYSTEM` (das 1.2-Klassifikationssystem selbst mitzuliefern — der Weg für ECLASS/eigene Standards, §11.8), `EAN`, `MIME_INFO`, `FORDER`/`FDESCR`, `TERRITORY`/`PRICE_FLAG`/`AGREEMENT`, `ARTICLE_TO_CATALOGGROUP_MAP` (Navigationszuordnung) sowie die Import-Seite von 1.2 (`T_NEW_CATALOG`/`T_UPDATE_*`, V2).
 
