@@ -34,10 +34,10 @@ run_python() {
     uv sync --quiet
 
     step "ruff check"
-    uv run ruff check meadow tests
+    uv run ruff check meadow tests scripts
 
     step "ruff format --check"
-    uv run ruff format --check meadow tests
+    uv run ruff format --check meadow tests scripts
 
     step "pytest"
     uv run pytest -q

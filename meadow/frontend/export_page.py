@@ -37,6 +37,7 @@ from meadow.frontend.export_fields import (
     selected_fields,
 )
 from meadow.frontend.grid import resolve_value
+from meadow.frontend.help_page import chapter_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker
@@ -402,7 +403,10 @@ async def export_page(request: Request) -> None:
         dialog.open()
 
     with ui.column().classes("w-full p-6"):
-        ui.label(t("export.title")).classes("text-h4")
+        with ui.row().classes("items-center gap-2 w-full"):
+            ui.label(t("export.title")).classes("text-h4 grow")
+            # One handbook entry point per working area (see docs/AGENTS.md).
+            chapter_button("export")
         ui.label(t("export.subtitle")).classes("text-subtitle1")
 
         # --- Saved profile ------------------------------------------------

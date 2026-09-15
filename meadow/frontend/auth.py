@@ -18,6 +18,10 @@ from meadow.frontend.theme import LOGIN_BG_PNG, LOGIN_BG_WEBP, MEADOW_LOGO
 
 #: Static routes that must be reachable without authentication.
 UNRESTRICTED_ROUTES = {"/login", "/favicon.ico"}
+#: Path prefixes served without authentication (brand assets, handbook images):
+#: an image request must not be redirected to the login page while a session
+#: expires, or the handbook shows broken screenshots.
+UNRESTRICTED_PREFIXES = ("/static", "/help-assets")
 #: User-storage keys that belong to the **authentication session** only.
 #: `clear_session` removes exactly these, so user preferences (saved grid views,
 #: the visible column set, pinned attributes, locale) survive a logout, an
@@ -43,7 +47,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             app.storage.user.get("authenticated")
             or path in UNRESTRICTED_ROUTES
             or path.startswith("/_nicegui")
-            or path.startswith("/static")
+            or path.startswith(UNRESTRICTED_PREFIXES)
         ):
             return await call_next(request)
         return RedirectResponse(f"/login?redirect_to={path}")

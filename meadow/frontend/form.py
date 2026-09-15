@@ -41,6 +41,7 @@ from meadow.frontend.display import (
     taxonomy_type_names,
 )
 from meadow.frontend.enums import enum_options
+from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
@@ -184,7 +185,10 @@ async def product_form(object_id: str) -> None:
             edit_queue.stop_queue()
             ui.navigate.to(origin_url if in_sequence else "/products")
 
-        ui.button(t("form.back"), icon="arrow_back", on_click=go_back).props("flat")
+        with ui.row().classes("items-center gap-1"):
+            ui.button(t("form.back"), icon="arrow_back", on_click=go_back).props("flat")
+            # Teaching the form is the handbook's job — one entry point, no extra text.
+            chapter_button("product-form")
 
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")
@@ -341,7 +345,10 @@ async def product_form(object_id: str) -> None:
                     t("form.consolidate"),
                     icon="arrow_upward",
                     on_click=lambda: open_consolidate_dialog(),
-                ).props("flat dense").tooltip(t("consolidate.hint"))
+                ).props("flat dense")
+                # Pushing identical child values up to the parent is a concept:
+                # the one-line answer sits here, the details in the handbook.
+                info_button("consolidate.hint", "product-form")
 
         # --- Sequential editing (queue started in the grid): progress + actions.
         # The lambdas defer resolving `save_and_next`/`skip_object`/`stop_sequence`

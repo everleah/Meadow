@@ -1,0 +1,91 @@
+# Objektliste (Grid)
+
+Die Objektliste unter **Produkte** ist die zentrale Arbeitsoberfläche: Sie
+suchen, filtern, vergleichen und ändern dort viele Objekte gleichzeitig.
+
+![Die Objektliste mit Strukturbaum, Filterleiste und Werkzeugleiste](/help-assets/product-grid.png)
+
+## Objekte laden
+
+Die Liste lädt bewusst nicht alle Objekte auf einmal. Wählen Sie links im Baum
+einen Knoten aus, zeigt die Tabelle dessen Objekte. Ohne Auswahl steht dort ein
+Hinweis, welche Aktion erwartet wird.
+
+Der Baum hat drei Sichten (Symbolleiste über dem Baum):
+
+| Sicht | Zeigt |
+| --- | --- |
+| **Struktur** | Die Zusammengehörigkeit der Objekte (Produkt → Baugruppe → Bauteil). |
+| **Kategorien** | Die Kategorien bzw. Klassifikationshierarchie. |
+| **Collections** | Gespeicherte Zusammenstellungen von Objekten. |
+
+Bei **Kategorien** wählen Sie zusätzlich:
+
+- **Taxonomie** — welche Knotenart der Baum zeigt (z. B. eigene Kategorien oder
+  eine importierte Klassifikation).
+- **Dimension** — welche Zuordnungsart gezählt und gefiltert wird. Alle
+  Dimensionen verwenden dieselben Kategorien; die Auswahl ändert nur, welche
+  Zuordnungen der Baum berücksichtigt.
+
+## Suchen und filtern
+
+- **Filtern** — Freitextsuche über die geladenen Objekte.
+- **Erweiterte Suche** — Bedingungen, Volltext, Referenzen, Sortierung und
+  Limits; die Suche arbeitet serverseitig.
+- **Nur unvollständige** — zeigt Objekte, denen Pflichtangaben fehlen.
+- **Kanal-Filter** — zeigt Objekte, die für einen Ausgabekanal freigegeben sind.
+- **Alle einklappen** — klappt den Baum zu; das Aufklappen erfolgt knotenweise
+  und lädt die Unterknoten nach Bedarf.
+
+Viele Filter stehen in der Adresszeile des Browsers. Eine solche Adresse können
+Sie als Lesezeichen ablegen oder weitergeben — sie öffnet dieselbe Sicht wieder
+(z. B. gefiltert nach Typ, Kategorie, Knoten im Baum oder Freigabekanal).
+
+## Spalten und Ansichten
+
+- **Spalten** — wählen Sie aus, welche Attribute die Tabelle zeigt.
+  Mehrsprachige Attribute lassen sich je Datensprache als eigene Spalte
+  einblenden; die Spalte der Arbeitssprache bleibt die, in der Sie schreiben.
+- **Ansichten** — speichern Sie die aktuelle Kombination aus Filtern und
+  Spalten dauerhaft. Ansichten gehören Ihnen persönlich und überleben das
+  Abmelden.
+- Spaltenbreiten passen Sie über die Symbole in der Filterleiste an die
+  verfügbare Breite oder an den Inhalt an.
+
+## Werte direkt ändern
+
+Zellen mit einfachen Werttypen sind direkt bearbeitbar. Änderungen werden
+zunächst nur **vorgemerkt** — erst **Speichern** schreibt sie, **Verwerfen**
+setzt sie zurück. So lassen sich mehrere Objekte in einem Zug korrigieren.
+
+Nicht direkt editierbar sind berechnete Werte sowie Bereiche und Referenzdaten
+der Klassifikationsstandards; diese pflegen Sie im
+[Objektformular](/help?page=product-form).
+
+## Vererbte Werte erkennen
+
+Ein ausgegrauter Wert mit einem Herkunftssymbol ist **geerbt** — er wird am
+übergeordneten Objekt gepflegt. Ein durchgestrichenes Kettensymbol bedeutet:
+Hier wurde die Vererbung bewusst unterbrochen, indem der Wert leer gesetzt
+wurde. Beides wird im Formular aufgelöst.
+
+## Mehrere Objekte bearbeiten
+
+- **Massenaktionen** — wendet eine Operation auf die Auswahl an: Attribute
+  setzen oder leeren, Status ändern, Kategorien oder Relationen zuweisen,
+  Freigaben setzen oder zurückziehen, Text ersetzen, Vererbung konsolidieren.
+  Die Operationen sind nach Bereichen geordnet; jede Aktion läuft als Job und
+  meldet anschließend, wie viele Objekte geändert, übersprungen oder
+  fehlgeschlagen sind.
+- **Suchen & Ersetzen** — ersetzt einen Textbaustein in den Textattributen der
+  Auswahl.
+- **Editieren** (Symbol mit Notizstift) — öffnet die ausgewählten Objekte
+  nacheinander im Formular, in der Reihenfolge der Liste, mit **Speichern &
+  weiter**.
+- **Exportieren** — übergibt die Auswahl oder alle Treffer an den
+  [Datenexport](/help?page=export).
+
+## Weiterlesen
+
+- [Objekt bearbeiten](/help?page=product-form)
+- [Daten exportieren](/help?page=export)

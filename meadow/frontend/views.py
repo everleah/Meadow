@@ -17,6 +17,7 @@ from meadow.frontend import (
     form,  # noqa: F401  (registers the product form page)
     grid,  # noqa: F401  (registers the /products page)
     groups,  # noqa: F401  (registers the /groups page)
+    help_page,  # noqa: F401  (registers the /help handbook)
     import_page,  # noqa: F401  (registers the /import page)
     jobs,  # noqa: F401  (registers the /jobs page)
     languages,  # noqa: F401  (registers the /languages page)
@@ -31,6 +32,7 @@ from meadow.frontend import (
 )
 from meadow.frontend.api import CoreClient
 from meadow.frontend.grid import status_badge
+from meadow.frontend.help_page import chapter_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import NAV_ITEMS, PAGE_TIMEOUT, build_shell
 
@@ -58,6 +60,7 @@ _IMPLEMENTED_ROUTES = {
     "/export",
     "/export-profiles",
     "/import",
+    "/help",
 }
 
 
@@ -69,7 +72,9 @@ async def home() -> None:
     client = CoreClient(config.CORE_URL)
     token = app.storage.user.get("token", "")
     with ui.column().classes("w-full p-6"):
-        ui.label(t("nav.dashboard")).classes("text-h4")
+        with ui.row().classes("items-center gap-2 w-full"):
+            ui.label(t("nav.dashboard")).classes("text-h4 grow")
+            chapter_button("getting-started")
         ui.label(t("dashboard.subtitle")).classes("text-subtitle1")
 
         try:

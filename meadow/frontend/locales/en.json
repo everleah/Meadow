@@ -1410,5 +1410,17 @@
   "url.preview_hint": "Click to preview",
   "url.preview_title": "Preview",
   "url.open_in_new_tab": "Open in new tab",
-  "url.close": "Close"
+  "url.close": "Close",
+  "nav.help": "Help",
+  "help.title": "Handbook",
+  "help.subtitle": "How to work with Meadow — short and task-oriented.",
+  "help.search": "Search",
+  "help.search_hint": "e.g. inheritance, import, columns",
+  "help.results": "{count} hit(s) for \"{query}\"",
+  "help.no_results": "No hits. Try a shorter term that also occurs in a chapter.",
+  "help.chapters": "Chapters",
+  "help.language": "Handbook language",
+  "help.page": "Open this page in the handbook",
+  "help.open": "→ Handbook: {chapter}",
+  "help.empty": "No handbook was shipped with this instance."
 }

@@ -54,8 +54,8 @@ $rustGates = @(
 
 $pythonGates = @(
     @{ Label = 'uv sync'; Command = @('uv', 'sync', '--quiet') }
-    @{ Label = 'ruff check'; Command = @('uv', 'run', 'ruff', 'check', 'meadow', 'tests') }
-    @{ Label = 'ruff format --check'; Command = @('uv', 'run', 'ruff', 'format', '--check', 'meadow', 'tests') }
+    @{ Label = 'ruff check'; Command = @('uv', 'run', 'ruff', 'check', 'meadow', 'tests', 'scripts') }
+    @{ Label = 'ruff format --check'; Command = @('uv', 'run', 'ruff', 'format', '--check', 'meadow', 'tests', 'scripts') }
     @{ Label = 'pytest'; Command = @('uv', 'run', 'pytest', '-q') }
 )
 

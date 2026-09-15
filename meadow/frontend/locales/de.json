@@ -1410,5 +1410,17 @@
   "url.preview_hint": "Zum Vorschau-Anzeigen klicken",
   "url.preview_title": "Vorschau",
   "url.open_in_new_tab": "In neuem Tab öffnen",
-  "url.close": "Schließen"
+  "url.close": "Schließen",
+  "nav.help": "Hilfe",
+  "help.title": "Handbuch",
+  "help.subtitle": "Wie Sie mit Meadow arbeiten — kurz und aufgabenbezogen.",
+  "help.search": "Suchen",
+  "help.search_hint": "z. B. Vererbung, Import, Spalten",
+  "help.results": "{count} Treffer für \"{query}\"",
+  "help.no_results": "Keine Treffer. Versuchen Sie einen kürzeren Begriff.",
+  "help.chapters": "Kapitel",
+  "help.language": "Sprache des Handbuchs",
+  "help.page": "Diese Seite im Handbuch öffnen",
+  "help.open": "→ Handbuch: {chapter}",
+  "help.empty": "Für diese Instanz wurde kein Handbuch mitgeliefert."
 }

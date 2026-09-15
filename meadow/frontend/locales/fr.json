@@ -1410,5 +1410,17 @@
   "url.preview_hint": "Cliquer pour l'aperçu",
   "url.preview_title": "Aperçu",
   "url.open_in_new_tab": "Ouvrir dans un nouvel onglet",
-  "url.close": "Fermer"
+  "url.close": "Fermer",
+  "nav.help": "Aide",
+  "help.title": "Manuel",
+  "help.subtitle": "Comment travailler avec Meadow — bref et orienté tâches.",
+  "help.search": "Rechercher",
+  "help.search_hint": "p. ex. héritage, import, colonnes",
+  "help.results": "{count} résultat(s) pour \"{query}\"",
+  "help.no_results": "Aucun résultat. Essayez un terme plus court.",
+  "help.chapters": "Chapitres",
+  "help.language": "Langue du manuel",
+  "help.page": "Ouvrir cette page dans le manuel",
+  "help.open": "→ Manuel : {chapter}",
+  "help.empty": "Aucun manuel n'est fourni avec cette instance."
 }

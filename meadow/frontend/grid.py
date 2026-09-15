@@ -37,6 +37,7 @@ from meadow.frontend.display import (
 )
 from meadow.frontend.export_fields import group_members, group_order
 from meadow.frontend.filters import filter_select
+from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
@@ -2799,8 +2800,10 @@ async def products_page(request: Request) -> None:
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
                     taxonomy_select.set_visibility(view == "category")
+                    taxonomy_help.set_visibility(view == "category")
                     tree_select.set_visibility(view == "category")
                     dimension_select.set_visibility(view == "category")
+                    dimension_help.set_visibility(view == "category")
                     collapse_btn.set_visibility(
                         view != "collection" and bool(tree_nodes or category_roots)
                     )
@@ -2833,9 +2836,12 @@ async def products_page(request: Request) -> None:
                         )
                         .props("outline dense")
                         .classes("shrink-0")
-                        .tooltip(t("categories.taxonomy_hint"))
                     )
+                    # The node type behind the tree is a concept, not a field: the
+                    # explanation lives in the handbook (one place, not per screen).
+                    taxonomy_help = info_button("categories.taxonomy_hint", "product-grid")
                     taxonomy_select.set_visibility(False)
+                    taxonomy_help.set_visibility(False)
                     taxonomy_select.on_value_change(
                         lambda e: change_taxonomy(str(e.value or ""))  # type: ignore
                     )
@@ -2864,7 +2870,8 @@ async def products_page(request: Request) -> None:
                         )
                         .props("outline dense")
                         .classes("shrink-0")
-                    ).tooltip(t("grid.category_dimension_hint"))
+                    )
+                    dimension_help = info_button("grid.category_dimension_hint", "product-grid")
                     dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
                 # Line 2: filter + action button (collapse for structure/category,
                 # collection reload for the flat Collections view).
@@ -2920,6 +2927,9 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="download", on_click=export_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.export"))
+                    # One handbook entry point per working area (the toolbar itself
+                    # explains its icons via tooltips; the concepts live in /help).
+                    chapter_button("product-grid").props("outline")
 
                     # --- Column picker -------------------------------------
                     # A dialog (not a `ui.menu`: Quasar's QMenu auto-open doesn't

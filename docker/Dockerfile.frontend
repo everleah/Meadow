@@ -11,6 +11,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 # Install the package itself.
 COPY meadow ./meadow
+# The in-app handbook (`/help`) is rendered from Markdown at runtime, so the
+# chapters must ship with the image.
+COPY docs/user ./docs/user
 RUN uv sync --frozen --no-dev
 # NiceGUI writes session state; use a writable dir (mounted volume in compose).
 ENV PIM_FRONTEND_HOST=0.0.0.0

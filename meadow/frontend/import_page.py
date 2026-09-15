@@ -23,6 +23,7 @@ from meadow import mef, tabular
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.help_page import chapter_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
@@ -146,7 +147,10 @@ async def import_page() -> None:
     column_selects: dict[str, ui.select] = {}
 
     with ui.column().classes("w-full p-6"):
-        ui.label(t("import.title")).classes("text-h4")
+        with ui.row().classes("items-center gap-2 w-full"):
+            ui.label(t("import.title")).classes("text-h4 grow")
+            # One handbook entry point per working area (see docs/AGENTS.md).
+            chapter_button("import")
         ui.label(t("import.subtitle")).classes("text-subtitle1")
 
         with ui.card().classes("w-full mt-4"):

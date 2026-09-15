@@ -52,6 +52,7 @@ NAV_ITEMS: list[tuple[str, str, bool]] = [
     ("nav.config", "/config", True),
     ("nav.system_settings", "/system-settings", True),
     ("nav.system_logs", "/system-logs", True),
+    ("nav.help", "/help", False),
 ]
 
 
