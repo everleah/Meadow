@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -507,6 +508,56 @@ def test_retry_document_collects_only_failed_entries(dataset) -> None:
     assert document["source"] == demo.SOURCE
 
     assert demo.build_retry_document({"run-1": {"result": {"references": []}}}, dataset) is None
+
+
+def test_cleanup_deletes_every_object_of_the_source() -> None:
+    """The cleanup lists the instance per type instead of the dataset keys.
+
+    A duplicate row left behind by an earlier parallel import carries the same
+    business key, so a key lookup would only ever find one of the two and the
+    other would survive every cleanup. Page two of the list must be requested
+    too, objects of other sources must stay untouched, and the second phase must
+    pick up a row whose parent cascade never reached it.
+    """
+    page = demo.LIST_PAGE
+    pages = {
+        "product": [
+            [{"id": "object:1", "source": demo.SOURCE, "attributes": {"sku": "A"}}] * 2
+            + [{"id": "object:foreign", "source": "other", "attributes": {"sku": "X"}}]
+        ],
+        "vehicle_make": [
+            [
+                {"id": f"object:make-{index}", "source": demo.SOURCE, "attributes": {}}
+                for index in range(page)
+            ],
+            [{"id": "object:make-last", "source": demo.SOURCE, "attributes": {}}],
+        ],
+        # Cascade would have taken it; here it is an orphan from a lost race.
+        "vehicle_model": [[{"id": "object:orphan", "source": demo.SOURCE, "attributes": {}}]],
+    }
+    deleted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            deleted.append(request.url.path.rsplit("/", 1)[-1])
+            return httpx.Response(204)
+        requested = request.url.params.get("type")
+        start = int(request.url.params.get("start") or 0)
+        rows = pages.get(requested or "", [[]])
+        index = start // page
+        return httpx.Response(200, json=rows[index] if index < len(rows) else [])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://core")
+    log = demo.ImportLog()
+    count = demo.cleanup_objects(client, {}, log)
+
+    assert count == 1_003  # two products, the full first make page and the last one
+    assert len(deleted) == 1_004  # plus the orphan of the second phase
+    assert deleted.count("object:1") == 2  # both duplicate rows, not just one
+    assert "object:make-last" in deleted  # the second page was requested
+    assert "object:orphan" in deleted  # the orphan phase found it
+    assert "object:foreign" not in deleted
+    assert any(step == "cleanup" for step, _ in log.steps)
 
 
 def test_cli_check_accepts_the_curated_catalogue() -> None:

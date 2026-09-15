@@ -176,6 +176,18 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 
 **Konsequenz (Rechengröße für `demo`, ~7 000 Objekte / ~23 000 Referenzen):** sequenziell ≈ 8 min + 25 min ≈ **35 min**; mit 4 Chunks ≈ **15–20 min**. `perf` (50 000 Objekte / 200 000 Referenzen) wäre sequenziell ≈ **3–4 h** → braucht den Turbo-Pfad.
 
+**Vollständiger `demo`-Lauf (2026-09-15, gemessen, Seed 42):**
+
+| Phase | Umfang | Dauer | Rate |
+| --- | --- | --- | --- |
+| Cleanup (`--cleanup`, sequenziell) | 3 105 Top-Level-Deletes → 5 950 Objekte inkl. Teilbäume | **~27 min** | 3,7 Objekte/s |
+| Master-Dokument | 220 Objekte (97 KiB) | 12 s | 18 obj/s |
+| 4 Daten-Chunks parallel | 6 546 Objekte + 18 370 Referenzen | **~8 min** (Wanduhr) | 13 obj/s · 38 ref/s |
+| Retry-Pass | 3 Objekte (Schreibkonflikte) | < 5 s | – |
+| Klassen-Merkmale / Extras | `category_attributes`, 2 573 Releases + Collections + Suchen + Regeln | ~6 min | – |
+
+Der Cleanup dominiert also den Neuaufbau, nicht der Import: 4 Threads halfen dort **nicht** (18–27 min statt 19 min, der Kern serialisiert die Löschungen, Abschnitt 9) — der Hebel ist ein gebündelter Löschpfad im Kern.
+
 ### 4.4 Befunde aus dem ersten Live-Import (2026-09-15)
 
 Zwei **echte Lücken im Import-Pfad** hat erst der Demo-Import aufgedeckt (beide behoben):
@@ -183,7 +195,8 @@ Zwei **echte Lücken im Import-Pfad** hat erst der Demo-Import aufgedeckt (beide
 1. **MEF konnte die Kompositionsstruktur nicht abbilden.** Ein neues Objekt hängt beim Anlegen am Universal-Root, und die Ein-Eltern-Invariante erlaubt genau eine `depends_on`-Kante — ein `depends_on`-Eintrag im MEF-Dokument wurde deshalb mit **`400`** abgelehnt (342 fehlgeschlagene Referenzen im ersten Lauf, Fahrzeugkette und Varianten blieben am Root). **Fix:** der Import-Worker wendet `depends_on` jetzt als **Umhängen** an (`PATCH /objects/{id}/parent`, Status `reparented`); damit ist ein MEF-Dokument strukturtreu. Tests: `tests/test_imports.py` (8).
 2. **`PATCH /objects/{id}/parent` akzeptierte nur JWT** (`AuthUser`) — der Worker (Service-Konto, `X-Api-Key`) bekam **`401`**. Damit war auch die Bulk-Operation **`change_parent`** seit ihrer Einführung kaputt. **Fix:** `api_key_or_role(..., ROLE_EDITOR)` plus `?emit_events=false` (wie bei `POST /references`), damit Bulk-/Importlaeufe den Outbox-Pfad ruhig halten.
 
-Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRENCY)`) — kommen später eintreffende Chunks erst danach dazu, startet die erste Welle einzeln (Demo: 1 Chunk laeuft, 3 warten). Für `perf` heißt das: mehr Chunks einplanen als `JOBS_CONCURRENCY` (oder die Fetch-Strategie tunen). Collections werden **aktualisiert statt dupliziert** (Upsert über `PATCH /saved-searches/{id}` bzw. `PATCH /collections/{id}`), damit ein zweiter Lauf die Filter der Artefakte durchsetzt; `--cleanup` entfernt Top-Level-Objekte (Kaskade nimmt Varianten, Modelle, Untergruppen mit) und wertet ein `404` als „schon per Kaskade entfernt", nicht als Fehler.
+Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRENCY)`) — kommen später eintreffende Chunks erst danach dazu, startet die erste Welle einzeln (Demo: 1 Chunk laeuft, 3 warten). Für `perf` heißt das: mehr Chunks einplanen als `JOBS_CONCURRENCY` (oder die Fetch-Strategie tunen). Collections werden **aktualisiert statt dupliziert** (Upsert über `PATCH /saved-searches/{id}` bzw. `PATCH /collections/{id}`), damit ein zweiter Lauf die Filter der Artefakte durchsetzt.
+5. **`--cleanup` über Schlüssel übersieht Duplikate.** Aufgeräumt wurde über die *Datensatz-Keys* (Key → eine Record-ID); eine von Punkt 4 hinterlassene **Doppelzeile** trägt denselben Business-Key und wurde deshalb nie gefunden — sie überlebte jedes Cleanup und ließ danach **jeden** `PATCH` auf diesen Key mit `409` scheitern (im Demo-Lauf: `demo-model-bmw-3er`, der Rest der 3 105 Objekte war fehlerfrei). **Fix:** das Cleanup listet jetzt **alle** lebenden Objekte dieser Quelle (`GET /objects?type=…&limit=…&start=…`, gefiltert auf `source`) und löscht sie; nur Top-Level-Typen, weil die Kaskade Varianten, Modelle/Generationen und Untergruppen mitnimmt, und ein `404` heißt „Kaskade war schneller", nicht „Fehler". Da `DELETE /objects/{id}` ~0,4 s braucht (offener Performance-Punkt, Abschnitt 9), löscht der Aufruf mit **4 Threads** parallel und wiederholt Fehlschläge einmal sequenziell (unterscheidet einen verlorenen Wettlauf von einem echten Fehler).
 
 3. **Kanten-Attribute muessen zur Definition passen.** `alternative_to` schrieb `quality_tier`, die Definition deklarierte nur `match_type` → der Kern lehnt unbekannte Kanten-Attribute mit **`400`** ab (1 520 fehlgeschlagene Kanten im ersten Demo-Lauf). Ursache der spaeten Entdeckung: das Test-Fixture lief auf `tiny` (40 Produkte), wo `alternative_to` gar nicht vorkommt — das Fixture nutzt jetzt das `demo`-Profil und prueft zusaetzlich, dass **jeder** deklarierte Relationstyp auch tatsaechlich erzeugt wird.
 4. **Geteilte Objekte kollidieren beim Anlegen.** Die geschlossenen Chunks wiederholen Objekte, die in mehreren Chunks gebraucht werden (Taxonomien, Fahrzeugkette). Laufen diese Chunks **parallel**, prüfen zwei von ihnen gleichzeitig ihre Business-Key-/Quell-Auflösung, finden nichts und legen beide an: Der Kern prüft die Eindeutigkeit **nicht atomar** (`key_value_exists` → `INSERT`), also gewinnt entweder ein Insert und der andere Lauf bekommt **`409`** (Objekt „failed“, obwohl es existiert) — oder es entstehen **zwei lebende Zeilen** (im Demo-Lauf: Fiat-Marke, BMW-3er, eine OEM-Nummer). Der Retry-Pass kann das nicht heilen, weil sein `PATCH` dann selbst mit `409` (Doppel-Key) scheitert.
@@ -194,12 +207,12 @@ Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRE
 | Profil | Objekte | Referenzen | Zweck | Weg |
 | --- | --- | --- | --- | --- |
 | `tiny` | 429 | 536 | Handbuchbilder, Smoke-Demo, Erstprüfung des Generators | 1 Chunk, < 1 min |
-| `demo` (Default) | **5 950** | **18 370** | Vorführung, Abnahme, Vollständigkeits-/Grid-/Export-Prüfung | 4 Chunks ≈ 11,5 MB, ~15–20 min Einspielung |
+| `demo` (Default) | **5 950** | **18 370** | Vorführung, Abnahme, Vollständigkeits-/Grid-/Export-Prüfung | Master-Dokument + 4 Chunks ≈ 6,2 MB, ~10 min Einspielung (parallel) |
 | `perf` | ~60 000 | ~180 000 | Lasttest (`scripts/load_test.py`), Grid-/Stats-/Such-Optimierung | Turbo nötig |
 
 (Die Ist-Zahlen stammen aus `report.json` für Seed 42; `tiny`/`demo` sind gemessen, `perf` hochgerechnet.)
 
-**Generierungslauf (2026-09-15, lokal):** `demo` in wenigen Sekunden, 4 Chunks à ~2,9 MB, 18 370 Referenzen nach Kanten-Deduplizierung (`dedupe_references` — ohne sie entstehen bei kleinen Familien doppelte `alternative_to`-Kanten).
+**Generierungslauf (2026-09-15, lokal):** `demo` in wenigen Sekunden; seit der Montagegruppen-Chunkung **`masters.mef.json` 97 KiB (220 Objekte) + 4 Chunks à 1,4–1,7 MB** (vorher 4 × 2,9 MB, weil die geteilten Objekte in jedem Chunk steckten), 18 370 Referenzen nach Kanten-Deduplizierung (`dedupe_references` — ohne sie entstehen bei kleinen Familien doppelte `alternative_to`-Kanten).
 
 **Turbo-Optionen (für `perf`, in dieser Reihenfolge):**
 
@@ -210,7 +223,7 @@ Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRE
 ## 6. Werkzeug-Schnitt
 
 - **`scripts/demo_data.py`** (Generator + CLI; Tests laden es per `spec_from_file_location`):
-  `--profile tiny|demo|perf`, `--seed 42`, `--chunks N` (0 = Profilwert), `--out-dir .tmp/demo-data`, `--catalog`, `--check` (nur Katalog prüfen), **`--import`** (Modell → geteilte Objekte → Daten-Chunks → Klassen-Merkmale → Extras einspielen und gegen `GET /objects/stats` prüfen), **`--cleanup`** (Bestand dieses Datensatzes soft-deleten), `--base-url`, `--user`/`--password`, `--timeout` (Wartezeit auf die Jobs). `--cleanup --import` ergibt einen sauberen Neuaufbau.
+  `--profile tiny|demo|perf`, `--seed 42`, `--chunks N` (0 = Profilwert), `--out-dir .tmp/demo-data`, `--catalog`, `--check` (nur Katalog prüfen), **`--import`** (Modell → geteilte Objekte → Daten-Chunks → Klassen-Merkmale → Extras einspielen und gegen `GET /objects/stats` prüfen), **`--cleanup`** (Bestand dieses Datensatzes soft-deleten: listet die Objekte der Quelle per Typ, löscht die Top-Level-Typen und danach die Typen, die eine Kaskade normalerweise mitnimmt), `--base-url`, `--user`/`--password`, `--timeout` (Wartezeit auf die Jobs). `--cleanup --import` ergibt einen sauberen Neuaufbau.
 - **`scripts/demo_data_catalog.json`** (Abschnitt 3.8) — Daten getrennt von Logik, damit Marken/Teile ohne Codeänderung wachsen.
 - **Konventionen:** Konsolen-UTF-8 (`configure_console()`, Windows-cp1252-Falle), feste `created_at` für Byte-Determinismus, stabile Quell-IDs (`demo-<typ>-<key>`), Ausgaben unter `.tmp/` (gitignored).
 - **Abhängigkeiten:** nur Standardbibliothek im Generator (`random`, `json`, `argparse`); `httpx` erst für den Importer. **Kein** Netzwerkzugriff, kein npm.
@@ -221,18 +234,28 @@ Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRE
 
 **Live verifiziert (2026-09-15, `tiny`, dann `demo`):** zweiter Lauf `created 0, updated 429, failed 0` (Idempotenz über die Quell-Referenz), `references 535 (failed 0)` nach dem Umhängen-Fix, Klassen-Merkmale angewendet, Collections mit Mitgliedern aus ihren Filtern, Regeln aktiviert, `role: category` der beiden Dimensionen per API bestätigt.
 
+**Live-E2E `demo` (2026-09-15, `--cleanup --import`, Seed 42) — abgeschlossen:**
+
+- **Import ohne Restfehler:** Cleanup `3 044 gelöscht, 60 per Kaskade, 1 Orphan, 0 Fehler`; Master-Dokument `220 (created 220, failed 0)`; 4 Chunks `created 5 950, updated 813, failed 3` / `40` fehlgeschlagene Referenzen — der **Retry-Pass heilt alle 3** (`created 0, updated 3, failed 0`) ⇒ **keine offenen Probleme** (Exit-Code 0). Zuvor waren es 2–9 Objekte bzw. 40–499 Referenzen, die der Retry nicht mehr heilen konnte (Abschnitt 4.4).
+- **Keine Dubletten:** Prüfung über alle Business-Keys je Typ (SurrealDB `GROUP BY`) ⇒ **0 doppelte Business-Keys**.
+- **Zahlen stimmen:** `GET /objects/stats` 11 678 Objekte; Report-Erwartung je Typ erfüllt (`product` 2 036 ≥ 2 000, `variant` 2 588 ≥ 2 587, `vehicle_generation` 166, `vehicle_model` 93, `vehicle_make` 22, `part_group` 42, `oem_number` 1 000); Status-Mix `published 4 879 / draft 6 305 / approved 149 / in_review 243 / archived 82 / active 20`; `incomplete_by_type` `product 2 036, variant 212`.
+- **Kanäle, Suchen, Regeln, Collections:** Freigaben je Kanal abfragbar (`webshop`, `print-2026`, `marketplace-de`, `bmecat-partner`), 6 Regeln aktiv, 5 Demo-Collections mit Mitgliedern aus ihren Filtern (74/72/500/72/218) und die zugehörigen Filter-Suchen liefern dieselben Trefferzahlen.
+- **Fahrzeugkette:** `/objects/{id}/ancestors` liefert den vollen Pfad `vehicle_make → vehicle_model → vehicle_generation` (der letzte Eintrag ist das Objekt selbst, so der dokumentierte Vertrag).
+- **Klassen-Merkmale:** 72 Ladeprodukte gefunden, `category-attributes` liefert Klassen und fehlende Merkmale; der BMEcat-Export des Ladepakets meldet `classes 72`, `features 3 780`, `feature_systems ["ETIM-10.0"]`, `issues []`.
+- **BMEcat-Export XSD-valide:** `POST /exports` (Collection „E-Mobilitaet Ladepaket", BMEcat 2005/ETIM 10.0) → Job `success`, 72 Produkte, 571 747 Bytes, Validierung gegen `resources/etim/bmecat_etim_501.xsd` ⇒ **`xsd valid: True`**.
+
 **Noch offen (Stufe 4–5):**
 
-- **Live-E2E:** MCF-Merge + Chunk-Import + Extras gegen eine Instanz, `report.json` vs. `GET /objects/stats`, Idempotenz (zweiter Lauf ⇒ `updated` statt `created`).
-- **Optional (skip ohne `resources/`):** BMEcat-Validierung des Demo-Exports gegen die XSD — analog zur bestehenden optionalen ETIM-Prüfung.
+- **Optional (skip ohne `resources/`):** BMEcat-Validierung als *automatisierter* Test (heute nur manuell über die Abnahmevalidierung gelaufen) — analog zur bestehenden optionalen ETIM-Prüfung.
+- **Handbuch:** `docs/`-Verweis für die Handbuchbilder und ein Kapitel „Demo-Daten" (Stufe 4/5).
 
 **Manuell (Abnahme-Checkliste, im Dokument zu führen):** Grid-Performance bei `demo`/`perf`, Dashboard-Zahlen (`incomplete_by_type`), Klassen-Merkmale im Produktformular, Dimensions-Umschalter auf `/categories`, Vererbung + „Vererbung konsolidieren", Kanalfreigaben + `?released_for=`, gespeicherte Suche, Collection-Refresh-Job, BMEcat-Export (XSD-valide), gespeichertes Export-Profil, `scripts/load_test.py` gegen `perf`.
 
 ## 8. Umsetzungsschritte
 
 1. **Katalog & Modell (erledigt 2026-09-15):** `scripts/demo_data_catalog.json` (22 Marken, 93 Baureihen, 166 Generationen, 42 Baugruppen, 55 Teile-Familien, 13 Enum-Sets, 2 Export-Profile) und `build_model()` → `POST /config/import?dry_run=true` liefert **0 Fehler** (176 `created`, 4 `updated`).
-2. **Generator-Kern (erledigt 2026-09-15):** deterministische Objekte + Referenzen, geschlossene Chunks, `masters.mef.json` für die geteilten Objekte, `report.json`, `tests/test_demo_data.py` (27 Tests, auf dem `demo`-Profil).
-3. **Einspielweg (erledigt 2026-09-15):** `--import` (Login → MCF-Merge → geteilte Objekte → Chunks → Klassen-Merkmale → Extras → Verifikation gegen `GET /objects/stats`) und `--cleanup`; idempotent über die Quell-Referenz (zweiter Lauf `updated` statt `created`), Extras als Upsert (`PATCH /saved-searches/{id}`, `PATCH /collections/{id}`), **Retry-Pass** für Objekte/Referenzen, die unter parallelen Chunks an einem Schreibkonflikt (`HTTP 500`) gescheitert sind.
+2. **Generator-Kern (erledigt 2026-09-15):** deterministische Objekte + Referenzen, geschlossene Chunks, `masters.mef.json` für die geteilten Objekte, `report.json`, `tests/test_demo_data.py` (29 Tests, auf dem `demo`-Profil).
+3. **Einspielweg (erledigt 2026-09-15):** `--import` (Login → MCF-Merge → geteilte Objekte → Chunks → Klassen-Merkmale → Extras → Verifikation gegen `GET /objects/stats`) und `--cleanup` (listet die Objekte der Quelle **pro Typ**, löscht die Top-Level-Typen und danach die Typen, die eine Kaskade normalerweise mitnimmt — fängt Duplikate und Orphans, `404` = Kaskade); idempotent über die Quell-Referenz (zweiter Lauf `updated` statt `created`), Extras als Upsert (`PATCH /saved-searches/{id}`, `PATCH /collections/{id}`), **Retry-Pass** für Objekte/Referenzen, die unter parallelen Chunks an einem Schreibkonflikt (`HTTP 500`) gescheitert sind.
 4. **Regeln, Kanäle, Sammlungen, Suchen, Export-Profile (Modelldaten erledigt):** im Modell und in `extras.json` enthalten; die Regel-**Aktivierung** und die Freigaben laufen über den Importer (Stufe 3).
 5. **MCF-Lücke `role` (erledigt 2026-09-15):** Sektion trägt die Rolle, Rollenprüfung + `kind`-Ableitung in `relation_definition_content()`, Taxonomie-Prüfung beim echten Apply (nicht im Dry-Run), 4 Kern-Unit-Tests; `plan/detail/konfiguration-export-import.md` §4.7 und `crates/AGENTS.md` nachgezogen.
 6. **`perf` + Turbo-Pfad (offen):** Lastprofil erzeugen, einspielen (parallele Chunks mit erhöhter `JOBS_CONCURRENCY`; optional `.surql`-Import nur für Lastdaten — **so entschieden**) und `scripts/load_test.py` auswerten; Ergebnisse hier dokumentieren.
@@ -251,12 +274,13 @@ Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRE
 
 **Offen:**
 
+- **Eindeutigkeit im Kern ist nicht atomar:** `key_value_exists` + `INSERT` (Abschnitt 4.4 Punkt 4) lässt zwei parallele Schreiber entweder in ein `409` oder in eine **Doppelzeile** laufen. Ein Datenbank-Unique-Index (bzw. eine Transaktion um Prüfung + Insert) würde das auf Kernebene schließen; bis dahin braucht der Generator den Master-Vorlauf.
 - **Doppelte Referenzkanten:** `POST /references` sollte eine bereits vorhandene Kante ablehnen (`409`) und der Import-Worker sie als `existing` (nicht als Fehler) melden — dann wäre ein `--import`-Lauf vollständig idempotent, ohne Zusatzabfragen je Kante. Heute heilt nur `--cleanup --import`.
 - Ob die `perf`-Lastdaten in dieselbe Instanz wie die Demo-Daten oder in eine eigene Instanz/Datenbank gehen (Trennung hält die Demo-Zahlen interpretierbar).
 - Ob der **Schreibkonflikt** bei parallelen Updates desselben Objekts im Kern sauber als `409` statt `500` gemeldet werden soll (heute heilt der Retry-Pass das; ein `409` wäre die ehrlichere Antwort und würde den Retry gezielter machen).
 - Ob die Worker-Fetch-Strategie (Jobs **batchweise** holen) für `perf` angepasst wird, damit die erste Chunk-Welle nicht einzeln startet.
 - `apply_extras` setzt die Kanalfreigaben **sequenziell** (~3 400 `PUT` für `demo`, ~5 min) — bei `perf` parallelisieren (Threadpool) oder über einen Bulk-Endpunkt bündeln.
-- **`--cleanup` ist teuer:** gemessen **~410 ms pro `DELETE /objects/{id}`** (Blatt-Objekt, 12 Proben — die Kaskade ist also nicht die Ursache eines Grundaufschlags), aber in der Praxis **~1,3–2,5 s pro Produkt**, weil Kaskade, Kanten-, Release- und Merkmals-Aufräumen, Audit und Outbox zusammenkommen. Für `demo` (3 104 Top-Level-Objekte, 5 950 Objekte inkl. Teilbäume) heißt das **~35 min** (gemessen: `3036 deleted, 68 removed by cascade, 0 failed`); für `perf` mit ~200k Kanten entsprechend mehr. Verdacht beim Grundaufschlag: `DELETE reference WHERE in IN $recs OR out IN $recs` kann die Indizes `idx_ref_in_def`/`idx_ref_out_def` (jeweils `in`/`out` **plus** `definition_id`) nicht nutzen und scannt die Kantentabelle. Kandidaten für die Performance-Arbeit: Index auf `reference.in`/`reference.out` allein oder ein gebündelter Löschpfad (eine Transaktion für n Objekte, `DELETE /objects?ids=` bzw. Bulk-Operation).
+- **`--cleanup` ist teuer:** gemessen **~410 ms pro `DELETE /objects/{id}`** (Blatt-Objekt, 12 Proben — die Kaskade ist also nicht die Ursache eines Grundaufschlags), aber in der Praxis **~1,3–2,5 s pro Produkt**, weil Kaskade, Kanten-, Release- und Merkmals-Aufräumen, Audit und Outbox zusammenkommen. Für `demo` (3 104 Top-Level-Objekte, 5 950 Objekte inkl. Teilbäume) heißt das **~19 min** sequenziell; mit **4 Threads ~9 min** (gemessen 2026-09-15: `3 105 Objekte, 0 Fehler`), weil der Kern die Löschungen nicht unbegrenzt parallel ausführt. Für `perf` mit ~200k Kanten entsprechend mehr. Verdacht beim Grundaufschlag: `DELETE reference WHERE in IN $recs OR out IN $recs` kann die Indizes `idx_ref_in_def`/`idx_ref_out_def` (jeweils `in`/`out` **plus** `definition_id`) nicht nutzen und scannt die Kantentabelle. Kandidaten für die Performance-Arbeit: Index auf `reference.in`/`reference.out` allein oder ein gebündelter Löschpfad (eine Transaktion für n Objekte, `DELETE /objects?ids=` bzw. Bulk-Operation).
 
 ## 10. Nicht-Ziele
 

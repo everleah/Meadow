@@ -1241,6 +1241,16 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 #: Page size for the object lists used to resolve record ids.
 LIST_PAGE = 1000
 
+#: Types the cleanup deletes directly; their composition cascade removes variants,
+#: vehicle models/generations and sub-assembly groups.
+CLEANUP_TYPES = ("product", "vehicle_make", "part_group", "category", "oem_number")
+
+#: Types a cascade normally takes. They are listed after the first phase (which is
+#: nearly free, because the cascade already soft-deleted them) to catch orphans: a
+#: concurrent import can apply the parent edge to a duplicate twin only, so no
+#: cascade ever reaches the other row.
+CLEANUP_ORPHAN_TYPES = ("variant", "vehicle_model", "vehicle_generation")
+
 
 class ImportFailure(RuntimeError):
     """Raised when a step of the import does not succeed."""
@@ -1662,37 +1672,78 @@ def verify_counts(
     log.add("verify total", f"{stats.get('total')} objects in the instance")
 
 
+def _list_source_objects(
+    client: httpx.Client, headers: dict[str, str], object_type: str
+) -> list[str]:
+    """Lists the live record ids of one type that belong to this generator."""
+    ids: list[str] = []
+    start = 0
+    while True:
+        response = client.get(
+            "/objects",
+            params={"type": object_type, "limit": LIST_PAGE, "start": start},
+            headers=headers,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        ids.extend(str(row["id"]) for row in rows if row.get("source") == SOURCE and row.get("id"))
+        if len(rows) < LIST_PAGE:
+            return ids
+        start += LIST_PAGE
+
+
 def cleanup_objects(
     client: httpx.Client,
     headers: dict[str, str],
-    dataset: Dataset,
     log: ImportLog,
 ) -> int:
     """Soft-deletes the generated objects; the composition cascade takes children.
 
-    Variants, vehicle models/generations and sub-assembly groups are deleted by
-    their parent's cascade, so only the top-level types are requested.
+    The list comes from the instance (**every** live object of this generator's
+    source, paged per type) instead of from the dataset keys: a duplicate row left
+    behind by an earlier parallel import carries the same business key and would
+    never be matched by a key lookup, so it would survive every cleanup.
+
+    Deletion happens in two phases: first the top-level types, whose composition
+    cascade removes variants, vehicle models/generations and sub-assembly groups;
+    then the types that a cascade normally takes. That second phase is almost free
+    (the cascade already soft-deleted them) but catches **orphans** — rows whose
+    parent edge a concurrent import applied to a duplicate twin only, so no
+    cascade reaches them.
+
+    The deletion stays sequential: `DELETE /objects/{id}` costs ~0.4 s for a leaf
+    and ~1-3 s for a subtree, and four parallel workers did not make the demo
+    rebuild measurably faster (18 min vs 19 min) — the core serialises those
+    writes (`plan/detail/demodaten-generator.md` §9).
     """
-    resolved = resolve_node_ids(client, headers, dataset, log)
     deleted = 0
     cascaded = 0
+    orphans = 0
     failed: list[str] = []
-    for node_type in ("product", "vehicle_make", "part_group", "category", "oem_number"):
-        for node in [entry for entry in dataset.nodes if entry.type == node_type]:
-            object_id = resolved.get(node.key)
-            if not object_id:
-                continue
+    for object_type in CLEANUP_TYPES:
+        targets = _list_source_objects(client, headers, object_type)
+        log.add("cleanup targets", f"{object_type}: {len(targets)} objects to delete")
+        for object_id in targets:
             response = client.delete(f"/objects/{object_id}", headers=headers)
             if response.status_code in (200, 204):
                 deleted += 1
             elif response.status_code == 404:
-                # Already removed: a parent's cascade went first (sub-assembly
-                # groups, categories, variants, vehicle models).
+                # A parent's cascade went first (sub-assembly groups, categories,
+                # variants, vehicle models).
                 cascaded += 1
             else:
-                failed.append(f"{node.key}: HTTP {response.status_code}")
+                failed.append(f"{object_id}: HTTP {response.status_code}")
+    for object_type in CLEANUP_ORPHAN_TYPES:
+        for object_id in _list_source_objects(client, headers, object_type):
+            response = client.delete(f"/objects/{object_id}", headers=headers)
+            if response.status_code in (200, 204):
+                orphans += 1
+            elif response.status_code != 404:
+                failed.append(f"{object_id}: HTTP {response.status_code}")
     log.add(
-        "cleanup", f"{deleted} objects deleted, {cascaded} removed by cascade, {len(failed)} failed"
+        "cleanup",
+        f"{deleted} objects deleted, {cascaded} removed by cascade, "
+        f"{orphans} orphans, {len(failed)} failed",
     )
     for entry in failed[:5]:
         log.problem(f"delete failed {entry}")
@@ -1908,7 +1959,7 @@ def main(argv: list[str] | None = None) -> int:
         headers = login(client, args.user, args.password)
         log.add("login", args.base_url)
         if args.cleanup:
-            cleanup_objects(client, headers, dataset, log)
+            cleanup_objects(client, headers, log)
         if args.apply:
             run_import(client, headers, dataset, Path(args.out_dir), log, timeout=args.timeout)
     if log.problems:
