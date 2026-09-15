@@ -209,7 +209,8 @@ Je Option: `code` (stabil, sprachunabhängig), `labels` (object), `position`, `a
 | Feld | Typ | Beschreibung |
 |---|---|---|
 | `name` | string | Name (stabiler Schlüssel, Record-Key `rel_<name>`) |
-| `kind` | string | `composition`\|`aggregation` |
+| `kind` | string | `composition`\|`aggregation` — beim Import aus der Rolle **abgeleitet** (`composition` nur bei Rolle `composition`), sonst `aggregation` |
+| `role` | string | Verwendung (`composition`\|`category`\|`collection`\|`link`) — **wandert mit**: ohne das Feld degradierte eine Zusatz-Kategorie-Dimension beim Roundtrip still zu `link` und Dimension-Umschalter, `?definition_id=`-Filter sowie Zähler fielen aus. Benutzerdefinierte Typen dürfen nur `link` oder `category` sein, `composition`/`collection` sind den System-Typen vorbehalten (unbekannte Rolle ⇒ **Fehler** im Report). Bei Rolle `category` prüft der Import `target_types` gegen die registrierten Taxonomie-Typen (gleiche Regel wie `POST /relation-definitions`) |
 | `source_types` | string[] | Erlaubte Quell-Objekttyp-Namen (leer = alle) |
 | `target_types` | string[] | Erlaubte Ziel-Objekttyp-Namen (leer = alle) |
 | `label` | object | Mehrsprachiges Label |

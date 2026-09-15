@@ -39,8 +39,8 @@ pub const ROLE_LINK: &str = "link";
 /// classification was introduced).
 pub const DEFAULT_ROLE: &str = ROLE_LINK;
 
-/// Roles custom relation types may carry.
-const CUSTOM_ROLES: [&str; 2] = [ROLE_LINK, ROLE_CATEGORY];
+/** Roles custom relation types may carry. */
+pub(crate) const CUSTOM_ROLES: [&str; 2] = [ROLE_LINK, ROLE_CATEGORY];
 
 /// Key of the built-in primary category relation type (used when no other
 /// category type is requested).
@@ -98,7 +98,7 @@ pub async fn resolve_category_definition(
 }
 
 /// Validates a requested role for a **custom** relation type.
-fn custom_role(raw: Option<&str>) -> Result<&str, ApiError> {
+pub(crate) fn custom_role(raw: Option<&str>) -> Result<&str, ApiError> {
     let role = raw
         .map(str::trim)
         .filter(|role| !role.is_empty())
@@ -158,7 +158,7 @@ fn check_taxonomy_targets(requested: &[String], allowed: &[String]) -> Result<()
 }
 
 /// Rejects an explicit target-type list that contradicts the role's rule.
-async fn check_role_target_types(
+pub(crate) async fn check_role_target_types(
     db: &Db,
     role: &str,
     requested: &[String],

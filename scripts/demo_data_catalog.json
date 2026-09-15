@@ -1,0 +1,6874 @@
+{
+  "version": 1,
+  "description": "Stammdaten des synthetischen Automotive-Demo-Datensatzes (Fakten: Marken, Baureihen, Generationen, Baugruppen, Teile-Familien). Keine Herstellerdaten, keine kommerziellen Bestaende.",
+  "channels": [
+    {
+      "code": "webshop",
+      "label": {
+        "de": "Webshop",
+        "en": "Web shop"
+      },
+      "description": "Hauptkanal Webshop",
+      "position": 1,
+      "active": true
+    },
+    {
+      "code": "print-2026",
+      "label": {
+        "de": "Printkatalog 2026",
+        "en": "Print catalogue 2026"
+      },
+      "description": "Jaehrlicher Printkatalog, keine Neuheiten",
+      "position": 2,
+      "active": true
+    },
+    {
+      "code": "marketplace-de",
+      "label": {
+        "de": "Marktplatz DE",
+        "en": "Marketplace DE"
+      },
+      "description": "Marktplatz, nur Fremdmarken-Qualitaet",
+      "position": 3,
+      "active": true
+    },
+    {
+      "code": "bmecat-partner",
+      "label": {
+        "de": "BMEcat Partner-API",
+        "en": "BMEcat partner API"
+      },
+      "description": "BMEcat-Lieferung, nur ETIM-klassifizierte Artikel",
+      "position": 4,
+      "active": true
+    }
+  ],
+  "enum_sets": [
+    {
+      "name": "manufacturer",
+      "label": {
+        "de": "Hersteller",
+        "en": "Manufacturer"
+      },
+      "options": [
+        {
+          "code": "meadow",
+          "labels": {
+            "de": "Meadow Original",
+            "en": "Meadow Original"
+          }
+        },
+        {
+          "code": "bremstech",
+          "labels": {
+            "de": "Bremstech",
+            "en": "Bremstech"
+          }
+        },
+        {
+          "code": "filterpro",
+          "labels": {
+            "de": "FilterPro",
+            "en": "FilterPro"
+          }
+        },
+        {
+          "code": "elox",
+          "labels": {
+            "de": "Elox Elektrik",
+            "en": "Elox Electrics"
+          }
+        },
+        {
+          "code": "kraftwerk",
+          "labels": {
+            "de": "KraftWerk Antrieb",
+            "en": "KraftWerk Drivetrain"
+          }
+        },
+        {
+          "code": "voltline",
+          "labels": {
+            "de": "VoltLine E-Mobility",
+            "en": "VoltLine E-Mobility"
+          }
+        },
+        {
+          "code": "werkstattpartner",
+          "labels": {
+            "de": "WerkstattPartner",
+            "en": "WerkstattPartner"
+          }
+        },
+        {
+          "code": "drivemaster",
+          "labels": {
+            "de": "DriveMaster",
+            "en": "DriveMaster"
+          }
+        }
+      ]
+    },
+    {
+      "name": "product_line",
+      "label": {
+        "de": "Produktlinie",
+        "en": "Product line"
+      },
+      "options": [
+        {
+          "code": "original",
+          "labels": {
+            "de": "Original",
+            "en": "Original"
+          }
+        },
+        {
+          "code": "pro",
+          "labels": {
+            "de": "Pro Line",
+            "en": "Pro line"
+          }
+        },
+        {
+          "code": "eco",
+          "labels": {
+            "de": "Eco Line",
+            "en": "Eco line"
+          }
+        },
+        {
+          "code": "workshop",
+          "labels": {
+            "de": "Werkstattbedarf",
+            "en": "Workshop"
+          }
+        },
+        {
+          "code": "motorsport",
+          "labels": {
+            "de": "Motorsport",
+            "en": "Motorsport"
+          }
+        }
+      ]
+    },
+    {
+      "name": "quality_tier",
+      "label": {
+        "de": "Qualitätsstufe",
+        "en": "Quality tier"
+      },
+      "options": [
+        {
+          "code": "oe",
+          "labels": {
+            "de": "OE-Qualitaet",
+            "en": "OE quality"
+          }
+        },
+        {
+          "code": "oes",
+          "labels": {
+            "de": "Erstausrüster",
+            "en": "OES"
+          }
+        },
+        {
+          "code": "premium",
+          "labels": {
+            "de": "Premium",
+            "en": "Premium"
+          }
+        },
+        {
+          "code": "standard",
+          "labels": {
+            "de": "Standard",
+            "en": "Standard"
+          }
+        },
+        {
+          "code": "budget",
+          "labels": {
+            "de": "Budget",
+            "en": "Budget"
+          }
+        }
+      ]
+    },
+    {
+      "name": "material",
+      "label": {
+        "de": "Werkstoff",
+        "en": "Material"
+      },
+      "options": [
+        {
+          "code": "steel",
+          "labels": {
+            "de": "Stahl",
+            "en": "Steel"
+          }
+        },
+        {
+          "code": "stainless_steel",
+          "labels": {
+            "de": "Edelstahl",
+            "en": "Stainless steel"
+          }
+        },
+        {
+          "code": "cast_iron",
+          "labels": {
+            "de": "Gusseisen",
+            "en": "Cast iron"
+          }
+        },
+        {
+          "code": "aluminium",
+          "labels": {
+            "de": "Aluminium",
+            "en": "Aluminium"
+          }
+        },
+        {
+          "code": "plastic",
+          "labels": {
+            "de": "Kunststoff",
+            "en": "Plastic"
+          }
+        },
+        {
+          "code": "rubber",
+          "labels": {
+            "de": "Gummi",
+            "en": "Rubber"
+          }
+        },
+        {
+          "code": "ceramic",
+          "labels": {
+            "de": "Keramik",
+            "en": "Ceramic"
+          }
+        },
+        {
+          "code": "copper",
+          "labels": {
+            "de": "Kupfer",
+            "en": "Copper"
+          }
+        },
+        {
+          "code": "brass",
+          "labels": {
+            "de": "Messing",
+            "en": "Brass"
+          }
+        },
+        {
+          "code": "composite",
+          "labels": {
+            "de": "Verbundwerkstoff",
+            "en": "Composite"
+          }
+        },
+        {
+          "code": "textile",
+          "labels": {
+            "de": "Textil",
+            "en": "Textile"
+          }
+        },
+        {
+          "code": "glass",
+          "labels": {
+            "de": "Glas",
+            "en": "Glass"
+          }
+        }
+      ]
+    },
+    {
+      "name": "colour",
+      "label": {
+        "de": "Farbe",
+        "en": "Colour"
+      },
+      "options": [
+        {
+          "code": "black",
+          "labels": {
+            "de": "Schwarz",
+            "en": "Black"
+          }
+        },
+        {
+          "code": "grey",
+          "labels": {
+            "de": "Grau",
+            "en": "Grey"
+          }
+        },
+        {
+          "code": "silver",
+          "labels": {
+            "de": "Silber",
+            "en": "Silver"
+          }
+        },
+        {
+          "code": "red",
+          "labels": {
+            "de": "Rot",
+            "en": "Red"
+          }
+        },
+        {
+          "code": "blue",
+          "labels": {
+            "de": "Blau",
+            "en": "Blue"
+          }
+        },
+        {
+          "code": "yellow",
+          "labels": {
+            "de": "Gelb",
+            "en": "Yellow"
+          }
+        },
+        {
+          "code": "natural",
+          "labels": {
+            "de": "Natur",
+            "en": "Natural"
+          }
+        }
+      ]
+    },
+    {
+      "name": "part_position",
+      "label": {
+        "de": "Einbauposition",
+        "en": "Installation position"
+      },
+      "options": [
+        {
+          "code": "front",
+          "labels": {
+            "de": "Vorne",
+            "en": "Front"
+          }
+        },
+        {
+          "code": "rear",
+          "labels": {
+            "de": "Hinten",
+            "en": "Rear"
+          }
+        },
+        {
+          "code": "left",
+          "labels": {
+            "de": "Links",
+            "en": "Left"
+          }
+        },
+        {
+          "code": "right",
+          "labels": {
+            "de": "Rechts",
+            "en": "Right"
+          }
+        },
+        {
+          "code": "front_axle",
+          "labels": {
+            "de": "Vorderachse",
+            "en": "Front axle"
+          }
+        },
+        {
+          "code": "rear_axle",
+          "labels": {
+            "de": "Hinterachse",
+            "en": "Rear axle"
+          }
+        },
+        {
+          "code": "upper",
+          "labels": {
+            "de": "Oben",
+            "en": "Upper"
+          }
+        },
+        {
+          "code": "lower",
+          "labels": {
+            "de": "Unten",
+            "en": "Lower"
+          }
+        },
+        {
+          "code": "inner",
+          "labels": {
+            "de": "Innen",
+            "en": "Inner"
+          }
+        },
+        {
+          "code": "outer",
+          "labels": {
+            "de": "Aussen",
+            "en": "Outer"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fuel_type",
+      "label": {
+        "de": "Kraftstoffart",
+        "en": "Fuel type"
+      },
+      "options": [
+        {
+          "code": "petrol",
+          "labels": {
+            "de": "Benzin",
+            "en": "Petrol"
+          }
+        },
+        {
+          "code": "diesel",
+          "labels": {
+            "de": "Diesel",
+            "en": "Diesel"
+          }
+        },
+        {
+          "code": "hybrid",
+          "labels": {
+            "de": "Hybrid",
+            "en": "Hybrid"
+          }
+        },
+        {
+          "code": "plugin_hybrid",
+          "labels": {
+            "de": "Plug-in-Hybrid",
+            "en": "Plug-in hybrid"
+          }
+        },
+        {
+          "code": "electric",
+          "labels": {
+            "de": "Elektro",
+            "en": "Electric"
+          }
+        },
+        {
+          "code": "lpg",
+          "labels": {
+            "de": "Autogas",
+            "en": "LPG"
+          }
+        },
+        {
+          "code": "cng",
+          "labels": {
+            "de": "Erdgas",
+            "en": "CNG"
+          }
+        }
+      ]
+    },
+    {
+      "name": "body_style",
+      "label": {
+        "de": "Karosserieform",
+        "en": "Body style"
+      },
+      "options": [
+        {
+          "code": "hatchback",
+          "labels": {
+            "de": "Schrägheck",
+            "en": "Hatchback"
+          }
+        },
+        {
+          "code": "sedan",
+          "labels": {
+            "de": "Limousine",
+            "en": "Sedan"
+          }
+        },
+        {
+          "code": "estate",
+          "labels": {
+            "de": "Kombi",
+            "en": "Estate"
+          }
+        },
+        {
+          "code": "suv",
+          "labels": {
+            "de": "SUV",
+            "en": "SUV"
+          }
+        },
+        {
+          "code": "coupe",
+          "labels": {
+            "de": "Coupe",
+            "en": "Coupe"
+          }
+        },
+        {
+          "code": "convertible",
+          "labels": {
+            "de": "Cabrio",
+            "en": "Convertible"
+          }
+        },
+        {
+          "code": "mpv",
+          "labels": {
+            "de": "Van",
+            "en": "MPV"
+          }
+        },
+        {
+          "code": "van",
+          "labels": {
+            "de": "Transporter",
+            "en": "Van"
+          }
+        },
+        {
+          "code": "pickup",
+          "labels": {
+            "de": "Pickup",
+            "en": "Pickup"
+          }
+        }
+      ]
+    },
+    {
+      "name": "drive_type",
+      "label": {
+        "de": "Antriebsart",
+        "en": "Drive type"
+      },
+      "options": [
+        {
+          "code": "fwd",
+          "labels": {
+            "de": "Frontantrieb",
+            "en": "Front-wheel drive"
+          }
+        },
+        {
+          "code": "rwd",
+          "labels": {
+            "de": "Heckantrieb",
+            "en": "Rear-wheel drive"
+          }
+        },
+        {
+          "code": "awd",
+          "labels": {
+            "de": "Allrad",
+            "en": "All-wheel drive"
+          }
+        }
+      ]
+    },
+    {
+      "name": "packaging_type",
+      "label": {
+        "de": "Verpackungsart",
+        "en": "Packaging type"
+      },
+      "options": [
+        {
+          "code": "piece",
+          "labels": {
+            "de": "Stueck",
+            "en": "Piece"
+          }
+        },
+        {
+          "code": "set",
+          "labels": {
+            "de": "Satz",
+            "en": "Set"
+          }
+        },
+        {
+          "code": "carton",
+          "labels": {
+            "de": "Karton",
+            "en": "Carton"
+          }
+        },
+        {
+          "code": "blister",
+          "labels": {
+            "de": "Blister",
+            "en": "Blister"
+          }
+        },
+        {
+          "code": "canister",
+          "labels": {
+            "de": "Kanister",
+            "en": "Canister"
+          }
+        },
+        {
+          "code": "pallet",
+          "labels": {
+            "de": "Palette",
+            "en": "Pallet"
+          }
+        },
+        {
+          "code": "bag",
+          "labels": {
+            "de": "Beutel",
+            "en": "Bag"
+          }
+        }
+      ]
+    },
+    {
+      "name": "match_type",
+      "label": {
+        "de": "Vergleichsart",
+        "en": "Match type"
+      },
+      "options": [
+        {
+          "code": "oe",
+          "labels": {
+            "de": "OE-Nummer",
+            "en": "OE number"
+          }
+        },
+        {
+          "code": "interchange",
+          "labels": {
+            "de": "Wettbewerbsnummer",
+            "en": "Interchange number"
+          }
+        }
+      ]
+    },
+    {
+      "name": "replace_reason",
+      "label": {
+        "de": "Nachfolgegrund",
+        "en": "Replacement reason"
+      },
+      "options": [
+        {
+          "code": "superseded",
+          "labels": {
+            "de": "Abgeloest",
+            "en": "Superseded"
+          }
+        },
+        {
+          "code": "improved",
+          "labels": {
+            "de": "Verbesserte Ausfuehrung",
+            "en": "Improved version"
+          }
+        },
+        {
+          "code": "discontinued",
+          "labels": {
+            "de": "Auslaufartikel",
+            "en": "Discontinued"
+          }
+        }
+      ]
+    },
+    {
+      "name": "oem_kind",
+      "label": {
+        "de": "Nummernart",
+        "en": "Number kind"
+      },
+      "options": [
+        {
+          "code": "oe",
+          "labels": {
+            "de": "OE",
+            "en": "OE"
+          }
+        },
+        {
+          "code": "interchange",
+          "labels": {
+            "de": "Interchange",
+            "en": "Interchange"
+          }
+        },
+        {
+          "code": "competitor",
+          "labels": {
+            "de": "Wettbewerb",
+            "en": "Competitor"
+          }
+        }
+      ]
+    }
+  ],
+  "attribute_groups": [
+    {
+      "name": "identity",
+      "label": {
+        "de": "Identifikation",
+        "en": "Identification"
+      },
+      "position": 1
+    },
+    {
+      "name": "descriptions",
+      "label": {
+        "de": "Beschreibungen",
+        "en": "Descriptions"
+      },
+      "position": 2
+    },
+    {
+      "name": "technical",
+      "label": {
+        "de": "Technische Daten",
+        "en": "Technical data"
+      },
+      "position": 3
+    },
+    {
+      "name": "logistics",
+      "label": {
+        "de": "Logistik & Preise",
+        "en": "Logistics & prices"
+      },
+      "position": 4
+    },
+    {
+      "name": "vehicle",
+      "label": {
+        "de": "Fahrzeug-Stammdaten",
+        "en": "Vehicle master data"
+      },
+      "position": 5
+    },
+    {
+      "name": "classification",
+      "label": {
+        "de": "Klassifikation",
+        "en": "Classification"
+      },
+      "position": 6
+    }
+  ],
+  "object_types": [
+    {
+      "name": "part_group",
+      "label": {
+        "de": "Baugruppe",
+        "en": "Assembly group"
+      },
+      "description": "Technische Teile-Gliederung (eigene Taxonomie)",
+      "key_attributes": [
+        "group_code"
+      ],
+      "label_attribute": "name",
+      "taxonomy": true
+    },
+    {
+      "name": "vehicle_make",
+      "label": {
+        "de": "Fahrzeugmarke",
+        "en": "Vehicle make"
+      },
+      "description": "Fahrzeughersteller",
+      "key_attributes": [
+        "make_code"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
+      "name": "vehicle_model",
+      "label": {
+        "de": "Fahrzeugbaureihe",
+        "en": "Vehicle model"
+      },
+      "description": "Baureihe einer Marke",
+      "key_attributes": [
+        "model_code"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
+      "name": "vehicle_generation",
+      "label": {
+        "de": "Fahrzeuggeneration",
+        "en": "Vehicle generation"
+      },
+      "description": "Generation/Baureihe mit Bauzeitraum",
+      "key_attributes": [
+        "generation_code"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
+      "name": "oem_number",
+      "label": {
+        "de": "OEM-Nummer",
+        "en": "OEM number"
+      },
+      "description": "OE-, Interchange- oder Wettbewerbsnummer",
+      "key_attributes": [
+        "oe_number"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
+      "name": "etim_class",
+      "label": {
+        "de": "ETIM-Klasse",
+        "en": "ETIM class"
+      },
+      "description": "Klassenknoten des ETIM-Standards (Taxonomie) — identisch zum Standardpaket",
+      "key_attributes": [
+        "code"
+      ],
+      "label_attribute": "description",
+      "taxonomy": true
+    }
+  ],
+  "attributes": [
+    {
+      "name": "sku",
+      "label": {
+        "de": "Artikelnummer",
+        "en": "SKU"
+      },
+      "type": "text",
+      "group_ids": [
+        "identity"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "gtin",
+      "label": {
+        "de": "GTIN",
+        "en": "GTIN"
+      },
+      "type": "text",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "description": "13-stellige GTIN mit Pruefziffer"
+    },
+    {
+      "name": "manufacturer",
+      "label": {
+        "de": "Hersteller",
+        "en": "Manufacturer"
+      },
+      "type": "enum",
+      "enum_set": "manufacturer",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "product_line",
+      "label": {
+        "de": "Produktlinie",
+        "en": "Product line"
+      },
+      "type": "enum",
+      "enum_set": "product_line",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "quality_tier",
+      "label": {
+        "de": "Qualitätsstufe",
+        "en": "Quality tier"
+      },
+      "type": "enum",
+      "enum_set": "quality_tier",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "replacement_for",
+      "label": {
+        "de": "Ersetzt",
+        "en": "Replaces"
+      },
+      "type": "text",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "country_of_origin",
+      "label": {
+        "de": "Ursprungsland",
+        "en": "Country of origin"
+      },
+      "type": "text",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "customs_tariff_number",
+      "label": {
+        "de": "Zolltarifnummer",
+        "en": "Customs tariff number"
+      },
+      "type": "text",
+      "group_ids": [
+        "identity"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "description_short",
+      "label": {
+        "de": "Kurzbeschreibung",
+        "en": "Short description"
+      },
+      "type": "text",
+      "multilingual": true,
+      "group_ids": [
+        "descriptions"
+      ],
+      "applicable_types": [
+        "product",
+        "variant",
+        "part_group",
+        "vehicle_model",
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "description_long",
+      "label": {
+        "de": "Langbeschreibung",
+        "en": "Long description"
+      },
+      "type": "text",
+      "multilingual": true,
+      "group_ids": [
+        "descriptions"
+      ],
+      "applicable_types": [
+        "product",
+        "variant",
+        "part_group"
+      ]
+    },
+    {
+      "name": "marketing_text",
+      "label": {
+        "de": "Marketingtext",
+        "en": "Marketing text"
+      },
+      "type": "text",
+      "multilingual": true,
+      "group_ids": [
+        "descriptions"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "installation_note",
+      "label": {
+        "de": "Montagehinweis",
+        "en": "Installation note"
+      },
+      "type": "text",
+      "multilingual": true,
+      "group_ids": [
+        "descriptions"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "weight_kg",
+      "label": {
+        "de": "Gewicht",
+        "en": "Weight"
+      },
+      "type": "number",
+      "unit": "kg",
+      "display_unit": "kg",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "length_mm",
+      "label": {
+        "de": "Länge",
+        "en": "Length"
+      },
+      "type": "number",
+      "unit": "mm",
+      "display_unit": "mm",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "width_mm",
+      "label": {
+        "de": "Breite",
+        "en": "Width"
+      },
+      "type": "number",
+      "unit": "mm",
+      "display_unit": "mm",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "height_mm",
+      "label": {
+        "de": "Höhe",
+        "en": "Height"
+      },
+      "type": "number",
+      "unit": "mm",
+      "display_unit": "mm",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "volume_l",
+      "label": {
+        "de": "Volumen",
+        "en": "Volume"
+      },
+      "type": "number",
+      "unit": "l",
+      "display_unit": "l",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "material",
+      "label": {
+        "de": "Werkstoff",
+        "en": "Material"
+      },
+      "type": "enum",
+      "enum_set": "material",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "colour",
+      "label": {
+        "de": "Farbe",
+        "en": "Colour"
+      },
+      "type": "enum",
+      "enum_set": "colour",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "part_position",
+      "label": {
+        "de": "Einbauposition",
+        "en": "Installation position"
+      },
+      "type": "enum",
+      "enum_set": "part_position",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "operating_voltage_v",
+      "label": {
+        "de": "Betriebsspannung",
+        "en": "Operating voltage"
+      },
+      "type": "number",
+      "unit": "V",
+      "display_unit": "V",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "constraints": {
+        "min": 0,
+        "max": 1000
+      }
+    },
+    {
+      "name": "power_w",
+      "label": {
+        "de": "Leistung",
+        "en": "Power"
+      },
+      "type": "number",
+      "unit": "W",
+      "display_unit": "W",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "temperature_range",
+      "label": {
+        "de": "Temperaturbereich",
+        "en": "Temperature range"
+      },
+      "type": "range",
+      "unit": "°C",
+      "display_unit": "°C",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "tightening_torque_nm",
+      "label": {
+        "de": "Anzugsdrehmoment",
+        "en": "Tightening torque"
+      },
+      "type": "number",
+      "unit": "N",
+      "display_unit": "N",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "thread_size",
+      "label": {
+        "de": "Gewindemaß",
+        "en": "Thread size"
+      },
+      "type": "text",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "nominal_current_a",
+      "label": {
+        "de": "Nennstrom",
+        "en": "Nominal current"
+      },
+      "type": "number",
+      "unit": "A",
+      "display_unit": "A",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "standard_codes": {
+        "etim": "EF007353"
+      },
+      "description": "Eigenes Attribut fuer das ETIM-Merkmal EF007353 (Max. output current DC)"
+    },
+    {
+      "name": "charging_power_kw",
+      "label": {
+        "de": "Ladeleistung",
+        "en": "Charging power"
+      },
+      "type": "number",
+      "unit": "kW",
+      "display_unit": "kW",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "standard_codes": {
+        "etim": "EF002136"
+      },
+      "description": "Eigenes Attribut fuer das ETIM-Merkmal EF002136 (Nominal connection power)"
+    },
+    {
+      "name": "output_voltage_range",
+      "label": {
+        "de": "Ausgangsspannung (Bereich)",
+        "en": "Output voltage range"
+      },
+      "type": "range",
+      "unit": "V",
+      "display_unit": "V",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "standard_codes": {
+        "etim": "EF007001"
+      },
+      "description": "Eigenes Attribut fuer das ETIM-Merkmal EF007001 (Output voltage DC)"
+    },
+    {
+      "name": "cable_length_m",
+      "label": {
+        "de": "Kabellänge",
+        "en": "Cable length"
+      },
+      "type": "number",
+      "unit": "m",
+      "display_unit": "m",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "standard_codes": {
+        "etim": "EF014895"
+      },
+      "description": "Eigenes Attribut fuer das ETIM-Merkmal EF014895 (Length of charging cable)"
+    },
+    {
+      "name": "capacity_ah",
+      "label": {
+        "de": "Kapazität",
+        "en": "Capacity"
+      },
+      "type": "number",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "description": "Batteriekapazität (Ah)"
+    },
+    {
+      "name": "cold_cranking_a",
+      "label": {
+        "de": "Kaltstartstrom",
+        "en": "Cold cranking current"
+      },
+      "type": "number",
+      "unit": "A",
+      "display_unit": "A",
+      "group_ids": [
+        "technical"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "net_price",
+      "label": {
+        "de": "Nettopreis",
+        "en": "Net price"
+      },
+      "type": "number",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ],
+      "constraints": {
+        "min": 0
+      }
+    },
+    {
+      "name": "currency",
+      "label": {
+        "de": "Währung",
+        "en": "Currency"
+      },
+      "type": "text",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "required_types": [
+        "product"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "list_price",
+      "label": {
+        "de": "Listenpreis",
+        "en": "List price"
+      },
+      "type": "number",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "computed": true,
+      "computed_rule": "calc_list_price",
+      "dependencies": [
+        "net_price"
+      ],
+      "computed_reads_inherited": true
+    },
+    {
+      "name": "gross_price",
+      "label": {
+        "de": "Bruttopreis",
+        "en": "Gross price"
+      },
+      "type": "number",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "computed": true,
+      "computed_rule": "calc_gross_price",
+      "dependencies": [
+        "net_price"
+      ],
+      "computed_reads_inherited": true
+    },
+    {
+      "name": "packaging_type",
+      "label": {
+        "de": "Verpackungsart",
+        "en": "Packaging type"
+      },
+      "type": "enum",
+      "enum_set": "packaging_type",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "min_order_qty",
+      "label": {
+        "de": "Mindestbestellmenge",
+        "en": "Minimum order quantity"
+      },
+      "type": "number",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "constraints": {
+        "min": 1
+      }
+    },
+    {
+      "name": "warranty_months",
+      "label": {
+        "de": "Garantie (Monate)",
+        "en": "Warranty (months)"
+      },
+      "type": "number",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true,
+      "computed": true,
+      "computed_rule": "default_warranty",
+      "dependencies": [
+        "quality_tier"
+      ],
+      "computed_reads_inherited": true
+    },
+    {
+      "name": "hazardous",
+      "label": {
+        "de": "Gefahrgut",
+        "en": "Hazardous goods"
+      },
+      "type": "boolean",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "disposal_note",
+      "label": {
+        "de": "Entsorgungshinweis",
+        "en": "Disposal note"
+      },
+      "type": "text",
+      "multilingual": true,
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ]
+    },
+    {
+      "name": "datasheet_url",
+      "label": {
+        "de": "Datenblatt",
+        "en": "Data sheet"
+      },
+      "type": "url",
+      "group_ids": [
+        "logistics"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "primary_vehicle_model",
+      "label": {
+        "de": "Hauptbaureihe",
+        "en": "Primary vehicle model"
+      },
+      "type": "reference",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "product"
+      ]
+    },
+    {
+      "name": "make_code",
+      "label": {
+        "de": "Marken-Code",
+        "en": "Make code"
+      },
+      "type": "text",
+      "group_ids": [
+        "vehicle"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "vehicle_make"
+      ],
+      "required_types": [
+        "vehicle_make"
+      ]
+    },
+    {
+      "name": "model_code",
+      "label": {
+        "de": "Baureihen-Code",
+        "en": "Model code"
+      },
+      "type": "text",
+      "group_ids": [
+        "vehicle"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "vehicle_model"
+      ],
+      "required_types": [
+        "vehicle_model"
+      ]
+    },
+    {
+      "name": "generation_code",
+      "label": {
+        "de": "Generations-Code",
+        "en": "Generation code"
+      },
+      "type": "text",
+      "group_ids": [
+        "vehicle"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "vehicle_generation"
+      ],
+      "required_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "platform_code",
+      "label": {
+        "de": "Plattform",
+        "en": "Platform"
+      },
+      "type": "text",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_model",
+        "vehicle_generation"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "body_style",
+      "label": {
+        "de": "Karosserieform",
+        "en": "Body style"
+      },
+      "type": "enum",
+      "enum_set": "body_style",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_model",
+        "vehicle_generation"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "fuel_type",
+      "label": {
+        "de": "Kraftstoffart",
+        "en": "Fuel type"
+      },
+      "type": "enum",
+      "enum_set": "fuel_type",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_model",
+        "vehicle_generation"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "drive_type",
+      "label": {
+        "de": "Antriebsart",
+        "en": "Drive type"
+      },
+      "type": "enum",
+      "enum_set": "drive_type",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ],
+      "inheritable": true
+    },
+    {
+      "name": "engine_code",
+      "label": {
+        "de": "Motorcode",
+        "en": "Engine code"
+      },
+      "type": "text",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "power_kw",
+      "label": {
+        "de": "Leistung",
+        "en": "Power"
+      },
+      "type": "number",
+      "unit": "kW",
+      "display_unit": "kW",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "displacement_l",
+      "label": {
+        "de": "Hubraum",
+        "en": "Displacement"
+      },
+      "type": "number",
+      "unit": "l",
+      "display_unit": "l",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "production_from",
+      "label": {
+        "de": "Bauzeit von",
+        "en": "Production from"
+      },
+      "type": "date",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "production_to",
+      "label": {
+        "de": "Bauzeit bis",
+        "en": "Production to"
+      },
+      "type": "date",
+      "group_ids": [
+        "vehicle"
+      ],
+      "applicable_types": [
+        "vehicle_generation"
+      ]
+    },
+    {
+      "name": "oe_number",
+      "label": {
+        "de": "OEM-Nummer",
+        "en": "OEM number"
+      },
+      "type": "text",
+      "group_ids": [
+        "classification"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "oem_number"
+      ],
+      "required_types": [
+        "oem_number"
+      ]
+    },
+    {
+      "name": "number_kind",
+      "label": {
+        "de": "Nummernart",
+        "en": "Number kind"
+      },
+      "type": "enum",
+      "enum_set": "oem_kind",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "oem_number"
+      ]
+    },
+    {
+      "name": "number_source",
+      "label": {
+        "de": "Nummernquelle",
+        "en": "Number source"
+      },
+      "type": "text",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "oem_number"
+      ]
+    },
+    {
+      "name": "group_code",
+      "label": {
+        "de": "Baugruppen-Code",
+        "en": "Group code"
+      },
+      "type": "text",
+      "group_ids": [
+        "classification"
+      ],
+      "is_key": true,
+      "applicable_types": [
+        "part_group"
+      ],
+      "required_types": [
+        "part_group"
+      ]
+    },
+    {
+      "name": "match_type",
+      "label": {
+        "de": "Vergleichsart",
+        "en": "Match type"
+      },
+      "type": "enum",
+      "enum_set": "match_type",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "description": "Kanten-Attribut alternative_to"
+    },
+    {
+      "name": "replace_reason",
+      "label": {
+        "de": "Nachfolgegrund",
+        "en": "Replacement reason"
+      },
+      "type": "enum",
+      "enum_set": "replace_reason",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product"
+      ],
+      "description": "Kanten-Attribut replaces"
+    },
+    {
+      "name": "oem_kind",
+      "label": {
+        "de": "Nummernart (Kante)",
+        "en": "Number kind (edge)"
+      },
+      "type": "enum",
+      "enum_set": "oem_kind",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "oem_number"
+      ],
+      "description": "Kanten-Attribut oem_reference"
+    },
+    {
+      "name": "position",
+      "label": {
+        "de": "Position",
+        "en": "Position"
+      },
+      "type": "enum",
+      "enum_set": "part_position",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "description": "Kanten-Attribut fits_vehicle"
+    },
+    {
+      "name": "qualifier",
+      "label": {
+        "de": "Einschränkung",
+        "en": "Qualifier"
+      },
+      "type": "text",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "description": "Kanten-Attribut fits_vehicle"
+    },
+    {
+      "name": "confidence",
+      "label": {
+        "de": "Sicherheit",
+        "en": "Confidence"
+      },
+      "type": "number",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product",
+        "variant"
+      ],
+      "constraints": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Kanten-Attribut fits_vehicle"
+    },
+    {
+      "name": "mandatory",
+      "label": {
+        "de": "Pflichtzubehör",
+        "en": "Mandatory accessory"
+      },
+      "type": "boolean",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product"
+      ],
+      "description": "Kanten-Attribut accessory_for"
+    },
+    {
+      "name": "quantity",
+      "label": {
+        "de": "Menge",
+        "en": "Quantity"
+      },
+      "type": "number",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product"
+      ],
+      "description": "Kanten-Attribut part_of_kit"
+    },
+    {
+      "name": "valid_from",
+      "label": {
+        "de": "Gültig ab",
+        "en": "Valid from"
+      },
+      "type": "date",
+      "group_ids": [
+        "classification"
+      ],
+      "applicable_types": [
+        "product"
+      ],
+      "description": "Kanten-Attribut replaces"
+    }
+  ],
+  "relation_definitions": [
+    {
+      "name": "fits_vehicle",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "Passt zu Fahrzeug",
+        "en": "Fits vehicle"
+      },
+      "target_types": [
+        "vehicle_generation"
+      ],
+      "attributes": [
+        "position",
+        "qualifier",
+        "confidence"
+      ]
+    },
+    {
+      "name": "replaces",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "Ersetzt",
+        "en": "Replaces"
+      },
+      "source_types": [
+        "product"
+      ],
+      "target_types": [
+        "product"
+      ],
+      "attributes": [
+        "replace_reason",
+        "valid_from"
+      ]
+    },
+    {
+      "name": "alternative_to",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "Alternative zu",
+        "en": "Alternative to"
+      },
+      "source_types": [
+        "product"
+      ],
+      "target_types": [
+        "product"
+      ],
+      "attributes": [
+        "match_type"
+      ]
+    },
+    {
+      "name": "accessory_for",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "Zubehör fuer",
+        "en": "Accessory for"
+      },
+      "source_types": [
+        "product"
+      ],
+      "target_types": [
+        "product"
+      ],
+      "attributes": [
+        "mandatory"
+      ]
+    },
+    {
+      "name": "oem_reference",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "OEM-Referenz",
+        "en": "OEM reference"
+      },
+      "source_types": [
+        "product"
+      ],
+      "target_types": [
+        "oem_number"
+      ],
+      "attributes": [
+        "oem_kind"
+      ]
+    },
+    {
+      "name": "part_of_kit",
+      "kind": "aggregation",
+      "role": "link",
+      "label": {
+        "de": "Teil von Satz",
+        "en": "Part of kit"
+      },
+      "source_types": [
+        "product",
+        "variant"
+      ],
+      "target_types": [
+        "product"
+      ],
+      "attributes": [
+        "quantity"
+      ]
+    },
+    {
+      "name": "part_group_member",
+      "kind": "aggregation",
+      "role": "category",
+      "label": {
+        "de": "Baugruppen-Zuordnung",
+        "en": "Assembly group membership"
+      },
+      "target_types": [
+        "part_group"
+      ],
+      "attributes": [
+        "position"
+      ]
+    },
+    {
+      "name": "etim_class_member",
+      "kind": "aggregation",
+      "role": "category",
+      "label": {
+        "de": "ETIM-Klassen-Zuordnung",
+        "en": "ETIM class membership"
+      },
+      "target_types": [
+        "etim_class"
+      ],
+      "attributes": []
+    }
+  ],
+  "business_rules": [
+    {
+      "name": "calc_gross_price",
+      "type": "computed",
+      "applies_to": [
+        "product",
+        "variant"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    net = obj[\"attributes\"].get(\"net_price\")\n    if isinstance(net, (int, float)):\n        result.set_value(\"gross_price\", round(net * 1.19, 2))\n"
+    },
+    {
+      "name": "calc_list_price",
+      "type": "computed",
+      "applies_to": [
+        "product",
+        "variant"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    net = obj[\"attributes\"].get(\"net_price\")\n    if isinstance(net, (int, float)):\n        result.set_value(\"list_price\", round(net * 1.4, 2))\n"
+    },
+    {
+      "name": "default_warranty",
+      "type": "computed",
+      "applies_to": [
+        "product",
+        "variant"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    tier = obj[\"attributes\"].get(\"quality_tier\")\n    result.set_value(\"warranty_months\", 24 if tier in (\"oe\", \"oes\") else 12)\n"
+    },
+    {
+      "name": "validate_gtin",
+      "type": "validation",
+      "applies_to": [
+        "product",
+        "variant"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    gtin = obj[\"attributes\"].get(\"gtin\")\n    if gtin is None:\n        return\n    digits = str(gtin)\n    if len(digits) != 13 or not digits.isdigit():\n        result.add_error(\"gtin\", \"invalid\", \"GTIN must have 13 digits\")\n        return\n    total = sum(int(d) * (3 if index % 2 else 1) for index, d in enumerate(digits[:12]))\n    if (10 - total % 10) % 10 != int(digits[12]):\n        result.add_error(\"gtin\", \"checksum\", \"GTIN check digit is wrong\")\n"
+    },
+    {
+      "name": "guard_publish_features",
+      "type": "workflow_guard",
+      "applies_to": [
+        "product"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    missing = list(getattr(ctx, \"missing_features\", None) or ())\n    if missing and obj.get(\"status\") == \"published\":\n        result.allow(False, \"Klassen-Merkmale fehlen: \" + \", \".join(missing))\n        return\n    result.allow(True, None)\n"
+    },
+    {
+      "name": "normalize_import",
+      "type": "normalization",
+      "applies_to": [
+        "product",
+        "variant"
+      ],
+      "state": "active",
+      "script": "def run(obj, ctx, result):\n    sku = obj[\"attributes\"].get(\"sku\")\n    if isinstance(sku, str):\n        result.set_value(\"sku\", sku.strip().upper())\n    if obj[\"attributes\"].get(\"product_line\") is None:\n        result.set_value(\"product_line\", \"pro\")\n"
+    }
+  ],
+  "export_profiles": [
+    {
+      "name": "meadow-bmecat-net",
+      "format": "bmecat",
+      "parameters": {
+        "bmecat": {
+          "catalog_id": "MEADOW-AUTO-2026",
+          "catalog_name": "Meadow Automotive Katalog 2026",
+          "catalog_version": "1.0",
+          "language": "deu",
+          "currency": "EUR",
+          "supplier": "Meadow Automotive GmbH",
+          "buyer": "Werkstattverbund Nord",
+          "pid_attribute": "sku",
+          "etim_version": "10.0",
+          "transaction": "new_catalog",
+          "price_attribute": "net_price",
+          "price_type": "net_customer",
+          "order_unit": "C62",
+          "content_unit": "C62",
+          "version": "2005"
+        },
+        "fields": [
+          "sku",
+          "name",
+          "net_price",
+          "gtin",
+          "weight_kg"
+        ],
+        "locales": [
+          "de"
+        ]
+      },
+      "notes": "BMEcat-Preisliste fuer den Partnerkanal"
+    },
+    {
+      "name": "meadow-csv-worklist",
+      "format": "csv",
+      "parameters": {
+        "fields": [
+          "sku",
+          "name",
+          "manufacturer",
+          "quality_tier",
+          "net_price",
+          "weight_kg"
+        ],
+        "locales": [
+          "de"
+        ]
+      },
+      "notes": "Arbeitsliste fuer die Katalogpflege"
+    }
+  ],
+  "categories": [
+    {
+      "code": "cat_root_shop",
+      "name_de": "Sortiment",
+      "name_en": "Assortment",
+      "parent": null
+    },
+    {
+      "code": "cat_new",
+      "name_de": "Neuheiten",
+      "name_en": "New products",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_sale",
+      "name_de": "Abverkauf",
+      "name_en": "Sale",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_fast",
+      "name_de": "Schnelldreher",
+      "name_en": "Fast movers",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_brakes",
+      "name_de": "Bremsen",
+      "name_en": "Brakes",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_brakes_discs",
+      "name_de": "Bremsscheiben",
+      "name_en": "Brake discs",
+      "parent": "cat_brakes"
+    },
+    {
+      "code": "cat_brakes_pads",
+      "name_de": "Bremsbeläge",
+      "name_en": "Brake pads",
+      "parent": "cat_brakes"
+    },
+    {
+      "code": "cat_brakes_fluid",
+      "name_de": "Bremsflüssigkeit",
+      "name_en": "Brake fluid",
+      "parent": "cat_brakes"
+    },
+    {
+      "code": "cat_engine",
+      "name_de": "Motor",
+      "name_en": "Engine",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_engine_filter",
+      "name_de": "Filter",
+      "name_en": "Filters",
+      "parent": "cat_engine"
+    },
+    {
+      "code": "cat_engine_belts",
+      "name_de": "Riementrieb",
+      "name_en": "Belt drive",
+      "parent": "cat_engine"
+    },
+    {
+      "code": "cat_engine_ignition",
+      "name_de": "Zündung",
+      "name_en": "Ignition",
+      "parent": "cat_engine"
+    },
+    {
+      "code": "cat_cooling",
+      "name_de": "Kühlung",
+      "name_en": "Cooling",
+      "parent": "cat_engine"
+    },
+    {
+      "code": "cat_chassis",
+      "name_de": "Fahrwerk",
+      "name_en": "Chassis",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_chassis_shocks",
+      "name_de": "Stoßdämpfer",
+      "name_en": "Shock absorbers",
+      "parent": "cat_chassis"
+    },
+    {
+      "code": "cat_chassis_steering",
+      "name_de": "Lenkung",
+      "name_en": "Steering",
+      "parent": "cat_chassis"
+    },
+    {
+      "code": "cat_chassis_bearings",
+      "name_de": "Radlager",
+      "name_en": "Wheel bearings",
+      "parent": "cat_chassis"
+    },
+    {
+      "code": "cat_drivetrain",
+      "name_de": "Antrieb",
+      "name_en": "Drivetrain",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_drivetrain_clutch",
+      "name_de": "Kupplung",
+      "name_en": "Clutch",
+      "parent": "cat_drivetrain"
+    },
+    {
+      "code": "cat_electrics",
+      "name_de": "Elektrik",
+      "name_en": "Electrics",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_electrics_battery",
+      "name_de": "Batterien",
+      "name_en": "Batteries",
+      "parent": "cat_electrics"
+    },
+    {
+      "code": "cat_electrics_light",
+      "name_de": "Beleuchtung",
+      "name_en": "Lighting",
+      "parent": "cat_electrics"
+    },
+    {
+      "code": "cat_electrics_sensor",
+      "name_de": "Sensoren",
+      "name_en": "Sensors",
+      "parent": "cat_electrics"
+    },
+    {
+      "code": "cat_ev",
+      "name_de": "E-Mobilität",
+      "name_en": "E-mobility",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_ev_wallbox",
+      "name_de": "Wallboxen",
+      "name_en": "Wall boxes",
+      "parent": "cat_ev"
+    },
+    {
+      "code": "cat_ev_cable",
+      "name_de": "Ladekabel",
+      "name_en": "Charging cables",
+      "parent": "cat_ev"
+    },
+    {
+      "code": "cat_ev_accessory",
+      "name_de": "Ladezubehör",
+      "name_en": "Charging accessories",
+      "parent": "cat_ev"
+    },
+    {
+      "code": "cat_consumables",
+      "name_de": "Betriebsstoffe",
+      "name_en": "Consumables",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_consumables_oil",
+      "name_de": "Motoröle",
+      "name_en": "Engine oils",
+      "parent": "cat_consumables"
+    },
+    {
+      "code": "cat_consumables_chemicals",
+      "name_de": "Chemie",
+      "name_en": "Chemicals",
+      "parent": "cat_consumables"
+    },
+    {
+      "code": "cat_workshop",
+      "name_de": "Werkstattbedarf",
+      "name_en": "Workshop supplies",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_workshop_tools",
+      "name_de": "Werkzeuge",
+      "name_en": "Tools",
+      "parent": "cat_workshop"
+    },
+    {
+      "code": "cat_workshop_special",
+      "name_de": "Spezialwerkzeug",
+      "name_en": "Special tools",
+      "parent": "cat_workshop"
+    },
+    {
+      "code": "cat_body",
+      "name_de": "Karosserie",
+      "name_en": "Body",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_body_wipers",
+      "name_de": "Wischer",
+      "name_en": "Wipers",
+      "parent": "cat_body"
+    },
+    {
+      "code": "cat_interior",
+      "name_de": "Innenraum",
+      "name_en": "Interior",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_wheels",
+      "name_de": "Räder & Reifen",
+      "name_en": "Wheels & tyres",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_accessories",
+      "name_de": "Zubehör",
+      "name_en": "Accessories",
+      "parent": "cat_root_shop"
+    },
+    {
+      "code": "cat_accessories_trailer",
+      "name_de": "Anhängerkupplungen",
+      "name_en": "Trailer hitches",
+      "parent": "cat_accessories"
+    },
+    {
+      "code": "cat_accessories_carrier",
+      "name_de": "Trägersysteme",
+      "name_en": "Carrier systems",
+      "parent": "cat_accessories"
+    }
+  ],
+  "part_groups": [
+    {
+      "code": "PG-ENG",
+      "name_de": "Motor",
+      "name_en": "Engine",
+      "parent": null
+    },
+    {
+      "code": "PG-ENG-MECH",
+      "name_de": "Motor-Mechanik",
+      "name_en": "Engine mechanics",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-ENG-BELT",
+      "name_de": "Riementrieb",
+      "name_en": "Belt drive",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-ENG-FUEL",
+      "name_de": "Kraftstoffsystem",
+      "name_en": "Fuel system",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-ENG-IGN",
+      "name_de": "Zündung",
+      "name_en": "Ignition",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-COOL",
+      "name_de": "Kühlung",
+      "name_en": "Cooling",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-EXH",
+      "name_de": "Abgasanlage",
+      "name_en": "Exhaust system",
+      "parent": "PG-ENG"
+    },
+    {
+      "code": "PG-BRK",
+      "name_de": "Bremsanlage",
+      "name_en": "Brake system",
+      "parent": null
+    },
+    {
+      "code": "PG-BRK-DISC",
+      "name_de": "Bremsscheiben",
+      "name_en": "Brake discs",
+      "parent": "PG-BRK"
+    },
+    {
+      "code": "PG-BRK-PAD",
+      "name_de": "Bremsbeläge",
+      "name_en": "Brake pads",
+      "parent": "PG-BRK"
+    },
+    {
+      "code": "PG-BRK-HYD",
+      "name_de": "Bremshydraulik",
+      "name_en": "Brake hydraulics",
+      "parent": "PG-BRK"
+    },
+    {
+      "code": "PG-BRK-ACC",
+      "name_de": "Bremszubehör",
+      "name_en": "Brake accessories",
+      "parent": "PG-BRK"
+    },
+    {
+      "code": "PG-CHS",
+      "name_de": "Fahrwerk",
+      "name_en": "Chassis",
+      "parent": null
+    },
+    {
+      "code": "PG-CHS-SHK",
+      "name_de": "Stoßdämpfer",
+      "name_en": "Shock absorbers",
+      "parent": "PG-CHS"
+    },
+    {
+      "code": "PG-CHS-SPR",
+      "name_de": "Federn",
+      "name_en": "Springs",
+      "parent": "PG-CHS"
+    },
+    {
+      "code": "PG-CHS-STR",
+      "name_de": "Lenkung",
+      "name_en": "Steering",
+      "parent": "PG-CHS"
+    },
+    {
+      "code": "PG-CHS-AXL",
+      "name_de": "Achse",
+      "name_en": "Axle",
+      "parent": "PG-CHS"
+    },
+    {
+      "code": "PG-CHS-BRG",
+      "name_de": "Radlager",
+      "name_en": "Wheel bearings",
+      "parent": "PG-CHS"
+    },
+    {
+      "code": "PG-DRV",
+      "name_de": "Antrieb",
+      "name_en": "Drivetrain",
+      "parent": null
+    },
+    {
+      "code": "PG-DRV-CLT",
+      "name_de": "Kupplung",
+      "name_en": "Clutch",
+      "parent": "PG-DRV"
+    },
+    {
+      "code": "PG-DRV-SHF",
+      "name_de": "Antriebswellen",
+      "name_en": "Drive shafts",
+      "parent": "PG-DRV"
+    },
+    {
+      "code": "PG-ELC",
+      "name_de": "Elektrik",
+      "name_en": "Electrics",
+      "parent": null
+    },
+    {
+      "code": "PG-ELC-BAT",
+      "name_de": "Batterien",
+      "name_en": "Batteries",
+      "parent": "PG-ELC"
+    },
+    {
+      "code": "PG-ELC-STR",
+      "name_de": "Anlasser & Lichtmaschine",
+      "name_en": "Starters & alternators",
+      "parent": "PG-ELC"
+    },
+    {
+      "code": "PG-ELC-LGT",
+      "name_de": "Beleuchtung",
+      "name_en": "Lighting",
+      "parent": "PG-ELC"
+    },
+    {
+      "code": "PG-ELC-SEN",
+      "name_de": "Sensoren",
+      "name_en": "Sensors",
+      "parent": "PG-ELC"
+    },
+    {
+      "code": "PG-EV",
+      "name_de": "E-Mobilität",
+      "name_en": "E-mobility",
+      "parent": null
+    },
+    {
+      "code": "PG-EV-WB",
+      "name_de": "Ladegeräte",
+      "name_en": "Charging devices",
+      "parent": "PG-EV"
+    },
+    {
+      "code": "PG-EV-CBL",
+      "name_de": "Ladekabel",
+      "name_en": "Charging cables",
+      "parent": "PG-EV"
+    },
+    {
+      "code": "PG-EV-ACC",
+      "name_de": "Ladezubehör",
+      "name_en": "Charging accessories",
+      "parent": "PG-EV"
+    },
+    {
+      "code": "PG-CON",
+      "name_de": "Betriebsstoffe & Chemie",
+      "name_en": "Consumables & chemicals",
+      "parent": null
+    },
+    {
+      "code": "PG-CON-OIL",
+      "name_de": "Motoröle",
+      "name_en": "Engine oils",
+      "parent": "PG-CON"
+    },
+    {
+      "code": "PG-CON-CHEM",
+      "name_de": "Chemie",
+      "name_en": "Chemicals",
+      "parent": "PG-CON"
+    },
+    {
+      "code": "PG-WKS",
+      "name_de": "Werkstattbedarf",
+      "name_en": "Workshop supplies",
+      "parent": null
+    },
+    {
+      "code": "PG-WKS-TLS",
+      "name_de": "Werkzeuge",
+      "name_en": "Tools",
+      "parent": "PG-WKS"
+    },
+    {
+      "code": "PG-WKS-SPC",
+      "name_de": "Spezialwerkzeug",
+      "name_en": "Special tools",
+      "parent": "PG-WKS"
+    },
+    {
+      "code": "PG-BDY",
+      "name_de": "Karosserie",
+      "name_en": "Body",
+      "parent": null
+    },
+    {
+      "code": "PG-BDY-WPR",
+      "name_de": "Wischer",
+      "name_en": "Wipers",
+      "parent": "PG-BDY"
+    },
+    {
+      "code": "PG-INT",
+      "name_de": "Innenraum",
+      "name_en": "Interior",
+      "parent": null
+    },
+    {
+      "code": "PG-WHL",
+      "name_de": "Räder & Reifen",
+      "name_en": "Wheels & tyres",
+      "parent": null
+    },
+    {
+      "code": "PG-ACC",
+      "name_de": "Zubehör",
+      "name_en": "Accessories",
+      "parent": null
+    },
+    {
+      "code": "PG-ACC-TRL",
+      "name_de": "Anhängerkupplungen",
+      "name_en": "Trailer hitches",
+      "parent": "PG-ACC"
+    }
+  ],
+  "part_families": [
+    {
+      "code": "brake_disc",
+      "name_de": "Bremsscheibe",
+      "name_en": "Brake disc",
+      "group": "PG-BRK-DISC",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "cast_iron",
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        3.5,
+        11.0
+      ],
+      "length_mm": [
+        240,
+        340
+      ],
+      "width_mm": [
+        240,
+        340
+      ],
+      "height_mm": [
+        20,
+        36
+      ],
+      "price": [
+        18.5,
+        129.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        12,
+        24
+      ]
+    },
+    {
+      "code": "brake_pad",
+      "name_de": "Bremsbelagsatz",
+      "name_en": "Brake pad set",
+      "group": "PG-BRK-PAD",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "ceramic",
+        "composite",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "oes",
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.6,
+        3.4
+      ],
+      "length_mm": [
+        85,
+        190
+      ],
+      "width_mm": [
+        45,
+        75
+      ],
+      "height_mm": [
+        14,
+        20
+      ],
+      "price": [
+        11.9,
+        79.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "set",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "brake_drum",
+      "name_de": "Bremstrommel",
+      "name_en": "Brake drum",
+      "group": "PG-BRK-DISC",
+      "positions": [
+        "rear_axle"
+      ],
+      "materials": [
+        "cast_iron"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        4.0,
+        9.0
+      ],
+      "length_mm": [
+        200,
+        300
+      ],
+      "width_mm": [
+        200,
+        300
+      ],
+      "height_mm": [
+        60,
+        90
+      ],
+      "price": [
+        24.0,
+        89.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "brake_caliper",
+      "name_de": "Bremssattel",
+      "name_en": "Brake caliper",
+      "group": "PG-BRK-HYD",
+      "positions": [
+        "front",
+        "rear",
+        "left",
+        "right"
+      ],
+      "materials": [
+        "aluminium",
+        "cast_iron"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        1.8,
+        6.5
+      ],
+      "length_mm": [
+        180,
+        320
+      ],
+      "width_mm": [
+        90,
+        160
+      ],
+      "height_mm": [
+        80,
+        150
+      ],
+      "price": [
+        79.0,
+        349.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "brake_hose",
+      "name_de": "Bremsschlauch",
+      "name_en": "Brake hose",
+      "group": "PG-BRK-HYD",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "rubber",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "standard"
+      ],
+      "weight_kg": [
+        0.08,
+        0.4
+      ],
+      "length_mm": [
+        220,
+        640
+      ],
+      "width_mm": [
+        8,
+        14
+      ],
+      "height_mm": [
+        8,
+        14
+      ],
+      "price": [
+        6.5,
+        32.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "brake_fluid",
+      "name_de": "Bremsflüssigkeit DOT4",
+      "name_en": "Brake fluid DOT4",
+      "group": "PG-BRK-ACC",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        0.5,
+        5.2
+      ],
+      "volume_l": [
+        0.5,
+        5.0
+      ],
+      "price": [
+        4.9,
+        39.0
+      ],
+      "dims": [
+        "volume_l"
+      ],
+      "packaging": "canister",
+      "warranty": 12,
+      "hazardous": true,
+      "disposal": true
+    },
+    {
+      "code": "brake_wear_sensor",
+      "name_de": "Bremsbelagverschleißsensor",
+      "name_en": "Brake pad wear sensor",
+      "group": "PG-BRK-ACC",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "plastic",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        0.03,
+        0.12
+      ],
+      "length_mm": [
+        300,
+        980
+      ],
+      "price": [
+        7.5,
+        28.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "oil_filter",
+      "name_de": "Ölfilter",
+      "name_en": "Oil filter",
+      "group": "PG-ENG-MECH",
+      "positions": [],
+      "materials": [
+        "steel",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.2,
+        1.1
+      ],
+      "length_mm": [
+        60,
+        160
+      ],
+      "width_mm": [
+        60,
+        110
+      ],
+      "height_mm": [
+        60,
+        160
+      ],
+      "price": [
+        3.9,
+        24.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "air_filter",
+      "name_de": "Luftfilter",
+      "name_en": "Air filter",
+      "group": "PG-ENG-MECH",
+      "positions": [],
+      "materials": [
+        "composite",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.25,
+        1.6
+      ],
+      "length_mm": [
+        180,
+        420
+      ],
+      "width_mm": [
+        120,
+        320
+      ],
+      "height_mm": [
+        40,
+        90
+      ],
+      "price": [
+        7.9,
+        42.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "fuel_filter",
+      "name_de": "Kraftstofffilter",
+      "name_en": "Fuel filter",
+      "group": "PG-ENG-FUEL",
+      "positions": [],
+      "materials": [
+        "steel",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.2,
+        1.3
+      ],
+      "length_mm": [
+        70,
+        190
+      ],
+      "width_mm": [
+        60,
+        120
+      ],
+      "height_mm": [
+        70,
+        190
+      ],
+      "price": [
+        8.9,
+        49.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "cabin_filter",
+      "name_de": "Innenraumfilter",
+      "name_en": "Cabin filter",
+      "group": "PG-INT",
+      "positions": [],
+      "materials": [
+        "composite",
+        "textile"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.15,
+        0.9
+      ],
+      "length_mm": [
+        150,
+        420
+      ],
+      "width_mm": [
+        90,
+        300
+      ],
+      "height_mm": [
+        25,
+        60
+      ],
+      "price": [
+        6.9,
+        39.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 12,
+      "hazardous": false
+    },
+    {
+      "code": "spark_plug",
+      "name_de": "Zündkerze",
+      "name_en": "Spark plug",
+      "group": "PG-ENG-IGN",
+      "positions": [],
+      "materials": [
+        "steel",
+        "ceramic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.04,
+        0.12
+      ],
+      "length_mm": [
+        70,
+        110
+      ],
+      "width_mm": [
+        14,
+        22
+      ],
+      "height_mm": [
+        14,
+        22
+      ],
+      "price": [
+        2.9,
+        19.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "blister",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "glow_plug",
+      "name_de": "Glühkerze",
+      "name_en": "Glow plug",
+      "group": "PG-ENG-IGN",
+      "positions": [],
+      "materials": [
+        "steel",
+        "ceramic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        0.04,
+        0.14
+      ],
+      "length_mm": [
+        60,
+        105
+      ],
+      "price": [
+        6.5,
+        28.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "blister",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "ignition_coil",
+      "name_de": "Zündspule",
+      "name_en": "Ignition coil",
+      "group": "PG-ENG-IGN",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.2,
+        1.2
+      ],
+      "length_mm": [
+        80,
+        260
+      ],
+      "width_mm": [
+        50,
+        110
+      ],
+      "height_mm": [
+        50,
+        120
+      ],
+      "price": [
+        14.9,
+        79.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        12,
+        12
+      ]
+    },
+    {
+      "code": "timing_belt_kit",
+      "name_de": "Zahnriemensatz",
+      "name_en": "Timing belt kit",
+      "group": "PG-ENG-BELT",
+      "positions": [],
+      "materials": [
+        "rubber",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        1.1,
+        3.8
+      ],
+      "length_mm": [
+        260,
+        480
+      ],
+      "width_mm": [
+        180,
+        320
+      ],
+      "height_mm": [
+        60,
+        140
+      ],
+      "price": [
+        49.0,
+        219.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "v_ribbed_belt",
+      "name_de": "Keilrippenriemen",
+      "name_en": "V-ribbed belt",
+      "group": "PG-ENG-BELT",
+      "positions": [],
+      "materials": [
+        "rubber",
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.1,
+        0.6
+      ],
+      "length_mm": [
+        700,
+        2400
+      ],
+      "width_mm": [
+        12,
+        26
+      ],
+      "height_mm": [
+        4,
+        8
+      ],
+      "price": [
+        8.9,
+        42.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm"
+      ],
+      "packaging": "bag",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "water_pump",
+      "name_de": "Wasserpumpe",
+      "name_en": "Water pump",
+      "group": "PG-COOL",
+      "positions": [],
+      "materials": [
+        "aluminium",
+        "cast_iron"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.7,
+        3.2
+      ],
+      "length_mm": [
+        110,
+        260
+      ],
+      "width_mm": [
+        90,
+        200
+      ],
+      "height_mm": [
+        90,
+        210
+      ],
+      "price": [
+        24.0,
+        149.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "thermostat",
+      "name_de": "Thermostat",
+      "name_en": "Thermostat",
+      "group": "PG-COOL",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "brass"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.1,
+        0.5
+      ],
+      "length_mm": [
+        60,
+        140
+      ],
+      "width_mm": [
+        50,
+        110
+      ],
+      "height_mm": [
+        50,
+        110
+      ],
+      "price": [
+        9.9,
+        49.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "temp_range": [
+        -40,
+        130
+      ]
+    },
+    {
+      "code": "coolant",
+      "name_de": "Kühlmittel G12",
+      "name_en": "Coolant G12",
+      "group": "PG-CON-CHEM",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        1.1,
+        12.0
+      ],
+      "volume_l": [
+        1.0,
+        10.0
+      ],
+      "price": [
+        3.9,
+        34.0
+      ],
+      "dims": [
+        "volume_l"
+      ],
+      "packaging": "canister",
+      "warranty": 12,
+      "hazardous": true,
+      "temp_range": [
+        -40,
+        130
+      ]
+    },
+    {
+      "code": "radiator_hose",
+      "name_de": "Kühlerschlauch",
+      "name_en": "Radiator hose",
+      "group": "PG-COOL",
+      "positions": [
+        "upper",
+        "lower"
+      ],
+      "materials": [
+        "rubber"
+      ],
+      "quality_tiers": [
+        "oe",
+        "standard"
+      ],
+      "weight_kg": [
+        0.15,
+        0.7
+      ],
+      "length_mm": [
+        280,
+        780
+      ],
+      "price": [
+        7.9,
+        39.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "bag",
+      "warranty": 24,
+      "hazardous": false,
+      "temp_range": [
+        -40,
+        125
+      ]
+    },
+    {
+      "code": "lambda_sensor",
+      "name_de": "Lambdasonde",
+      "name_en": "Lambda sensor",
+      "group": "PG-EXH",
+      "positions": [
+        "upper",
+        "lower"
+      ],
+      "materials": [
+        "steel",
+        "ceramic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.08,
+        0.4
+      ],
+      "length_mm": [
+        320,
+        1200
+      ],
+      "price": [
+        29.0,
+        139.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        12,
+        12
+      ]
+    },
+    {
+      "code": "catalytic_converter",
+      "name_de": "Katalysator",
+      "name_en": "Catalytic converter",
+      "group": "PG-EXH",
+      "positions": [],
+      "materials": [
+        "stainless_steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        2.5,
+        9.5
+      ],
+      "length_mm": [
+        420,
+        1200
+      ],
+      "width_mm": [
+        140,
+        320
+      ],
+      "height_mm": [
+        120,
+        260
+      ],
+      "price": [
+        129.0,
+        649.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "temp_range": [
+        -40,
+        900
+      ]
+    },
+    {
+      "code": "exhaust_mount",
+      "name_de": "Auspuffgummi",
+      "name_en": "Exhaust mount",
+      "group": "PG-EXH",
+      "positions": [],
+      "materials": [
+        "rubber"
+      ],
+      "quality_tiers": [
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.04,
+        0.2
+      ],
+      "length_mm": [
+        40,
+        120
+      ],
+      "price": [
+        1.9,
+        12.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "bag",
+      "warranty": 12,
+      "hazardous": false
+    },
+    {
+      "code": "shock_absorber",
+      "name_de": "Stoßdämpfer",
+      "name_en": "Shock absorber",
+      "group": "PG-CHS-SHK",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "steel",
+        "aluminium"
+      ],
+      "quality_tiers": [
+        "oe",
+        "oes",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        1.6,
+        5.4
+      ],
+      "length_mm": [
+        380,
+        720
+      ],
+      "width_mm": [
+        45,
+        90
+      ],
+      "height_mm": [
+        45,
+        90
+      ],
+      "price": [
+        34.0,
+        179.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "coil_spring",
+      "name_de": "Fahrwerksfeder",
+      "name_en": "Coil spring",
+      "group": "PG-CHS-SPR",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        1.4,
+        4.8
+      ],
+      "length_mm": [
+        240,
+        460
+      ],
+      "width_mm": [
+        110,
+        180
+      ],
+      "height_mm": [
+        110,
+        180
+      ],
+      "price": [
+        24.0,
+        119.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "tie_rod_end",
+      "name_de": "Spurstangenkopf",
+      "name_en": "Tie rod end",
+      "group": "PG-CHS-STR",
+      "positions": [
+        "front_axle",
+        "left",
+        "right"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.3,
+        1.1
+      ],
+      "length_mm": [
+        90,
+        260
+      ],
+      "price": [
+        9.9,
+        55.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        30,
+        90
+      ]
+    },
+    {
+      "code": "ball_joint",
+      "name_de": "Traggelenk",
+      "name_en": "Ball joint",
+      "group": "PG-CHS-AXL",
+      "positions": [
+        "front_axle",
+        "lower"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.3,
+        1.4
+      ],
+      "length_mm": [
+        70,
+        200
+      ],
+      "price": [
+        11.9,
+        59.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        40,
+        120
+      ]
+    },
+    {
+      "code": "wheel_bearing",
+      "name_de": "Radlagersatz",
+      "name_en": "Wheel bearing kit",
+      "group": "PG-CHS-BRG",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "oes",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.6,
+        3.4
+      ],
+      "length_mm": [
+        70,
+        180
+      ],
+      "width_mm": [
+        70,
+        180
+      ],
+      "height_mm": [
+        30,
+        90
+      ],
+      "price": [
+        18.9,
+        129.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        80,
+        320
+      ]
+    },
+    {
+      "code": "stabilizer_link",
+      "name_de": "Koppelstange",
+      "name_en": "Stabiliser link",
+      "group": "PG-CHS-AXL",
+      "positions": [
+        "front_axle",
+        "rear_axle"
+      ],
+      "materials": [
+        "steel",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.2,
+        0.8
+      ],
+      "length_mm": [
+        120,
+        420
+      ],
+      "price": [
+        6.9,
+        32.0
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "bag",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "control_arm",
+      "name_de": "Querlenker",
+      "name_en": "Control arm",
+      "group": "PG-CHS-AXL",
+      "positions": [
+        "front_axle",
+        "rear_axle",
+        "upper",
+        "lower"
+      ],
+      "materials": [
+        "aluminium",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        1.4,
+        5.2
+      ],
+      "length_mm": [
+        240,
+        520
+      ],
+      "width_mm": [
+        80,
+        180
+      ],
+      "height_mm": [
+        60,
+        140
+      ],
+      "price": [
+        42.0,
+        219.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "clutch_kit",
+      "name_de": "Kupplungssatz",
+      "name_en": "Clutch kit",
+      "group": "PG-DRV-CLT",
+      "positions": [],
+      "materials": [
+        "steel",
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "oes",
+        "premium"
+      ],
+      "weight_kg": [
+        4.2,
+        12.5
+      ],
+      "length_mm": [
+        220,
+        340
+      ],
+      "width_mm": [
+        220,
+        340
+      ],
+      "height_mm": [
+        80,
+        160
+      ],
+      "price": [
+        89.0,
+        429.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        15,
+        45
+      ]
+    },
+    {
+      "code": "drive_shaft",
+      "name_de": "Antriebswelle",
+      "name_en": "Drive shaft",
+      "group": "PG-DRV-SHF",
+      "positions": [
+        "front",
+        "left",
+        "right"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        3.2,
+        9.8
+      ],
+      "length_mm": [
+        420,
+        980
+      ],
+      "price": [
+        69.0,
+        329.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "cv_boot_kit",
+      "name_de": "Faltenbalgsatz",
+      "name_en": "CV boot kit",
+      "group": "PG-DRV-SHF",
+      "positions": [
+        "front",
+        "rear",
+        "inner",
+        "outer"
+      ],
+      "materials": [
+        "rubber",
+        "steel"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.2,
+        0.7
+      ],
+      "length_mm": [
+        90,
+        160
+      ],
+      "price": [
+        5.9,
+        29.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "bag",
+      "warranty": 12,
+      "hazardous": false
+    },
+    {
+      "code": "starter_motor",
+      "name_de": "Anlasser",
+      "name_en": "Starter motor",
+      "group": "PG-ELC-STR",
+      "positions": [],
+      "materials": [
+        "steel",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        2.6,
+        7.4
+      ],
+      "length_mm": [
+        180,
+        320
+      ],
+      "width_mm": [
+        110,
+        180
+      ],
+      "height_mm": [
+        110,
+        180
+      ],
+      "price": [
+        79.0,
+        329.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        12,
+        12
+      ],
+      "power_w": [
+        800,
+        2600
+      ]
+    },
+    {
+      "code": "alternator",
+      "name_de": "Lichtmaschine",
+      "name_en": "Alternator",
+      "group": "PG-ELC-STR",
+      "positions": [],
+      "materials": [
+        "aluminium",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        4.1,
+        8.9
+      ],
+      "length_mm": [
+        180,
+        320
+      ],
+      "width_mm": [
+        140,
+        220
+      ],
+      "height_mm": [
+        140,
+        220
+      ],
+      "price": [
+        119.0,
+        449.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        12,
+        14
+      ],
+      "power_w": [
+        1400,
+        3000
+      ],
+      "nominal_current_a": [
+        70,
+        250
+      ]
+    },
+    {
+      "code": "starter_battery",
+      "name_de": "Starterbatterie",
+      "name_en": "Starter battery",
+      "group": "PG-ELC-BAT",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        9.5,
+        22.0
+      ],
+      "length_mm": [
+        175,
+        400
+      ],
+      "width_mm": [
+        175,
+        190
+      ],
+      "height_mm": [
+        175,
+        195
+      ],
+      "price": [
+        59.0,
+        249.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": true,
+      "voltage_v": [
+        12,
+        12
+      ],
+      "capacity_ah": [
+        44,
+        105
+      ],
+      "cold_cranking_a": [
+        360,
+        950
+      ],
+      "etim_class": "EC011878"
+    },
+    {
+      "code": "hd_light_bulb",
+      "name_de": "Glühlampe H7",
+      "name_en": "Halogen bulb H7",
+      "group": "PG-ELC-LGT",
+      "positions": [],
+      "materials": [
+        "glass",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.01,
+        0.06
+      ],
+      "price": [
+        1.5,
+        14.0
+      ],
+      "dims": [],
+      "packaging": "blister",
+      "warranty": 12,
+      "hazardous": false,
+      "voltage_v": [
+        12,
+        24
+      ],
+      "power_w": [
+        55,
+        70
+      ],
+      "etim_class": "EC000001"
+    },
+    {
+      "code": "wiper_blade",
+      "name_de": "Wischerblatt",
+      "name_en": "Wiper blade",
+      "group": "PG-BDY-WPR",
+      "positions": [
+        "front",
+        "rear"
+      ],
+      "materials": [
+        "rubber",
+        "steel",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.1,
+        0.5
+      ],
+      "length_mm": [
+        280,
+        750
+      ],
+      "price": [
+        3.9,
+        34.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "blister",
+      "warranty": 12,
+      "hazardous": false
+    },
+    {
+      "code": "engine_oil",
+      "name_de": "Motoroel 5W-30",
+      "name_en": "Engine oil 5W-30",
+      "group": "PG-CON-OIL",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.9,
+        18.5
+      ],
+      "volume_l": [
+        1.0,
+        20.0
+      ],
+      "price": [
+        6.9,
+        129.0
+      ],
+      "dims": [
+        "volume_l"
+      ],
+      "packaging": "canister",
+      "warranty": 12,
+      "hazardous": true,
+      "temp_range": [
+        -35,
+        40
+      ]
+    },
+    {
+      "code": "screen_wash",
+      "name_de": "Scheibenwaschkonzentrat",
+      "name_en": "Screen wash concentrate",
+      "group": "PG-CON-CHEM",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.6,
+        12.0
+      ],
+      "volume_l": [
+        0.5,
+        10.0
+      ],
+      "price": [
+        1.9,
+        24.0
+      ],
+      "dims": [
+        "volume_l"
+      ],
+      "packaging": "canister",
+      "warranty": 12,
+      "hazardous": true,
+      "temp_range": [
+        -30,
+        40
+      ]
+    },
+    {
+      "code": "brake_cleaner",
+      "name_de": "Bremsenreiniger",
+      "name_en": "Brake cleaner",
+      "group": "PG-CON-CHEM",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.4,
+        6.5
+      ],
+      "volume_l": [
+        0.5,
+        5.0
+      ],
+      "price": [
+        2.9,
+        22.0
+      ],
+      "dims": [
+        "volume_l"
+      ],
+      "packaging": "canister",
+      "warranty": 12,
+      "hazardous": true,
+      "disposal": true
+    },
+    {
+      "code": "torque_wrench",
+      "name_de": "Drehmomentschlüssel",
+      "name_en": "Torque wrench",
+      "group": "PG-WKS-TLS",
+      "positions": [],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.6,
+        2.4
+      ],
+      "length_mm": [
+        270,
+        660
+      ],
+      "price": [
+        39.0,
+        219.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "torque_nm": [
+        20,
+        400
+      ]
+    },
+    {
+      "code": "socket_set",
+      "name_de": "Steckschlüsselsatz",
+      "name_en": "Socket set",
+      "group": "PG-WKS-TLS",
+      "positions": [],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        1.2,
+        6.8
+      ],
+      "length_mm": [
+        240,
+        520
+      ],
+      "width_mm": [
+        140,
+        320
+      ],
+      "height_mm": [
+        60,
+        160
+      ],
+      "price": [
+        29.0,
+        189.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false
+    },
+    {
+      "code": "special_tool_brake",
+      "name_de": "Bremskolbenrücksteller",
+      "name_en": "Brake caliper piston tool",
+      "group": "PG-WKS-SPC",
+      "positions": [],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.4,
+        1.6
+      ],
+      "length_mm": [
+        120,
+        320
+      ],
+      "price": [
+        19.0,
+        89.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "etim_class": "EC011956"
+    },
+    {
+      "code": "wallbox_11kw",
+      "name_de": "Wallbox 11 kW",
+      "name_en": "Wall box 11 kW",
+      "group": "PG-EV-WB",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        3.2,
+        9.5
+      ],
+      "length_mm": [
+        180,
+        420
+      ],
+      "width_mm": [
+        120,
+        300
+      ],
+      "height_mm": [
+        120,
+        320
+      ],
+      "price": [
+        349.0,
+        1290.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 36,
+      "hazardous": false,
+      "voltage_v": [
+        230,
+        400
+      ],
+      "nominal_current_a": [
+        16,
+        32
+      ],
+      "charging_power_kw": [
+        3.7,
+        22.0
+      ],
+      "output_voltage_range": [
+        230,
+        400
+      ],
+      "etim_class": "EC002883"
+    },
+    {
+      "code": "charging_cable_mode3",
+      "name_de": "Ladekabel Mode 3",
+      "name_en": "Charging cable Mode 3",
+      "group": "PG-EV-CBL",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        1.8,
+        6.4
+      ],
+      "length_mm": [
+        4000,
+        10000
+      ],
+      "price": [
+        129.0,
+        549.0
+      ],
+      "dims": [
+        "cable_length_m"
+      ],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        230,
+        400
+      ],
+      "nominal_current_a": [
+        16,
+        32
+      ],
+      "cable_length_m": [
+        4.0,
+        10.0
+      ],
+      "etim_class": "EC002897"
+    },
+    {
+      "code": "charging_connector",
+      "name_de": "Ladestecker Typ 2",
+      "name_en": "Charging connector Type 2",
+      "group": "PG-EV-ACC",
+      "positions": [],
+      "materials": [
+        "plastic",
+        "copper"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium"
+      ],
+      "weight_kg": [
+        0.3,
+        1.2
+      ],
+      "price": [
+        49.0,
+        199.0
+      ],
+      "dims": [],
+      "packaging": "carton",
+      "warranty": 24,
+      "hazardous": false,
+      "voltage_v": [
+        230,
+        400
+      ],
+      "nominal_current_a": [
+        16,
+        32
+      ],
+      "etim_class": "EC002898"
+    },
+    {
+      "code": "charging_post",
+      "name_de": "Ladesäule",
+      "name_en": "Charging post",
+      "group": "PG-EV-WB",
+      "positions": [],
+      "materials": [
+        "aluminium",
+        "steel"
+      ],
+      "quality_tiers": [
+        "premium"
+      ],
+      "weight_kg": [
+        18.0,
+        46.0
+      ],
+      "length_mm": [
+        1200,
+        1600
+      ],
+      "width_mm": [
+        200,
+        320
+      ],
+      "height_mm": [
+        200,
+        320
+      ],
+      "price": [
+        890.0,
+        2490.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "pallet",
+      "warranty": 36,
+      "hazardous": false,
+      "charging_power_kw": [
+        11.0,
+        22.0
+      ],
+      "etim_class": "EC004824"
+    },
+    {
+      "code": "trailer_hitch",
+      "name_de": "Anhängerkupplung",
+      "name_en": "Trailer hitch",
+      "group": "PG-ACC-TRL",
+      "positions": [
+        "rear"
+      ],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        14.0,
+        32.0
+      ],
+      "length_mm": [
+        900,
+        1400
+      ],
+      "width_mm": [
+        500,
+        900
+      ],
+      "height_mm": [
+        300,
+        600
+      ],
+      "price": [
+        189.0,
+        749.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "pallet",
+      "warranty": 24,
+      "hazardous": false,
+      "etim_class": "EC004738"
+    },
+    {
+      "code": "jumper_cable",
+      "name_de": "Starthilfekabel",
+      "name_en": "Jumper cable",
+      "group": "PG-ELC-BAT",
+      "positions": [],
+      "materials": [
+        "copper",
+        "plastic"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.6,
+        2.8
+      ],
+      "length_mm": [
+        2500,
+        4500
+      ],
+      "price": [
+        12.9,
+        59.0
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 12,
+      "hazardous": false,
+      "nominal_current_a": [
+        80,
+        400
+      ],
+      "etim_class": "EC004141"
+    },
+    {
+      "code": "wheel_bolt",
+      "name_de": "Radschraube",
+      "name_en": "Wheel bolt",
+      "group": "PG-WHL",
+      "positions": [],
+      "materials": [
+        "steel"
+      ],
+      "quality_tiers": [
+        "oe",
+        "premium",
+        "standard"
+      ],
+      "weight_kg": [
+        0.06,
+        0.16
+      ],
+      "length_mm": [
+        40,
+        70
+      ],
+      "price": [
+        1.2,
+        6.9
+      ],
+      "dims": [
+        "length_mm",
+        "thread_size"
+      ],
+      "packaging": "bag",
+      "warranty": 12,
+      "hazardous": false,
+      "torque_nm": [
+        110,
+        160
+      ]
+    },
+    {
+      "code": "tyre_summer",
+      "name_de": "Sommerreifen",
+      "name_en": "Summer tyre",
+      "group": "PG-WHL",
+      "positions": [],
+      "materials": [
+        "rubber"
+      ],
+      "quality_tiers": [
+        "premium",
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        7.5,
+        14.5
+      ],
+      "length_mm": [
+        560,
+        780
+      ],
+      "width_mm": [
+        175,
+        285
+      ],
+      "height_mm": [
+        560,
+        780
+      ],
+      "price": [
+        49.0,
+        289.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 12,
+      "hazardous": false
+    },
+    {
+      "code": "shop_towel",
+      "name_de": "Werkstattrolle",
+      "name_en": "Workshop roll",
+      "group": "PG-WKS",
+      "positions": [],
+      "materials": [
+        "textile"
+      ],
+      "quality_tiers": [
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.4,
+        1.2
+      ],
+      "length_mm": [
+        200,
+        400
+      ],
+      "price": [
+        1.9,
+        9.9
+      ],
+      "dims": [
+        "length_mm"
+      ],
+      "packaging": "piece",
+      "warranty": 0,
+      "hazardous": false
+    },
+    {
+      "code": "gloves_nitrile",
+      "name_de": "Nitrilhandschuhe",
+      "name_en": "Nitrile gloves",
+      "group": "PG-WKS",
+      "positions": [],
+      "materials": [
+        "composite"
+      ],
+      "quality_tiers": [
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.05,
+        0.3
+      ],
+      "price": [
+        4.9,
+        24.0
+      ],
+      "dims": [],
+      "packaging": "carton",
+      "warranty": 0,
+      "hazardous": false
+    },
+    {
+      "code": "seat_cover",
+      "name_de": "Sitzbezug",
+      "name_en": "Seat cover",
+      "group": "PG-INT",
+      "positions": [],
+      "materials": [
+        "textile",
+        "composite"
+      ],
+      "quality_tiers": [
+        "standard",
+        "budget"
+      ],
+      "weight_kg": [
+        0.5,
+        2.2
+      ],
+      "length_mm": [
+        400,
+        900
+      ],
+      "width_mm": [
+        300,
+        600
+      ],
+      "height_mm": [
+        100,
+        300
+      ],
+      "price": [
+        14.9,
+        89.0
+      ],
+      "dims": [
+        "length_mm",
+        "width_mm",
+        "height_mm"
+      ],
+      "packaging": "carton",
+      "warranty": 12,
+      "hazardous": false
+    }
+  ],
+  "class_features": [
+    {
+      "group": "PG-BRK-PAD",
+      "features": [
+        {
+          "attribute": "width_mm",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "height_mm",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 3
+        },
+        {
+          "attribute": "material",
+          "required": true,
+          "position": 4
+        },
+        {
+          "attribute": "part_position",
+          "required": false,
+          "position": 5
+        }
+      ]
+    },
+    {
+      "group": "PG-BRK-DISC",
+      "features": [
+        {
+          "attribute": "length_mm",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "height_mm",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 3
+        },
+        {
+          "attribute": "tightening_torque_nm",
+          "required": false,
+          "position": 4
+        }
+      ]
+    },
+    {
+      "group": "PG-ELC-BAT",
+      "features": [
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "operating_voltage_v",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "hazardous",
+          "required": true,
+          "position": 3
+        }
+      ]
+    },
+    {
+      "group": "PG-EV-WB",
+      "features": [
+        {
+          "attribute": "charging_power_kw",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "operating_voltage_v",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "nominal_current_a",
+          "required": true,
+          "position": 3
+        },
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 4
+        },
+        {
+          "attribute": "output_voltage_range",
+          "required": false,
+          "position": 5
+        }
+      ]
+    },
+    {
+      "group": "PG-EV-CBL",
+      "features": [
+        {
+          "attribute": "cable_length_m",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "nominal_current_a",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 3
+        }
+      ]
+    },
+    {
+      "group": "PG-ELC-LGT",
+      "features": [
+        {
+          "attribute": "operating_voltage_v",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "power_w",
+          "required": true,
+          "position": 2
+        }
+      ]
+    },
+    {
+      "group": "PG-CON-OIL",
+      "features": [
+        {
+          "attribute": "volume_l",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "hazardous",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "temperature_range",
+          "required": false,
+          "position": 3
+        }
+      ]
+    },
+    {
+      "group": "PG-CHS-SHK",
+      "features": [
+        {
+          "attribute": "length_mm",
+          "required": true,
+          "position": 1
+        },
+        {
+          "attribute": "weight_kg",
+          "required": true,
+          "position": 2
+        },
+        {
+          "attribute": "part_position",
+          "required": false,
+          "position": 3
+        }
+      ]
+    },
+    {
+      "group": "PG-WKS-TLS",
+      "features": [
+        {
+          "attribute": "length_mm",
+          "required": false,
+          "position": 1
+        },
+        {
+          "attribute": "weight_kg",
+          "required": false,
+          "position": 2
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "Bremsen-Sortiment",
+      "note": "Alle Artikel der Baugruppe Bremsanlage",
+      "size": 260
+    },
+    {
+      "name": "Neuheiten Q3 2026",
+      "note": "Neu aufgenommene Artikel",
+      "size": 180
+    },
+    {
+      "name": "Schnelldreher Werkstatt",
+      "note": "Meistverkaufte Werkstattartikel",
+      "size": 320
+    },
+    {
+      "name": "E-Mobilität Ladepaket",
+      "note": "Wallboxen, Ladekabel und Zubehör",
+      "size": 120
+    }
+  ],
+  "saved_searches": [
+    {
+      "name": "Bremsscheiben ohne Gewicht",
+      "note": "Produkte ohne Gewichtsangabe",
+      "query": {
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.weight_kg",
+              "operator": "is_null"
+            }
+          ]
+        },
+        "limit": 100,
+        "sort": [
+          {
+            "field": "attributes.name",
+            "order": "asc"
+          }
+        ]
+      }
+    },
+    {
+      "name": "E-Mobilität ohne Ladeleistung",
+      "note": "Ladeartikel ohne gepflegte Ladeleistung",
+      "query": {
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.charging_power_kw",
+              "operator": "is_null"
+            }
+          ]
+        },
+        "limit": 100
+      }
+    },
+    {
+      "name": "Preis über 100 EUR in OE-Qualität",
+      "note": "Hochpreisige Originalteile",
+      "query": {
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "attributes.net_price",
+              "operator": "gt",
+              "value": 100
+            },
+            {
+              "field": "attributes.quality_tier",
+              "operator": "eq",
+              "value": "oe"
+            }
+          ]
+        },
+        "limit": 100,
+        "sort": [
+          {
+            "field": "attributes.net_price",
+            "order": "desc"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Veröffentlichte Artikel ohne Werkstoff",
+      "note": "Datenpflege: Werkstoff fehlt bei veroeffentlichten Artikeln",
+      "query": {
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "attributes.material",
+              "operator": "is_null"
+            },
+            {
+              "field": "attributes.net_price",
+              "operator": "not_empty"
+            }
+          ]
+        },
+        "limit": 100
+      }
+    },
+    {
+      "name": "Gefahrgut im Sortiment",
+      "note": "Artikel mit Gefahrgutkennzeichnung",
+      "query": {
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "attributes.hazardous",
+              "operator": "eq",
+              "value": true
+            }
+          ]
+        },
+        "limit": 100,
+        "sort": [
+          {
+            "field": "attributes.name",
+            "order": "asc"
+          }
+        ]
+      }
+    }
+  ],
+  "makes": [
+    {
+      "code": "vw",
+      "name": "Volkswagen",
+      "country": "DE",
+      "oe_format": "{p} {n3} {n3} {L}",
+      "oe_prefixes": [
+        "1K0",
+        "5Q0",
+        "3C0",
+        "1J0"
+      ],
+      "models": [
+        {
+          "code": "golf",
+          "name": "Golf",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "VII|2012|2019|MQB",
+            "VIII|2019|2024|MQB Evo"
+          ]
+        },
+        {
+          "code": "passat",
+          "name": "Passat",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "B7|2010|2015|PQ46",
+            "B8|2015|2023|MQB"
+          ]
+        },
+        {
+          "code": "polo",
+          "name": "Polo",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "V|2009|2017|PQ25",
+            "VI|2017|2024|MQB A0"
+          ]
+        },
+        {
+          "code": "tiguan",
+          "name": "Tiguan",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2016|2023|MQB",
+            "III|2023|2025|MQB Evo"
+          ]
+        },
+        {
+          "code": "transporter",
+          "name": "Transporter",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "T6|2015|2019|PQ35",
+            "T6.1|2019|2024|PQ35"
+          ]
+        },
+        {
+          "code": "id3",
+          "name": "ID.3",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2020|2024|MEB"
+          ]
+        },
+        {
+          "code": "id4",
+          "name": "ID.4",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2020|2024|MEB"
+          ]
+        },
+        {
+          "code": "caddy",
+          "name": "Caddy",
+          "body_style": "van",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "IV|2015|2020|MQB",
+            "V|2020|2025|MQB"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "audi",
+      "name": "Audi",
+      "country": "DE",
+      "oe_format": "{p} {n3} {n3} {L}",
+      "oe_prefixes": [
+        "8V0",
+        "4G0",
+        "5F0",
+        "8W0"
+      ],
+      "models": [
+        {
+          "code": "a3",
+          "name": "A3",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "8V|2012|2020|MQB",
+            "8Y|2020|2024|MQB Evo"
+          ]
+        },
+        {
+          "code": "a4",
+          "name": "A4",
+          "body_style": "estate",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "B8|2008|2015|MLB",
+            "B9|2015|2023|MLB Evo"
+          ]
+        },
+        {
+          "code": "a6",
+          "name": "A6",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "C7|2011|2018|MLB",
+            "C8|2018|2024|MLB Evo"
+          ]
+        },
+        {
+          "code": "q3",
+          "name": "Q3",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "II|2018|2024|MQB"
+          ]
+        },
+        {
+          "code": "q5",
+          "name": "Q5",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2016|2024|MLB Evo"
+          ]
+        },
+        {
+          "code": "etron",
+          "name": "e-tron",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "GE|2019|2023|MLB Evo"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "bmw",
+      "name": "BMW",
+      "country": "DE",
+      "oe_format": "{n2} {n2} {n1} {n3} {n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "1er",
+          "name": "1er",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "F20|2011|2019|UKL",
+            "F40|2019|2024|UKL"
+          ]
+        },
+        {
+          "code": "3er",
+          "name": "3er",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "F30|2011|2019|CLAR",
+            "G20|2019|2024|CLAR"
+          ]
+        },
+        {
+          "code": "5er",
+          "name": "5er",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "F10|2010|2017|CLAR",
+            "G30|2017|2023|CLAR"
+          ]
+        },
+        {
+          "code": "x3",
+          "name": "X3",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "F25|2010|2017|CLAR",
+            "G01|2017|2024|CLAR"
+          ]
+        },
+        {
+          "code": "i3",
+          "name": "i3",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I01|2013|2022|LifeDrive"
+          ]
+        },
+        {
+          "code": "mini",
+          "name": "Mini",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "electric"
+          ],
+          "generations": [
+            "F56|2014|2024|UKL"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "mercedes",
+      "name": "Mercedes-Benz",
+      "country": "DE",
+      "oe_format": "A {n3} {n3} {n2} {n2}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "a_class",
+          "name": "A-Klasse",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "W176|2012|2018|MFA",
+            "W177|2018|2024|MFA2"
+          ]
+        },
+        {
+          "code": "c_class",
+          "name": "C-Klasse",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "W205|2014|2021|MRA",
+            "W206|2021|2024|MRA2"
+          ]
+        },
+        {
+          "code": "e_class",
+          "name": "E-Klasse",
+          "body_style": "estate",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "W213|2016|2023|MRA",
+            "W214|2023|2025|MRA2"
+          ]
+        },
+        {
+          "code": "glc",
+          "name": "GLC",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "X253|2015|2022|MRA",
+            "X254|2022|2025|MRA2"
+          ]
+        },
+        {
+          "code": "sprinter",
+          "name": "Sprinter",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "W906|2006|2018|NCV3",
+            "W907|2018|2025|VS30"
+          ]
+        },
+        {
+          "code": "eqc",
+          "name": "EQC",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "N293|2019|2024|EVA"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "opel",
+      "name": "Opel",
+      "country": "DE",
+      "oe_format": "{n3} {n3} {n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "astra",
+          "name": "Astra",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "J|2009|2015|Delta",
+            "K|2015|2021|EMP2",
+            "L|2021|2025|EMP2"
+          ]
+        },
+        {
+          "code": "corsa",
+          "name": "Corsa",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "D|2006|2014|Gamma",
+            "E|2014|2019|Gamma",
+            "F|2019|2025|CMP"
+          ]
+        },
+        {
+          "code": "insignia",
+          "name": "Insignia",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "A|2008|2017|Epsilon",
+            "B|2017|2022|E2"
+          ]
+        },
+        {
+          "code": "mokka",
+          "name": "Mokka",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "A|2012|2019|Gamma",
+            "B|2020|2025|CMP"
+          ]
+        },
+        {
+          "code": "vivaro",
+          "name": "Vivaro",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "B|2014|2019|EMP2",
+            "C|2019|2024|EMP2"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "ford",
+      "name": "Ford",
+      "country": "US",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "focus",
+          "name": "Focus",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "III|2011|2018|C1",
+            "IV|2018|2025|C2"
+          ]
+        },
+        {
+          "code": "fiesta",
+          "name": "Fiesta",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "VI|2008|2017|B",
+            "VII|2017|2023|B"
+          ]
+        },
+        {
+          "code": "kuga",
+          "name": "Kuga",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2012|2019|C1",
+            "III|2019|2025|C2"
+          ]
+        },
+        {
+          "code": "transit_custom",
+          "name": "Transit Custom",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "I|2012|2023|V362",
+            "II|2023|2025|V710"
+          ]
+        },
+        {
+          "code": "mustang",
+          "name": "Mustang",
+          "body_style": "coupe",
+          "fuel_types": [
+            "petrol"
+          ],
+          "generations": [
+            "VI|2014|2023|S550",
+            "VII|2023|2025|S650"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "skoda",
+      "name": "Skoda",
+      "country": "CZ",
+      "oe_format": "{p} {n3} {n3} {L}",
+      "oe_prefixes": [
+        "5E0",
+        "1Z0",
+        "3V0"
+      ],
+      "models": [
+        {
+          "code": "octavia",
+          "name": "Octavia",
+          "body_style": "estate",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "III|2012|2020|MQB",
+            "IV|2020|2025|MQB Evo"
+          ]
+        },
+        {
+          "code": "fabia",
+          "name": "Fabia",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "III|2014|2021|PQ26",
+            "IV|2021|2025|MQB A0"
+          ]
+        },
+        {
+          "code": "superb",
+          "name": "Superb",
+          "body_style": "sedan",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "III|2015|2023|MQB",
+            "IV|2023|2025|MQB Evo"
+          ]
+        },
+        {
+          "code": "kodiaq",
+          "name": "Kodiaq",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "I|2016|2023|MQB",
+            "II|2023|2025|MQB Evo"
+          ]
+        },
+        {
+          "code": "enyaq",
+          "name": "Enyaq",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "iV|2020|2025|MEB"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "seat",
+      "name": "SEAT",
+      "country": "ES",
+      "oe_format": "{p} {n3} {n3} {L}",
+      "oe_prefixes": [
+        "5F0",
+        "6J0",
+        "5P0"
+      ],
+      "models": [
+        {
+          "code": "leon",
+          "name": "Leon",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "III|2012|2020|MQB",
+            "IV|2020|2025|MQB Evo"
+          ]
+        },
+        {
+          "code": "ibiza",
+          "name": "Ibiza",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "IV|2008|2017|PQ25",
+            "V|2017|2025|MQB A0"
+          ]
+        },
+        {
+          "code": "ateca",
+          "name": "Ateca",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "I|2016|2025|MQB"
+          ]
+        },
+        {
+          "code": "arona",
+          "name": "Arona",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "I|2017|2025|MQB A0"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "renault",
+      "name": "Renault",
+      "country": "FR",
+      "oe_format": "{n3} {n3} {n4} {L}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "clio",
+          "name": "Clio",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "hybrid"
+          ],
+          "generations": [
+            "IV|2012|2019|CMF A",
+            "V|2019|2025|CMF B"
+          ]
+        },
+        {
+          "code": "megane",
+          "name": "Megane",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "IV|2015|2022|CMF C",
+            "V|2022|2025|CMF C"
+          ]
+        },
+        {
+          "code": "captur",
+          "name": "Captur",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "I|2013|2019|CMF B",
+            "II|2019|2025|CMF B"
+          ]
+        },
+        {
+          "code": "zoe",
+          "name": "Zoe",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2012|2019|Z.E.",
+            "II|2019|2024|Z.E. 2"
+          ]
+        },
+        {
+          "code": "trafic",
+          "name": "Trafic",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "III|2014|2021|X82",
+            "IV|2021|2025|X82"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "peugeot",
+      "name": "Peugeot",
+      "country": "FR",
+      "oe_format": "{n4} {n3} {n2}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "208",
+          "name": "208",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "I|2012|2019|PF1",
+            "II|2019|2025|CMP"
+          ]
+        },
+        {
+          "code": "308",
+          "name": "308",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2013|2021|EMP2",
+            "III|2021|2025|EMP2"
+          ]
+        },
+        {
+          "code": "3008",
+          "name": "3008",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2016|2023|EMP2",
+            "III|2023|2025|STLA"
+          ]
+        },
+        {
+          "code": "partner",
+          "name": "Partner",
+          "body_style": "van",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "II|2008|2018|PF2",
+            "III|2018|2025|EMP2"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "citroen",
+      "name": "Citroen",
+      "country": "FR",
+      "oe_format": "{n4} {n3} {n2}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "c3",
+          "name": "C3",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "II|2009|2016|PF1",
+            "III|2016|2024|CMP"
+          ]
+        },
+        {
+          "code": "c4",
+          "name": "C4",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "II|2010|2018|PF2",
+            "III|2020|2025|CMP"
+          ]
+        },
+        {
+          "code": "berlingo",
+          "name": "Berlingo",
+          "body_style": "van",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "II|2008|2018|PF2",
+            "III|2018|2025|EMP2"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "toyota",
+      "name": "Toyota",
+      "country": "JP",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "corolla",
+          "name": "Corolla",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "hybrid"
+          ],
+          "generations": [
+            "E170|2013|2019|MC",
+            "E210|2019|2025|GA-C"
+          ]
+        },
+        {
+          "code": "yaris",
+          "name": "Yaris",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "hybrid"
+          ],
+          "generations": [
+            "XP130|2011|2020|B",
+            "XP210|2020|2025|GA-B"
+          ]
+        },
+        {
+          "code": "rav4",
+          "name": "RAV4",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "hybrid",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "XA40|2012|2018|MC",
+            "XA50|2018|2025|GA-K"
+          ]
+        },
+        {
+          "code": "hilux",
+          "name": "Hilux",
+          "body_style": "pickup",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "VIII|2015|2025|IMV"
+          ]
+        },
+        {
+          "code": "prius",
+          "name": "Prius",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "hybrid",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "IV|2015|2022|GA-C",
+            "V|2022|2025|GA-C"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "nissan",
+      "name": "Nissan",
+      "country": "JP",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "qashqai",
+          "name": "Qashqai",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "hybrid"
+          ],
+          "generations": [
+            "J11|2013|2021|CMF",
+            "J12|2021|2025|CMF"
+          ]
+        },
+        {
+          "code": "micra",
+          "name": "Micra",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "K13|2010|2017|V",
+            "K14|2017|2023|V"
+          ]
+        },
+        {
+          "code": "leaf",
+          "name": "Leaf",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "ZE0|2010|2017|EV",
+            "ZE1|2017|2025|EV"
+          ]
+        },
+        {
+          "code": "x_trail",
+          "name": "X-Trail",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "hybrid"
+          ],
+          "generations": [
+            "T32|2013|2021|CMF",
+            "T33|2021|2025|CMF"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "hyundai",
+      "name": "Hyundai",
+      "country": "KR",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "i30",
+          "name": "i30",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "GD|2011|2017|J",
+            "PD|2017|2024|K2"
+          ]
+        },
+        {
+          "code": "tucson",
+          "name": "Tucson",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "hybrid",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "TL|2015|2020|J",
+            "NX4|2020|2025|N3"
+          ]
+        },
+        {
+          "code": "ioniq5",
+          "name": "Ioniq 5",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "NE|2021|2025|E-GMP"
+          ]
+        },
+        {
+          "code": "kona",
+          "name": "Kona",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "hybrid",
+            "electric"
+          ],
+          "generations": [
+            "OS|2017|2023|B",
+            "SX2|2023|2025|K3"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "kia",
+      "name": "Kia",
+      "country": "KR",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "ceed",
+          "name": "Ceed",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "JD|2012|2018|J",
+            "CD|2018|2025|K2"
+          ]
+        },
+        {
+          "code": "sportage",
+          "name": "Sportage",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "hybrid",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "QL|2015|2021|J",
+            "NQ5|2021|2025|N3"
+          ]
+        },
+        {
+          "code": "niro",
+          "name": "Niro",
+          "body_style": "suv",
+          "fuel_types": [
+            "hybrid",
+            "plugin_hybrid",
+            "electric"
+          ],
+          "generations": [
+            "DE|2016|2022|J",
+            "SG2|2022|2025|K3"
+          ]
+        },
+        {
+          "code": "ev6",
+          "name": "EV6",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "CV|2021|2025|E-GMP"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "volvo",
+      "name": "Volvo",
+      "country": "SE",
+      "oe_format": "{n6} {n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "xc40",
+          "name": "XC40",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "hybrid",
+            "electric"
+          ],
+          "generations": [
+            "I|2017|2025|CMA"
+          ]
+        },
+        {
+          "code": "xc60",
+          "name": "XC60",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2017|2025|SPA"
+          ]
+        },
+        {
+          "code": "v60",
+          "name": "V60",
+          "body_style": "estate",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "plugin_hybrid"
+          ],
+          "generations": [
+            "II|2018|2025|SPA"
+          ]
+        },
+        {
+          "code": "ex30",
+          "name": "EX30",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2024|2025|SEA"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "mazda",
+      "name": "Mazda",
+      "country": "JP",
+      "oe_format": "{n5}-{n5}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "mazda3",
+          "name": "Mazda3",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "BM|2013|2019|Skyactiv",
+            "BP|2019|2025|Skyactiv-V"
+          ]
+        },
+        {
+          "code": "cx5",
+          "name": "CX-5",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel"
+          ],
+          "generations": [
+            "KE|2012|2017|Skyactiv",
+            "KF|2017|2025|Skyactiv-V"
+          ]
+        },
+        {
+          "code": "mx5",
+          "name": "MX-5",
+          "body_style": "convertible",
+          "fuel_types": [
+            "petrol"
+          ],
+          "generations": [
+            "ND|2015|2025|Skyactiv"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "fiat",
+      "name": "Fiat",
+      "country": "IT",
+      "oe_format": "{n5}{n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "500",
+          "name": "500",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "electric"
+          ],
+          "generations": [
+            "312|2007|2020|Mini",
+            "332|2020|2025|EV"
+          ]
+        },
+        {
+          "code": "panda",
+          "name": "Panda",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "lpg",
+            "hybrid"
+          ],
+          "generations": [
+            "319|2011|2025|Mini"
+          ]
+        },
+        {
+          "code": "ducato",
+          "name": "Ducato",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel",
+            "electric"
+          ],
+          "generations": [
+            "X250|2006|2014|Sevel",
+            "X290|2014|2025|Sevel"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "dacia",
+      "name": "Dacia",
+      "country": "RO",
+      "oe_format": "{n5}{n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "duster",
+          "name": "Duster",
+          "body_style": "suv",
+          "fuel_types": [
+            "petrol",
+            "diesel",
+            "lpg"
+          ],
+          "generations": [
+            "I|2010|2017|B0",
+            "II|2017|2024|CMF B",
+            "III|2024|2026|CMF B"
+          ]
+        },
+        {
+          "code": "sandero",
+          "name": "Sandero",
+          "body_style": "hatchback",
+          "fuel_types": [
+            "petrol",
+            "lpg"
+          ],
+          "generations": [
+            "II|2012|2020|B0",
+            "III|2020|2025|CMF B"
+          ]
+        },
+        {
+          "code": "jogger",
+          "name": "Jogger",
+          "body_style": "estate",
+          "fuel_types": [
+            "petrol",
+            "hybrid",
+            "lpg"
+          ],
+          "generations": [
+            "I|2021|2025|CMF B"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "tesla",
+      "name": "Tesla",
+      "country": "US",
+      "oe_format": "{n4}-{n4}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "model3",
+          "name": "Model 3",
+          "body_style": "sedan",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2017|2023|S3X",
+            "II|2023|2025|S3X"
+          ]
+        },
+        {
+          "code": "modely",
+          "name": "Model Y",
+          "body_style": "suv",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2020|2025|S3X"
+          ]
+        },
+        {
+          "code": "models",
+          "name": "Model S",
+          "body_style": "sedan",
+          "fuel_types": [
+            "electric"
+          ],
+          "generations": [
+            "I|2012|2021|SX",
+            "Plaid|2021|2025|SX"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "man",
+      "name": "MAN",
+      "country": "DE",
+      "oe_format": "{n3} {n3} {n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "tge",
+          "name": "TGE",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "I|2017|2024|TGE",
+            "II|2024|2026|TGE"
+          ]
+        },
+        {
+          "code": "tgl",
+          "name": "TGL",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel"
+          ],
+          "generations": [
+            "I|2005|2025|L2000"
+          ]
+        }
+      ]
+    },
+    {
+      "code": "iveco",
+      "name": "Iveco",
+      "country": "IT",
+      "oe_format": "{n5}{n3}",
+      "oe_prefixes": [],
+      "models": [
+        {
+          "code": "daily",
+          "name": "Daily",
+          "body_style": "van",
+          "fuel_types": [
+            "diesel",
+            "cng",
+            "electric"
+          ],
+          "generations": [
+            "VI|2014|2019|Daily",
+            "VII|2019|2025|Daily"
+          ]
+        }
+      ]
+    }
+  ]
+}

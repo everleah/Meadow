@@ -416,6 +416,10 @@ async fn relation_definitions_section(
         result.push(json!({
             "name": as_str(&definition, "name").unwrap_or_default(),
             "kind": as_str(&definition, "kind").unwrap_or_default(),
+            // The usage classification must travel with the model: without it a
+            // category dimension degrades to `link` on re-import
+            // (`plan/detail/demodaten-generator.md`, section 3.2).
+            "role": crate::api::references::role_of(&definition),
             "source_types": Value::Array(
                 as_string_array(&definition, "source_types").into_iter().map(Value::from).collect()
             ),
@@ -1863,6 +1867,55 @@ async fn apply_attribute_definitions(
 
 // -- relation definitions ----------------------------------------------------
 
+/// Builds the stored form of one MCF relation-definition entry.
+///
+/// The **usage** (`role`) is part of the model: the section used to drop it, so
+/// a round-trip turned every additional category dimension into a plain
+/// `link` (`plan/detail/demodaten-generator.md`, section 3.2). Custom types are
+/// always aggregations and may only be `link` or `category`
+/// (`plan/detail/relationen.md`), so the role is validated and `kind` derived
+/// from it instead of being trusted.
+fn relation_definition_content(entry: &Value, system: bool) -> Result<Value, ApiError> {
+    use crate::api::references::{
+        DEFAULT_ROLE, ROLE_CATEGORY, ROLE_COLLECTION, ROLE_COMPOSITION, ROLE_LINK, custom_role,
+    };
+
+    let stored = entry
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|role| !role.is_empty());
+    let role = if system {
+        match stored {
+            None => DEFAULT_ROLE,
+            Some(role)
+                if [ROLE_COMPOSITION, ROLE_CATEGORY, ROLE_COLLECTION, ROLE_LINK]
+                    .contains(&role) =>
+            {
+                role
+            }
+            Some(other) => {
+                return Err(ApiError::bad_request(format!(
+                    "unknown role `{other}` (expected one of {})",
+                    [ROLE_COMPOSITION, ROLE_CATEGORY, ROLE_COLLECTION, ROLE_LINK].join(", ")
+                )));
+            }
+        }
+    } else {
+        custom_role(stored)?
+    };
+    Ok(json!({
+        "name": as_str(entry, "name").unwrap_or_default(),
+        "kind": if role == ROLE_COMPOSITION { "composition" } else { "aggregation" },
+        "role": role,
+        "source_types": entry.get("source_types").cloned().unwrap_or_else(|| json!([])),
+        "target_types": entry.get("target_types").cloned().unwrap_or_else(|| json!([])),
+        "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
+        "attributes": entry.get("attributes").cloned().unwrap_or_else(|| json!([])),
+        "system": system,
+    }))
+}
+
 async fn apply_relation_definitions(
     db: &crate::db::Db,
     mode: Mode,
@@ -1876,15 +1929,31 @@ async fn apply_relation_definitions(
         };
         let name = name.to_owned();
         let system = as_bool(entry, "system");
-        let content = json!({
-            "name": name,
-            "kind": as_str(entry, "kind").unwrap_or("aggregation"),
-            "source_types": entry.get("source_types").cloned().unwrap_or_else(|| json!([])),
-            "target_types": entry.get("target_types").cloned().unwrap_or_else(|| json!([])),
-            "label": entry.get("label").cloned().unwrap_or_else(|| json!({})),
-            "attributes": entry.get("attributes").cloned().unwrap_or_else(|| json!([])),
-            "system": system,
-        });
+        let content = match relation_definition_content(entry, system) {
+            Ok(content) => content,
+            Err(error) => {
+                report.error("relation_definitions", &name, error.message());
+                continue;
+            }
+        };
+        // Same rule as `POST /relation-definitions`: an explicit target list of a
+        // category type may only name registered taxonomy node types. A dry run
+        // cannot see the document's own `object_types` section (it is applied
+        // before this one), so the cross-section check only runs on a real apply.
+        if mode != Mode::DryRun {
+            let role = content
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or(crate::api::references::DEFAULT_ROLE)
+                .to_owned();
+            let target_types = as_string_array(&content, "target_types");
+            if let Err(error) =
+                crate::api::references::check_role_target_types(db, &role, &target_types).await
+            {
+                report.error("relation_definitions", &name, error.message());
+                continue;
+            }
+        }
 
         let key = format!("rel_{name}");
         match fetch_by_field(db, "relation_definition", "name", &name).await? {
@@ -2347,5 +2416,64 @@ mod tests {
             "an absent field stays absent"
         );
         assert_eq!(entries[3], json!("not an object"));
+    }
+
+    #[test]
+    fn relation_definition_role_travels_with_the_model() {
+        // The section used to drop `role`, which silently degraded an additional
+        // category dimension to `link` on re-import.
+        let entry = json!({
+            "name": "part_group_member",
+            "kind": "aggregation",
+            "role": "category",
+            "target_types": ["part_group"],
+            "label": { "de": "Baugruppen-Zuordnung" },
+            "attributes": ["position"],
+        });
+        let content = relation_definition_content(&entry, false).expect("valid entry");
+        assert_eq!(content["role"], json!("category"));
+        assert_eq!(content["kind"], json!("aggregation"));
+        assert_eq!(content["target_types"], json!(["part_group"]));
+        assert_eq!(content["attributes"], json!(["position"]));
+        assert_eq!(content["system"], json!(false));
+    }
+
+    #[test]
+    fn relation_definition_defaults_and_normalises_the_role() {
+        let entry = json!({ "name": "related_x", "kind": "composition" });
+        let content = relation_definition_content(&entry, false).expect("default role");
+        assert_eq!(content["role"], json!(crate::api::references::DEFAULT_ROLE));
+        assert_eq!(
+            content["kind"],
+            json!("aggregation"),
+            "custom types are always aggregations, the kind is derived from the role"
+        );
+    }
+
+    #[test]
+    fn relation_definition_rejects_reserved_roles_for_custom_types() {
+        for role in ["composition", "collection", "nonsense"] {
+            let entry = json!({ "name": "x", "role": role });
+            assert!(
+                relation_definition_content(&entry, false).is_err(),
+                "role `{role}` must be rejected for custom types"
+            );
+        }
+    }
+
+    #[test]
+    fn relation_definition_keeps_system_roles() {
+        let entry = json!({
+            "name": "depends_on",
+            "kind": "aggregation",
+            "role": "composition",
+            "system": true,
+        });
+        let content = relation_definition_content(&entry, true).expect("system entry");
+        assert_eq!(content["role"], json!("composition"));
+        assert_eq!(content["kind"], json!("composition"));
+
+        let unknown = json!({ "name": "x", "role": "nope", "system": true });
+        assert!(relation_definition_content(&unknown, true).is_err());
     }
 }

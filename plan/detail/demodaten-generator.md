@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration-und-eventsystem))
 - **Relevante Phasen:** Phase 8, 9 (Werkzeug und Datenbestand für Vorführung, Handbuch und Lasttests)
-- **Stand:** Entwurf (Planung; Generator und Katalogdaten noch nicht umgesetzt)
+- **Stand:** Stufen 1+2 **umgesetzt** (Katalog, Generator, Tests, Modell-Dry-Run fehlerfrei; MCF-`role`-Lücke geschlossen 2026-09-15); offen: Importer (Stufe 3), Extras-Einspielung, `perf`/Turbo, Doku-Verweise
 
 ## 1. Zweck
 
@@ -24,7 +24,7 @@ Ziel dieses Dokuments ist ein **reproduzierbarer Generator** für synthetische A
 | --- | --- | --- | --- |
 | **VW OKAPI** | OEM-Teiledaten | Genehmigungs- und Lizenzlage unklar | **Nicht verwenden** |
 | **TecDoc / TecAlliance** | Kfz-Teile-Klassifikation, OE-Nummern | kommerziell | **Nicht verwenden** |
-| **`auto-parts-db`** (npm, `lifeofcapo/car-list`) | 142 Marken, 2379 Modelle mit Generationen (ab 1968), 1530 Teile | Paket **MIT** (npm-Registry verifiziert); Herkunft der Daten nicht dokumentiert | **Optional** als Anreicherung: nur lokal unter `resources/automotive/` (gitignored), **nie** Build-, Test- oder Gate-Abhängigkeit |
+| **`auto-parts-db`** (npm, `lifeofcapo/car-list`) | 142 Marken, 2379 Modelle mit Generationen (ab 1968), 1530 Teile | Paket **MIT** (npm-Registry verifiziert); Herkunft der Daten nicht dokumentiert | **Nicht verwendet** (Entscheidung 2026-09-15: eigene Stammdatenliste) |
 | **NHTSA vPIC** | US-Marken/Modelle (public domain) | frei, aber US-lastig | nicht nötig (nur als Notiz) |
 | **Wikidata** | Marken/Modelle (CC0) | frei | optionale Ergänzung |
 | **ETIM 10.0 IXF** (bereits lokal) | 5640 Klassen, 17 377 Merkmale, 18 Feature-Gruppen | ETIM-Lizenz, `resources/` gitignored | **Klassifikations-Rückgrat** für den elektrotechnischen Sortimentsteil |
@@ -67,7 +67,7 @@ Die Fahrzeugkette (`vehicle_make` → `vehicle_model` → `vehicle_generation`, 
 | `rel_part_group_member` (neu, `role: category`, `target_types: ["part_group"]`) | `part_group` | technische Baugruppen-Gliederung (Grid-Filter, Zähler) |
 | `rel_etim_class_member` (neu, `role: category`, `target_types: ["etim_class"]`) | `etim_class` | trennt „Shopkategorie" von „ETIM-Klasse" (rein fachliche Zuordnung) |
 
-> **Offener Punkt (im Kern verifiziert):** Der **MCF-Import/Export überträgt `role` nicht** (`crates/pim-core/src/api/config.rs`: `relation_definitions_section` schreibt nur `name`/`kind`/`source_types`/`target_types`/`label`/`attributes`/`system`; `apply_relation_definitions` setzt kein `role`). Ein MCF-Roundtrip **degradiert eine Zusatz-Dimension still zu `role: link`** — dann funktionieren Dimension-Umschalter, `?definition_id=`-Filter und Zähler nicht mehr. Empfehlung: MCF-Sektion um `role` erweitern (inkl. derselben Rollenprüfung wie `POST /relation-definitions`) — kleine Änderung, echte Lücke, nicht nur Demo-Bedarf. Bis dahin: die beiden Dimensions-Typen per API anlegen (Schritt 2 des Einspielwegs).
+> **Geschlossen (2026-09-15, im Kern):** Der **MCF-Import/Export überträgt `role`** jetzt (`crates/pim-core/src/api/config.rs`: `relation_definitions_section` schreibt `role`, `relation_definition_content()` validiert Rolle und leitet `kind` daraus ab, `apply_relation_definitions` prüft zusätzlich `target_types` gegen registrierte Taxonomie-Typen; Details [konfiguration-export-import.md](konfiguration-export-import.md) §4.7). Vorher **degradierte ein MCF-Roundtrip jede Zusatz-Dimension still zu `role: link`** — Dimension-Umschalter, `?definition_id=`-Filter und Zähler fielen aus. Damit reisen beide Dimensionen in `model.mcf.json` mit (kein separater API-Schritt mehr); Voraussetzung ist, dass der Zieltyp als Taxonomie registriert ist — deshalb deklariert das Demo-Modell `etim_class` selbst (identisch zum Standardpaket), sonst bräuchte der Import das ETIM-Paket vorher.
 
 ### 3.3 Attribute (eigene Definitionen, ~45)
 
@@ -140,19 +140,19 @@ Die Datei ist **eigene Stammdatenliste** (keine Lizenzfrage); `auto-parts-db` ka
 
 | Datei | Inhalt | Zielweg |
 | --- | --- | --- |
-| `model.mcf.json` | `languages` (Prüfung), `channels`, `enum_sets`, `object_types`, `attribute_definitions`, `relation_definitions`, `business_rules`, `export_profiles`, `category_attributes` | `POST /config/import?mode=merge` (Admin) |
-| `dimensions.json` | die beiden `role: category`-Zusatztypen (bis MCF `role` trägt) | `POST /relation-definitions` |
+| `model.mcf.json` | `channels`, `attribute_groups`, `enum_sets`, `object_types` (inkl. `part_group`, `etim_class`), `attribute_definitions`, `relation_definitions` (8, inkl. der zwei `role: category`-Dimensionen), `business_rules`, `export_profiles` | `POST /config/import?mode=merge` (Admin), erst `?dry_run=true` |
+| `class-features.mcf.json` | nur `category_attributes` (Klassen-Merkmale der `part_group`-Knoten) — **nach** dem Datenimport, weil die Sektion Klassen über ihren Business-Key adressiert | `POST /config/import?sections=category_attributes` |
 | `data-<nn>.mef.json` | Objekte + Referenzen, in `--chunks` geschlossene Teildokumente | `POST /imports?emit_events=false&source=meadow-demo` je Chunk, parallel |
-| `extras.json` | Kanalfreigaben, Collections + Mitglieder, gespeicherte Suchen, Jobdefinitionen (Cron), Regel-Aktivierung | `PUT /objects/{id}/releases`, `POST /collections…`, `POST /saved-searches`, `POST /jobs`, `POST /rules/{id}/activate` |
-| `report.json` | erzeugte Zahlen je Typ/Relation, Optional-Lücken, Prüfsummen | Nachweis (wie `install_standard_bundle.py`) |
-| *(optional)* `data.surql` | SurrealDB-Export/Import-Datei | **nur** Turbo-Pfad für Lasttests (Abschnitt 5) |
+| `extras.json` | Kanalfreigaben, Collections + Mitglieder, gespeicherte Suchen, Jobdefinitionen (Cron), ETIM-Klassen-Zuordnung (per Business-Key), Regel-Aktivierung | `PUT /objects/{id}/releases`, `POST /collections…`, `POST /saved-searches`, `POST /jobs`, `POST /rules/{id}/activate` |
+| `report.json` | erzeugte Zahlen je Typ/Relation, Optional-Lücken, Katalogzahlen | Nachweis (wie `install_standard_bundle.py`), geprüft von `tests/test_demo_data.py` |
+| *(optional)* `data.surql` | SurrealDB-Import-Datei | **nur** Turbo-Pfad für Lasttests (Abschnitt 5) |
 
 ### 4.2 Einspielreihenfolge
 
 1. `POST /config/import?mode=merge` mit `model.mcf.json` (erst **dry_run** prüfen)
-2. Dimensions-Typen per `POST /relation-definitions` (bis MCF `role` trägt)
-3. Daten-Chunks parallel über `POST /imports` (Objekte zuerst, innerhalb des Chunks Referenzen danach)
-4. `extras.json` (Freigaben, Collections, Suchen, Jobs, Regeln aktivieren)
+2. Daten-Chunks parallel über `POST /imports` (die Chunks sind geschlossen; Referenzen laufen mit dem Chunk, der ihren Startknoten besitzt)
+3. `POST /config/import?sections=category_attributes` mit `class-features.mcf.json` (jetzt existieren die Klassenknoten)
+4. `extras.json` (Freigaben, Collections, Suchen, Jobs, ETIM-Klassen, Regeln aktivieren)
 5. Verifikation (`report.json` gegen die Ist-Zahlen aus `GET /objects/stats`, `GET /classification-standards?counts=true`, `GET /config/export`)
 
 **Idempotenz:** Jedes Objekt trägt ein stabiles `id` und zusätzlich die Quell-Referenz (`source: meadow-demo` plus `source_id`); der Worker gleicht Business-Key → Record-ID → Quell-Referenz ab und meldet je Objekt `created`/`updated`. Ein zweiter Lauf ist damit gefahrlos.
@@ -176,9 +176,13 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 
 | Profil | Objekte | Referenzen | Zweck | Weg |
 | --- | --- | --- | --- | --- |
-| `tiny` | ~400 | ~800 | Handbuchbilder, Smoke-Demo, Erstprüfung des Generators | 1 Chunk, < 1 min |
-| `demo` (Default) | ~7 000 | ~23 000 | Vorführung, Abnahme, Vollständigkeits-/Grid-/Export-Prüfung | 4–8 Chunks, ~15–20 min |
-| `perf` | 50 000 | 200 000 | Lasttest (`scripts/load_test.py`), Grid-/Stats-/Such-Optimierung | Turbo nötig |
+| `tiny` | 429 | 536 | Handbuchbilder, Smoke-Demo, Erstprüfung des Generators | 1 Chunk, < 1 min |
+| `demo` (Default) | **5 950** | **18 370** | Vorführung, Abnahme, Vollständigkeits-/Grid-/Export-Prüfung | 4 Chunks ≈ 11,5 MB, ~15–20 min Einspielung |
+| `perf` | ~60 000 | ~180 000 | Lasttest (`scripts/load_test.py`), Grid-/Stats-/Such-Optimierung | Turbo nötig |
+
+(Die Ist-Zahlen stammen aus `report.json` für Seed 42; `tiny`/`demo` sind gemessen, `perf` hochgerechnet.)
+
+**Generierungslauf (2026-09-15, lokal):** `demo` in wenigen Sekunden, 4 Chunks à ~2,9 MB, 18 370 Referenzen nach Kanten-Deduplizierung (`dedupe_references` — ohne sie entstehen bei kleinen Familien doppelte `alternative_to`-Kanten).
 
 **Turbo-Optionen (für `perf`, in dieser Reihenfolge):**
 
@@ -188,44 +192,48 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 
 ## 6. Werkzeug-Schnitt
 
-- **`scripts/demo_data.py`** (Generator + CLI, ein Modul wie die bestehenden Skripte; Tests laden es per `spec_from_file_location`):
-  `--profile tiny|demo|perf`, `--seed 42`, `--chunks 4`, `--out-dir .tmp/demo-data`, `--base-url http://127.0.0.1:8080`, `--user/--password`, `--dry-run` (nur Dateien schreiben), `--import` (einspielen), `--cleanup` (erzeugte Objekte soft-deleten), `--surql` (Turbo-Datei zusätzlich).
+- **`scripts/demo_data.py`** (Generator + CLI; Tests laden es per `spec_from_file_location`):
+  `--profile tiny|demo|perf`, `--seed 42`, `--chunks N` (0 = Profilwert), `--out-dir .tmp/demo-data`, `--catalog`, `--check` (nur Katalog prüfen). Stufe 3 ergänzt `--import`/`--cleanup`/`--surql`.
 - **`scripts/demo_data_catalog.json`** (Abschnitt 3.8) — Daten getrennt von Logik, damit Marken/Teile ohne Codeänderung wachsen.
-- **Konventionen:** Konsolen-UTF-8 (`configure_console()`, Windows cp1252-Falle), Login → MCF → Imports → Polling des `job_run`, Abschlussreport wie `install_standard_bundle.py`; Ausgaben unter `.tmp/` (gitignored), Scratch-Dateien nie im Repo.
-- **Abhängigkeiten:** nur `httpx` + Standardbibliothek (`random`, `json`, `argparse`) — **kein** npm, kein `auto-parts-db` im Pflichtpfad, **kein** Netzwerkzugriff im Normalbetrieb.
+- **Konventionen:** Konsolen-UTF-8 (`configure_console()`, Windows-cp1252-Falle), feste `created_at` für Byte-Determinismus, stabile Quell-IDs (`demo-<typ>-<key>`), Ausgaben unter `.tmp/` (gitignored).
+- **Abhängigkeiten:** nur Standardbibliothek im Generator (`random`, `json`, `argparse`); `httpx` erst für den Importer. **Kein** Netzwerkzugriff, kein npm.
 
 ## 7. Verifikation
 
-**Automatisiert (`tests/test_demo_data.py`, Teil des pytest-Gates):**
+**Umgesetzt (`tests/test_demo_data.py` — 24 Tests, Teil des pytest-Gates):** Determinismus (gleicher Seed ⇒ identische Objekte/Referenzen, anderer Seed ⇒ anders), Katalog-Konsistenz (inkl. Negativfall mit unbekannten Querverweisen), Profil-Skalierung, eindeutige Objekt- und Business-Keys, Referenz-Endpunkte innerhalb des Datensatzes, **geschlossene Chunks** (jede Referenz mit beiden Endpunkten im selben Dokument) inklusive Vollständigkeit der Abdeckung, deklarierte Relationstypen und Kanten-Attribute, Attributwerte gegen das Modell (Enum-Werte, `range` = `{from,to}`, Zahlen/Bools/Text, mehrsprachige Karten `de`/`en`), GTIN-Prüfziffern, Statuswerte, Modell-Abdeckung aller erzeugten Typen, `role: category`-Dimensionen im Modell, Klassen-Merkmale, **ETIM-Standardbindung** (die vier `standard_codes` existieren und gehören zu einer benutzten Klasse; skip ohne `resources/`), Report-Konsistenz, Extras (nur veröffentlichte Produkte freigegeben, Collections/Suchen/Klassen-Zuordnungen zeigen auf erzeugte Objekte), Dateiausgabe und beide CLI-Pfade (`--check`, Schreiben).
 
-- **Determinismus:** gleicher Seed → byte-identische Ausgabe; anderer Seed → andere Daten.
-- **Referenzielle Integrität:** jede Referenz hat beide Endpunkte im selben Chunk; keine Referenz auf unbekannte Objekt-ID; jede `product`-→`vehicle_generation`-Kante nur zwischen erlaubten Typen.
-- **Schlüssel:** keine doppelten `sku`/`code` innerhalb des Bestands; `is_key`-Attribute gesetzt.
-- **MEF/MCF-Wohlgeformtheit:** `objects`/`references` Arrays, `format_version`, Status nur aus `draft|in_review|approved|published|archived`, Attributnamen existieren als Definition, Enum-Werte im jeweiligen Set, `range`-Werte als `{from,to}`.
-- **Standardbindung:** jedes `standard_codes`-Ziel existiert im installierten Standard (`GET /classification-standards`), Klassen-Merkmale verweisen auf bekannte Attribute.
-- **Profilzahlen:** Objekt-/Referenzzahlen je Profil entsprechen dem Report (Schutz gegen stille Regressionen).
+**Noch offen (Stufen 3–4):**
+
+- **Live-E2E:** MCF-Merge + Chunk-Import + Extras gegen eine Instanz, `report.json` vs. `GET /objects/stats`, Idempotenz (zweiter Lauf ⇒ `updated` statt `created`).
 - **Optional (skip ohne `resources/`):** BMEcat-Validierung des Demo-Exports gegen die XSD — analog zur bestehenden optionalen ETIM-Prüfung.
 
 **Manuell (Abnahme-Checkliste, im Dokument zu führen):** Grid-Performance bei `demo`/`perf`, Dashboard-Zahlen (`incomplete_by_type`), Klassen-Merkmale im Produktformular, Dimensions-Umschalter auf `/categories`, Vererbung + „Vererbung konsolidieren", Kanalfreigaben + `?released_for=`, gespeicherte Suche, Collection-Refresh-Job, BMEcat-Export (XSD-valide), gespeichertes Export-Profil, `scripts/load_test.py` gegen `perf`.
 
 ## 8. Umsetzungsschritte
 
-1. **Katalog & Modell (Planung → Daten):** `demo_data_catalog.json` (Marken/Modelle/Generationen/Baugruppen/Teile-Familien/OE-Muster) und das MCF-Modell erzeugen; `POST /config/import?dry_run=true` muss fehlerfrei sein.
-2. **Generator-Kern:** Objekte + Referenzen deterministisch, Chunk-Bildung, `report.json`, `tests/test_demo_data.py` (Determinismus, Integrität, Zahlen).
-3. **Einspielweg:** Login/MCF/Imports/Extras/Verifikation als CLI, idempotent, inkl. `--cleanup`.
-4. **Regeln, Kanäle, Sammlungen, Suchen, Export-Profile**; Regel-Aktivierung und Freigaben im Demo plausibel mischen.
-5. **MCF-Lücke `role`** schließen (Relationstypen-Sektion + Tests + Doku) — sonst degradiert jede Zusatz-Dimension beim MCF-Roundtrip zu `link`.
-6. **`perf` + Turbo-Pfad** und Lasttest-Auswertung; Ergebnisse hier dokumentieren (Durchsatz, Flaschenhälse, ggf. Optimierungsauftrag).
-7. **DOX/Doku:** Root-`AGENTS.md` (Skripte), `docs/`-Verweis (Demo-Daten für Handbuchbilder), Handbuch-Kapitel „Demo-Daten", `plan/detail/AGENTS.md`/Hauptdokument-Änderungsnotiz.
+1. **Katalog & Modell (erledigt 2026-09-15):** `scripts/demo_data_catalog.json` (22 Marken, 93 Baureihen, 166 Generationen, 42 Baugruppen, 55 Teile-Familien, 13 Enum-Sets, 2 Export-Profile) und `build_model()` → `POST /config/import?dry_run=true` liefert **0 Fehler** (176 `created`, 4 `updated`).
+2. **Generator-Kern (erledigt 2026-09-15):** deterministische Objekte + Referenzen, geschlossene Chunks, `report.json`, `tests/test_demo_data.py` (24 Tests).
+3. **Einspielweg (offen, Stufe 3):** Login/MCF/Imports/Extras/Verifikation als CLI, idempotent, inkl. `--cleanup`.
+4. **Regeln, Kanäle, Sammlungen, Suchen, Export-Profile (Modelldaten erledigt):** im Modell und in `extras.json` enthalten; die Regel-**Aktivierung** und die Freigaben laufen über den Importer (Stufe 3).
+5. **MCF-Lücke `role` (erledigt 2026-09-15):** Sektion trägt die Rolle, Rollenprüfung + `kind`-Ableitung in `relation_definition_content()`, Taxonomie-Prüfung beim echten Apply (nicht im Dry-Run), 4 Kern-Unit-Tests; `plan/detail/konfiguration-export-import.md` §4.7 und `crates/AGENTS.md` nachgezogen.
+6. **`perf` + Turbo-Pfad (offen):** Lastprofil erzeugen, einspielen (parallele Chunks mit erhöhter `JOBS_CONCURRENCY`; optional `.surql`-Import nur für Lastdaten — **so entschieden**) und `scripts/load_test.py` auswerten; Ergebnisse hier dokumentieren.
+7. **DOX/Doku (teilweise erledigt):** Root-`AGENTS.md` (Skripte) und `plan/detail/AGENTS.md` aktualisiert; offen: `docs/`-Verweis für Handbuchbilder und ein Handbuch-Kapitel „Demo-Daten" (Stufe 4/5).
 
-## 9. Offene Entscheidungen
+## 9. Getroffene Entscheidungen und offene Punkte
 
-1. **Profil-Default:** `demo` mit ~7 000 Objekten/~23 000 Referenzen (Empfehlung) oder kleiner (`tiny` als Default, `demo` auf Abruf)?
-2. **`auto-parts-db`:** als optionale, gitignorierte Anreicherung zulassen (Empfehlung) oder ausschließlich eigene Stammdatenliste?
-3. **MCF-`role`-Lücke:** jetzt schließen (Empfehlung, kleine Änderung) oder Generator umgeht sie per API-Aufruf?
-4. **Turbo-Pfad für `perf`:** direkter SurrealDB-Import erlaubt (nur Lastdaten) oder ausschließlich über die API (dann `perf` mit mehreren Stunden Laufzeit)?
-5. **Reichweite:** nur Daten (MCF/MEF) oder auch die Extras (Freigaben, Collections, Suchen, Jobs, Regel-Aktivierung) im Generator?
-6. **Ablage der Stammdatenliste:** `scripts/` (Empfehlung, wie die übrigen Werkzeuge) oder neuer Top-Level-Ordner mit eigenem DOX-Knoten?
+**Entschieden (Auftraggeber, 2026-09-15):**
+
+1. **Profil-Default:** `demo` (tatsächlich 5 950 Objekte / 18 370 Referenzen, Seed 42); `tiny` für Handbuchbilder, `perf` für Lasttests.
+2. **Datenquelle:** **eigene** gepflegte Stammdatenliste in `scripts/demo_data_catalog.json`; `auto-parts-db` wird **nicht** verwendet (keine externe Abhängigkeit, keine Lizenzfrage).
+3. **MCF-`role`-Lücke:** geschlossen (Kern + Tests + Doku) — damit reisen die Kategorie-Dimensionen im Modelldokument.
+4. **Turbo-Pfad für `perf`:** zusätzlich zum API-Weg ist ein **direkter SurrealDB-Import nur für Lastdaten** erlaubt (klar gekennzeichneter Messbestand, nie Demo-/Abnahme-Daten).
+5. **Reichweite:** auch die Extras (Freigaben, Collections, Suchen, Jobs, Regel-Aktivierung) gehören zum Generator.
+6. **Ablage:** `scripts/` (wie die übrigen Werkzeuge).
+
+**Offen:**
+
+- Ob der Importer (Stufe 3) als Unterbefehl in `demo_data.py` oder als eigenes Skript entsteht (naheliegend: im selben Modul, damit Katalog → Dateien → Import eine Kette bleiben).
+- Ob die `perf`-Lastdaten in dieselbe Instanz wie die Demo-Daten oder in eine eigene Instanz/Datenbank gehen (Trennung hält die Demo-Zahlen interpretierbar).
 
 ## 10. Nicht-Ziele
 
