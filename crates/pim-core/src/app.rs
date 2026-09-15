@@ -192,6 +192,10 @@ pub fn router(state: AppState) -> Router {
                 .post(api::attribute_definitions::create_attribute_definition),
         )
         .route(
+            "/attribute-definitions/vocabulary",
+            get(api::attribute_definitions::list_attribute_vocabulary),
+        )
+        .route(
             "/attribute-definitions/{id}",
             get(api::attribute_definitions::get_attribute_definition)
                 .patch(api::attribute_definitions::update_attribute_definition)

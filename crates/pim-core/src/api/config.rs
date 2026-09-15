@@ -2159,6 +2159,14 @@ pub async fn import_config(
     }
 
     let report = apply_document(&state.db, &doc, mode).await?;
+    // The import writes attribute definitions, object types and units directly
+    // (not through their handlers), so the metadata caches are cleared here —
+    // otherwise the vocabulary, pickers and completeness keep serving the
+    // pre-import state. A dry run changes nothing and must not flush them.
+    if mode != Mode::DryRun {
+        state.cache.invalidate_attribute_definitions().await;
+        state.cache.invalidate_object_types().await;
+    }
     Ok((
         StatusCode::OK,
         Json(serde_json::to_value(report).unwrap_or(Value::Null)),

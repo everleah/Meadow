@@ -309,6 +309,22 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_attribute_vocabulary(self, token: str) -> list[dict]:
+        """Returns the slim vocabulary of **all** attribute definitions.
+
+        One request instead of 18 pages of `list_attribute_definitions`: the
+        export wizard offers every definition (ETIM 10.0 carries 17 379) and the
+        core serves the projection from its metadata cache
+        (`GET /attribute-definitions/vocabulary`).
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/attribute-definitions/vocabulary",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def update_attribute_definition(
         self,
         token: str,

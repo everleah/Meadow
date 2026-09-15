@@ -22,6 +22,7 @@ pub struct MetaCache {
     inheritable_names: RwLock<Option<Arc<Vec<String>>>>,
     url_attributes: RwLock<Option<Arc<Vec<UrlAttribute>>>>,
     feature_bindings: RwLock<Option<Arc<HashMap<String, String>>>>,
+    attribute_vocabulary: RwLock<Option<Arc<String>>>,
     required_names: RwLock<HashMap<String, Arc<Vec<String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
 }
@@ -101,12 +102,37 @@ impl MetaCache {
         Ok(bindings)
     }
 
+    /// Slim vocabulary of **all** attribute definitions as a **serialized JSON
+    /// body**, cached.
+    ///
+    /// The export wizard offers an attribute selection over every definition
+    /// (`/export`), and paging `GET /attribute-definitions` in 1000-row chunks
+    /// cost 18 requests / ~9 s with a classification standard installed (ETIM
+    /// 10.0: 17 379 definitions, 640 KB per page). The projection carries only
+    /// what such a selection needs (`VOCABULARY_FIELDS`): 318 KB per 1000 rows
+    /// and 5.8 MB for the whole vocabulary in one query.
+    ///
+    /// The body is cached **serialized** because this payload is megabytes:
+    /// cloning 17 379 documents out of a cache and re-serialising them per
+    /// request cost seconds in a debug build, the query ~3 s — the cache only
+    /// pays off when a warm request just hands out the finished bytes. Cleared by
+    /// the attribute-definition writes and by the MCF import.
+    pub async fn attribute_vocabulary_json(&self, db: &Db) -> Result<Arc<String>, ApiError> {
+        if let Some(json) = self.attribute_vocabulary.read().await.clone() {
+            return Ok(json);
+        }
+        let json = Arc::new(load_attribute_vocabulary(db).await?);
+        *self.attribute_vocabulary.write().await = Some(json.clone());
+        Ok(json)
+    }
+
     /// Invalidates cached attribute names after attribute-definition writes.
     pub async fn invalidate_attribute_definitions(&self) {
         *self.multilingual_names.write().await = None;
         *self.inheritable_names.write().await = None;
         *self.url_attributes.write().await = None;
         *self.feature_bindings.write().await = None;
+        *self.attribute_vocabulary.write().await = None;
         // The per-type required names come from `attribute_definition.required_types`.
         self.required_names.write().await.clear();
     }
@@ -227,6 +253,41 @@ async fn load_url_attributes(db: &Db) -> Result<Vec<UrlAttribute>, ApiError> {
         .collect())
 }
 
+/// Fields of the slim attribute vocabulary: everything an attribute *selection*
+/// needs (label, data type, group membership, whether it is applicable to an
+/// object type, whether it is reference data of a standard) and nothing else —
+/// `SELECT *` returned 640 KB per 1000 rows, this projection 318 KB.
+const VOCABULARY_FIELDS: [&str; 8] = [
+    "id",
+    "name",
+    "label",
+    "type",
+    "group_ids",
+    "multilingual",
+    "applicable_types",
+    "reference_data",
+];
+
+/// The vocabulary query: an explicit projection (never `SELECT *`), name order.
+fn vocabulary_sql() -> String {
+    format!(
+        "SELECT {} FROM attribute_definition ORDER BY name;",
+        VOCABULARY_FIELDS.join(", ")
+    )
+}
+
+/// Reads the slim vocabulary of every attribute definition and serializes it
+/// **once** (the cached body is handed out verbatim).
+async fn load_attribute_vocabulary(db: &Db) -> Result<String, ApiError> {
+    let mut response = db.inner().query(vocabulary_sql()).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    serde_json::to_string(&rows).map_err(|error| {
+        ApiError::internal(format!(
+            "could not serialize the attribute vocabulary: {error}"
+        ))
+    })
+}
+
 async fn load_fallback_chain(db: &Db, locale: &str) -> Result<Vec<String>, ApiError> {
     let sql = "SELECT fallback_order FROM language_tree WHERE code = $code LIMIT 1";
     let mut response = db
@@ -252,4 +313,36 @@ async fn load_fallback_chain(db: &Db, locale: &str) -> Result<Vec<String>, ApiEr
         chain.push("root".to_owned());
     }
     Ok(chain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vocabulary_query_projects_only_the_slim_fields() {
+        let sql = vocabulary_sql();
+        // `SELECT *` on 17 379 definitions shipped the whole document per row.
+        assert!(!sql.contains('*'), "the vocabulary must never select *");
+        assert!(sql.contains("FROM attribute_definition"));
+        assert!(sql.contains("ORDER BY name"));
+        for field in VOCABULARY_FIELDS {
+            assert!(
+                sql.contains(field),
+                "projection is missing `{field}`: {sql}"
+            );
+        }
+        // The data-heavy fields are deliberately absent.
+        for omitted in [
+            "description",
+            "constraints",
+            "default_value",
+            "standard_codes",
+        ] {
+            assert!(
+                !sql.contains(omitted),
+                "`{omitted}` does not belong into the vocabulary projection"
+            );
+        }
+    }
 }

@@ -83,6 +83,43 @@ def _fmt_dt(value: object) -> str:
         return str(value)
 
 
+#: Page size of the paged fallback load (`GET /attribute-definitions` caps at 1000).
+DEFINITION_PAGE = 1000
+
+
+async def _paged_attribute_definitions(client: CoreClient, token: str) -> list[dict]:
+    """Every attribute definition through the paged list endpoint (fallback).
+
+    A catalogue with an imported classification standard has tens of thousands of
+    definitions (ETIM 10.0: 17 379). One capped page silently truncated the
+    selection to the first 1000 — the reference switch then offered 1000 of
+    17 379 features and its count was wrong.
+    """
+    definitions: list[dict] = []
+    start = 0
+    while True:
+        page = await client.list_attribute_definitions(token, limit=DEFINITION_PAGE, start=start)
+        definitions.extend(page)
+        if len(page) < DEFINITION_PAGE:
+            return definitions
+        start += DEFINITION_PAGE
+
+
+async def load_attribute_definitions(client: CoreClient, token: str) -> list[dict]:
+    """Every attribute definition the wizard offers, in **one** request.
+
+    `GET /attribute-definitions/vocabulary` answers with the slim projection
+    (name/label/type/group/…, everything a selection needs) of **all**
+    definitions from the core's cache: measured 18 pages / ~9 s for the paged
+    load against 17 379 definitions. The paged load stays as the fallback, so an
+    older core still opens the wizard.
+    """
+    try:
+        return await client.list_attribute_vocabulary(token)
+    except Exception:  # noqa: BLE001 - an older core has no vocabulary endpoint
+        return await _paged_attribute_definitions(client, token)
+
+
 @ui.page("/export", response_timeout=PAGE_TIMEOUT)
 async def export_page(request: Request) -> None:
     """The structured export wizard page."""
@@ -124,37 +161,10 @@ async def export_page(request: Request) -> None:
             if coro_type == "attribute_groups":
                 return await client.list_attribute_groups(token)
             if coro_type == "attribute_definitions":
-                return await _all_attribute_definitions()
+                return await load_attribute_definitions(client, token)
             return await client.list_attribute_definitions(token, limit=1000)
         except Exception:  # noqa: BLE001 - degrade so the wizard still opens
             return []
-
-    async def _all_attribute_definitions() -> list[dict]:
-        """Every attribute definition, **paged** — not just the first 1000.
-
-        A catalogue with an imported classification standard has tens of thousands
-        of definitions (ETIM 10.0: 17 379). One capped page silently truncated the
-        selection to the first 1000 — the reference switch then offered 1000 of
-        17 379 features and its count was wrong. The grouped renderer keeps them
-        out of the DOM while the switch is off, so the load cost stays bounded, and
-        the pages are fetched in **batches** (18 sequential requests kept the page
-        waiting ~15 s; each batch costs one round trip).
-        """
-        definitions: list[dict] = []
-        batch = 8
-        start = 0
-        while True:
-            pages = await asyncio.gather(
-                *(
-                    client.list_attribute_definitions(token, limit=1000, start=start + index * 1000)
-                    for index in range(batch)
-                )
-            )
-            for page in pages:
-                definitions.extend(page)
-                if len(page) < 1000:
-                    return definitions
-            start += batch * 1000
 
     object_types = await _safe("object_types")
     collections = await _safe("collections")

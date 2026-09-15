@@ -3,6 +3,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -427,6 +428,37 @@ pub async fn list_attribute_definitions(
         .check()?;
     let definitions: Vec<Value> = response.take(0)?;
     Ok(Json(definitions))
+}
+
+/// Lists the whole attribute vocabulary in the **slim** projection (one call).
+///
+/// The export wizard offers an attribute selection over **every** definition, and
+/// paging `GET /attribute-definitions` in 1000-row chunks cost 18 requests / ~9 s
+/// with a classification standard installed (ETIM 10.0: 17 379 definitions, 640
+/// KB per page). This endpoint answers with `id`/`name`/`label`/`type`/
+/// `group_ids`/`multilingual`/`applicable_types`/`reference_data` of all
+/// definitions from the `MetaCache` (5.8 MB, invalidated by the definition
+/// writes and the MCF import) — the caller keeps its own order/grouping.
+///
+/// Like `GET /attribute-definitions` this read takes no role (it exposes the
+/// same metadata); callers that write need `admin`.
+#[utoipa::path(
+    get,
+    path = "/attribute-definitions/vocabulary",
+    responses(
+        (status = 200, description = "Slim attribute vocabulary of all definitions", body = Vec<Value>)
+    )
+)]
+pub async fn list_attribute_vocabulary(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Served from the cached body: this payload is megabytes, so serialising the
+    // whole vocabulary per request would cost more than the query it saves.
+    let json = state.cache.attribute_vocabulary_json(&state.db).await?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        json.as_str().to_owned(),
+    ))
 }
 
 /// Partially updates an attribute definition.
