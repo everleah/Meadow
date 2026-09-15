@@ -6,6 +6,11 @@
 
 Der Rust-Kern stellt eine vollständige REST-API bereit, dokumentiert mit OpenAPI 3.x.
 
+## Vertragsregeln (entschieden, nicht erneut diskutieren)
+
+- **Keine Kompatibilitätspfade für ältere Kern-Versionen.** Solange es keine produktive VPS-Umgebung gibt, laufen Kern und Frontend/Worker immer zusammen: ein neuer Endpunkt/ein geändertes Payload wird direkt genutzt, es gibt keine Doppel-Formate, keine Feature-Detection, kein „sonst seitenweise laden". Fehlt der Vertrag, ist das ein **Fehler** und wird sichtbar gemeldet (der Aufrufer darf nicht still degradieren). Ausgenommen sind Degradierungen bei fehlenden **Daten/Infrastruktur** (leere Liste statt Absturz, `RULES_DEGRADE`) und die bewusst mehreren Versionen folgenden Import-Konventionen (MEF/MCF). Verankert in `AGENTS.md` (User Preferences).
+- **Kein HTTP-Cache-Layer:** keine `ETag`/`Cache-Control`/Conditional-Request-Schicht, kein Shared/Proxy-Cache; der Cache ist der In-Process-`MetaCache` mit expliziter Invalidierung. Auslöser für ein Wiederaufgreifen (dann `MetaCache`-Generationszähler als `ETag` auf den Massen-Endpunkten): externer Konsument über langsame Leitung, öffentliche Read-API hinter Proxy/CDN, oder mehr als eine Kern-Instanz. Details: `plan/meadow-pim-architektur.md`, Nachtrag 15.
+
 ## Wichtige Endpunkte (Auszug)
 
 | Methode | Pfad                                                 | Beschreibung                                                                                                                                             |
