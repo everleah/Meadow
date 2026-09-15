@@ -28,6 +28,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `gespeicherte-suchen-collections.md` — saved searches & collections (section 10)
   - `suche-formular.md` — schema-driven search form (query builder) and the shared query DSL for saved searches *and* the grid (extension of sections 10 & 11; stages A–C implemented, per-field full text sketched in §12)
   - `frontend.md` — frontend: architecture, i18n & module overview (section 11)
+  - `dokumentation-und-hilfe.md` — in-app user handbook & help (`/help`, Markdown chapters in `docs/user/`, info-button convention, generated screenshots; first stage implemented 2026-09-15, extension points in §6)
   - `frontend-arbeitsflaechen.md` — frontend working areas: grid, form, mass maintenance, completeness & dashboard (section 11)
   - `betrieb-deployment.md` — operations & deployment (section 12)
   - `versionierung-audit.md` — versioning & audit (section 13)
