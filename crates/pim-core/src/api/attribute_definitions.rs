@@ -108,18 +108,23 @@ pub struct UpdateAttributeDefinition {
     pub required_types: Option<Vec<String>>,
     #[serde(default)]
     pub computed: Option<bool>,
-    #[serde(default)]
-    pub computed_rule: Option<String>,
+    /// Name of the computing business rule. `null` (or an empty string) **clears**
+    /// it, omitting the field leaves the stored value untouched.
+    #[serde(default, deserialize_with = "patch_text")]
+    pub computed_rule: Option<Option<String>>,
     #[serde(default)]
     pub dependencies: Option<Vec<String>>,
     #[serde(default)]
     pub computed_reads_inherited: Option<bool>,
     #[serde(default)]
     pub multilingual: Option<bool>,
-    #[serde(default)]
-    pub unit_id: Option<String>,
-    #[serde(default)]
-    pub display_unit_id: Option<String>,
+    /// Canonical unit id for numeric values. `null`/empty clears it (a unit left
+    /// over from a former `number` type has no meaning).
+    #[serde(default, deserialize_with = "patch_text")]
+    pub unit_id: Option<Option<String>>,
+    /// Default display unit id. `null`/empty clears it, like `unit_id`.
+    #[serde(default, deserialize_with = "patch_text")]
+    pub display_unit_id: Option<Option<String>>,
     #[serde(default)]
     pub constraints: Option<Value>,
     /// Binds the attribute to a classification standard's feature code, e.g.
@@ -130,8 +135,9 @@ pub struct UpdateAttributeDefinition {
     /// adopts it into the own attribute set (both directions are allowed).
     #[serde(default)]
     pub reference_data: Option<bool>,
-    /// Reference to a reusable `enum_set:<key>` for `enum` attributes.
-    #[serde(default)]
+    /// Reference to a reusable `enum_set:<key>` for `enum` attributes. `null` (or
+    /// an empty string) clears it.
+    #[serde(default, deserialize_with = "patch_text")]
     pub enum_set_id: Option<Option<String>>,
     #[serde(default)]
     pub default_value: Option<Value>,
@@ -274,7 +280,9 @@ pub async fn create_attribute_definition(
         Value::Array(required_types.into_iter().map(Value::String).collect()),
     );
     content.insert("computed".to_owned(), Value::Bool(computed));
-    if let Some(computed_rule) = computed_rule {
+    // An empty string means "no value" here (the dialog sends `""` for a field it
+    // cleared, `attribute_definition` is what the PATCH contract calls `null`).
+    if let Some(computed_rule) = text_change(Some(computed_rule)).flatten() {
         content.insert("computed_rule".to_owned(), Value::String(computed_rule));
     }
     content.insert(
@@ -286,10 +294,10 @@ pub async fn create_attribute_definition(
         Value::Bool(computed_reads_inherited),
     );
     content.insert("multilingual".to_owned(), Value::Bool(multilingual));
-    if let Some(unit_id) = unit_id {
+    if let Some(unit_id) = text_change(Some(unit_id)).flatten() {
         content.insert("unit_id".to_owned(), Value::String(unit_id));
     }
-    if let Some(display_unit_id) = display_unit_id {
+    if let Some(display_unit_id) = text_change(Some(display_unit_id)).flatten() {
         content.insert("display_unit_id".to_owned(), Value::String(display_unit_id));
     }
     if let Some(constraints) = constraints {
@@ -303,14 +311,14 @@ pub async fn create_attribute_definition(
         "reference_data".to_owned(),
         Value::Bool(reference_data.unwrap_or(false)),
     );
-    if let Some(set_id) = enum_set_id {
+    if let Some(set_id) = text_change(Some(enum_set_id)).flatten() {
         let set_ref = validate_enum_set(&state.db, &set_id).await?;
         content.insert("enum_set_id".to_owned(), Value::String(set_ref));
     }
     if let Some(default_value) = default_value {
         content.insert("default_value".to_owned(), default_value);
     }
-    if let Some(description) = description {
+    if let Some(description) = text_change(Some(description)).flatten() {
         content.insert("description".to_owned(), Value::String(description));
     }
     content.insert("version".to_owned(), Value::from(1));
@@ -530,6 +538,11 @@ pub async fn update_attribute_definition(
         .unwrap_or(false);
 
     let mut changes = serde_json::Map::new();
+    // Fields the request asks to **clear**. `MERGE` cannot carry the distinct
+    // `NONE`, so they are removed in one extra `UNSET` statement (which shifts the
+    // index of the final `SELECT`); the names are compile-time constants, never
+    // request input.
+    let mut clear_fields: Vec<&'static str> = Vec::new();
     if let Some(name) = body.name {
         changes.insert("name".to_owned(), Value::String(name));
     }
@@ -563,8 +576,13 @@ pub async fn update_attribute_definition(
     if let Some(computed) = body.computed {
         changes.insert("computed".to_owned(), Value::Bool(computed));
     }
-    if let Some(computed_rule) = body.computed_rule {
-        changes.insert("computed_rule".to_owned(), Value::String(computed_rule));
+    if let Some(computed_rule) = text_change(body.computed_rule) {
+        match computed_rule {
+            Some(rule) => {
+                changes.insert("computed_rule".to_owned(), Value::String(rule));
+            }
+            None => clear_fields.push("computed_rule"),
+        }
     }
     if let Some(dependencies) = body.dependencies {
         changes.insert(
@@ -581,11 +599,21 @@ pub async fn update_attribute_definition(
     if let Some(multilingual) = body.multilingual {
         changes.insert("multilingual".to_owned(), Value::Bool(multilingual));
     }
-    if let Some(unit_id) = body.unit_id {
-        changes.insert("unit_id".to_owned(), Value::String(unit_id));
+    if let Some(unit_id) = text_change(body.unit_id) {
+        match unit_id {
+            Some(unit) => {
+                changes.insert("unit_id".to_owned(), Value::String(unit));
+            }
+            None => clear_fields.push("unit_id"),
+        }
     }
-    if let Some(display_unit_id) = body.display_unit_id {
-        changes.insert("display_unit_id".to_owned(), Value::String(display_unit_id));
+    if let Some(display_unit_id) = text_change(body.display_unit_id) {
+        match display_unit_id {
+            Some(unit) => {
+                changes.insert("display_unit_id".to_owned(), Value::String(unit));
+            }
+            None => clear_fields.push("display_unit_id"),
+        }
     }
     let new_constraints: Option<Value> = body.constraints;
     if let Some(constraints_value) = new_constraints.as_ref() {
@@ -597,14 +625,15 @@ pub async fn update_attribute_definition(
     let clear_standard_codes = body.standard_codes.as_ref().is_some_and(clears_binding);
     if let Some(standard_codes) = body.standard_codes {
         let validated = validate_standard_codes(&state.db, Some(standard_codes), Some(key)).await?;
-        if !clear_standard_codes {
+        if clear_standard_codes {
+            clear_fields.push("standard_codes");
+        } else {
             changes.insert("standard_codes".to_owned(), validated);
         }
     }
     if let Some(reference_data) = body.reference_data {
         changes.insert("reference_data".to_owned(), Value::Bool(reference_data));
     }
-    let mut clear_enum_set = false;
     if let Some(enum_set_id) = body.enum_set_id {
         match enum_set_id
             .as_ref()
@@ -615,9 +644,7 @@ pub async fn update_attribute_definition(
                 let set_ref = validate_enum_set(&state.db, set_id).await?;
                 changes.insert("enum_set_id".to_owned(), Value::String(set_ref));
             }
-            None => {
-                clear_enum_set = true;
-            }
+            None => clear_fields.push("enum_set_id"),
         }
     }
     if let Some(default_value) = body.default_value {
@@ -636,7 +663,7 @@ pub async fn update_attribute_definition(
         changes.insert("inheritable".to_owned(), Value::Bool(false));
     }
 
-    if changes.is_empty() && !clear_standard_codes {
+    if changes.is_empty() && clear_fields.is_empty() {
         return Ok(Json(existing));
     }
 
@@ -750,19 +777,16 @@ pub async fn update_attribute_definition(
     });
     let changes = Value::Object(changes);
 
-    // Clear a reference with `SET ... = NONE`: `MERGE` cannot carry the distinct
-    // `NONE` value (JSON `null` would be rejected by an `option<…>` field) and
-    // merges nested objects instead of replacing them. Each clear adds one
-    // statement, so the index of the `SELECT` below shifts with them.
-    let mut clears: Vec<&str> = Vec::new();
-    if clear_enum_set {
-        clears.push("UPDATE $obj SET enum_set_id = NONE;");
-    }
-    if clear_standard_codes {
-        clears.push("UPDATE $obj SET standard_codes = NONE;");
-    }
-    let clear_sql = clears.join("\n        ");
-    let select_index = 5 + clears.len();
+    // Clear fields with `UNSET`: `MERGE` cannot carry the distinct `NONE` value
+    // (JSON `null` would be rejected by an `option<…>` field) and merges nested
+    // objects instead of replacing them. One statement, so the index of the
+    // `SELECT` below shifts by one whenever anything must be cleared.
+    let unset_sql = if clear_fields.is_empty() {
+        String::new()
+    } else {
+        format!("UPDATE $obj UNSET {};", clear_fields.join(", "))
+    };
+    let select_index = 5 + usize::from(!clear_fields.is_empty());
 
     // Statements (no clear): BEGIN(0), LET(1), UPDATE MERGE(2), UPDATE SET(3),
     // CREATE outbox(4), SELECT(5), COMMIT(6).
@@ -771,7 +795,7 @@ pub async fn update_attribute_definition(
         BEGIN TRANSACTION;
         LET $obj = type::record('attribute_definition', $key);
         UPDATE $obj MERGE $changes;
-        {clear_sql}
+        {unset_sql}
         UPDATE $obj SET version = version + 1, updated_at = time::now(), updated_by = $user;
         CREATE outbox_event CONTENT $outbox;
         SELECT * FROM $obj;
@@ -809,6 +833,37 @@ pub async fn update_attribute_definition(
     state.cache.invalidate_attribute_definitions().await;
 
     Ok(Json(definition))
+}
+
+/// Deserialises an optional text field of a `PATCH` so that a present `null`
+/// becomes `Some(None)` — **"clear it"** — while an omitted field stays `None`
+/// ("leave it as it is").
+///
+/// A plain `Option<Option<String>>` cannot tell the two apart: serde maps JSON
+/// `null` to the *outer* `None`, so a client asking to clear a field silently
+/// got "untouched" back (`PATCH {"computed_rule": null}` kept the old rule —
+/// found while wiring the dialog to clear fields that lost their meaning).
+fn patch_text<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
+/// Reads an optional text field of a `PATCH`: `Some(Some(name))` sets it,
+/// `Some(None)` **clears** it (the caller sent `null` or only whitespace) and
+/// `None` leaves the stored value untouched.
+///
+/// Why the handler needs the distinction: `MERGE` cannot write the distinct
+/// `NONE`, so a clear becomes an `UNSET` statement. Without it the dialog's
+/// cleaned payload (a field that lost its meaning, e.g. `computed_rule` after
+/// unchecking *Computed*) silently kept the old value.
+fn text_change(sent: Option<Option<String>>) -> Option<Option<String>> {
+    sent.map(|value| {
+        value
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
+    })
 }
 
 /// `true` when a `standard_codes` payload **clears** the binding (`{}`) instead
@@ -1589,5 +1644,38 @@ mod tests {
         assert!(!clears_binding(&json!([])));
         assert!(!clears_binding(&json!("EF000040")));
         assert!(!clears_binding(&Value::Null));
+    }
+
+    #[test]
+    fn text_change_distinguishes_set_clear_and_untouched() {
+        // Omitted field: leave the stored value alone.
+        assert_eq!(text_change(None), None);
+        // Explicit `null` or whitespace-only: clear it.
+        assert_eq!(text_change(Some(None)), Some(None));
+        assert_eq!(text_change(Some(Some(String::new()))), Some(None));
+        assert_eq!(text_change(Some(Some("  ".to_owned()))), Some(None));
+        // A value: set it, trimmed.
+        assert_eq!(
+            text_change(Some(Some("  gross_price ".to_owned()))),
+            Some(Some("gross_price".to_owned()))
+        );
+    }
+
+    #[test]
+    fn patch_text_distinguishes_null_from_omitted() {
+        #[derive(serde::Deserialize)]
+        struct Patch {
+            #[serde(default, deserialize_with = "patch_text")]
+            field: Option<Option<String>>,
+        }
+
+        let omitted: Patch = serde_json::from_str("{}").expect("empty patch");
+        assert_eq!(omitted.field, None, "omitted keeps the stored value");
+
+        let cleared: Patch = serde_json::from_str(r#"{"field": null}"#).expect("null patch");
+        assert_eq!(cleared.field, Some(None), "null clears the field");
+
+        let set: Patch = serde_json::from_str(r#"{"field": "gross_price"}"#).expect("value patch");
+        assert_eq!(set.field, Some(Some("gross_price".to_owned())));
     }
 }

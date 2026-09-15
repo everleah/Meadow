@@ -11,6 +11,7 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
+from meadow.frontend.attribute_form import cleaned_payload, field_state
 from meadow.frontend.filters import filter_select
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
@@ -110,6 +111,38 @@ async def attribute_definitions_page() -> None:
             )
             for g in groups
         }
+
+        # Business rules drive the `computed_rule` select: its value is a rule **name**
+        # and the inherited-computed cascade looks the rule up by exactly that name,
+        # so the dialog offers the registry instead of free text (a typed name can
+        # point nowhere). Computed + active rules come first, they are the usual pick.
+        try:
+            rules = await client.list_rules(token, limit=1000)
+        except Exception:  # noqa: BLE001 - degrade to an empty picker
+            rules = []
+        rule_options: dict[str, str] = {
+            str(r.get("name")): " · ".join(
+                part
+                for part in (
+                    str(r.get("name") or ""),
+                    str(r.get("type") or ""),
+                    str(r.get("state") or ""),
+                )
+                if part
+            )
+            for r in sorted(
+                rules,
+                key=lambda r: (
+                    0 if (r.get("type") == "computed" and r.get("state") == "active") else 1,
+                    str(r.get("name") or ""),
+                ),
+            )
+            if r.get("name")
+        }
+        #: Attribute names for the dependencies select, loaded on first dialog open
+        #: (the catalog list of this page is capped at 1000 rows — with an imported
+        #: standard those are the standard's attributes, not the own ones).
+        vocabulary_names: dict[str, list[str]] = {"names": []}
 
         # --- Filter state & predicate (name / group / type / reference) ------
         filters: dict[str, str] = {"name": "", "group": "", "type": "", "reference": ""}
@@ -474,7 +507,6 @@ async def attribute_definitions_page() -> None:
         form_dialog = ui.dialog()
         with form_dialog, ui.card().classes("w-[42rem] max-w-[95vw] max-h-[85vh] overflow-y-auto"):
             title_label = ui.label("").classes("text-h6")
-            fields: dict[str, ui.element] = {}
             with ui.column().classes("w-full mt-2 gap-2"):
                 with ui.row().classes("w-full gap-2"):
                     name_input = (
@@ -514,6 +546,35 @@ async def attribute_definitions_page() -> None:
                     is_key_check = ui.checkbox(t("attr_def.field_key"))
                     multilingual_check = ui.checkbox(t("attr_def.field_multilingual"))
                     computed_check = ui.checkbox(t("attr_def.field_computed"))
+                # Names the locked switch and why (`attribute_form.field_state`).
+                flag_hint = ui.label().classes("text-caption text-orange-600")
+                # --- Computed value: rule, inputs, inherited reads -------------
+                # Only meaningful with `computed` (`attribute_form.cleaned_payload`
+                # clears the three fields when the flag is off).
+                with ui.column().classes("w-full gap-1") as computed_box:
+                    computed_rule_select = (
+                        ui.select(
+                            rule_options,
+                            label=t("attr_def.field_computed_rule"),
+                            value=None,
+                            clearable=True,
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    ui.label(t("attr_def.computed_rule_hint")).classes("text-caption text-gray-500")
+                    dependencies_select = (
+                        ui.select(
+                            [],
+                            label=t("attr_def.field_dependencies"),
+                            value=[],
+                            multiple=True,
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    ui.label(t("attr_def.dependencies_hint")).classes("text-caption text-gray-500")
+                    computed_inherited_check = ui.checkbox(t("attr_def.field_computed_inherited"))
                 applicable_select = (
                     ui.select(
                         {typ: typ for typ in object_types},
@@ -534,7 +595,9 @@ async def attribute_definitions_page() -> None:
                     .props("filled dense")
                     .classes("w-full")
                 )
-                with ui.row().classes("w-full gap-2"):
+                required_hint = ui.label().classes("text-caption text-gray-500")
+                # --- Units (numeric types only) ---
+                with ui.row().classes("w-full gap-2") as units_row:
                     unit_input = (
                         ui.select(
                             unit_options,
@@ -554,26 +617,28 @@ async def attribute_definitions_page() -> None:
                         .classes("grow")
                     )
                 # --- Enum set selector (Phase 9, Reference Data) ---
-                enum_set_select = (
-                    ui.select(
-                        enum_set_options,
-                        label=t("attr_def.field_enum_set"),
-                        value=None,
+                with ui.column().classes("w-full gap-1") as enum_box:
+                    enum_set_select = (
+                        ui.select(
+                            enum_set_options,
+                            label=t("attr_def.field_enum_set"),
+                            value=None,
+                        )
+                        .props("filled dense")
+                        .classes("w-full")
                     )
-                    .props("filled dense")
-                    .classes("w-full")
-                )
-                ui.button(
-                    t("attr_def.manage_enum_sets"),
-                    icon="list",
-                    on_click=lambda: ui.navigate.to("/enum-sets"),
-                ).props("flat dense").classes("w-full")
+                    ui.button(
+                        t("attr_def.manage_enum_sets"),
+                        icon="list",
+                        on_click=lambda: ui.navigate.to("/enum-sets"),
+                    ).props("flat dense").classes("w-full")
 
                 description_area = (
                     ui.textarea(t("attr_def.field_description"))
                     .props("filled dense")
                     .classes("w-full")
-                )  # --- Standard binding (classification standards, Phase 9) ---
+                )
+                # --- Standard binding (classification standards, Phase 9) ---
                 # Binds this attribute to a standard's feature code, so a
                 # class feature is filled from *this* attribute instead of one
                 # named after the code (`plan/detail/bmecat-export.md` §11.7).
@@ -591,20 +656,13 @@ async def attribute_definitions_page() -> None:
                 ui.label(t("attr_def.standard_code_hint")).classes("text-caption text-gray-500")
                 # Reference data of an imported standard: hidden wherever
                 # attributes are chosen until it is adopted into the own set
-                # (`meadow/frontend/reference_data.py`).
+                # (`meadow/frontend/reference_data.py`). Only offered while
+                # editing — a standard import creates reference data, so the
+                # switch has no meaning on a new attribute.
                 reference_check = ui.checkbox(t("attr_def.field_reference"))
-                ui.label(t("attr_def.field_reference_hint")).classes("text-caption text-gray-500")
-                computed_rule_input = (
-                    ui.input(t("attr_def.field_computed_rule"))
-                    .props("filled dense")
-                    .classes("w-full")
+                reference_hint = ui.label(t("attr_def.field_reference_hint")).classes(
+                    "text-caption text-gray-500"
                 )
-                dependencies_input = (
-                    ui.input(t("attr_def.field_dependencies"))
-                    .props("filled dense")
-                    .classes("w-full")
-                )
-                computed_inherited_check = ui.checkbox(t("attr_def.field_computed_inherited"))
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 delete_btn = ui.button(
                     t("attr_def.delete"), icon="delete", on_click=lambda: delete_definition()
@@ -615,32 +673,53 @@ async def attribute_definitions_page() -> None:
                         "flat"
                     )
 
-        fields.update(
-            {
-                "name": name_input,
-                "type": type_select,
-                "label": label_field,
-                "group": group_select,
-                "inheritable": inheritable_check,
-                "key": is_key_check,
-                "multilingual": multilingual_check,
-                "computed": computed_check,
-                "applicable": applicable_select,
-                "required": required_select,
-                "unit": unit_input,
-                "display_unit": display_input,
-                "standard": standard_select,
-                "standard_code": standard_code_input,
-                "enum_set": enum_set_select,
-                "description": description_area,
-                "computed_rule": computed_rule_input,
-                "dependencies": dependencies_input,
-                "computed_inherited": computed_inherited_check,
-            }
-        )
+        def apply_field_state() -> None:
+            """Shows only the fields the current choices make meaningful.
 
-        def _split_csv(value: str) -> list[str]:
-            return [item.strip() for item in value.split(",") if item.strip()]
+            The decision itself lives in `attribute_form.field_state` (pure,
+            tested); this renders it. A switch the current data type or flag
+            forbids is **reset** rather than hidden, so a save cannot carry a
+            stale choice, and a hint names the reason.
+            """
+            state = field_state(
+                str(type_select.value or "text"),
+                is_key=bool(is_key_check.value),
+                multilingual=bool(multilingual_check.value),
+                computed=bool(computed_check.value),
+                editing=bool(getattr(save, "editing_id", None)),
+            )
+            computed_box.set_visibility(state.computed)
+            units_row.set_visibility(state.units)
+            enum_box.set_visibility(state.enum_set)
+            reference_check.set_visibility(state.reference)
+            reference_hint.set_visibility(state.reference)
+            is_key_check.set_enabled(state.key)
+            if not state.key:
+                is_key_check.set_value(False)
+            inheritable_check.set_enabled(state.inheritable)
+            if not state.inheritable:
+                inheritable_check.set_value(False)
+            reason = state.key_reason or state.inheritable_reason
+            flag_hint.set_text(t(reason) if reason else "")
+            flag_hint.set_visibility(bool(reason))
+            # Required types are limited to the applicable ones (an empty
+            # `applicable_types` means "every type", so all stay allowed).
+            chosen = list(applicable_select.value or [])
+            allowed = chosen or object_types
+            kept = [typ for typ in (required_select.value or []) if typ in set(allowed)]
+            required_select.set_options({typ: typ for typ in allowed}, value=kept)
+            required_hint.set_text(t("attr_def.required_follows_applicable") if chosen else "")
+            required_hint.set_visibility(bool(chosen))
+
+        # Any decision can turn another field meaningless — re-evaluate on change.
+        for element in (
+            type_select,
+            is_key_check,
+            multilingual_check,
+            computed_check,
+            applicable_select,
+        ):
+            element.on_value_change(lambda _: apply_field_state())
 
         def _fill_form(definition: dict | None) -> None:
             editing = definition is not None
@@ -681,14 +760,49 @@ async def attribute_definitions_page() -> None:
             standard_code_input.set_value(str(codes.get(first_standard) or ""))
             reference_check.set_value(bool(definition.get("reference_data")) if editing else False)
             description_area.set_value(str(definition.get("description") or "") if editing else "")
-            computed_rule_input.set_value(
-                str(definition.get("computed_rule") or "") if editing else ""
+            # Dependencies are attribute names — a multi-select over the whole
+            # catalog (a stored name that no longer exists stays selectable).
+            own_name = str(definition.get("name") or "") if editing else ""
+            dependency_values = (
+                [str(name) for name in (definition.get("dependencies") or [])] if editing else []
             )
-            dependencies_input.set_value(
-                ", ".join(definition.get("dependencies") or []) if editing else ""
+            dependency_choices = [name for name in vocabulary_names["names"] if name != own_name]
+            for name in dependency_values:
+                if name not in dependency_choices:
+                    dependency_choices.append(name)
+            dependencies_select.set_options(
+                {name: name for name in dependency_choices}, value=dependency_values
             )
+            # The stored rule name stays selectable when the rule was renamed or
+            # removed, so opening a definition never drops the value silently.
+            rule_value = str(definition.get("computed_rule") or "") if editing else ""
+            rule_picks = dict(rule_options)
+            if rule_value and rule_value not in rule_picks:
+                rule_picks[rule_value] = t("attr_def.computed_rule_missing").format(name=rule_value)
+            computed_rule_select.set_options(rule_picks, value=rule_value or None)
             computed_inherited_check.set_value(
                 bool(definition.get("computed_reads_inherited")) if editing else False
+            )
+            # Last: hide/lock what the loaded choices make meaningless.
+            apply_field_state()
+
+        async def load_attribute_names() -> None:
+            """Loads every attribute name for the dependencies select (once).
+
+            The catalog list of this page is capped at 1000 rows and with an
+            imported standard those are the standard's attributes — the own ones
+            would be missing from the picker. `GET /attribute-definitions/vocabulary`
+            answers with all definitions from the core's cache; only the names are
+            kept, and a free-text name stays possible.
+            """
+            if vocabulary_names["names"]:
+                return
+            try:
+                vocabulary = await client.list_attribute_vocabulary(token)
+            except Exception:  # noqa: BLE001 - free text stays possible
+                return
+            vocabulary_names["names"] = sorted(
+                {str(row.get("name")) for row in vocabulary if row.get("name")}
             )
 
         async def reload() -> None:
@@ -698,6 +812,8 @@ async def attribute_definitions_page() -> None:
             except Exception:  # noqa: BLE001 - keep the cached list on failure
                 definitions = state["definitions"]
             state["definitions"] = definitions
+            # A write may have added or renamed an attribute: the picker reloads.
+            vocabulary_names["names"] = []
             grid.run_grid_method("setGridOption", "rowData", _rows())
 
         async def apply_type_change(
@@ -800,12 +916,6 @@ async def attribute_definitions_page() -> None:
             label = dict(def_store["label"] or {})
             group_ids = list(group_select.value or [])
             applicable = list(applicable_select.value or [])
-            required = list(required_select.value or [])
-            inherited = bool(computed_inherited_check.value)
-
-            enum_set_id: str | None = None
-            if type_select.value == "enum":
-                enum_set_id = enum_set_select.value or None
 
             current = (
                 next((d for d in definitions if d.get("id") == editing_id), None)
@@ -829,21 +939,30 @@ async def attribute_definitions_page() -> None:
             common = {
                 "label": label,
                 "group_ids": group_ids,
-                "inheritable": bool(inheritable_check.value),
-                "is_key": bool(is_key_check.value),
                 "applicable_types": applicable,
-                "required_types": required,
                 "computed": bool(computed_check.value),
-                "computed_rule": computed_rule_input.value or None,
-                "dependencies": _split_csv(dependencies_input.value or "") or None,
-                "computed_reads_inherited": inherited,
                 "multilingual": bool(multilingual_check.value),
-                "unit_id": unit_input.value or None,
-                "display_unit_id": display_input.value or None,
                 "standard_codes": standard_codes,
                 "reference_data": bool(reference_check.value),
-                "enum_set_id": enum_set_id,
                 "description": description_area.value or None,
+                # The fields that only make sense together with a type/flag:
+                # cleared instead of sent stale (`attribute_form.cleaned_payload`).
+                **cleaned_payload(
+                    definition_type=definition_type,
+                    is_key=bool(is_key_check.value),
+                    multilingual=bool(multilingual_check.value),
+                    computed=bool(computed_check.value),
+                    inheritable=bool(inheritable_check.value),
+                    unit_id=unit_input.value,
+                    display_unit_id=display_input.value,
+                    enum_set_id=enum_set_select.value,
+                    computed_rule=computed_rule_select.value,
+                    dependencies=dependencies_select.value or [],
+                    reads_inherited=bool(computed_inherited_check.value),
+                    applicable=applicable,
+                    required=required_select.value or [],
+                    own_name=name,
+                ),
             }
 
             try:
@@ -920,7 +1039,7 @@ async def attribute_definitions_page() -> None:
                     ui.button(t("attr_def.delete"), on_click=_confirm).props("color=negative")
             confirm.open()
 
-        def open_editor(definition: dict | None) -> None:
+        async def open_editor(definition: dict | None) -> None:
             if isinstance(definition, str):
                 definition = next((d for d in definitions if str(d.get("id")) == definition), None)
             if definition is None:
@@ -934,6 +1053,8 @@ async def attribute_definitions_page() -> None:
                     definition,
                 )
             save.editing_id = editing_id  # type: ignore[attr-defined]
+            # The dependency picker needs the full name list (loaded on demand).
+            await load_attribute_names()
             _fill_form(full)
             form_dialog.open()
 
