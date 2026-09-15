@@ -129,6 +129,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - **Python-Paketmanager:** `uv` (statt pip). Projekt-venv unter `.venv/`; Abhängigkeiten in `pyproject.toml` pflegen (`uv add`/`uv sync`, Lockfile `uv.lock`).
 - **Test-Ablage:** Neue Tests möglichst im `tests/`-Verzeichnis anlegen, um das Wurzelverzeichnis übersichtlich zu halten.
 - **Dokumentations-Ablage:** Dokumentation, die nicht zur Planung gehört, (idealerweise hierarchisch) im `docs/`-Verzeichnis anlegen.
+- **Keine Fallbacks für Versionsversatz (bis es eine produktive VPS-Umgebung gibt):** Kern und Frontend/Worker laufen immer zusammen, also gibt es keine Kompatibilitätspfade für ältere Kern-Versionen (z. B. „neuer Endpunkt, sonst seitenweise laden", doppelte Payload-Formate, Feature-Detection). Ein neuer Vertrag wird direkt genutzt; fehlt er, ist das ein Fehler und wird sichtbar gemeldet. Das betrifft **nicht** das Degradieren bei fehlenden Daten/Infrastruktur (leere Liste statt Absturz, `RULES_DEGRADE`), und nicht die bewusst doppelt geführten Konventionen (MEF/MCF-Importe mehrerer Versionen).
 
 ## Child DOX Index
 

@@ -83,41 +83,18 @@ def _fmt_dt(value: object) -> str:
         return str(value)
 
 
-#: Page size of the paged fallback load (`GET /attribute-definitions` caps at 1000).
-DEFINITION_PAGE = 1000
-
-
-async def _paged_attribute_definitions(client: CoreClient, token: str) -> list[dict]:
-    """Every attribute definition through the paged list endpoint (fallback).
-
-    A catalogue with an imported classification standard has tens of thousands of
-    definitions (ETIM 10.0: 17 379). One capped page silently truncated the
-    selection to the first 1000 — the reference switch then offered 1000 of
-    17 379 features and its count was wrong.
-    """
-    definitions: list[dict] = []
-    start = 0
-    while True:
-        page = await client.list_attribute_definitions(token, limit=DEFINITION_PAGE, start=start)
-        definitions.extend(page)
-        if len(page) < DEFINITION_PAGE:
-            return definitions
-        start += DEFINITION_PAGE
-
-
 async def load_attribute_definitions(client: CoreClient, token: str) -> list[dict]:
     """Every attribute definition the wizard offers, in **one** request.
 
     `GET /attribute-definitions/vocabulary` answers with the slim projection
     (name/label/type/group/…, everything a selection needs) of **all**
-    definitions from the core's cache: measured 18 pages / ~9 s for the paged
-    load against 17 379 definitions. The paged load stays as the fallback, so an
-    older core still opens the wizard.
+    definitions from the core's cache: the paged list endpoint it replaces cost 18
+    requests for the 17 397 definitions of the full ETIM standard (a capped page
+    would silently truncate the selection and the reference-switch count to 1000).
+    No fallback: core and frontend ship together, so an endpoint the wizard needs
+    always exists.
     """
-    try:
-        return await client.list_attribute_vocabulary(token)
-    except Exception:  # noqa: BLE001 - an older core has no vocabulary endpoint
-        return await _paged_attribute_definitions(client, token)
+    return await client.list_attribute_vocabulary(token)
 
 
 @ui.page("/export", response_timeout=PAGE_TIMEOUT)
