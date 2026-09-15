@@ -15,6 +15,7 @@ import copy
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Mapping
 from urllib.parse import quote
 
 from fastapi import Request
@@ -34,13 +35,14 @@ from meadow.frontend.display import (
     taxonomy_options,
     taxonomy_type_names,
 )
+from meadow.frontend.export_fields import group_members, group_order
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 from meadow.frontend.range_values import format_range
-from meadow.frontend.reference_data import visible_in_picker
+from meadow.frontend.reference_data import has_value, visible_in_picker
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     association_definitions,
@@ -308,6 +310,55 @@ def restore_columns(stored: object, known_fields: set[str]) -> set[str] | None:
 def language_field(prefix: str, language: str) -> str:
     """Returns the field name of a per-language column (`<prefix>__<lang>`)."""
     return f"{prefix}{LANG_SEPARATOR}{language}"
+
+
+def present_attribute_names(objects: Iterable[Mapping[str, object]]) -> set[str]:
+    """The attribute names the loaded objects actually carry a value for.
+
+    Drives the standard columns: reference data is *read*, not chosen
+    (`meadow/frontend/reference_data.py`), so a column of an imported standard is
+    offered once data for it exists — and the rows then carry that cell.
+    """
+    names: set[str] = set()
+    for object_ in objects:
+        attributes = object_.get("attributes")
+        if not isinstance(attributes, Mapping):
+            continue
+        for name in attributes:
+            if has_value(attributes, str(name)):
+                names.add(str(name))
+    return names
+
+
+def offered_definitions(
+    definitions: Iterable[dict],
+    *,
+    visible_fields: Iterable[str],
+    present_names: Iterable[str],
+) -> list[dict]:
+    """The definitions that are worth a grid column.
+
+    Every **own** attribute gets a column (the grid is where its values are read
+    and edited), while the vocabulary of an imported classification standard
+    (17 377 features in the full ETIM standard) would become 17 377 columns and
+    picker rows. A standard attribute is offered when objects on the page carry a
+    value for it (then the column has data) or when it is part of the restored
+    column set (so a saved personal view stays switchable). Own definitions keep
+    their input order, the standard's follow.
+    """
+    visible = {str(field) for field in visible_fields}
+    present = {str(name) for name in present_names}
+    own: list[dict] = []
+    extra: list[dict] = []
+    for definition in definitions:
+        name = str(definition.get("name") or "")
+        if not name:
+            continue
+        if not definition.get("reference_data"):
+            own.append(definition)
+        elif name in present or attribute_field(name) in visible:
+            extra.append(definition)
+    return [*own, *extra]
 
 
 def _language_column(header_name: str, field: str) -> dict:
@@ -960,30 +1011,99 @@ async def products_page(request: Request) -> None:
         selection_hint.set_visibility(not has_filter())
 
         try:
-            definitions = await client.list_attribute_definitions(token)
+            # The **slim vocabulary** of *all* definitions, not the paged catalog
+            # list: that one is capped at 1000 rows, and with an imported standard
+            # those rows are the standard's features (`EF…`) — every own attribute
+            # (and with it every own column) was missing here, while 1000 standard
+            # columns buried the column picker. Cache-backed in the core, the same
+            # source the catalog page and the export wizard use.
+            definitions = await client.list_attribute_vocabulary(token)
         except Exception:  # noqa: BLE001 - degrade to base columns on failure
             definitions = []
-        attribute_names = [
-            str(definition.get("name")) for definition in definitions if definition.get("name")
-        ]
+        # Attribute groups label the column picker (own catalogue plus the
+        # standard's feature groups, which the standard's definitions carry).
+        try:
+            attribute_groups = await client.list_attribute_groups(token)
+        except Exception:  # noqa: BLE001 - degrade to ungrouped sections
+            attribute_groups = []
+        groups_by_id = {str(group.get("id")): group for group in attribute_groups}
 
         # Per-language columns (Sprach-Spalten): the working-language column
         # (`attr_<name>`) is joined by one hidden column per active data language
         # for every multilingual attribute. Only `active` languages are offered,
         # mirroring the product form.
         active_languages: list[str] = []
+        language_labels: dict[str, str] = {}
         try:
             languages = await client.list_languages(token)
-            active_languages = [
-                str(lang.get("code"))
-                for lang in languages
-                if lang.get("code") not in (None, "root", locale) and lang.get("active", True)
-            ]
+            for lang in languages:
+                code = str(lang.get("code") or "")
+                if not code or code == "root" or code == locale or not lang.get("active", True):
+                    continue
+                active_languages.append(code)
+                language_labels[code] = resolve_value(lang.get("label"), locale) or code
         except Exception:  # noqa: BLE001 - degrade to a single-language grid
             active_languages = []
+
+        # The user's column set is resolved **before** the columns are built: a
+        # restored set decides which standard columns have to exist at all (a
+        # saved view that carries `EF…` columns stays switchable).
+        views = app.storage.user.get("views", {})
+        default_fields = {
+            "_id",
+            "_name",
+            "_type",
+            "_status",
+            "_completeness",
+            "_releases",
+            "_refs",
+        }
+        candidate_fields = set(default_fields)
+        for definition in definitions:
+            name = str(definition.get("name") or "")
+            if not name:
+                continue
+            candidate_fields.add(attribute_field(name))
+            if definition.get("multilingual"):
+                candidate_fields |= {
+                    language_field(f"attr_{name}", language) for language in active_languages
+                }
+        candidate_fields |= {
+            language_field(NAME_FIELD_PREFIX, language) for language in active_languages
+        }
+        # The **current** column set is persisted as well, so it survives a
+        # browser-back from the product form, a reload and a re-login (only the
+        # authentication is cleared on logout, see `auth.clear_session`).
+        restored = restore_columns(app.storage.user.get(COLUMNS_STORAGE_KEY), candidate_fields)
+        visible_fields: set[str] = restored or set(default_fields)
+        #: Attribute names the loaded objects carry a value for. Reference data is
+        #: *read*, not chosen: a standard column is offered once data exists.
+        present_names = present_attribute_names(objects)
+        #: Own catalogue plus the standard attributes that carry data (or are
+        #: restored) — the vocabulary of an imported standard is 17 377 strong and
+        #: must not become 17 377 columns and picker rows.
+        active_definitions = offered_definitions(
+            definitions, visible_fields=visible_fields, present_names=present_names
+        )
+        own_definitions = [
+            definition for definition in active_definitions if not definition.get("reference_data")
+        ]
+        reference_definitions = [
+            definition for definition in active_definitions if definition.get("reference_data")
+        ]
+        definitions_by_name = {
+            str(definition.get("name")): definition
+            for definition in active_definitions
+            if definition.get("name")
+        }
+        #: Cells the rows carry: every own attribute (so a column enabled later is
+        #: filled immediately) plus what the loaded objects store under names of
+        #: their own (a standard's attribute with a value, e.g. an `EF…` feature).
+        own_names = {name for name in (str(d.get("name")) for d in own_definitions) if name}
+        cell_names = sorted(own_names) + sorted(present_names - own_names)
         multilingual_names = {
             str(definition.get("name"))
-            for definition in definitions
+            for definition in active_definitions
             if definition.get("name") and definition.get("multilingual")
         }
         # Field prefix of the language columns per attribute (`name` is the
@@ -994,17 +1114,18 @@ async def products_page(request: Request) -> None:
         }
         # Attributes that can be edited inline (working language); computed,
         # quantified and date/reference attributes stay read-only (see
-        # `is_editable_definition`).
+        # `is_editable_definition`). Reference data with a value stays editable —
+        # a stored value never becomes read-only (`reference_data.visible_in_form`).
         editable_defs: dict[str, dict] = {
             str(definition.get("name")): definition
-            for definition in definitions
+            for definition in active_definitions
             if definition.get("name") and is_editable_definition(definition)
         }
         # Attributes that participate in inheritance: an own empty value there
         # blocks the inherited one (marked as "interrupted" in the grid).
         inheritable_names = [
             str(definition.get("name"))
-            for definition in definitions
+            for definition in active_definitions
             if definition.get("name")
             and definition.get("inheritable")
             and not definition.get("computed")
@@ -1018,7 +1139,7 @@ async def products_page(request: Request) -> None:
         # column resolves the stored code with its own locale.
         enum_resolvers: dict[str, dict[str, str]] = {}
         enum_resolvers_by_language: dict[str, dict[str, dict[str, str]]] = {}
-        enum_defs = [d for d in definitions if d.get("type") == "enum"]
+        enum_defs = [d for d in active_definitions if d.get("type") == "enum"]
         if enum_defs:
             try:
                 enum_sets = await client.list_enum_sets(token)
@@ -1046,9 +1167,13 @@ async def products_page(request: Request) -> None:
         name_column_defs, name_language_fields = name_language_columns(
             t("grid.name"), active_languages
         )
-        attribute_column_defs, attribute_language_fields = attribute_column_specs(
-            definitions, locale, active_languages, enum_resolvers
+        own_column_defs, own_language_fields = attribute_column_specs(
+            own_definitions, locale, active_languages, enum_resolvers
         )
+        reference_column_defs, reference_language_fields = attribute_column_specs(
+            reference_definitions, locale, active_languages, enum_resolvers
+        )
+        attribute_column_defs = [*own_column_defs, *reference_column_defs]
         # The working-language attribute columns carry the inheritance marker
         # (dimmed + source tooltip) for values resolved from an ancestor. The
         # `url` renderer draws those markers itself, so it is not replaced.
@@ -1058,7 +1183,11 @@ async def products_page(request: Request) -> None:
                 column[":cellStyle"] = INHERITED_CELL_STYLE
                 column[":tooltipValueGetter"] = INHERITED_CELL_TOOLTIP
                 column.setdefault(":cellRenderer", INHERITED_CELL_RENDERER)
-        language_fields = {**name_language_fields, **attribute_language_fields}
+        language_fields = {
+            **name_language_fields,
+            **own_language_fields,
+            **reference_language_fields,
+        }
         # Channel releases: one badge per channel (only with a channel catalog).
         release_columns = (
             [{"headerName": t("grid.releases"), "field": "_releases", "width": 180}]
@@ -1109,7 +1238,7 @@ async def products_page(request: Request) -> None:
         # so the row carries a marker map for exactly the URL columns.
         url_names = {
             str(definition.get("name"))
-            for definition in definitions
+            for definition in active_definitions
             if definition.get("name") and str(definition.get("type") or "") == "url"
         }
         url_fields = {attribute_field(name) for name in url_names} | {
@@ -1120,7 +1249,7 @@ async def products_page(request: Request) -> None:
         def make_rows(selected_objects: list[dict]) -> list[dict]:
             """Builds the grid rows: display values, typed editable cells, languages."""
             rows = [
-                row_data(object_, locale, attribute_names, enum_resolvers)
+                row_data(object_, locale, cell_names, enum_resolvers)
                 | editable_cells(object_, locale, editable_defs, enum_resolvers)
                 | language_cells(
                     object_,
@@ -1464,24 +1593,28 @@ async def products_page(request: Request) -> None:
         def discard() -> None:
             ui.navigate.reload()
 
-        # Personal views (step 4b): save/restore the visible column set per user.
-        views = app.storage.user.get("views", {})
-        default_fields = {
-            "_id",
-            "_name",
-            "_type",
-            "_status",
-            "_completeness",
-            "_releases",
-            "_refs",
+        # --- Column picker state ---------------------------------------------
+        # One source of truth: `visible_fields`. The grid, every picker checkbox
+        # (an attribute may sit in several groups, so a field can have several
+        # boxes), the group toggles and the language counters are mirrored from
+        # it by `sync_picker()`. `syncing` suppresses the change handlers while
+        # the picker is written from code — `element.value = x` **fires**
+        # `on_value_change` in NiceGUI, which would call back into here.
+        checkbox_refs: dict[str, list[ui.checkbox]] = {}
+        group_boxes: dict[str, ui.checkbox] = {}
+        #: Group id -> the column **fields** of that group (an attribute name may
+        #: sit in several groups, its column stays one) and the field prefixes
+        #: whose language columns the group toggle clears when it is switched off.
+        group_fields: dict[str, list[str]] = {}
+        group_prefixes: dict[str, list[str]] = {}
+        language_counters: dict[str, ui.label] = {}
+        #: Field prefix -> `{language: field}` of every attribute with language
+        #: columns (`name` uses `_name`, attributes `attr_<name>`).
+        language_fields_by_prefix = {
+            prefix: {language: language_field(prefix, language) for language in active_languages}
+            for prefix in language_prefixes.values()
         }
-        # The **current** column set is persisted as well, so it survives a
-        # browser-back from the product form, a reload and a re-login (only the
-        # authentication is cleared on logout, see `auth.clear_session`).
-        known_fields = {str(column.get("field") or "") for column in column_defs}
-        restored = restore_columns(app.storage.user.get(COLUMNS_STORAGE_KEY), known_fields)
-        visible_fields: set[str] = restored or set(default_fields)
-        checkbox_refs: dict[str, ui.checkbox] = {}
+        syncing = {"value": False}
 
         def apply_visibility(fields: set[str]) -> None:
             for column in column_defs:
@@ -1493,16 +1626,76 @@ async def products_page(request: Request) -> None:
             """Persists the visible column set of the current user."""
             app.storage.user[COLUMNS_STORAGE_KEY] = sorted(visible_fields)
 
+        def sync_picker() -> None:
+            """Mirrors `visible_fields` into the picker (boxes, groups, counters).
+
+            Called after every change, so a field that belongs to several groups
+            stays consistent in all of them and a restored personal view shows up
+            in the picker as well.
+            """
+            syncing["value"] = True
+            try:
+                for field, boxes in checkbox_refs.items():
+                    state = field in visible_fields
+                    for box in boxes:
+                        if bool(box.value) != state:
+                            box.value = state
+                for group_id, box in group_boxes.items():
+                    members = group_fields.get(group_id, [])
+                    state = bool(members) and all(field in visible_fields for field in members)
+                    if bool(box.value) != state:
+                        box.value = state
+                for prefix, counter in language_counters.items():
+                    fields = language_fields_by_prefix.get(prefix, {})
+                    counter.set_text(
+                        t("grid.columns_languages_count").format(
+                            on=sum(1 for field in fields.values() if field in visible_fields),
+                            total=len(fields),
+                        )
+                    )
+            finally:
+                syncing["value"] = False
+
         def set_visibility(fields: set[str]) -> None:
-            """Applies a column set, syncs the picker checkboxes and persists it."""
+            """Applies a column set, syncs the picker and persists it."""
             visible_fields.clear()
             visible_fields.update(fields)
             apply_visibility(visible_fields)
-            for column in column_defs:
-                checkbox = checkbox_refs.get(str(column.get("field") or ""))
-                if checkbox is not None:
-                    checkbox.value = column["field"] in visible_fields
+            sync_picker()
             remember_columns()
+
+        def toggle_field(field: str, visible: bool) -> None:
+            """Shows/hides one column and brings the whole picker in line."""
+            if visible:
+                visible_fields.add(field)
+            else:
+                visible_fields.discard(field)
+            grid.run_grid_method("setColumnsVisible", [field], visible)
+            sync_picker()
+            remember_columns()
+
+        def on_field_change(field: str, event) -> None:
+            """Checkbox handler: ignored while the picker is written from code."""
+            if syncing["value"]:
+                return
+            toggle_field(field, bool(event.value))
+
+        def toggle_group(group_id: str, visible: bool) -> None:
+            """Toggles a whole attribute group.
+
+            Turning a group on enables the group's attributes (the working-language
+            column each, the language columns stay a per-attribute choice); turning
+            it off also clears those language columns, so a hidden group leaves no
+            orphan language column behind.
+            """
+            for field in group_fields.get(group_id, []):
+                toggle_field(field, visible)
+            if not visible:
+                for prefix in group_prefixes.get(group_id, []):
+                    for language_column in language_fields_by_prefix.get(prefix, {}).values():
+                        if language_column in visible_fields:
+                            toggle_field(language_column, False)
+            sync_picker()
 
         def fit_to_view() -> None:
             """Fits the columns into the available width."""
@@ -2728,32 +2921,189 @@ async def products_page(request: Request) -> None:
                         "outline"
                     ).tooltip(t("grid.export"))
 
-                    def make_toggler(field: str):
-                        def toggle(event) -> None:
-                            grid.run_grid_method("setColumnsVisible", [field], event.value)
-                            if event.value:
-                                visible_fields.add(field)
-                            else:
-                                visible_fields.discard(field)
-                            remember_columns()
+                    # --- Column picker -------------------------------------
+                    # A dialog (not a `ui.menu`: Quasar's QMenu auto-open doesn't
+                    # fire in Firefox/Zen) whose list is **grouped by attribute
+                    # group**, like the export wizard's field selection — a
+                    # catalogue with an imported standard carries thousands of
+                    # attributes and a flat list of them is unusable. An attribute
+                    # may sit in several groups: it shows up in each of them while
+                    # staying **one** column (`checkbox_refs` holds every box of a
+                    # field and `sync_picker()` keeps them in sync). The
+                    # per-language columns are a **hybrid** like the product form:
+                    # the attribute's own box is the working-language column, the
+                    # `translate` button opens its language columns.
+                    column_fields = {str(column.get("field") or "") for column in column_defs}
+                    base_labels = {
+                        "_id": t("grid.id"),
+                        "_name": t("grid.name"),
+                        "_type": t("grid.type"),
+                        "_status": t("grid.status"),
+                        "_completeness": t("grid.completeness"),
+                        "_releases": t("grid.releases"),
+                        "_refs": t("grid.columns_refs"),
+                    }
+                    base_fields = [field for field in base_labels if field in column_fields]
+                    grouped_names, ungrouped_names = group_members(own_definitions)
 
-                        return toggle
+                    def group_title(group_id: str) -> str:
+                        group = groups_by_id.get(group_id) or {}
+                        return (
+                            resolve_value(group.get("label"), locale)
+                            or str(group.get("name") or "")
+                            or group_id
+                        )
+
+                    ordered_group_ids = group_order(grouped_names, groups_by_id, group_title)
+
+                    def field_checkbox(field: str, text: str) -> ui.checkbox:
+                        """One picker box for a field (a field may get several)."""
+                        box = (
+                            ui.checkbox(text, value=field in visible_fields)
+                            .props("dense")
+                            .on_value_change(lambda e, f=field: on_field_change(f, e))
+                        )
+                        checkbox_refs.setdefault(field, []).append(box)
+                        return box
+
+                    language_dialogs: dict[str, ui.dialog] = {}
+
+                    def open_language_dialog(prefix: str, title: str) -> None:
+                        """Opens the language columns of one attribute (hybrid part)."""
+                        dlg = language_dialogs.get(prefix)
+                        if dlg is None:
+                            with ui.dialog() as dlg, ui.card().classes("w-[24rem] max-w-[92vw]"):
+                                ui.label(title).classes("text-h6")
+                                ui.label(t("grid.columns_languages_hint")).classes(
+                                    "text-caption text-gray-500"
+                                )
+                                for language, field in (
+                                    language_fields_by_prefix.get(prefix) or {}
+                                ).items():
+                                    field_checkbox(
+                                        field,
+                                        f"{language_labels.get(language, language)} · "
+                                        f"{language.upper()}",
+                                    )
+                                with ui.row().classes("w-full justify-end"):
+                                    ui.button(t("grid.close"), on_click=dlg.close).props(
+                                        "flat dense"
+                                    )
+                            language_dialogs[prefix] = dlg
+                        dlg.open()
+
+                    def language_row(prefix: str, title: str) -> None:
+                        """The hybrid language control of one attribute."""
+                        fields = language_fields_by_prefix.get(prefix) or {}
+                        if not fields:
+                            return
+                        counter = ui.label().classes("text-caption text-gray-500")
+                        language_counters[prefix] = counter
+                        ui.button(icon="translate").props("flat round dense").on_click(
+                            lambda p=prefix, title_=title: open_language_dialog(p, title_)  # type: ignore
+                        ).tooltip(t("grid.columns_languages_hint"))
+
+                    def add_section(
+                        group_id: str,
+                        title: str,
+                        rows: list[tuple[str, str, str]],
+                        *,
+                        open_: bool = False,
+                    ) -> None:
+                        """One collapsible section: group toggle + `(field, text, prefix)` rows.
+
+                        `prefix` is the field prefix of the attribute's language
+                        columns (empty when it has none), so the group toggle can
+                        clear them together with the group.
+                        """
+                        if not rows:
+                            return
+                        with (
+                            ui.expansion(f"{title} ({len(rows)})", value=open_)
+                            .classes("w-full")
+                            .props("dense")
+                        ):
+                            group_box = (
+                                ui.checkbox(t("grid.columns_group_all"))
+                                .props("dense")
+                                .on_value_change(
+                                    lambda e, g=group_id: (
+                                        None if syncing["value"] else toggle_group(g, bool(e.value))
+                                    )
+                                )
+                            )
+                            group_boxes[group_id] = group_box
+                            group_fields[group_id] = [field for field, _, _ in rows]
+                            group_prefixes[group_id] = [prefix for _, _, prefix in rows if prefix]
+                            for field, text, prefix in rows:
+                                with ui.row().classes("w-full items-center gap-1 pl-4"):
+                                    field_checkbox(field, text)
+                                    language_row(prefix, text)
+
+                    def attribute_rows(names: list[str]) -> list[tuple[str, str, str]]:
+                        """Picker rows for attribute names (label + name, language prefix)."""
+                        rows: list[tuple[str, str, str]] = []
+                        for name in names:
+                            definition = definitions_by_name.get(name) or {}
+                            label = resolve_value(definition.get("label"), locale) or name
+                            text = name if label == name else f"{label} ({name})"
+                            rows.append(
+                                (attribute_field(name), text, language_prefixes.get(name, ""))
+                            )
+                        return rows
 
                     # Column picker as a dialog (not a `ui.menu`): Quasar's QMenu
                     # auto-open doesn't fire in Firefox/Zen, while `ui.dialog` opens
                     # reliably in all browsers (same pattern as the working "views").
                     columns_dialog = ui.dialog()
-                    with columns_dialog, ui.card().classes("w-[22rem] max-w-[92vw]"):
+                    with columns_dialog, ui.card().classes("w-[26rem] max-w-[94vw]"):
                         ui.label(t("grid.columns")).classes("text-h6")
-                        with ui.column().classes("w-full gap-1 max-h-80 overflow-y-auto"):
-                            for column in column_defs:
-                                field = str(column.get("field") or "")
-                                checkbox = ui.checkbox(
-                                    column["headerName"], value=field in visible_fields
-                                ).on_value_change(make_toggler(field))
-                                checkbox_refs[field] = checkbox
+                        with ui.column().classes("w-full gap-0 max-h-[70vh] overflow-y-auto"):
+                            add_section(
+                                "_base",
+                                t("grid.columns_base"),
+                                [
+                                    (
+                                        field,
+                                        base_labels[field],
+                                        NAME_FIELD_PREFIX if field == "_name" else "",
+                                    )
+                                    for field in base_fields
+                                ],
+                                open_=True,
+                            )
+                            for group_id in ordered_group_ids:
+                                add_section(
+                                    group_id,
+                                    group_title(group_id),
+                                    attribute_rows(grouped_names[group_id]),
+                                )
+                            add_section(
+                                "_ungrouped",
+                                t("grid.columns_ungrouped"),
+                                attribute_rows(ungrouped_names),
+                            )
+                            if reference_definitions:
+                                add_section(
+                                    "_standard",
+                                    t("grid.columns_reference"),
+                                    attribute_rows(
+                                        [str(d.get("name")) for d in reference_definitions]
+                                    ),
+                                )
+                            hidden_standard = sum(
+                                1 for d in definitions if d.get("reference_data")
+                            ) - len(reference_definitions)
+                            if hidden_standard > 0:
+                                ui.label(
+                                    t("grid.columns_reference_hidden").format(count=hidden_standard)
+                                ).classes("text-caption text-gray-500 mt-2")
                         with ui.row().classes("w-full justify-end gap-2"):
                             ui.button(t("grid.close"), on_click=columns_dialog.close).props("flat")
+                        # Initial state: the field boxes are built with the current
+                        # set, the group toggles and language counters are filled
+                        # from it (a restored personal view must show up here).
+                        sync_picker()
                     ui.button(icon="view_column").props("outline").tooltip(
                         t("grid.columns")
                     ).on_click(columns_dialog.open)
