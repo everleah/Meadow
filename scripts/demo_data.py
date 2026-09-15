@@ -21,9 +21,11 @@ output directory:
     ``POST /imports?emit_events=false&source=meadow-demo``.
 ``extras.json``
     Everything that needs resolved object ids or post-import steps: channel
-    releases, collections with their members, saved searches, the collection
-    refresh jobs, the standard class membership and the business rules to
-    activate (MCF-imported rules start ``disabled`` by design).
+    releases, collections (materialised from their saved-search query), saved
+    searches, the collection refresh jobs, the standard class membership and the
+    business rules to activate (MCF-imported rules start ``disabled`` by design).
+    Node keys (``demo-group-PG-BRK``) inside a collection query are resolved by
+    the importer.
 ``report.json``
     Counts per object type and relation plus the parameter set — the evidence
     checked by ``tests/test_demo_data.py``.
@@ -44,10 +46,13 @@ import argparse
 import json
 import random
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 #: Source label written into every MEF document and used for the idempotent
 #: source-reference matching on re-import.
@@ -67,7 +72,6 @@ PROFILES: dict[str, dict[str, Any]] = {
         "fits_per_product": 2,
         "oem_ratio": 0.3,
         "chunks": 1,
-        "collection_size": 6,
     },
     "demo": {
         "products": 2000,
@@ -75,7 +79,6 @@ PROFILES: dict[str, dict[str, Any]] = {
         "fits_per_product": 3,
         "oem_ratio": 0.5,
         "chunks": 4,
-        "collection_size": 60,
     },
     "perf": {
         "products": 20000,
@@ -83,7 +86,6 @@ PROFILES: dict[str, dict[str, Any]] = {
         "fits_per_product": 4,
         "oem_ratio": 0.5,
         "chunks": 8,
-        "collection_size": 400,
     },
 }
 
@@ -260,6 +262,13 @@ def validate_catalog(data: dict[str, Any]) -> list[str]:
             if feature["attribute"] not in attribute_names:
                 problems.append(f"class features {entry['group']}: unknown attribute")
 
+    for collection in data.get("collections", []):
+        if not collection.get("name"):
+            problems.append("collection without name")
+        query = collection.get("query") or {}
+        if not query.get("where") and not query.get("references"):
+            problems.append(f"collection {collection.get('name')}: query without filter")
+
     for relation in data.get("relation_definitions", []):
         for attribute in relation.get("attributes", []):
             if attribute not in attribute_names:
@@ -344,6 +353,8 @@ class Node:
     status: str
     #: Business key value (for the report and the tests).
     business_key: str = ""
+    #: Assembly group of the part family a product/variant belongs to.
+    family_group: str = ""
 
     def to_mef(self) -> dict[str, Any]:
         return {
@@ -676,6 +687,7 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
             attributes=attributes,
             status=pick_status(rng),
             business_key=sku,
+            family_group=family["group"],
         )
         nodes.append(product)
         products.append(product)
@@ -709,6 +721,7 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
                 attributes=variant_attributes,
                 status="published" if product.status == "published" else product.status,
                 business_key=variant_sku,
+                family_group=family["group"],
             )
             nodes.append(variant)
             references.append(Reference(variant.key, product.key, "depends_on"))
@@ -735,6 +748,9 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
             },
             status="published",
             business_key=number,
+            # The number belongs to the family of the product that references it,
+            # so the chunker keeps both in the same chunk (see `_chunk_assignment`).
+            family_group=product.family_group,
         )
         nodes.append(node)
         oem_nodes.append(node)
@@ -871,18 +887,19 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
                 {"object": product.key, "channel": "bmecat-partner", "status": "published"}
             )
 
-    collections = []
-    for entry in catalog["collections"]:
-        size = min(int(entry["size"]), settings["collection_size"] * 4, len(products))
-        members = [products[(index * 3 + 1) % len(products)].key for index in range(size)]
-        collections.append(
-            {
-                "name": entry["name"],
-                "note": entry["note"],
-                "members": sorted(set(members)),
-                "refresh_schedule": "0 3 * * *",
-            }
-        )
+    collections = [
+        {
+            "name": entry["name"],
+            "note": entry.get("note", ""),
+            # The query selects the members (a collection is the materialised form
+            # of a saved search, `POST /collections` requires `saved_search_id`);
+            # `references[].out` may name a node key, the importer resolves it.
+            # A `refresh_interval` makes the core auto-sync the cron job.
+            "query": entry["query"],
+            "refresh_interval": entry.get("refresh_interval", ""),
+        }
+        for entry in catalog["collections"]
+    ]
 
     standard_memberships = []
     for index, family in enumerate(families):
@@ -1027,21 +1044,43 @@ def build_class_features(catalog: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def chunk_dataset(
+def _chunk_assignment(
     nodes: list[Node], references: list[Reference], chunks: int
-) -> list[dict[str, Any]]:
-    """Splits the dataset into closed MEF chunks.
+) -> tuple[list[dict[str, Node]], list[list[Reference]]]:
+    """Assigns objects and references to closed chunks.
 
-    A reference is assigned to the chunk of its source object; every chunk also
+    A reference belongs to the chunk of its source object; every chunk also
     carries the target objects of its references, so all references can be
     resolved inside one document (`meadow/worker/imports.py` builds its id map
-    from the objects of the document). Objects mentioned by several chunks are
-    imported several times — matched by business key/source reference, so the
-    second run updates instead of duplicating.
+    from the objects of the document).
+
+    Objects stay together with their assembly group (`Node.family_group`): a
+    part family, its variants and its OEM numbers form one unit, so a chunk
+    resolves its family-local relations on its own. Only the shared taxonomies
+    (`family_group == ""` — categories, assembly groups, vehicle chain) then end
+    up in several chunks; `build_master_document` creates those beforehand, so
+    the parallel chunks only update them.
     """
     count = max(1, int(chunks))
     nodes_by_key = {node.key: node for node in nodes}
-    home: dict[str, int] = {node.key: index % count for index, node in enumerate(nodes)}
+    home: dict[str, int] = {}
+    if count == 1:
+        home = {node.key: 0 for node in nodes}
+    else:
+        grouped: dict[str, list[Node]] = {}
+        for node in nodes:
+            grouped.setdefault(node.family_group, []).append(node)
+        sizes = [0] * count
+        # The shared taxonomies (empty group) come first so they do not pile up
+        # in the last chunk of the round.
+        for name in sorted(grouped, key=lambda group: (group != "", group)):
+            members = grouped[name]
+            index = min(range(count), key=lambda slot: (sizes[slot], slot))
+            for node in members:
+                home[node.key] = index
+            sizes[index] += len(members)
+    chunk_nodes: list[dict[str, Node]] = [{} for _ in range(count)]
+    chunk_references: list[list[Reference]] = [[] for _ in range(count)]
     chunk_nodes: list[dict[str, Node]] = [{} for _ in range(count)]
     chunk_references: list[list[Reference]] = [[] for _ in range(count)]
     for reference in references:
@@ -1054,6 +1093,59 @@ def chunk_dataset(
     # Objects without any reference still have to be imported.
     for node in nodes:
         chunk_nodes[home[node.key]].setdefault(node.key, node)
+    return chunk_nodes, chunk_references
+
+
+def build_master_document(
+    nodes: list[Node], references: list[Reference], chunks: int
+) -> dict[str, Any] | None:
+    """Builds the MEF document of the objects that more than one chunk carries.
+
+    Closed chunks repeat the objects a chunk shares with others (taxonomies and
+    the vehicle chain, see `_chunk_assignment`), because a chunk resolves its
+    references from its own objects. When the chunks run in parallel, two of
+    them create the same shared object at the same time: one insert wins, the
+    other fails with `409` or — if both lookups ran before the first insert —
+    leaves a duplicate row. Importing the shared objects once, before the
+    parallel chunks, removes that race: the chunks then match them by business
+    key and update them.
+
+    The document carries objects only: its references stay in the chunks that
+    own them (a `depends_on` parent is applied by re-parenting the object).
+    Returns `None` when a single chunk needs no shared-object pass.
+    """
+    chunk_nodes, _ = _chunk_assignment(nodes, references, chunks)
+    if len(chunk_nodes) < 2:
+        return None
+    occurrences: dict[str, int] = {}
+    for members in chunk_nodes:
+        for key in members:
+            occurrences[key] = occurrences.get(key, 0) + 1
+    shared = sorted(key for key, count in occurrences.items() if count > 1)
+    if not shared:
+        return None
+    nodes_by_key = {node.key: node for node in nodes}
+    return {
+        "format_version": "1.0",
+        "source": SOURCE,
+        "created_at": CREATED_AT,
+        "objects": [nodes_by_key[key].to_mef() for key in shared],
+        "references": [],
+    }
+
+
+def chunk_dataset(
+    nodes: list[Node], references: list[Reference], chunks: int
+) -> list[dict[str, Any]]:
+    """Splits the dataset into closed MEF chunks.
+
+    Objects mentioned by several chunks are imported several times — matched by
+    business key/source reference, so the second run updates instead of
+    duplicating. `build_master_document` creates those shared objects first, so
+    the parallel chunks only update them.
+    """
+    count = max(1, int(chunks))
+    chunk_nodes, chunk_references = _chunk_assignment(nodes, references, chunks)
 
     documents = []
     for index in range(count):
@@ -1097,6 +1189,9 @@ def write_outputs(
 
     dump("model.mcf.json", build_model(catalog))
     dump("class-features.mcf.json", build_class_features(catalog))
+    masters = build_master_document(dataset.nodes, dataset.references, chunks)
+    if masters is not None:
+        dump("masters.mef.json", masters, compact=True)
     documents = chunk_dataset(dataset.nodes, dataset.references, chunks)
     for index, document in enumerate(documents):
         dump(f"data-{index:02d}.mef.json", document, compact=True)
@@ -1124,6 +1219,630 @@ def summarize(report: dict[str, Any], written: dict[str, Path]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Import (stage 3)
+# --------------------------------------------------------------------------- #
+
+#: Business-key attribute per generated object type: used to resolve the record
+#: ids of the generated objects through the list endpoint. Types without an
+#: entry are matched by their `name` value.
+KEY_ATTRIBUTE_BY_TYPE = {
+    "product": "sku",
+    "variant": "sku",
+    "part_group": "group_code",
+    "oem_number": "oe_number",
+    "vehicle_make": "make_code",
+    "vehicle_model": "model_code",
+    "vehicle_generation": "generation_code",
+}
+
+#: Default address of the dev core.
+DEFAULT_BASE_URL = "http://127.0.0.1:8080"
+
+#: Page size for the object lists used to resolve record ids.
+LIST_PAGE = 1000
+
+
+class ImportFailure(RuntimeError):
+    """Raised when a step of the import does not succeed."""
+
+
+@dataclass
+class ImportLog:
+    """Collects the steps and problems of an import/cleanup run."""
+
+    steps: list[tuple[str, str]] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+    def add(self, step: str, detail: str = "") -> None:
+        self.steps.append((step, detail))
+        print(f"  {step}{': ' + detail if detail else ''}")
+
+    def problem(self, message: str) -> None:
+        self.problems.append(message)
+        print(f"  ! {message}")
+
+    def render(self) -> str:
+        return "\n".join(f"{step}: {detail}" if detail else step for step, detail in self.steps)
+
+
+def login(client: httpx.Client, user: str, password: str) -> dict[str, str]:
+    """Logs in and returns the authorization headers."""
+    response = client.post("/auth/login", json={"username": user, "password": password})
+    if response.status_code != 200:
+        raise ImportFailure(f"login failed: HTTP {response.status_code}")
+    return {"Authorization": f"Bearer {response.json()['token']}"}
+
+
+def _config_problems(report: dict[str, Any]) -> list[str]:
+    """Collects the errors of an MCF report (document level and per section)."""
+    problems = [str(error) for error in (report.get("errors") or [])]
+    for section, result in (report.get("sections") or {}).items():
+        for error in result.get("errors") or []:
+            problems.append(f"{section}: {error}")
+    return problems
+
+
+def apply_config(
+    client: httpx.Client,
+    headers: dict[str, str],
+    document: dict[str, Any],
+    *,
+    sections: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Applies an MCF document (`dry_run` validates only); fails on any error."""
+    params: dict[str, str] = {"mode": "dry_run" if dry_run else "merge"}
+    if sections:
+        params["sections"] = sections
+    response = client.post("/config/import", params=params, headers=headers, json=document)
+    if response.status_code != 200:
+        raise ImportFailure(
+            f"config import failed: HTTP {response.status_code} {response.text[:200]}"
+        )
+    report = response.json()
+    problems = _config_problems(report)
+    if problems:
+        raise ImportFailure("config import reported errors: " + "; ".join(problems[:5]))
+    return report
+
+
+def submit_mef(client: httpx.Client, headers: dict[str, str], document: dict[str, Any]) -> str:
+    """Submits one MEF document as an `inbound_import` job; returns the run id."""
+    response = client.post(
+        "/imports",
+        params={"emit_events": "false", "source": SOURCE},
+        headers=headers,
+        json=document,
+    )
+    if response.status_code not in (200, 201, 202):
+        raise ImportFailure(
+            f"chunk import failed: HTTP {response.status_code} {response.text[:200]}"
+        )
+    return str(response.json()["job_run_id"])
+
+
+def wait_for_runs(
+    client: httpx.Client,
+    headers: dict[str, str],
+    run_ids: list[str],
+    *,
+    timeout: float = 7200.0,
+    interval: float = 5.0,
+) -> dict[str, dict[str, Any]]:
+    """Polls `GET /jobs/runs` until every run finished (or the timeout hits)."""
+    wanted = set(run_ids)
+    finished: dict[str, dict[str, Any]] = {}
+    deadline = time.monotonic() + timeout
+    while wanted - set(finished) and time.monotonic() < deadline:
+        response = client.get("/jobs/runs", params={"limit": 50}, headers=headers)
+        response.raise_for_status()
+        rows = response.json()
+        if isinstance(rows, dict):
+            rows = rows.get("value", rows.get("items", []))
+        for row in rows:
+            run_id = str(row.get("id"))
+            if run_id in wanted and row.get("status") in ("success", "failed", "error"):
+                finished[run_id] = row
+        if wanted - set(finished):
+            time.sleep(interval)
+    missing = wanted - set(finished)
+    if missing:
+        raise ImportFailure(f"import jobs did not finish in time: {', '.join(sorted(missing))}")
+    return finished
+
+
+def run_summary(run: dict[str, Any]) -> str:
+    """One-line summary of an import job run."""
+    result = run.get("result") or {}
+    references = result.get("references") or []
+    failed_references = sum(1 for entry in references if entry.get("status") == "failed")
+    return (
+        f"objects {result.get('processed')} "
+        f"(created {result.get('created')}, updated {result.get('updated')}, "
+        f"failed {result.get('failed')}) · references {len(references)} "
+        f"(failed {failed_references})"
+    )
+
+
+def _lookup_key(value: Any) -> str:
+    """Stable lookup key for a business key (strings and language maps)."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _node_lookup(node: Node) -> tuple[str, Any]:
+    """Attribute name and value that identify a node in the list response."""
+    attribute = KEY_ATTRIBUTE_BY_TYPE.get(node.type, "name")
+    value = node.business_key if attribute in KEY_ATTRIBUTE_BY_TYPE.values() else None
+    return attribute, value or node.attributes.get(attribute)
+
+
+def resolve_node_ids(
+    client: httpx.Client,
+    headers: dict[str, str],
+    dataset: Dataset,
+    log: ImportLog,
+) -> dict[str, str]:
+    """Maps generated node keys to core record ids (list endpoint, paged).
+
+    Only objects of this generator's source are considered.
+    """
+    wanted: dict[str, dict[str, str]] = {}
+    for node in dataset.nodes:
+        attribute, value = _node_lookup(node)
+        if value in (None, ""):
+            continue
+        wanted.setdefault(node.type, {})[_lookup_key((attribute, value))] = node.key
+
+    resolved: dict[str, str] = {}
+    for object_type, entries in sorted(wanted.items()):
+        attribute = KEY_ATTRIBUTE_BY_TYPE.get(object_type, "name")
+        start = 0
+        while True:
+            response = client.get(
+                "/objects",
+                params={"type": object_type, "limit": LIST_PAGE, "start": start},
+                headers=headers,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            for row in rows:
+                if row.get("source") != SOURCE:
+                    continue
+                value = (row.get("attributes") or {}).get(attribute)
+                if value in (None, ""):
+                    continue
+                node_key = entries.get(_lookup_key((attribute, value)))
+                if node_key:
+                    resolved[node_key] = str(row.get("id"))
+            if len(rows) < LIST_PAGE:
+                break
+            start += LIST_PAGE
+    log.add("resolve ids", f"{len(resolved)}/{len(dataset.nodes)} objects")
+    return resolved
+
+
+def resolve_query(query: dict[str, Any], resolved: dict[str, str]) -> dict[str, Any]:
+    """Replaces node keys inside a query (e.g. `references[].out`) by record ids."""
+
+    def replace(value: Any) -> Any:
+        if isinstance(value, str):
+            return resolved.get(value, value)
+        if isinstance(value, dict):
+            return {key: replace(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace(item) for item in value]
+        return value
+
+    return replace(query)
+
+
+def _existing_by_name(client: httpx.Client, headers: dict[str, str], path: str) -> dict[str, str]:
+    """Maps `attributes.name` to record id for saved searches / collections."""
+    response = client.get(path, params={"limit": 200}, headers=headers)
+    response.raise_for_status()
+    rows = response.json()
+    if isinstance(rows, dict):
+        rows = rows.get("value", rows.get("items", []))
+    return {
+        str((row.get("attributes") or {}).get("name")): str(row.get("id"))
+        for row in rows
+        if (row.get("attributes") or {}).get("name")
+    }
+
+
+def apply_extras(
+    client: httpx.Client,
+    headers: dict[str, str],
+    extras: dict[str, Any],
+    resolved: dict[str, str],
+    log: ImportLog,
+) -> None:
+    """Applies releases, saved searches, collections, class membership and rules."""
+    set_releases = 0
+    unresolved_releases = 0
+    for release in extras["releases"]:
+        object_id = resolved.get(release["object"])
+        if not object_id:
+            unresolved_releases += 1
+            continue
+        response = client.put(
+            f"/objects/{object_id}/releases",
+            json={"channel": release["channel"], "status": release["status"]},
+            headers=headers,
+        )
+        if response.status_code != 200:
+            raise ImportFailure(
+                f"release for {release['object']} failed: HTTP {response.status_code}"
+            )
+        set_releases += 1
+    log.add("channel releases", f"{set_releases} set, {unresolved_releases} unresolved")
+
+    searches = _existing_by_name(client, headers, "/saved-searches")
+    created_searches = 0
+    updated_searches = 0
+    for entry in extras["saved_searches"]:
+        query = resolve_query(entry["query"], resolved)
+        existing_id = searches.get(entry["name"])
+        if existing_id:
+            # Upsert: the artefacts are the source of truth, so a re-run brings an
+            # existing search back in line (names come from the demo catalogue).
+            response = client.patch(
+                f"/saved-searches/{existing_id}",
+                json={"query": query},
+                headers=headers,
+            )
+            if response.status_code != 200:
+                raise ImportFailure(
+                    f"update of `{entry['name']}` failed: HTTP {response.status_code}"
+                )
+            updated_searches += 1
+            continue
+        response = client.post(
+            "/saved-searches",
+            json={"name": entry["name"], "query": query},
+            headers=headers,
+        )
+        if response.status_code not in (200, 201):
+            raise ImportFailure(
+                f"saved search `{entry['name']}` failed: HTTP {response.status_code}"
+            )
+        searches[entry["name"]] = str(response.json().get("id"))
+        created_searches += 1
+    log.add(
+        "saved searches",
+        f"{created_searches} created, {updated_searches} updated, "
+        f"{len(extras['saved_searches']) - created_searches - updated_searches} untouched",
+    )
+
+    collections = _existing_by_name(client, headers, "/collections")
+    created_collections = 0
+    member_counts: list[str] = []
+    for entry in extras["collections"]:
+        filter_name = f"{entry['name']} (Auswahl)"
+        search_id = searches.get(filter_name)
+        if search_id is None:
+            response = client.post(
+                "/saved-searches",
+                json={"name": filter_name, "query": resolve_query(entry["query"], resolved)},
+                headers=headers,
+            )
+            if response.status_code not in (200, 201):
+                raise ImportFailure(
+                    f"collection filter `{filter_name}` failed: HTTP {response.status_code}"
+                )
+            search_id = str(response.json().get("id"))
+            searches[filter_name] = search_id
+        else:
+            client.patch(
+                f"/saved-searches/{search_id}",
+                json={"query": resolve_query(entry["query"], resolved)},
+                headers=headers,
+            ).raise_for_status()
+        collection_id = collections.get(entry["name"])
+        payload = {
+            "saved_search_id": search_id,
+            "refresh_interval": entry["refresh_interval"] or None,
+        }
+        if collection_id is None:
+            response = client.post(
+                "/collections",
+                json={"name": entry["name"], **payload},
+                headers=headers,
+            )
+            if response.status_code not in (200, 201):
+                raise ImportFailure(
+                    f"collection `{entry['name']}` failed: HTTP {response.status_code}"
+                )
+            collection_id = str(response.json().get("id"))
+            collections[entry["name"]] = collection_id
+            created_collections += 1
+        else:
+            client.patch(
+                f"/collections/{collection_id}", json=payload, headers=headers
+            ).raise_for_status()
+        refresh = client.post(f"/collections/{collection_id}/refresh", headers=headers)
+        if refresh.status_code != 200:
+            raise ImportFailure(f"refresh of `{entry['name']}` failed: HTTP {refresh.status_code}")
+        member_counts.append(f"{entry['name']}={refresh.json().get('count')}")
+    log.add(
+        "collections",
+        f"{created_collections} created, {len(extras['collections']) - created_collections} "
+        f"existing · members {', '.join(member_counts)}",
+    )
+
+    created_edges = 0
+    skipped_edges = 0
+    class_ids: dict[str, str | None] = {}
+    for intent in extras["standard_memberships"]:
+        object_id = resolved.get(intent["object"])
+        if not object_id:
+            skipped_edges += 1
+            continue
+        key_value = str(intent["key_value"])
+        if key_value not in class_ids:
+            response = client.get(
+                "/objects/by-key",
+                params={
+                    "type": intent["standard_node_type"],
+                    "key": intent["key_attribute"],
+                    "value": key_value,
+                },
+                headers=headers,
+            )
+            class_ids[key_value] = (
+                str(response.json().get("id")) if response.status_code == 200 else None
+            )
+        class_id = class_ids[key_value]
+        if class_id is None:
+            skipped_edges += 1
+            continue
+        definition_id = f"rel_{intent['relation']}"
+        existing = client.get(f"/objects/{object_id}/references", headers=headers)
+        if existing.status_code == 200 and any(
+            str(row.get("definition_id")) == definition_id for row in existing.json()
+        ):
+            skipped_edges += 1
+            continue
+        response = client.post(
+            "/references",
+            json={
+                "source": object_id,
+                "target": class_id,
+                "definition_id": definition_id,
+                "attributes": {},
+            },
+            headers=headers,
+        )
+        if response.status_code not in (200, 201):
+            raise ImportFailure(
+                f"class membership for {intent['object']} failed: HTTP {response.status_code}"
+            )
+        created_edges += 1
+    log.add(
+        "standard membership",
+        f"{created_edges} created, {skipped_edges} existing/unresolved",
+    )
+
+    rules = client.get("/rules", headers=headers).json()
+    by_name = {str(rule.get("name")): rule for rule in rules}
+    activated: list[str] = []
+    for name in extras["activate_rules"]:
+        rule = by_name.get(name)
+        if rule is None:
+            log.problem(f"rule `{name}` not found")
+            continue
+        if str(rule.get("state")) == "active":
+            continue
+        response = client.post(f"/rules/{rule['id']}/activate", headers=headers)
+        if response.status_code != 200:
+            raise ImportFailure(f"activation of `{name}` failed: HTTP {response.status_code}")
+        activated.append(name)
+    log.add("business rules", f"activated {len(activated)}: {', '.join(activated) or '—'}")
+
+
+def verify_counts(
+    client: httpx.Client,
+    headers: dict[str, str],
+    report: dict[str, Any],
+    log: ImportLog,
+) -> None:
+    """Compares the expected object counts with `GET /objects/stats`."""
+    response = client.get("/objects/stats", headers=headers)
+    response.raise_for_status()
+    stats = response.json()
+    by_type = stats.get("by_type") or {}
+    log.add(
+        "verify types",
+        ", ".join(f"{name}={by_type.get(name, 0)}" for name in sorted(report["by_type"])),
+    )
+    for object_type, expected in sorted(report["by_type"].items()):
+        actual = int(by_type.get(object_type, 0))
+        if actual < expected:
+            log.problem(f"{object_type}: {actual} objects found, {expected} expected")
+    log.add("verify total", f"{stats.get('total')} objects in the instance")
+
+
+def cleanup_objects(
+    client: httpx.Client,
+    headers: dict[str, str],
+    dataset: Dataset,
+    log: ImportLog,
+) -> int:
+    """Soft-deletes the generated objects; the composition cascade takes children.
+
+    Variants, vehicle models/generations and sub-assembly groups are deleted by
+    their parent's cascade, so only the top-level types are requested.
+    """
+    resolved = resolve_node_ids(client, headers, dataset, log)
+    deleted = 0
+    cascaded = 0
+    failed: list[str] = []
+    for node_type in ("product", "vehicle_make", "part_group", "category", "oem_number"):
+        for node in [entry for entry in dataset.nodes if entry.type == node_type]:
+            object_id = resolved.get(node.key)
+            if not object_id:
+                continue
+            response = client.delete(f"/objects/{object_id}", headers=headers)
+            if response.status_code in (200, 204):
+                deleted += 1
+            elif response.status_code == 404:
+                # Already removed: a parent's cascade went first (sub-assembly
+                # groups, categories, variants, vehicle models).
+                cascaded += 1
+            else:
+                failed.append(f"{node.key}: HTTP {response.status_code}")
+    log.add(
+        "cleanup", f"{deleted} objects deleted, {cascaded} removed by cascade, {len(failed)} failed"
+    )
+    for entry in failed[:5]:
+        log.problem(f"delete failed {entry}")
+    return deleted
+
+
+def build_retry_document(
+    runs: dict[str, dict[str, Any]], dataset: Dataset
+) -> dict[str, Any] | None:
+    """Builds a MEF document for the entries that failed in a run (or `None`).
+
+    Parallel chunks update shared objects (vehicle generations, categories,
+    assembly groups) even though `masters.mef.json` created them beforehand: two
+    chunks updating the same record at the same time can hit a SurrealDB write
+    conflict (`HTTP 500`), which the worker isolates per entry. A second, small
+    pass over exactly those objects and references converges.
+    """
+    nodes_by_key = dataset.node_by_key()
+    references_by_key = {
+        (reference.source, reference.target, reference.type): reference
+        for reference in dataset.references
+    }
+    failed_nodes: dict[str, Node] = {}
+    failed_references: dict[tuple[str, str, str], Reference] = {}
+    for run in runs.values():
+        result = run.get("result") or {}
+        for entry in result.get("results") or []:
+            if entry.get("status") != "failed":
+                continue
+            node = nodes_by_key.get(str(entry.get("id") or ""))
+            if node is not None:
+                failed_nodes[node.key] = node
+        for entry in result.get("references") or []:
+            if entry.get("status") != "failed":
+                continue
+            key = (str(entry.get("in")), str(entry.get("out")), str(entry.get("type")))
+            reference = references_by_key.get(key)
+            if reference is not None:
+                failed_references[key] = reference
+    if not failed_nodes and not failed_references:
+        return None
+    for reference in failed_references.values():
+        for key in (reference.source, reference.target):
+            node = nodes_by_key.get(key)
+            if node is not None:
+                failed_nodes.setdefault(key, node)
+    return {
+        "format_version": "1.0",
+        "source": SOURCE,
+        "created_at": CREATED_AT,
+        "objects": [failed_nodes[key].to_mef() for key in sorted(failed_nodes)],
+        "references": [reference.to_mef() for _, reference in sorted(failed_references.items())],
+    }
+
+
+def run_import(
+    client: httpx.Client,
+    headers: dict[str, str],
+    dataset: Dataset,
+    out_dir: Path,
+    log: ImportLog,
+    *,
+    timeout: float = 7200.0,
+) -> None:
+    """Applies the generated artefacts: model, shared objects, chunks, features, extras.
+
+    The shared objects (`masters.mef.json`) are imported and awaited before the
+    parallel chunks are queued — otherwise two chunks create the same object at
+    the same time and one of them fails with `409`.
+    """
+    model = json.loads((out_dir / "model.mcf.json").read_text(encoding="utf-8"))
+    apply_config(client, headers, model, dry_run=True)
+    log.add("model (dry run)", "no errors")
+    apply_config(client, headers, model)
+    log.add("model", "applied (merge)")
+
+    masters_path = out_dir / "masters.mef.json"
+    runs: dict[str, dict[str, Any]] = {}
+    masters_run_id: str | None = None
+    if masters_path.exists():
+        masters = json.loads(masters_path.read_text(encoding="utf-8"))
+        masters_run_id = submit_mef(client, headers, masters)
+        log.add("shared objects", f"{len(masters['objects'])} objects queued (before the chunks)")
+        master_runs = wait_for_runs(client, headers, [masters_run_id], timeout=timeout)
+        runs.update(master_runs)
+        log.add("shared objects done", run_summary(master_runs[masters_run_id]))
+
+    documents = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(out_dir.glob("data-*.mef.json"))
+    ]
+    run_ids = [submit_mef(client, headers, document) for document in documents]
+    log.add("data import", f"{len(run_ids)} chunks queued")
+    runs.update(wait_for_runs(client, headers, run_ids, timeout=timeout))
+    created = sum(int((run.get("result") or {}).get("created") or 0) for run in runs.values())
+    updated = sum(int((run.get("result") or {}).get("updated") or 0) for run in runs.values())
+    failed = sum(int((run.get("result") or {}).get("failed") or 0) for run in runs.values())
+    failed_references = sum(
+        sum(
+            1
+            for entry in ((run.get("result") or {}).get("references") or [])
+            if entry.get("status") == "failed"
+        )
+        for run in runs.values()
+    )
+    log.add(
+        "data import done",
+        f"created {created}, updated {updated}, failed {failed} "
+        f"(references failed: {failed_references})",
+    )
+    for run_id, run in sorted(runs.items()):
+        if run_id == masters_run_id:
+            continue
+        log.add(f"  chunk {run_id[-6:]}", run_summary(run))
+    if failed or failed_references:
+        log.add(
+            "failed entries",
+            f"{failed} objects / {failed_references} references failed, retrying them",
+        )
+        retry = build_retry_document(runs, dataset)
+        if retry is not None:
+            log.add(
+                "retry pass",
+                f"{len(retry['objects'])} objects, {len(retry['references'])} references",
+            )
+            retry_run = submit_mef(client, headers, retry)
+            retry_result = wait_for_runs(client, headers, [retry_run], timeout=timeout)[retry_run]
+            log.add("retry done", run_summary(retry_result))
+            retry_failed = int((retry_result.get("result") or {}).get("failed") or 0)
+            retry_references = sum(
+                1
+                for entry in ((retry_result.get("result") or {}).get("references") or [])
+                if entry.get("status") == "failed"
+            )
+            if retry_failed or retry_references:
+                log.problem(
+                    f"after the retry pass: {retry_failed} objects / "
+                    f"{retry_references} references still failed"
+                )
+
+    features = json.loads((out_dir / "class-features.mcf.json").read_text(encoding="utf-8"))
+    apply_config(client, headers, features, sections="category_attributes")
+    log.add("class features", "applied")
+
+    resolved = resolve_node_ids(client, headers, dataset, log)
+    apply_extras(client, headers, dataset.extras, resolved, log)
+    verify_counts(client, headers, dataset.report, log)
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -1141,6 +1860,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--check",
         action="store_true",
         help="only validate the catalogue and print its counts",
+    )
+    parser.add_argument(
+        "--import",
+        dest="apply",
+        action="store_true",
+        help="apply model, chunks, class features and extras to the running core",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="soft-delete the objects of this dataset (then optionally re-import)",
+    )
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--user", default="admin")
+    parser.add_argument("--password", default="admin")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=7200.0,
+        help="seconds to wait for the import jobs",
     )
     return parser.parse_args(argv)
 
@@ -1161,6 +1900,22 @@ def main(argv: list[str] | None = None) -> int:
     chunks = args.chunks or int(PROFILES[args.profile]["chunks"])
     written = write_outputs(dataset, catalog, Path(args.out_dir), chunks)
     print(summarize(dataset.report, written))
+    if not (args.apply or args.cleanup):
+        return 0
+
+    log = ImportLog()
+    with httpx.Client(base_url=args.base_url, timeout=120.0) as client:
+        headers = login(client, args.user, args.password)
+        log.add("login", args.base_url)
+        if args.cleanup:
+            cleanup_objects(client, headers, dataset, log)
+        if args.apply:
+            run_import(client, headers, dataset, Path(args.out_dir), log, timeout=args.timeout)
+    if log.problems:
+        print(f"\n{len(log.problems)} problem(s):")
+        for problem in log.problems:
+            print(f"  ! {problem}")
+        return 1
     return 0
 
 

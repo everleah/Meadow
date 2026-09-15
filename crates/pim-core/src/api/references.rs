@@ -1742,14 +1742,16 @@ pub async fn collection_member_keys(db: &Db, collection_id: &str) -> Result<Vec<
     )
 )]
 pub async fn reparent_object(
-    AuthUser(claims): AuthUser,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<ReferenceWriteQuery>,
     Json(body): Json<ReparentObject>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    // `api_key_or_role`, not `AuthUser`: the worker re-parents objects for the
+    // bulk operation `change_parent` and for `depends_on` references in a MEF
+    // import (service account, `X-Api-Key`).
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let child_key = parse_object_key(&id)?;
     let new_parent_key = parse_object_key(&body.parent)?;
     if child_key == new_parent_key {
@@ -1792,30 +1794,38 @@ pub async fn reparent_object(
         object_type: child_type.to_owned(),
         object_id: id.clone(),
         changes: json!({ "parent": old_parent_id.clone() }),
-        metadata: json!({ "user_id": claims.sub.clone() }),
+        metadata: json!({ "user_id": user_id.clone() }),
     });
     let outbox_created = crate::event::content(&crate::event::OutboxEvent {
         event_type: crate::event::EVENT_REFERENCE_CREATED,
         object_type: child_type.to_owned(),
         object_id: id.clone(),
         changes: json!({ "parent": body.parent.clone() }),
-        metadata: json!({ "user_id": claims.sub.clone() }),
+        metadata: json!({ "user_id": user_id.clone() }),
     });
 
     // Statements: BEGIN(0), LET child(1), LET parent(2), DELETE(3),
-    // RELATE(4), CREATE outbox deleted(5), CREATE outbox created(6),
-    // SELECT(7), COMMIT(8).
-    let sql = "
+    // RELATE(4), [CREATE outbox deleted(5), CREATE outbox created(6)],
+    // SELECT(7|5), COMMIT(8|6). The events are skipped for bulk imports
+    // (`?emit_events=false`), like `create_reference` does.
+    let emit_events = params.emit_events.unwrap_or(true);
+    let event_statements = if emit_events {
+        "CREATE outbox_event CONTENT $outbox_deleted;\n        CREATE outbox_event CONTENT $outbox_created;\n        "
+    } else {
+        ""
+    };
+    let select_index = if emit_events { 7 } else { 5 };
+    let sql = format!(
+        "
         BEGIN TRANSACTION;
         LET $child = type::record('object', $child_key);
         LET $parent = type::record('object', $parent_key);
         DELETE reference WHERE in = $child AND definition_id = 'rel_depends_on';
-        RELATE $child->reference->$parent SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
-        CREATE outbox_event CONTENT $outbox_deleted;
-        CREATE outbox_event CONTENT $outbox_created;
-        SELECT * FROM $child;
+        RELATE $child->reference->$parent SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {{}};
+        {event_statements}SELECT * FROM $child;
         COMMIT TRANSACTION;
-    ";
+    "
+    );
     let mut response = state
         .db
         .inner()
@@ -1826,7 +1836,7 @@ pub async fn reparent_object(
         .bind(("outbox_created", outbox_created))
         .await?
         .check()?;
-    let objects: Vec<Value> = response.take(7)?;
+    let objects: Vec<Value> = response.take(select_index)?;
     let object = objects
         .into_iter()
         .next()
@@ -1835,7 +1845,7 @@ pub async fn reparent_object(
     audit::record_best_effort(
         &state.db,
         AuditEntry {
-            user_id: &claims.sub,
+            user_id: &user_id,
             action: "reference_reparented",
             object_id: Some(&id),
             from: Some(json!({ "parent": old_parent_id })),

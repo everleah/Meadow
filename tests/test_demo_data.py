@@ -47,7 +47,13 @@ def catalog() -> dict:
 
 @pytest.fixture(scope="module")
 def dataset(catalog: dict):
-    return demo.generate_dataset(catalog, "tiny", seed=7)
+    """The full `demo` profile: only it exercises every relation type.
+
+    The `tiny` profile (40 products) covers just a slice of the part families,
+    so e.g. `alternative_to` never occurs there — an undeclared edge attribute
+    slipped through until the profile-level dataset was used.
+    """
+    return demo.generate_dataset(catalog, "demo", seed=7)
 
 
 def test_catalogue_is_consistent(catalog: dict) -> None:
@@ -180,6 +186,12 @@ def test_reference_types_are_declared(catalog: dict, dataset) -> None:
     }
     used = {reference.type for reference in dataset.references}
     assert used <= declared, f"undeclared relation types: {sorted(used - declared)}"
+    # Every declared demo relation type must actually occur — a type that never
+    # occurs hides undeclared edge attributes from the check below. The two
+    # exceptions are deliberate: `related`/`collection_member` are core types the
+    # demo does not use, and the ETIM class membership is applied through the
+    # extras step (standard memberships), not through the MEF references.
+    assert used == declared - {"collection_member", "related", "etim_class_member"}
 
 
 def test_edge_attributes_are_declared(catalog: dict, dataset) -> None:
@@ -345,19 +357,33 @@ def test_extras_reference_generated_objects(dataset) -> None:
     for release in extras["releases"]:
         assert release["object"] in product_keys
         assert release["status"] == "published"
-    assert {collection["name"] for collection in extras["collections"]} == {
-        collection["name"] for collection in dataset.extras["collections"]
-    }
+    assert len(extras["collections"]) == 5
     for collection in extras["collections"]:
-        assert collection["members"]
-        assert set(collection["members"]) <= product_keys
-        assert collection["refresh_schedule"].count(" ") == 4
+        # A collection is the materialised form of a saved-search query: the
+        # query selects the members, the importer resolves node keys inside it.
+        assert collection["query"]["where"]["conditions"]
+        assert collection["refresh_interval"].count(" ") == 4
     for membership in extras["standard_memberships"]:
         assert membership["object"] in keys
         assert membership["key_attribute"] == "code"
         assert membership["relation"] == "etim_class_member"
     for search in extras["saved_searches"]:
         assert search["query"]["where"]["conditions"]
+
+
+def test_collection_queries_resolve_to_generated_nodes(catalog: dict, dataset) -> None:
+    """Every node key used in a collection query exists in the dataset."""
+    keys = {node.key for node in dataset.nodes}
+    group_keys = {node.key for node in dataset.nodes if node.type == "part_group"}
+    assert group_keys
+    referenced = [
+        reference["out"]
+        for collection in dataset.extras["collections"]
+        for reference in collection["query"].get("references", [])
+    ]
+    assert referenced, "at least one collection filters over a relation"
+    assert set(referenced) <= keys
+    assert set(referenced) <= group_keys
 
 
 def test_extras_releases_only_published_products(dataset) -> None:
@@ -372,6 +398,7 @@ def test_write_outputs_creates_the_expected_files(catalog: dict, tmp_path: Path)
     assert set(written) == {
         "model.mcf.json",
         "class-features.mcf.json",
+        "masters.mef.json",
         "data-00.mef.json",
         "data-01.mef.json",
         "extras.json",
@@ -383,6 +410,103 @@ def test_write_outputs_creates_the_expected_files(catalog: dict, tmp_path: Path)
     assert report["profile"] == "tiny"
     document = json.loads((tmp_path / "data-00.mef.json").read_text(encoding="utf-8"))
     assert document["objects"] and isinstance(document["references"], list)
+
+
+def test_master_document_pre_creates_the_shared_objects(catalog: dict) -> None:
+    """Chunks repeated objects are created once, before the parallel chunks.
+
+    Two chunks creating the same object at the same time either collide (`409`)
+    or leave a duplicate row; importing `masters.mef.json` first removes the
+    race, so the chunks only update those objects.
+    """
+    data = demo.generate_dataset(catalog, "demo", seed=5)
+    documents = demo.chunk_dataset(data.nodes, data.references, 3)
+    masters = demo.build_master_document(data.nodes, data.references, 3)
+    assert masters is not None
+    assert masters["references"] == []
+
+    occurrences: dict[str, int] = {}
+    for document in documents:
+        for entry in document["objects"]:
+            occurrences[entry["id"]] = occurrences.get(entry["id"], 0) + 1
+    shared = {key for key, count in occurrences.items() if count > 1}
+    assert shared, "the demo dataset must repeat objects across chunks"
+    assert {entry["id"] for entry in masters["objects"]} == shared
+    assert len(masters["objects"]) == len(shared)
+
+    # A single chunk never needs the pass, and a master entry must be a
+    # complete object so the core can create it.
+    assert demo.build_master_document(data.nodes, data.references, 1) is None
+    for entry in masters["objects"]:
+        assert set(entry) == {"id", "type", "status", "attributes"}
+
+
+def test_chunks_keep_every_assembly_group_together(catalog: dict) -> None:
+    """A part family, its variants and its OEM numbers live in one chunk.
+
+    Only the shared taxonomies (`family_group == ""`) are repeated, which is why
+    the master pass stays small (220 of 5 950 objects on the `demo` profile) and
+    the chunks resolve their family-local relations on their own.
+    """
+    data = demo.generate_dataset(catalog, "demo", seed=5)
+    documents = demo.chunk_dataset(data.nodes, data.references, 4)
+    chunk_of = {
+        entry["id"]: index
+        for index, document in enumerate(documents)
+        for entry in document["objects"]
+    }
+    groups: dict[str, set[int]] = {}
+    for node in data.nodes:
+        if node.family_group:
+            groups.setdefault(node.family_group, set()).add(chunk_of[node.key])
+    assert groups, "the demo dataset must have assembly groups"
+    spread = {name: chunks for name, chunks in groups.items() if len(chunks) > 1}
+    assert not spread, f"assembly groups split across chunks: {sorted(spread)[:3]}"
+
+    masters = demo.build_master_document(data.nodes, data.references, 4)
+    assert masters is not None
+    assert len(masters["objects"]) < 0.1 * len(data.nodes)
+    shared_groups = {entry["id"] for entry in masters["objects"]}
+    assert shared_groups <= {node.key for node in data.nodes if not node.family_group}
+
+
+def test_retry_document_collects_only_failed_entries(dataset) -> None:
+    """The retry pass rebuilds a small MEF document from a run report.
+
+    Parallel chunks share "hot" objects; a concurrent update can fail with a
+    write conflict (HTTP 500), which the worker reports per entry.
+    """
+    node = dataset.nodes[0]
+    reference = dataset.references[0]
+    runs = {
+        "run-1": {
+            "result": {
+                "results": [
+                    {"id": node.key, "status": "failed"},
+                    {"id": "object:01M2JZ", "status": "created"},
+                ],
+                "references": [
+                    {
+                        "in": reference.source,
+                        "out": reference.target,
+                        "type": reference.type,
+                        "status": "failed",
+                    },
+                    {"in": "a", "out": "b", "type": "unknown_type", "status": "failed"},
+                ],
+            }
+        }
+    }
+    document = demo.build_retry_document(runs, dataset)
+    assert document is not None
+    keys = {entry["id"] for entry in document["objects"]}
+    assert node.key in keys
+    assert {reference.source, reference.target} <= keys
+    assert len(document["references"]) == 1
+    assert document["references"][0]["type"] == reference.type
+    assert document["source"] == demo.SOURCE
+
+    assert demo.build_retry_document({"run-1": {"result": {"references": []}}}, dataset) is None
 
 
 def test_cli_check_accepts_the_curated_catalogue() -> None:

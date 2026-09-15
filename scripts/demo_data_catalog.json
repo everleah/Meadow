@@ -2067,7 +2067,8 @@
         "product"
       ],
       "attributes": [
-        "match_type"
+        "match_type",
+        "quality_tier"
       ]
     },
     {
@@ -5301,24 +5302,123 @@
   ],
   "collections": [
     {
-      "name": "Bremsen-Sortiment",
-      "note": "Alle Artikel der Baugruppe Bremsanlage",
-      "size": 260
+      "name": "Bremsscheiben-Sortiment",
+      "note": "Alle Artikel der Baugruppe Bremsscheiben (Filter ueber die Baugruppen-Zuordnung)",
+      "refresh_interval": "0 3 * * *",
+      "query": {
+        "limit": 500,
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            }
+          ]
+        },
+        "references": [
+          {
+            "type": "part_group_member",
+            "out": "demo-group-PG-BRK-DISC",
+            "direction": "incoming"
+          }
+        ]
+      }
     },
     {
-      "name": "Neuheiten Q3 2026",
-      "note": "Neu aufgenommene Artikel",
-      "size": 180
+      "name": "E-Mobilitaet Ladepaket",
+      "note": "Wallboxen, Ladekabel und Zubehoer mit Ladeleistung",
+      "refresh_interval": "0 3 * * *",
+      "query": {
+        "limit": 500,
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.charging_power_kw",
+              "operator": "not_empty"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Premium-Sortiment",
+      "note": "OE- und Erstausruester-Qualitaet",
+      "refresh_interval": "30 4 * * *",
+      "query": {
+        "limit": 500,
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.quality_tier",
+              "operator": "in",
+              "value": [
+                "oe",
+                "oes"
+              ]
+            }
+          ]
+        }
+      }
     },
     {
       "name": "Schnelldreher Werkstatt",
-      "note": "Meistverkaufte Werkstattartikel",
-      "size": 320
+      "note": "Artikel der Linie WerkstattPartner",
+      "refresh_interval": "0 5 * * *",
+      "query": {
+        "limit": 500,
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.manufacturer",
+              "operator": "eq",
+              "value": "werkstattpartner"
+            }
+          ]
+        }
+      }
     },
     {
-      "name": "E-Mobilität Ladepaket",
-      "note": "Wallboxen, Ladekabel und Zubehör",
-      "size": 120
+      "name": "Gefahrgut im Sortiment",
+      "note": "Artikel mit Gefahrgutkennzeichnung",
+      "refresh_interval": "0 6 * * *",
+      "query": {
+        "limit": 500,
+        "where": {
+          "op": "and",
+          "conditions": [
+            {
+              "field": "type",
+              "operator": "eq",
+              "value": "product"
+            },
+            {
+              "field": "attributes.hazardous",
+              "operator": "eq",
+              "value": true
+            }
+          ]
+        }
+      }
     }
   ],
   "saved_searches": [
@@ -5343,7 +5443,7 @@
         "limit": 100,
         "sort": [
           {
-            "field": "attributes.name",
+            "field": "attributes.sku",
             "order": "asc"
           }
         ]
@@ -5435,7 +5535,7 @@
         "limit": 100,
         "sort": [
           {
-            "field": "attributes.name",
+            "field": "attributes.sku",
             "order": "asc"
           }
         ]

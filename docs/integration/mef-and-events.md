@@ -72,11 +72,18 @@ MEF is a generic JSON exchange format that maps Meadow PIM core entities (object
 | `type` | `string` | Relation-definition **name** (e.g. `related`, `category_member`). The worker maps it to the core definition key `rel_<name>`. |
 | `attributes` | `object` | Optional relation attributes (e.g. `position`). |
 
+**`depends_on` (composition):** a new object is attached to the universal root when it
+is created and an object has exactly one composition parent, so a `depends_on`
+reference is applied as a **re-parenting** (`PATCH /objects/{id}/parent`) instead of a
+second edge. That is how a MEF document expresses the composition tree (variants under
+their product, vehicle generations under their model).
+
 ### 1.4 Semantics
 
 - **Upsert by business key:** if `match_by_key` is set (e.g. `sku`), an existing object of the same type with the same key value is updated instead of created.
 - **Idempotent dedup:** objects without a key are matched by their **source reference** — the MEF `id` plus the document `source` — against `GET /objects/by-source`, so re-importing the same record updates rather than duplicates.
 - **Superset behavior:** attributes not present in the MEF document are left unchanged on update / empty on create.
+- **Self-contained references:** both endpoints of a reference must be part of the document (`objects`), because the worker resolves `in`/`out` through the ids it just imported. A document may repeat an object that another document owns — the second import updates it.
 - **Validation:** the core only validates the document shallowly (`objects`/`references` must be arrays); full processing happens in the worker.
 - **Dates:** all timestamps are ISO-8601 with timezone, normalized to UTC on receipt.
 

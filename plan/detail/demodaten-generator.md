@@ -142,6 +142,7 @@ Die Datei ist **eigene Stammdatenliste** (keine Lizenzfrage); `auto-parts-db` ka
 | --- | --- | --- |
 | `model.mcf.json` | `channels`, `attribute_groups`, `enum_sets`, `object_types` (inkl. `part_group`, `etim_class`), `attribute_definitions`, `relation_definitions` (8, inkl. der zwei `role: category`-Dimensionen), `business_rules`, `export_profiles` | `POST /config/import?mode=merge` (Admin), erst `?dry_run=true` |
 | `class-features.mcf.json` | nur `category_attributes` (Klassen-Merkmale der `part_group`-Knoten) — **nach** dem Datenimport, weil die Sektion Klassen über ihren Business-Key adressiert | `POST /config/import?sections=category_attributes` |
+| `masters.mef.json` | **nur Objekte**, die in mehr als einem Chunk vorkommen (Taxonomien, Baugruppen, Fahrzeugkette, OEM-Nummern) | `POST /imports?emit_events=false&source=meadow-demo`, **vor** den Chunks und abgewartet |
 | `data-<nn>.mef.json` | Objekte + Referenzen, in `--chunks` geschlossene Teildokumente | `POST /imports?emit_events=false&source=meadow-demo` je Chunk, parallel |
 | `extras.json` | Kanalfreigaben, Collections + Mitglieder, gespeicherte Suchen, Jobdefinitionen (Cron), ETIM-Klassen-Zuordnung (per Business-Key), Regel-Aktivierung | `PUT /objects/{id}/releases`, `POST /collections…`, `POST /saved-searches`, `POST /jobs`, `POST /rules/{id}/activate` |
 | `report.json` | erzeugte Zahlen je Typ/Relation, Optional-Lücken, Katalogzahlen | Nachweis (wie `install_standard_bundle.py`), geprüft von `tests/test_demo_data.py` |
@@ -150,14 +151,17 @@ Die Datei ist **eigene Stammdatenliste** (keine Lizenzfrage); `auto-parts-db` ka
 ### 4.2 Einspielreihenfolge
 
 1. `POST /config/import?mode=merge` mit `model.mcf.json` (erst **dry_run** prüfen)
-2. Daten-Chunks parallel über `POST /imports` (die Chunks sind geschlossen; Referenzen laufen mit dem Chunk, der ihren Startknoten besitzt)
-3. `POST /config/import?sections=category_attributes` mit `class-features.mcf.json` (jetzt existieren die Klassenknoten)
-4. `extras.json` (Freigaben, Collections, Suchen, Jobs, ETIM-Klassen, Regeln aktivieren)
-5. Verifikation (`report.json` gegen die Ist-Zahlen aus `GET /objects/stats`, `GET /classification-standards?counts=true`, `GET /config/export`)
+2. `masters.mef.json` über `POST /imports` und **abwarten** (geteilte Objekte entstehen genau einmal)
+3. Daten-Chunks parallel über `POST /imports` (die Chunks sind geschlossen; Referenzen laufen mit dem Chunk, der ihren Startknoten besitzt)
+4. `POST /config/import?sections=category_attributes` mit `class-features.mcf.json` (jetzt existieren die Klassenknoten)
+5. `extras.json` (Freigaben, Collections, Suchen, Jobs, ETIM-Klassen, Regeln aktivieren)
+6. Verifikation (`report.json` gegen die Ist-Zahlen aus `GET /objects/stats`, `GET /classification-standards?counts=true`, `GET /config/export`)
 
-**Idempotenz:** Jedes Objekt trägt ein stabiles `id` und zusätzlich die Quell-Referenz (`source: meadow-demo` plus `source_id`); der Worker gleicht Business-Key → Record-ID → Quell-Referenz ab und meldet je Objekt `created`/`updated`. Ein zweiter Lauf ist damit gefahrlos.
+**Idempotenz:** Jedes Objekt trägt ein stabiles `id` und zusätzlich die Quell-Referenz (`source: meadow-demo` plus `source_id`); der Worker gleicht Business-Key → Record-ID → Quell-Referenz ab und meldet je Objekt `created`/`updated`. Ein zweiter Lauf ist für **Objekte** gefahrlos.
 
-**Chunk-Regel (aus dem Worker-Code):** Referenzen werden nur **innerhalb desselben Dokuments** aufgelöst (`id_map`), ein Chunk muss also beide Endpunkte jeder seiner Referenzen enthalten. Objekte dürfen dafür in **mehreren** Chunks vorkommen — sie werden dann aktualisiert statt dupliziert. So bleiben die Chunks in sich geschlossen und parallel einspielbar.
+**Referenzkanten sind (noch) nicht dedupliziert:** `POST /references` legt dieselbe Kante erneut an, wenn sie schon existiert (kein `409`), ein zweiter `--import`-Lauf verdoppelt die Aggregationen also. Deshalb gilt: **`--cleanup --import`** ist der saubere Neuaufbau (das Löschen der Objekte entfernt ihre Kanten mit), ein `--import` auf einen bestehenden Bestand ist ein „Auffüllen" (Objekte aktualisiert, Kanten erneut). Sauberer wäre ein `409` im Kern plus `existing`-Behandlung im Worker — als offener Punkt unten vermerkt.
+
+**Chunk-Regel (aus dem Worker-Code):** Referenzen werden nur **innerhalb desselben Dokuments** aufgelöst (`id_map`), ein Chunk muss also beide Endpunkte jeder seiner Referenzen enthalten. Objekte dürfen dafür in **mehreren** Chunks vorkommen — sie werden dann aktualisiert statt dupliziert. Damit das auch **parallel** gilt, spielt `masters.mef.json` die geteilten Objekte vorher einmal ein (Abschnitt 4.4, Punkt 4).
 
 ### 4.3 Gemessener Durchsatz des Import-Pfads (2026-09-15, lokal)
 
@@ -171,6 +175,19 @@ Die Datei ist **eigene Stammdatenliste** (keine Lizenzfrage); `auto-parts-db` ka
 Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele Import-Chunks skalieren also messbar (~2× Wanduhr gegenüber einem Dokument) und prüfen zugleich die Job-Queue.
 
 **Konsequenz (Rechengröße für `demo`, ~7 000 Objekte / ~23 000 Referenzen):** sequenziell ≈ 8 min + 25 min ≈ **35 min**; mit 4 Chunks ≈ **15–20 min**. `perf` (50 000 Objekte / 200 000 Referenzen) wäre sequenziell ≈ **3–4 h** → braucht den Turbo-Pfad.
+
+### 4.4 Befunde aus dem ersten Live-Import (2026-09-15)
+
+Zwei **echte Lücken im Import-Pfad** hat erst der Demo-Import aufgedeckt (beide behoben):
+
+1. **MEF konnte die Kompositionsstruktur nicht abbilden.** Ein neues Objekt hängt beim Anlegen am Universal-Root, und die Ein-Eltern-Invariante erlaubt genau eine `depends_on`-Kante — ein `depends_on`-Eintrag im MEF-Dokument wurde deshalb mit **`400`** abgelehnt (342 fehlgeschlagene Referenzen im ersten Lauf, Fahrzeugkette und Varianten blieben am Root). **Fix:** der Import-Worker wendet `depends_on` jetzt als **Umhängen** an (`PATCH /objects/{id}/parent`, Status `reparented`); damit ist ein MEF-Dokument strukturtreu. Tests: `tests/test_imports.py` (8).
+2. **`PATCH /objects/{id}/parent` akzeptierte nur JWT** (`AuthUser`) — der Worker (Service-Konto, `X-Api-Key`) bekam **`401`**. Damit war auch die Bulk-Operation **`change_parent`** seit ihrer Einführung kaputt. **Fix:** `api_key_or_role(..., ROLE_EDITOR)` plus `?emit_events=false` (wie bei `POST /references`), damit Bulk-/Importlaeufe den Outbox-Pfad ruhig halten.
+
+Weitere Beobachtungen: Der Worker holt Jobs **batchweise** (`fetch(JOBS_CONCURRENCY)`) — kommen später eintreffende Chunks erst danach dazu, startet die erste Welle einzeln (Demo: 1 Chunk laeuft, 3 warten). Für `perf` heißt das: mehr Chunks einplanen als `JOBS_CONCURRENCY` (oder die Fetch-Strategie tunen). Collections werden **aktualisiert statt dupliziert** (Upsert über `PATCH /saved-searches/{id}` bzw. `PATCH /collections/{id}`), damit ein zweiter Lauf die Filter der Artefakte durchsetzt; `--cleanup` entfernt Top-Level-Objekte (Kaskade nimmt Varianten, Modelle, Untergruppen mit) und wertet ein `404` als „schon per Kaskade entfernt", nicht als Fehler.
+
+3. **Kanten-Attribute muessen zur Definition passen.** `alternative_to` schrieb `quality_tier`, die Definition deklarierte nur `match_type` → der Kern lehnt unbekannte Kanten-Attribute mit **`400`** ab (1 520 fehlgeschlagene Kanten im ersten Demo-Lauf). Ursache der spaeten Entdeckung: das Test-Fixture lief auf `tiny` (40 Produkte), wo `alternative_to` gar nicht vorkommt — das Fixture nutzt jetzt das `demo`-Profil und prueft zusaetzlich, dass **jeder** deklarierte Relationstyp auch tatsaechlich erzeugt wird.
+4. **Geteilte Objekte kollidieren beim Anlegen.** Die geschlossenen Chunks wiederholen Objekte, die in mehreren Chunks gebraucht werden (Taxonomien, Fahrzeugkette). Laufen diese Chunks **parallel**, prüfen zwei von ihnen gleichzeitig ihre Business-Key-/Quell-Auflösung, finden nichts und legen beide an: Der Kern prüft die Eindeutigkeit **nicht atomar** (`key_value_exists` → `INSERT`), also gewinnt entweder ein Insert und der andere Lauf bekommt **`409`** (Objekt „failed“, obwohl es existiert) — oder es entstehen **zwei lebende Zeilen** (im Demo-Lauf: Fiat-Marke, BMW-3er, eine OEM-Nummer). Der Retry-Pass kann das nicht heilen, weil sein `PATCH` dann selbst mit `409` (Doppel-Key) scheitert.
+   **Fix (zwei Teile):** (a) `masters.mef.json` legt alle Objekte, die in mehreren Chunks vorkommen, **vor** den Chunks an; die Chunks finden sie danach per Business-Key/Quell-Referenz und aktualisieren nur. (b) Der Chunker schneidet nicht mehr per Round-Robin über die Knotenliste, sondern hält jede **Montagegruppe** (`Node.family_group`: Teilefamilie + Varianten + deren OEM-Nummern) in **einem** Chunk und verteilt die Gruppen gleichmäßig auf die Chunks; dadurch sind nur noch die 220 wirklich geteilten Taxonomie-Knoten im Master-Dokument (vorher ~2 600, weil jedes OEM-Paar und jede Variante quer lag). Zusätzlich bleibt der **Retry-Pass** für die Schreibkonflikte übrig, die zwei parallele `PATCH`-Aufrufe auf denselben Datensatz weiterhin auslösen können (SurrealDB quittiert sie mit einem Konflikt, der Kern als **`500`** meldet; isoliert und paarweise selten).
 
 ## 5. Profile und Turbo-Pfad
 
@@ -193,16 +210,18 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 ## 6. Werkzeug-Schnitt
 
 - **`scripts/demo_data.py`** (Generator + CLI; Tests laden es per `spec_from_file_location`):
-  `--profile tiny|demo|perf`, `--seed 42`, `--chunks N` (0 = Profilwert), `--out-dir .tmp/demo-data`, `--catalog`, `--check` (nur Katalog prüfen). Stufe 3 ergänzt `--import`/`--cleanup`/`--surql`.
+  `--profile tiny|demo|perf`, `--seed 42`, `--chunks N` (0 = Profilwert), `--out-dir .tmp/demo-data`, `--catalog`, `--check` (nur Katalog prüfen), **`--import`** (Modell → geteilte Objekte → Daten-Chunks → Klassen-Merkmale → Extras einspielen und gegen `GET /objects/stats` prüfen), **`--cleanup`** (Bestand dieses Datensatzes soft-deleten), `--base-url`, `--user`/`--password`, `--timeout` (Wartezeit auf die Jobs). `--cleanup --import` ergibt einen sauberen Neuaufbau.
 - **`scripts/demo_data_catalog.json`** (Abschnitt 3.8) — Daten getrennt von Logik, damit Marken/Teile ohne Codeänderung wachsen.
 - **Konventionen:** Konsolen-UTF-8 (`configure_console()`, Windows-cp1252-Falle), feste `created_at` für Byte-Determinismus, stabile Quell-IDs (`demo-<typ>-<key>`), Ausgaben unter `.tmp/` (gitignored).
 - **Abhängigkeiten:** nur Standardbibliothek im Generator (`random`, `json`, `argparse`); `httpx` erst für den Importer. **Kein** Netzwerkzugriff, kein npm.
 
 ## 7. Verifikation
 
-**Umgesetzt (`tests/test_demo_data.py` — 24 Tests, Teil des pytest-Gates):** Determinismus (gleicher Seed ⇒ identische Objekte/Referenzen, anderer Seed ⇒ anders), Katalog-Konsistenz (inkl. Negativfall mit unbekannten Querverweisen), Profil-Skalierung, eindeutige Objekt- und Business-Keys, Referenz-Endpunkte innerhalb des Datensatzes, **geschlossene Chunks** (jede Referenz mit beiden Endpunkten im selben Dokument) inklusive Vollständigkeit der Abdeckung, deklarierte Relationstypen und Kanten-Attribute, Attributwerte gegen das Modell (Enum-Werte, `range` = `{from,to}`, Zahlen/Bools/Text, mehrsprachige Karten `de`/`en`), GTIN-Prüfziffern, Statuswerte, Modell-Abdeckung aller erzeugten Typen, `role: category`-Dimensionen im Modell, Klassen-Merkmale, **ETIM-Standardbindung** (die vier `standard_codes` existieren und gehören zu einer benutzten Klasse; skip ohne `resources/`), Report-Konsistenz, Extras (nur veröffentlichte Produkte freigegeben, Collections/Suchen/Klassen-Zuordnungen zeigen auf erzeugte Objekte), Dateiausgabe und beide CLI-Pfade (`--check`, Schreiben).
+**Umgesetzt (`tests/test_demo_data.py` — 27 Tests und `tests/test_imports.py` — 8 Tests, Teil des pytest-Gates):** Determinismus (gleicher Seed ⇒ identische Objekte/Referenzen, anderer Seed ⇒ anders), Katalog-Konsistenz (inkl. Negativfall mit unbekannten Querverweisen), Profil-Skalierung, eindeutige Objekt- und Business-Keys, Referenz-Endpunkte innerhalb des Datensatzes, **geschlossene Chunks** (jede Referenz mit beiden Endpunkten im selben Dokument) inklusive Vollständigkeit der Abdeckung, deklarierte Relationstypen und Kanten-Attribute, Attributwerte gegen das Modell (Enum-Werte, `range` = `{from,to}`, Zahlen/Bools/Text, mehrsprachige Karten `de`/`en`), GTIN-Prüfziffern, Statuswerte, Modell-Abdeckung aller erzeugten Typen, `role: category`-Dimensionen im Modell, Klassen-Merkmale, **ETIM-Standardbindung** (die vier `standard_codes` existieren und gehören zu einer benutzten Klasse; skip ohne `resources/`), Collection-Filter (die Knoten-Keys in `references[].out` existieren), Report-Konsistenz, Extras (nur veröffentlichte Produkte freigegeben, Suchen/Klassen-Zuordnungen zeigen auf erzeugte Objekte), Dateiausgabe und beide CLI-Pfade (`--check`, Schreiben). Dazu die Worker-Seite: `depends_on` ⇒ Umhängen, Aggregationen ⇒ `POST /references`, Fehlerisolierung je Referenz, `emit_events`-Weitergabe.
 
-**Noch offen (Stufen 3–4):**
+**Live verifiziert (2026-09-15, `tiny`, dann `demo`):** zweiter Lauf `created 0, updated 429, failed 0` (Idempotenz über die Quell-Referenz), `references 535 (failed 0)` nach dem Umhängen-Fix, Klassen-Merkmale angewendet, Collections mit Mitgliedern aus ihren Filtern, Regeln aktiviert, `role: category` der beiden Dimensionen per API bestätigt.
+
+**Noch offen (Stufe 4–5):**
 
 - **Live-E2E:** MCF-Merge + Chunk-Import + Extras gegen eine Instanz, `report.json` vs. `GET /objects/stats`, Idempotenz (zweiter Lauf ⇒ `updated` statt `created`).
 - **Optional (skip ohne `resources/`):** BMEcat-Validierung des Demo-Exports gegen die XSD — analog zur bestehenden optionalen ETIM-Prüfung.
@@ -212,8 +231,8 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 ## 8. Umsetzungsschritte
 
 1. **Katalog & Modell (erledigt 2026-09-15):** `scripts/demo_data_catalog.json` (22 Marken, 93 Baureihen, 166 Generationen, 42 Baugruppen, 55 Teile-Familien, 13 Enum-Sets, 2 Export-Profile) und `build_model()` → `POST /config/import?dry_run=true` liefert **0 Fehler** (176 `created`, 4 `updated`).
-2. **Generator-Kern (erledigt 2026-09-15):** deterministische Objekte + Referenzen, geschlossene Chunks, `report.json`, `tests/test_demo_data.py` (24 Tests).
-3. **Einspielweg (offen, Stufe 3):** Login/MCF/Imports/Extras/Verifikation als CLI, idempotent, inkl. `--cleanup`.
+2. **Generator-Kern (erledigt 2026-09-15):** deterministische Objekte + Referenzen, geschlossene Chunks, `masters.mef.json` für die geteilten Objekte, `report.json`, `tests/test_demo_data.py` (27 Tests, auf dem `demo`-Profil).
+3. **Einspielweg (erledigt 2026-09-15):** `--import` (Login → MCF-Merge → geteilte Objekte → Chunks → Klassen-Merkmale → Extras → Verifikation gegen `GET /objects/stats`) und `--cleanup`; idempotent über die Quell-Referenz (zweiter Lauf `updated` statt `created`), Extras als Upsert (`PATCH /saved-searches/{id}`, `PATCH /collections/{id}`), **Retry-Pass** für Objekte/Referenzen, die unter parallelen Chunks an einem Schreibkonflikt (`HTTP 500`) gescheitert sind.
 4. **Regeln, Kanäle, Sammlungen, Suchen, Export-Profile (Modelldaten erledigt):** im Modell und in `extras.json` enthalten; die Regel-**Aktivierung** und die Freigaben laufen über den Importer (Stufe 3).
 5. **MCF-Lücke `role` (erledigt 2026-09-15):** Sektion trägt die Rolle, Rollenprüfung + `kind`-Ableitung in `relation_definition_content()`, Taxonomie-Prüfung beim echten Apply (nicht im Dry-Run), 4 Kern-Unit-Tests; `plan/detail/konfiguration-export-import.md` §4.7 und `crates/AGENTS.md` nachgezogen.
 6. **`perf` + Turbo-Pfad (offen):** Lastprofil erzeugen, einspielen (parallele Chunks mit erhöhter `JOBS_CONCURRENCY`; optional `.surql`-Import nur für Lastdaten — **so entschieden**) und `scripts/load_test.py` auswerten; Ergebnisse hier dokumentieren.
@@ -232,8 +251,12 @@ Der Worker zieht `JOBS_CONCURRENCY` (Default **4**) Jobs gleichzeitig; parallele
 
 **Offen:**
 
-- Ob der Importer (Stufe 3) als Unterbefehl in `demo_data.py` oder als eigenes Skript entsteht (naheliegend: im selben Modul, damit Katalog → Dateien → Import eine Kette bleiben).
+- **Doppelte Referenzkanten:** `POST /references` sollte eine bereits vorhandene Kante ablehnen (`409`) und der Import-Worker sie als `existing` (nicht als Fehler) melden — dann wäre ein `--import`-Lauf vollständig idempotent, ohne Zusatzabfragen je Kante. Heute heilt nur `--cleanup --import`.
 - Ob die `perf`-Lastdaten in dieselbe Instanz wie die Demo-Daten oder in eine eigene Instanz/Datenbank gehen (Trennung hält die Demo-Zahlen interpretierbar).
+- Ob der **Schreibkonflikt** bei parallelen Updates desselben Objekts im Kern sauber als `409` statt `500` gemeldet werden soll (heute heilt der Retry-Pass das; ein `409` wäre die ehrlichere Antwort und würde den Retry gezielter machen).
+- Ob die Worker-Fetch-Strategie (Jobs **batchweise** holen) für `perf` angepasst wird, damit die erste Chunk-Welle nicht einzeln startet.
+- `apply_extras` setzt die Kanalfreigaben **sequenziell** (~3 400 `PUT` für `demo`, ~5 min) — bei `perf` parallelisieren (Threadpool) oder über einen Bulk-Endpunkt bündeln.
+- **`--cleanup` ist teuer:** gemessen **~410 ms pro `DELETE /objects/{id}`** (Blatt-Objekt, 12 Proben — die Kaskade ist also nicht die Ursache eines Grundaufschlags), aber in der Praxis **~1,3–2,5 s pro Produkt**, weil Kaskade, Kanten-, Release- und Merkmals-Aufräumen, Audit und Outbox zusammenkommen. Für `demo` (3 104 Top-Level-Objekte, 5 950 Objekte inkl. Teilbäume) heißt das **~35 min** (gemessen: `3036 deleted, 68 removed by cascade, 0 failed`); für `perf` mit ~200k Kanten entsprechend mehr. Verdacht beim Grundaufschlag: `DELETE reference WHERE in IN $recs OR out IN $recs` kann die Indizes `idx_ref_in_def`/`idx_ref_out_def` (jeweils `in`/`out` **plus** `definition_id`) nicht nutzen und scannt die Kantentabelle. Kandidaten für die Performance-Arbeit: Index auf `reference.in`/`reference.out` allein oder ein gebündelter Löschpfad (eine Transaktion für n Objekte, `DELETE /objects?ids=` bzw. Bulk-Operation).
 
 ## 10. Nicht-Ziele
 

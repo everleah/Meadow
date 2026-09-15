@@ -41,6 +41,9 @@ NORMALIZATION_TIMEOUT_SECONDS = 30.0
 #: Default source label when the MEF document carries none.
 DEFAULT_SOURCE = "default"
 
+#: Record key of the (single) composition relation type.
+COMPOSITION_DEFINITION = "rel_depends_on"
+
 
 def _key_value(attributes: dict[str, Any], key: str) -> str | None:
     """Returns the business-key value if it is a plain string, else `None`."""
@@ -236,6 +239,12 @@ async def _import_references(
     `related`, `category_member`); the core's `POST /references` expects the
     definition **record key** (seed convention `rel_<name>`, e.g.
     `rel_related`). An already-prefixed id is passed through unchanged.
+
+    `depends_on` is special: a new object is attached to the universal root when
+    it is created, and the composition invariant allows exactly one parent edge
+    (`plan/detail/relationen.md`), so the reference is applied as a
+    **re-parenting** (`PATCH /objects/{id}/parent`) instead of a second edge.
+    Without that, a MEF document could not express the composition tree at all.
     """
     results: list[dict[str, Any]] = []
     params = None if emit_events else {"emit_events": "false"}
@@ -255,19 +264,32 @@ async def _import_references(
                 )
             if not definition_name:
                 raise RuntimeError("reference is missing `type`")
-            response = await client.post(
-                f"{core_url}/references",
-                json={
-                    "source": source,
-                    "target": target,
-                    "definition_id": definition_id,
-                    "attributes": attributes,
-                },
-                params=params,
-            )
+            composition = definition_id == COMPOSITION_DEFINITION
+            if composition:
+                response = await client.patch(
+                    f"{core_url}/objects/{source}/parent",
+                    json={"parent": target},
+                    params=params,
+                )
+            else:
+                response = await client.post(
+                    f"{core_url}/references",
+                    json={
+                        "source": source,
+                        "target": target,
+                        "definition_id": definition_id,
+                        "attributes": attributes,
+                    },
+                    params=params,
+                )
             response.raise_for_status()
             results.append(
-                {"in": source, "out": target, "type": definition_name, "status": "created"}
+                {
+                    "in": source,
+                    "out": target,
+                    "type": definition_name,
+                    "status": "reparented" if composition else "created",
+                }
             )
         except Exception as exc:  # noqa: BLE001 - per-reference isolation
             logger.warning("reference import failed: %s", exc)
