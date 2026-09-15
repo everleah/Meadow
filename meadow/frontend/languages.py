@@ -323,8 +323,11 @@ async def languages_page() -> None:
             await reload()
             ui.notify(t("lang_admin.deleted"), color="positive")
 
-        detail_host = ui.column()
-
+        # The host of the detail pane is created together with the layout at the
+        # end of this function (the splitter's right side). The renderers below
+        # close over this name, so it is bound exactly once: a second, earlier
+        # binding would leave an orphan column behind and send every render into
+        # the wrong pane (`tests/test_frontend_page_scopes.py`).
         async def render_detail() -> None:
             detail_host.clear()
             lang = selected["lang"]

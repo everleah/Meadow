@@ -102,15 +102,16 @@ impl MetaCache {
         Ok(bindings)
     }
 
-    /// Slim vocabulary of **all** attribute definitions as a **serialized JSON
+    /// Slim projection of **all** attribute definitions as a **serialized JSON
     /// body**, cached.
     ///
-    /// The export wizard offers an attribute selection over every definition
-    /// (`/export`), and paging `GET /attribute-definitions` in 1000-row chunks
-    /// cost 18 requests / ~9 s with a classification standard installed (ETIM
-    /// 10.0: 17 379 definitions, 640 KB per page). The projection carries only
-    /// what such a selection needs (`VOCABULARY_FIELDS`): 318 KB per 1000 rows
-    /// and 5.8 MB for the whole vocabulary in one query.
+    /// Two consumers: the export wizard offers an attribute selection over every
+    /// definition (`/export`), and the catalog page (`/attribute-definitions`)
+    /// lists them all — its paged list endpoint is capped at 1000 rows, and with a
+    /// classification standard installed those are the standard's features, so own
+    /// attributes were unreachable. The projection carries only what such a list or
+    /// selection needs (`VOCABULARY_FIELDS`): 318 KB per 1000 rows and ~6 MB for the
+    /// whole vocabulary in one query.
     ///
     /// The body is cached **serialized** because this payload is megabytes:
     /// cloning 17 379 documents out of a cache and re-serialising them per
@@ -253,11 +254,12 @@ async fn load_url_attributes(db: &Db) -> Result<Vec<UrlAttribute>, ApiError> {
         .collect())
 }
 
-/// Fields of the slim attribute vocabulary: everything an attribute *selection*
-/// needs (label, data type, group membership, whether it is applicable to an
-/// object type, whether it is reference data of a standard) and nothing else —
-/// `SELECT *` returned 640 KB per 1000 rows, this projection 318 KB.
-const VOCABULARY_FIELDS: [&str; 8] = [
+/// Fields of the slim attribute catalog projection: everything an attribute
+/// *selection* needs (label, data type, group membership, whether it applies to
+/// an object type, whether it is reference data) plus the three flags the
+/// catalog grid shows (`is_key`, `inheritable`, `required_types`) — and nothing
+/// else: `SELECT *` returned 640 KB per 1000 rows, this projection 318 KB.
+const VOCABULARY_FIELDS: [&str; 11] = [
     "id",
     "name",
     "label",
@@ -266,6 +268,9 @@ const VOCABULARY_FIELDS: [&str; 8] = [
     "multilingual",
     "applicable_types",
     "reference_data",
+    "is_key",
+    "inheritable",
+    "required_types",
 ];
 
 /// The vocabulary query: an explicit projection (never `SELECT *`), name order.

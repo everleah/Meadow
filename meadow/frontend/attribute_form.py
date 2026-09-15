@@ -29,7 +29,7 @@ with `computed` so records do not carry meaningless data.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from meadow.frontend.range_values import NUMERIC_TYPES
@@ -88,6 +88,23 @@ def field_state(
         inheritable_reason=inheritable_reason,
         reference=bool(editing),
     )
+
+
+def hides_standard(definition: Mapping[str, object], *, show_reference: bool) -> bool:
+    """Whether the catalog's standard switch hides this definition.
+
+    Reference data is the vocabulary of an imported classification standard (ETIM
+    10.0 brings 17 377 definitions). It belongs to the catalogue but not into the
+    admin's working list, so the catalog page hides it by default and offers a
+    count of what is hidden (the product form, the export wizard and the search
+    form follow the same rule: `reference_data.py`).
+    """
+    return bool(definition.get("reference_data")) and not show_reference
+
+
+def standard_count(definitions: Iterable[Mapping[str, object]]) -> int:
+    """How many definitions of the list are reference data."""
+    return sum(1 for definition in definitions if definition.get("reference_data"))
 
 
 def _parts(values: Iterable[object], *, skip: str = "") -> list[str]:

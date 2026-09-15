@@ -325,6 +325,22 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_attribute_definition(self, token: str, definition_id: str) -> dict:
+        """Loads one attribute definition in full (``GET /attribute-definitions/{id}``).
+
+        The catalog page lists the **slim** vocabulary (all definitions in one
+        request); the editor dialog needs the complete record — units, standard
+        bindings, computed fields, description — so it loads it on open instead of
+        saving a truncated payload back.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/attribute-definitions/{definition_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def update_attribute_definition(
         self,
         token: str,

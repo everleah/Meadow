@@ -11,7 +11,12 @@ See `plan/detail/api-design.md` ("Attributkatalog") and `meadow/AGENTS.md`.
 
 from __future__ import annotations
 
-from meadow.frontend.attribute_form import cleaned_payload, field_state
+from meadow.frontend.attribute_form import (
+    cleaned_payload,
+    field_state,
+    hides_standard,
+    standard_count,
+)
 
 
 def test_units_and_enum_set_follow_the_data_type() -> None:
@@ -185,3 +190,24 @@ def test_required_types_stay_within_the_applicable_types() -> None:
         required=["product", "category"],
     )
     assert every_type["required_types"] == ["product", "category"]
+
+
+_CATALOG = [
+    {"name": "sku", "reference_data": False},
+    {"name": "EF000001", "reference_data": True},
+    {"name": "EF000002", "reference_data": True},
+]
+
+
+def test_the_standard_switch_hides_reference_data() -> None:
+    assert hides_standard(_CATALOG[1], show_reference=False) is True
+    assert hides_standard(_CATALOG[1], show_reference=True) is False
+    assert hides_standard(_CATALOG[0], show_reference=False) is False
+    # A definition without the flag is own data (older records may lack it).
+    assert hides_standard({"name": "legacy"}, show_reference=False) is False
+
+
+def test_standard_count_counts_the_vocabulary() -> None:
+    assert standard_count(_CATALOG) == 2
+    assert standard_count([]) == 0
+    assert standard_count([{"name": "sku"}]) == 0

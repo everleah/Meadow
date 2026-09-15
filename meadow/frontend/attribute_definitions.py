@@ -11,7 +11,12 @@ from nicegui import app, ui
 
 from meadow.frontend import config
 from meadow.frontend.api import CoreClient, CoreError
-from meadow.frontend.attribute_form import cleaned_payload, field_state
+from meadow.frontend.attribute_form import (
+    cleaned_payload,
+    field_state,
+    hides_standard,
+    standard_count,
+)
 from meadow.frontend.filters import filter_select
 from meadow.frontend.grid import resolve_value
 from meadow.frontend.i18n import current_locale, t
@@ -38,7 +43,12 @@ async def attribute_definitions_page() -> None:
         ui.label(t("attr_def.subtitle")).classes("text-subtitle1")
 
         try:
-            definitions = await client.list_attribute_definitions(token, limit=1000)
+            # The **slim vocabulary** of *all* definitions, not the paged catalog
+            # list: that one is capped at 1000 rows, and with an imported standard
+            # the first 1000 are the standard's features (`EF…`), so an own
+            # attribute was simply not reachable here. The core serves the
+            # projection from its cache; the editor loads the full record on open.
+            definitions = await client.list_attribute_vocabulary(token)
         except Exception:  # noqa: BLE001 - show a friendly message on failure
             ui.label(t("attr_def.load_failed")).classes("text-subtitle1 text-negative")
             return
@@ -139,25 +149,21 @@ async def attribute_definitions_page() -> None:
             )
             if r.get("name")
         }
-        #: Attribute names for the dependencies select, loaded on first dialog open
-        #: (the catalog list of this page is capped at 1000 rows — with an imported
-        #: standard those are the standard's attributes, not the own ones).
-        vocabulary_names: dict[str, list[str]] = {"names": []}
 
-        # --- Filter state & predicate (name / group / type / reference) ------
-        filters: dict[str, str] = {"name": "", "group": "", "type": "", "reference": ""}
+        # --- Filter state & predicate (name / group / type / standard) ------
+        #: Standard vocabulary stays out of the working list until the switch is on.
+        show_state: dict[str, bool] = {"reference": False}
+        filters: dict[str, str] = {"name": "", "group": "", "type": ""}
 
         def _matches(d: dict) -> bool:
+            if hides_standard(d, show_reference=show_state["reference"]):
+                return False
             if filters["name"]:
                 q = filters["name"].lower()
                 hay = f"{d.get('name', '')} {resolve_value(d.get('label'), locale)}".lower()
                 if q not in hay:
                     return False
             if filters["type"] and str(d.get("type")) != filters["type"]:
-                return False
-            if filters["reference"] == "own" and d.get("reference_data"):
-                return False
-            if filters["reference"] == "reference" and not d.get("reference_data"):
                 return False
             return not (filters["group"] and filters["group"] not in (d.get("group_ids") or []))
 
@@ -207,15 +213,18 @@ async def attribute_definitions_page() -> None:
                 classes="w-40",
                 on_change=lambda value: _set_filter("type", str(value)),
             )
-            filter_select(
-                {
-                    "own": t("attr_def.reference_own"),
-                    "reference": t("attr_def.reference_standard"),
-                },
-                label=t("attr_def.filter_reference"),
-                classes="w-52",
-                on_change=lambda value: _set_filter("reference", str(value)),
-            )
+            # The standard's vocabulary is hidden by default: it belongs to the
+            # catalogue but not into the list an admin works with (the same rule as
+            # the product form, the export wizard and the search form).
+            ui.switch(
+                t("attr_def.show_reference"),
+                value=False,
+                on_change=lambda e: _set_show_reference(bool(e.value)),
+            ).props("dense").classes("ml-2")
+        #: "N standard attributes hidden": one label for the grid, **not** the
+        #: editor dialog's `reference_hint` further down — both would live in this
+        #: one function scope (`tests/test_frontend_page_scopes.py`).
+        hidden_hint = ui.label().classes("text-caption text-gray-500")
 
         state: dict = {"definitions": definitions}
 
@@ -255,10 +264,23 @@ async def attribute_definitions_page() -> None:
 
         def _apply_filters() -> None:
             grid.run_grid_method("setGridOption", "rowData", _rows())
+            hidden = 0 if show_state["reference"] else standard_count(definitions)
+            hidden_hint.set_text(
+                t("attr_def.reference_hidden").format(count=hidden) if hidden else ""
+            )
+            hidden_hint.set_visibility(hidden > 0)
 
         def _set_filter(key: str, value: str) -> None:
             filters[key] = value
             _apply_filters()
+
+        def _set_show_reference(show: bool) -> None:
+            show_state["reference"] = show
+            _apply_filters()
+
+        # Initial render: the grid has its rows already, but the hidden-count hint
+        # has to be filled from the loaded catalog.
+        _apply_filters()
 
         with ui.row().classes("w-full justify-end mt-2 gap-2"):
             ui.button(t("attr_def.create"), icon="add", on_click=lambda: open_editor(None)).props(
@@ -766,7 +788,11 @@ async def attribute_definitions_page() -> None:
             dependency_values = (
                 [str(name) for name in (definition.get("dependencies") or [])] if editing else []
             )
-            dependency_choices = [name for name in vocabulary_names["names"] if name != own_name]
+            dependency_choices = [
+                str(row.get("name"))
+                for row in definitions
+                if row.get("name") and str(row.get("name")) != own_name
+            ]
             for name in dependency_values:
                 if name not in dependency_choices:
                     dependency_choices.append(name)
@@ -786,35 +812,16 @@ async def attribute_definitions_page() -> None:
             # Last: hide/lock what the loaded choices make meaningless.
             apply_field_state()
 
-        async def load_attribute_names() -> None:
-            """Loads every attribute name for the dependencies select (once).
-
-            The catalog list of this page is capped at 1000 rows and with an
-            imported standard those are the standard's attributes — the own ones
-            would be missing from the picker. `GET /attribute-definitions/vocabulary`
-            answers with all definitions from the core's cache; only the names are
-            kept, and a free-text name stays possible.
-            """
-            if vocabulary_names["names"]:
-                return
-            try:
-                vocabulary = await client.list_attribute_vocabulary(token)
-            except Exception:  # noqa: BLE001 - free text stays possible
-                return
-            vocabulary_names["names"] = sorted(
-                {str(row.get("name")) for row in vocabulary if row.get("name")}
-            )
-
         async def reload() -> None:
             nonlocal definitions
             try:
-                definitions = await client.list_attribute_definitions(token, limit=1000)
+                # Same projection as the initial load: the list endpoint is capped
+                # at 1000 rows and would silently drop late-sorted attributes.
+                definitions = await client.list_attribute_vocabulary(token)
             except Exception:  # noqa: BLE001 - keep the cached list on failure
                 definitions = state["definitions"]
             state["definitions"] = definitions
-            # A write may have added or renamed an attribute: the picker reloads.
-            vocabulary_names["names"] = []
-            grid.run_grid_method("setGridOption", "rowData", _rows())
+            _apply_filters()
 
         async def apply_type_change(
             definition: dict, target: str, fields: dict, *, drop: bool
@@ -923,10 +930,13 @@ async def attribute_definitions_page() -> None:
                 else None
             )
             # Merge into the loaded map so a second standard is not dropped, and
-            # an empty input clears the binding of the shown standard.
+            # an empty input clears the binding of the shown standard. The grid row
+            # is the slim projection, so the **full** record loaded by the editor
+            # wins over it (otherwise the merge would drop every other binding).
+            loaded = getattr(save, "loaded", None) or current or {}
             standard_codes = {
                 str(key): str(value)
-                for key, value in dict((current or {}).get("standard_codes") or {}).items()
+                for key, value in dict(loaded.get("standard_codes") or {}).items()
                 if value
             }
             standard = str(standard_select.value or "etim").strip() or "etim"
@@ -1045,16 +1055,21 @@ async def attribute_definitions_page() -> None:
             if definition is None:
                 editing_id = None
                 full = None
+                save.loaded = None  # type: ignore[attr-defined]
             else:
-                oid = definition.get("id")
-                editing_id = oid
-                full = next(
-                    (d for d in definitions if d.get("id") == oid),
-                    definition,
-                )
+                editing_id = definition.get("id")
+                # The grid row is the slim projection; the editor needs the whole
+                # record (units, standard binding, computed fields, description) —
+                # otherwise saving would write a truncated payload back.
+                try:
+                    full = await client.get_attribute_definition(token, str(editing_id))
+                except Exception:  # noqa: BLE001 - fall back to the loaded row
+                    full = next(
+                        (d for d in definitions if d.get("id") == editing_id),
+                        definition,
+                    )
+                save.loaded = full  # type: ignore[attr-defined]
             save.editing_id = editing_id  # type: ignore[attr-defined]
-            # The dependency picker needs the full name list (loaded on demand).
-            await load_attribute_names()
             _fill_form(full)
             form_dialog.open()
 
