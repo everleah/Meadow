@@ -68,6 +68,10 @@ pub fn router(state: AppState) -> Router {
             "/objects/batch-delete",
             post(api::objects::batch_delete_objects),
         )
+        .route(
+            "/objects/batch-upsert",
+            post(api::objects::batch_upsert_objects),
+        )
         .route("/objects/bulk", post(api::objects::bulk_objects))
         .route("/objects/tree", get(api::references::get_object_tree))
         .route(

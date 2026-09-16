@@ -10,7 +10,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use ulid::Ulid;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::api::keys;
@@ -718,6 +719,830 @@ pub async fn batch_delete_objects(
         cascaded,
         missing,
     }))
+}
+
+/// Maximum number of objects in one `POST /objects/batch-upsert` call.
+pub const MAX_BATCH_UPSERT_ROWS: usize = 500;
+
+/// Additional match of a batch upsert (the business key is **always** tried first,
+/// exactly like the single write path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpsertMatch {
+    /// `source` + `source_id` (the import case: a MEF document carries both).
+    Source,
+    /// Before the source reference, an entry whose `source_id` is an existing
+    /// object record id updates that object (MEF roundtrip, `POST /imports?
+    /// match_by_id=true`).
+    Id,
+}
+
+impl UpsertMatch {
+    fn parse(raw: Option<&str>) -> Result<Self, ApiError> {
+        match raw.map(str::trim).unwrap_or("") {
+            "" | "source" => Ok(Self::Source),
+            "id" => Ok(Self::Id),
+            other => Err(ApiError::bad_request(format!(
+                "unknown `match_by` `{other}` (expected `source` or `id`)"
+            ))),
+        }
+    }
+}
+
+/// One create-or-update entry of [`BatchUpsertRequest`].
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchUpsertItem {
+    /// Object type (business role), e.g. `product`.
+    #[serde(rename = "type")]
+    pub object_type: String,
+    /// Attribute values (the complete map, as a single write would carry it).
+    #[serde(default)]
+    pub attributes: Value,
+    /// Workflow status (defaults to `draft`).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Source system (with `source_id` it is the default match).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Identifier in the source system.
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+/// Payload of `POST /objects/batch-upsert`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchUpsertRequest {
+    /// `source` (default) or `id`.
+    #[serde(default)]
+    pub match_by: Option<String>,
+    /// Attribute used to match existing objects (e.g. `sku`). Default: the key
+    /// attributes the object type declares. This mirrors `match_by_key` of
+    /// `POST /imports`; the **uniqueness** check always uses the registered key
+    /// attributes.
+    #[serde(default)]
+    pub key: Option<String>,
+    pub objects: Vec<BatchUpsertItem>,
+}
+
+/// Per-entry outcome of a batch upsert.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchUpsertItemResult {
+    /// Position in the request's `objects` array.
+    pub index: usize,
+    /// Record id of the created/updated object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// `created`, `updated` or `failed`.
+    pub action: String,
+    /// Failure message (only for `failed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Result of `POST /objects/batch-upsert`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchUpsertResponse {
+    pub created: usize,
+    pub updated: usize,
+    pub failed: usize,
+    pub results: Vec<BatchUpsertItemResult>,
+}
+
+/// Creates or updates many objects with **one** lookup, **one** transaction and
+/// **one** audit statement per batch.
+///
+/// A single object write costs ~4–5 database round trips (type registry, key
+/// uniqueness, the write transaction, the audit row, the outbox row); at 16 k
+/// objects an import therefore spends its time in round trips, not in the
+/// database — measured 2026-09-16: each round trip that SurrealDB answers in
+/// 300–500 ms under load multiplies into ~450 ms per object
+/// (`plan/detail/demodaten-generator.md` §4.3/§5). This endpoint keeps the
+/// semantics of the single endpoints and amortises the round trips:
+///
+/// - the object types of the batch are registered once,
+/// - the business-key uniqueness is checked with **one** query per key attribute
+///   (plus a check for duplicates *inside* the batch),
+/// - all keys of the batch are locked as one critical section
+///   (`crate::key_lock`), so the check-then-write window stays closed,
+/// - creates and updates go into **one** transaction, root edges included,
+/// - audit entries are written per object but with one statement.
+///
+/// Rules keep running per entry (`validation`/`computed` in `save` mode, plus
+/// `workflow_guard` in `transition` mode when the status changes) and stay
+/// fail-closed: an entry a rule rejects is reported as `failed`, the rest of the
+/// batch is written. Channel releases and class features are deliberately *not*
+/// part of this endpoint — they are separate calls with their own guard rules.
+#[utoipa::path(
+    post,
+    path = "/objects/batch-upsert",
+    request_body = BatchUpsertRequest,
+    params(WriteObjectQuery),
+    responses(
+        (status = 200, description = "Per-entry results", body = BatchUpsertResponse),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 413, description = "Too many rows", body = Value)
+    )
+)]
+pub async fn batch_upsert_objects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WriteObjectQuery>,
+    Json(body): Json<BatchUpsertRequest>,
+) -> Result<Json<BatchUpsertResponse>, ApiError> {
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    if body.objects.is_empty() {
+        return Err(ApiError::bad_request("`objects` must not be empty"));
+    }
+    if body.objects.len() > MAX_BATCH_UPSERT_ROWS {
+        return Err(ApiError::payload_too_large(format!(
+            "batch exceeds the limit of {MAX_BATCH_UPSERT_ROWS} objects"
+        )));
+    }
+    let match_mode = UpsertMatch::parse(body.match_by.as_deref())?;
+    // The attribute the *matching* uses: the request's `key` when given (the
+    // import job's `match_by_key`), else each type's declared key attributes.
+    let explicit_key: Option<String> = body
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned);
+    let emit_events = params.emit_events.unwrap_or(true);
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+    let started = std::time::Instant::now();
+
+    // ---- per-entry preparation (no database access) -------------------------
+    let mut results: Vec<BatchUpsertItemResult> = Vec::with_capacity(body.objects.len());
+    let mut prepared: Vec<Option<PreparedBatchItem>> = Vec::with_capacity(body.objects.len());
+    for item in &body.objects {
+        let object_type = item.object_type.trim().to_owned();
+        if object_type.is_empty() {
+            results.push(failed_result(prepared.len(), "entry without `type`"));
+            prepared.push(None);
+            continue;
+        }
+        let Value::Object(attributes) = &item.attributes else {
+            results.push(failed_result(
+                prepared.len(),
+                "`attributes` must be an object",
+            ));
+            prepared.push(None);
+            continue;
+        };
+        let status = item
+            .status
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_status().as_str())
+            .to_owned();
+        prepared.push(Some(PreparedBatchItem {
+            object_type,
+            status,
+            attributes: attributes.clone(),
+            source: item.source.clone(),
+            source_id: item.source_id.clone(),
+        }));
+        results.push(pending_result(prepared.len() - 1));
+    }
+
+    // Keep the type registry complete, and read the key attributes of every type
+    // that appears — once per type, not once per object.
+    let mut key_names: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for item in prepared.iter().flatten() {
+        if key_names.contains_key(&item.object_type) {
+            continue;
+        }
+        crate::api::object_types::ensure_registered(&state.db, &item.object_type).await?;
+        let names =
+            crate::api::object_types::key_attributes_for(&state.db, &item.object_type).await?;
+        key_names.insert(item.object_type.clone(), names);
+    }
+
+    // One critical section for the whole batch: the uniqueness check below and
+    // the write must not be separated by another writer of the same key.
+    let mut lock_names: Vec<String> = Vec::new();
+    for item in prepared.iter().flatten() {
+        let names = key_names
+            .get(&item.object_type)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        lock_names.extend(crate::api::keys::key_lock_names(
+            &item.object_type,
+            names,
+            &item.attributes,
+        ));
+    }
+    let _key_guards = state.key_locks.lock_keys(&lock_names).await;
+
+    // Trim the key values (identical semantics as the single write path).
+    let mut key_values: Vec<Vec<(String, String)>> = Vec::with_capacity(prepared.len());
+    for item in prepared.iter_mut() {
+        match item {
+            Some(entry) => {
+                let names = key_names
+                    .get(&entry.object_type)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                key_values.push(crate::api::keys::trim_key_values(
+                    names,
+                    &mut entry.attributes,
+                ));
+            }
+            None => key_values.push(Vec::new()),
+        }
+    }
+
+    // Values used to find an existing object: the trimmed key attributes plus the
+    // explicit match key (the `key` values are also needed for the uniqueness
+    // check below).
+    let mut lookup_values: Vec<Vec<(String, String)>> = Vec::with_capacity(prepared.len());
+    for (index, item) in prepared.iter().enumerate() {
+        let mut values = key_values[index].clone();
+        if let (Some(name), Some(entry)) = (explicit_key.as_ref(), item.as_ref())
+            && let Some(text) = entry.attributes.get(name).and_then(Value::as_str)
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() && !values.iter().any(|(n, _)| n == name) {
+                values.push((name.clone(), trimmed.to_owned()));
+            }
+        }
+        lookup_values.push(values);
+    }
+
+    // ---- lookups: existing objects and key values in use --------------------
+    // Duplicates *inside* the batch would be a conflict the database cannot see.
+    let mut in_batch: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut conflicts: Vec<Option<String>> = vec![None; prepared.len()];
+    for (index, values) in key_values.iter().enumerate() {
+        let Some(entry) = prepared.get(index).and_then(Option::as_ref) else {
+            continue;
+        };
+        for (name, value) in values {
+            if !in_batch.insert(format!("{}\u{1}{name}\u{1}{value}", entry.object_type)) {
+                conflicts[index] = Some(format!(
+                    "duplicate business key `{name}` inside the batch: `{value}` appears twice"
+                ));
+            }
+        }
+    }
+
+    // Values that another live object of the same type already carries.
+    let mut used: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut grouped: std::collections::HashMap<(String, String), Vec<String>> =
+        std::collections::HashMap::new();
+    for (index, values) in lookup_values.iter().enumerate() {
+        let Some(entry) = prepared.get(index).and_then(Option::as_ref) else {
+            continue;
+        };
+        for (name, value) in values {
+            grouped
+                .entry((entry.object_type.clone(), name.clone()))
+                .or_default()
+                .push(value.clone());
+        }
+    }
+    for ((object_type, name), mut values) in grouped {
+        values.sort_unstable();
+        values.dedup();
+        let in_use =
+            crate::api::keys::key_values_in_use(&state.db, &object_type, &name, &values, None)
+                .await?;
+        for (value, key) in in_use {
+            used.insert(format!("{object_type}\u{1}{name}\u{1}{value}"), key);
+        }
+    }
+
+    // Which entries update an existing object?
+    //
+    // **Both** lookups always run and one is the fallback of the other: the single
+    // write path (`_upsert_object` in the import worker) tries the business key
+    // first and the source reference second, so an import must not create a second
+    // object for a keyless MEF entry (or for one whose key was added later).
+    let mut by_source_match: Vec<Option<String>> = vec![None; prepared.len()];
+    let mut by_key_match: Vec<Option<String>> = vec![None; prepared.len()];
+    let mut by_id_match: Vec<Option<String>> = vec![None; prepared.len()];
+    {
+        let mut by_source: std::collections::HashMap<String, Vec<(usize, String)>> =
+            std::collections::HashMap::new();
+        for (index, item) in prepared.iter().enumerate() {
+            let Some(entry) = item.as_ref() else {
+                continue;
+            };
+            let Some(source_id) = entry.source_id.clone() else {
+                continue;
+            };
+            let label = entry
+                .source
+                .clone()
+                .unwrap_or_else(|| SOURCE_FALLBACK.to_owned());
+            by_source.entry(label).or_default().push((index, source_id));
+        }
+        for (source, entries) in by_source {
+            let ids: Vec<String> = entries.iter().map(|(_, id)| id.clone()).collect();
+            let mut response = state
+                .db
+                .inner()
+                .query(
+                    "SELECT type::string(id) AS id, status, source_id FROM object \
+                     WHERE source = $source AND source_id IN $ids AND deleted_at IS NONE;",
+                )
+                .bind(("source", source))
+                .bind(("ids", ids))
+                .await?
+                .check()?;
+            let rows: Vec<Value> = response.take(0)?;
+            let mut found: std::collections::HashMap<String, (String, String)> =
+                std::collections::HashMap::new();
+            for row in rows {
+                let (Some(id), Some(source_id)) = (
+                    row.get("id").and_then(Value::as_str),
+                    row.get("source_id").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                let status = row
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                found.insert(source_id.to_owned(), (id.to_owned(), status));
+            }
+            for (index, source_id) in entries {
+                if let Some((id, _)) = found.get(&source_id) {
+                    by_source_match[index] = Some(id.clone());
+                }
+            }
+        }
+        for (index, item) in prepared.iter().enumerate() {
+            let Some(entry) = item.as_ref() else {
+                continue;
+            };
+            for (name, value) in &lookup_values[index] {
+                let lookup = format!("{}\u{1}{name}\u{1}{value}", entry.object_type);
+                if let Some(key) = used.get(&lookup) {
+                    by_key_match[index] = Some(format!("object:{key}"));
+                }
+            }
+        }
+        // `match_by=id`: a `source_id` that is an existing record id wins over the
+        // source reference (the single write path does the same check).
+        if match_mode == UpsertMatch::Id {
+            let candidates: Vec<String> = prepared
+                .iter()
+                .flatten()
+                .filter_map(|entry| entry.source_id.clone())
+                .filter(|id| id.starts_with("object:"))
+                .collect();
+            if !candidates.is_empty() {
+                let literal = crate::api::keys::record_list_literal(
+                    TABLE,
+                    candidates.iter().map(String::as_str),
+                );
+                let mut response = state
+                    .db
+                    .inner()
+                    .query(format!(
+                        "SELECT type::string(id) AS id FROM object WHERE id IN {literal} \
+                         AND deleted_at IS NONE;"
+                    ))
+                    .await?
+                    .check()?;
+                let rows: Vec<Value> = response.take(0)?;
+                let existing_ids: std::collections::HashSet<String> = rows
+                    .iter()
+                    .filter_map(|row| row.get("id").and_then(Value::as_str))
+                    .map(str::to_owned)
+                    .collect();
+                for (index, item) in prepared.iter().enumerate() {
+                    if let Some(entry) = item.as_ref()
+                        && let Some(source_id) = entry.source_id.as_deref()
+                        && existing_ids.contains(source_id)
+                    {
+                        by_id_match[index] = Some(source_id.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    let mut existing: Vec<Option<String>> = Vec::with_capacity(prepared.len());
+    for index in 0..prepared.len() {
+        // The order matches the single write path: business key, then (with
+        // `match_by=id`) the record id, then the source reference.
+        existing.push(
+            by_key_match[index]
+                .clone()
+                .or_else(|| by_id_match[index].clone())
+                .or_else(|| by_source_match[index].clone()),
+        );
+    }
+    // Statuses of the matched objects (needed for the workflow guard).
+    let mut existing_status: Vec<Option<String>> = vec![None; prepared.len()];
+    let matched_keys: Vec<String> = existing
+        .iter()
+        .filter_map(|id| {
+            id.as_deref()
+                .and_then(|id| id.split_once(':').map(|(_, k)| k.to_owned()))
+        })
+        .collect();
+    if !matched_keys.is_empty() {
+        let literal =
+            crate::api::keys::record_list_literal(TABLE, matched_keys.iter().map(String::as_str));
+        let mut response = state
+            .db
+            .inner()
+            .query(format!(
+                "SELECT type::string(id) AS id, status FROM object WHERE id IN {literal};"
+            ))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        let mut statuses: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for row in rows {
+            if let (Some(id), Some(status)) = (
+                row.get("id").and_then(Value::as_str),
+                row.get("status").and_then(Value::as_str),
+            ) {
+                statuses.insert(id.to_owned(), status.to_owned());
+            }
+        }
+        for (index, id) in existing.iter().enumerate() {
+            if let Some(status) = id.as_ref().and_then(|id| statuses.get(id)) {
+                existing_status[index] = Some(status.clone());
+            }
+        }
+    }
+
+    // ---- per-entry validation, rules and content ----------------------------
+    let mut creates: Vec<Value> = Vec::new();
+    let mut updates: Vec<Value> = Vec::new();
+    let mut audits: Vec<Value> = Vec::new();
+    let mut events: Vec<Value> = Vec::new();
+    let mut cascades: Vec<String> = Vec::new();
+    let mut created_count = 0usize;
+    let mut updated_count = 0usize;
+    let mut failed_count = 0usize;
+
+    for (index, item) in prepared.into_iter().enumerate() {
+        let Some(PreparedBatchItem {
+            object_type,
+            status,
+            mut attributes,
+            source,
+            source_id,
+        }) = item
+        else {
+            failed_count += 1;
+            continue;
+        };
+        if let Some(conflict) = conflicts[index].take() {
+            results[index] = failed_at(index, &conflict);
+            failed_count += 1;
+            continue;
+        }
+        // The matched object may itself carry the key value — then it is not a
+        // conflict, it is the object we are updating.
+        let own_key = existing[index]
+            .as_deref()
+            .and_then(|id| id.split_once(':').map(|(_, key)| key.to_owned()));
+        if let Some(conflict) =
+            key_conflict(&object_type, &key_values[index], &used, own_key.as_deref())
+        {
+            results[index] = failed_at(index, &conflict);
+            failed_count += 1;
+            continue;
+        }
+        if let Err(error) =
+            crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
+                .await
+        {
+            results[index] = failed_at(index, error.message());
+            failed_count += 1;
+            continue;
+        }
+
+        // Rules: `save` mode for every entry, `transition` mode when the status
+        // changes (the single write paths do the same).
+        let new_status = if status.is_empty() {
+            default_status()
+        } else {
+            status.clone()
+        };
+        let status_changed = existing[index].is_some()
+            && existing_status[index].as_deref() != Some(new_status.as_str());
+        let mut eval_attributes = attributes.clone();
+        if let Some(locale) = locale
+            && let Err(error) = crate::language::resolve_attributes(
+                &state.cache,
+                &state.db,
+                locale,
+                &mut eval_attributes,
+            )
+            .await
+        {
+            results[index] = failed_at(index, error.message());
+            failed_count += 1;
+            continue;
+        }
+        let candidate = json!({
+            "id": existing[index].clone().unwrap_or_default(),
+            "type": object_type.clone(),
+            "status": new_status.clone(),
+            "attributes": Value::Object(eval_attributes),
+        });
+        match crate::rules::evaluate_for_write(
+            &state.cache,
+            &state.db,
+            &state.rules,
+            &candidate,
+            crate::rules::WriteEvaluation::new(
+                &["validation", "computed"],
+                "save",
+                locale,
+                Some(&user_id),
+            ),
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if let Err(error) = crate::rules::enforce(&outcome) {
+                    results[index] = failed_at(index, error.message());
+                    failed_count += 1;
+                    continue;
+                }
+                match crate::rules::resolve_computed(&state.db, &outcome.computed_object()).await {
+                    Ok(computed) => {
+                        for (name, value) in computed {
+                            attributes.insert(name, value);
+                        }
+                    }
+                    Err(error) => {
+                        results[index] = failed_at(index, error.message());
+                        failed_count += 1;
+                        continue;
+                    }
+                }
+                if status_changed {
+                    let guard = match crate::rules::evaluate_for_write(
+                        &state.cache,
+                        &state.db,
+                        &state.rules,
+                        &candidate,
+                        crate::rules::WriteEvaluation::new(
+                            &["workflow_guard"],
+                            "transition",
+                            locale,
+                            Some(&user_id),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(guard) => guard,
+                        Err(error) => {
+                            results[index] = failed_at(index, error.message());
+                            failed_count += 1;
+                            continue;
+                        }
+                    };
+                    if let Err(error) = crate::rules::enforce(&guard) {
+                        results[index] = failed_at(index, error.message());
+                        failed_count += 1;
+                        continue;
+                    }
+                }
+            }
+            Err(error) => {
+                results[index] = failed_at(index, error.message());
+                failed_count += 1;
+                continue;
+            }
+        }
+
+        let mut content = Map::new();
+        content.insert("type".to_owned(), Value::String(object_type.clone()));
+        content.insert("attributes".to_owned(), Value::Object(attributes));
+        content.insert("status".to_owned(), Value::String(new_status.clone()));
+        content.insert("updated_by".to_owned(), Value::String(user_id.clone()));
+        if let Some(source_id) = source_id {
+            content.insert("source_id".to_owned(), Value::String(source_id));
+        }
+        if let Some(source) = source {
+            content.insert("source".to_owned(), Value::String(source));
+        }
+
+        match &existing[index] {
+            Some(id) => {
+                let key = id
+                    .split_once(':')
+                    .map(|(_, key)| key.to_owned())
+                    .unwrap_or_else(|| id.clone());
+                let change_view = content
+                    .get("attributes")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                updates.push(json!({ "key": key, "content": Value::Object(content) }));
+                audits.push(audit::content(AuditEntry {
+                    user_id: &user_id,
+                    action: if status_changed {
+                        "status_changed"
+                    } else {
+                        "object_updated"
+                    },
+                    object_id: Some(id),
+                    from: None,
+                    to: status_changed.then(|| Value::String(new_status.clone())),
+                    metadata: None,
+                }));
+                if emit_events {
+                    events.push(crate::event::content(&crate::event::OutboxEvent {
+                        event_type: crate::event::EVENT_OBJECT_UPDATED,
+                        object_type: object_type.clone(),
+                        object_id: id.clone(),
+                        changes: json!({ "attributes": change_view }),
+                        metadata: json!({ "user_id": user_id.clone() }),
+                    }));
+                }
+                cascades.push(id.clone());
+                updated_count += 1;
+                results[index] = BatchUpsertItemResult {
+                    index,
+                    id: Some(id.clone()),
+                    action: "updated".to_owned(),
+                    error: None,
+                };
+            }
+            None => {
+                content.insert("version".to_owned(), json!(1));
+                let ulid = Ulid::new().to_string();
+                let record_id = format!("object:{ulid}");
+                let change_view = content
+                    .get("attributes")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                creates.push(json!({ "id": ulid, "content": Value::Object(content) }));
+                audits.push(audit::content(AuditEntry {
+                    user_id: &user_id,
+                    action: "object_created",
+                    object_id: Some(&record_id),
+                    from: None,
+                    to: None,
+                    metadata: Some(json!({ "batch": true })),
+                }));
+                if emit_events {
+                    events.push(crate::event::content(&crate::event::OutboxEvent {
+                        event_type: crate::event::EVENT_OBJECT_CREATED,
+                        object_type: object_type.clone(),
+                        object_id: record_id.clone(),
+                        changes: json!({ "attributes": change_view }),
+                        metadata: json!({ "user_id": user_id.clone() }),
+                    }));
+                }
+                created_count += 1;
+                results[index] = BatchUpsertItemResult {
+                    index,
+                    id: Some(record_id),
+                    action: "created".to_owned(),
+                    error: None,
+                };
+            }
+        }
+    }
+
+    // ---- one transaction for the whole batch --------------------------------
+    if !creates.is_empty() || !updates.is_empty() || !events.is_empty() {
+        let mut sql = String::from("BEGIN TRANSACTION;\n");
+        if !creates.is_empty() {
+            sql.push_str("FOR $c IN $creates { CREATE type::record('object', $c.id) CONTENT $c.content; };\n");
+            // The root edge needs `RELATE`: a directly created edge record
+            // (`CREATE reference SET in = …, out = …`) is stored but is **not** a
+            // relation ("Found record … which is not a relation, but expected a
+            // RELATION"), so no traversal finds it. `RELATE <function call>->…`
+            // does not parse ("Unexpected token `::`"), therefore the loop binds a
+            // record first — verified against the running server, including that
+            // the edge is traversable afterwards.
+            sql.push_str(
+                "FOR $c IN $creates { LET $new = type::record('object', $c.id); \
+                 RELATE $new->reference->object:object_root SET definition_id = 'rel_depends_on', \
+                 type = 'depends_on', attributes = {}; };\n",
+            );
+        }
+        if !updates.is_empty() {
+            sql.push_str(
+                "FOR $u IN $updates { UPDATE type::record('object', $u.key) MERGE $u.content; };\n",
+            );
+            sql.push_str(
+                "FOR $u IN $updates { UPDATE type::record('object', $u.key) \
+                 SET version = version + 1, updated_at = time::now(), updated_by = $user_id; };\n",
+            );
+        }
+        if !events.is_empty() {
+            sql.push_str("FOR $e IN $events { CREATE outbox_event CONTENT $e; };\n");
+        }
+        sql.push_str("COMMIT TRANSACTION;");
+        state
+            .db
+            .inner()
+            .query(sql)
+            .bind(("creates", creates))
+            .bind(("updates", updates))
+            .bind(("events", events))
+            .bind(("user_id", user_id.clone()))
+            .await?
+            .check()?;
+        state.cache.invalidate_stats();
+    }
+
+    if !audits.is_empty() {
+        audit::record_many_best_effort(&state.db, audits).await;
+    }
+    for id in cascades {
+        if let Err(error) =
+            crate::rules::queue_inherited_cascade(&state, &id, locale, &user_id).await
+        {
+            tracing::warn!(?error, "failed to enqueue inherited-computed cascade");
+        }
+    }
+    tracing::debug!(
+        total_ms = started.elapsed().as_secs_f64() * 1000.0,
+        created = created_count,
+        updated = updated_count,
+        failed = failed_count,
+        "batch upsert"
+    );
+
+    Ok(Json(BatchUpsertResponse {
+        created: created_count,
+        updated: updated_count,
+        failed: failed_count,
+        results,
+    }))
+}
+
+/// A validated batch-upsert entry on its way to the write (see
+/// [`batch_upsert_objects`]).
+struct PreparedBatchItem {
+    object_type: String,
+    status: String,
+    attributes: Map<String, Value>,
+    source: Option<String>,
+    source_id: Option<String>,
+}
+
+/// Fallback source label when an entry carries a `source_id` but no `source`
+/// (the object table stores `source` as a plain string, so the lookup needs one).
+const SOURCE_FALLBACK: &str = "api";
+
+/// Result placeholder for an entry that has not been decided yet.
+fn pending_result(index: usize) -> BatchUpsertItemResult {
+    BatchUpsertItemResult {
+        index,
+        id: None,
+        action: "failed".to_owned(),
+        error: Some("entry was not processed".to_owned()),
+    }
+}
+
+/// Result of an entry that failed before the write.
+fn failed_result(index: usize, error: &str) -> BatchUpsertItemResult {
+    failed_at(index, error)
+}
+
+fn failed_at(index: usize, error: &str) -> BatchUpsertItemResult {
+    BatchUpsertItemResult {
+        index,
+        id: None,
+        action: "failed".to_owned(),
+        error: Some(error.to_owned()),
+    }
+}
+
+/// The first key value of an entry that another live object already carries
+/// (the object being updated itself is not a conflict).
+fn key_conflict(
+    object_type: &str,
+    values: &[(String, String)],
+    used: &std::collections::HashMap<String, String>,
+    own_key: Option<&str>,
+) -> Option<String> {
+    for (name, value) in values {
+        let lookup = format!("{object_type}\u{1}{name}\u{1}{value}");
+        if let Some(owner) = used.get(&lookup)
+            && own_key != Some(owner.as_str())
+        {
+            return Some(format!(
+                "duplicate business key `{name}`: an object of type `{object_type}` \
+                 with value `{value}` already exists"
+            ));
+        }
+    }
+    None
 }
 
 /// Loads a single object by id, optionally resolving multilingual attributes.
@@ -2250,6 +3075,33 @@ mod tests {
             percent,
             missing: missing.iter().map(|name| (*name).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn upsert_match_defaults_to_source_and_accepts_id() {
+        assert_eq!(UpsertMatch::parse(None).unwrap(), UpsertMatch::Source);
+        assert_eq!(UpsertMatch::parse(Some("")).unwrap(), UpsertMatch::Source);
+        assert_eq!(
+            UpsertMatch::parse(Some(" source ")).unwrap(),
+            UpsertMatch::Source
+        );
+        assert_eq!(UpsertMatch::parse(Some("id")).unwrap(), UpsertMatch::Id);
+        assert!(UpsertMatch::parse(Some("key")).is_err());
+    }
+
+    #[test]
+    fn key_conflict_ignores_the_object_that_is_being_updated() {
+        let values = vec![("sku".to_owned(), "A-1".to_owned())];
+        let mut used = std::collections::HashMap::new();
+        used.insert("product\u{1}sku\u{1}A-1".to_owned(), "own".to_owned());
+
+        // The matched object itself carries the value: an update, not a conflict.
+        assert!(key_conflict("product", &values, &used, Some("own")).is_none());
+        // Another object carries it: a conflict.
+        assert!(key_conflict("product", &values, &used, Some("other")).is_some());
+        assert!(key_conflict("product", &values, &used, None).is_some());
+        // A different type may reuse the value (the check is per type).
+        assert!(key_conflict("variant", &values, &used, None).is_none());
     }
 
     #[test]

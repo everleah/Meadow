@@ -4,13 +4,15 @@ The handler receives `parameters.document_id`, fetches the stored MEF document
 from the core (`GET /imports/{document_id}`), and imports its objects and
 references:
 
-- Objects are upserted by business key (`match_by_key`, e.g. `sku`): an
-  existing object with the same type + key value is updated, otherwise a new
-  object is created.
-- With `match_by_id` a MEF `id` that is an existing core record id
-  (`object:<ulid>`, as written by Meadow's own MEF export) updates that object.
-- Objects without a key match are deduplicated by **source reference** (the
-  MEF object `id` + the document `source`), via `GET /objects/by-source`.
+- Objects are upserted in **batches** (`POST /objects/batch-upsert`, see
+  `BATCH_UPSERT_SIZE`); the core matches each entry like the single write path:
+  business key first (`match_by_key`, e.g. `sku`, default: the type's declared key
+  attributes), then — with `match_by_id` — a MEF `id` that is an existing core
+  record id (`object:<ulid>`, as written by Meadow's own MEF export), then the
+  **source reference** (the MEF object `id` + the document `source`). One request
+  therefore replaces up to `BATCH_UPSERT_SIZE` single writes, which is what makes
+  large imports cheap: the per-object round trips, not the database, dominated
+  them (`plan/detail/demodaten-generator.md` §4.3/§5).
 - References are created between the imported objects, mapping the MEF `id`
   (and the key/source lookups) to the core's record ids.
 - A reference the core reports as a duplicate (`409`: the edge exists already) is
@@ -49,14 +51,6 @@ DEFAULT_SOURCE = "default"
 
 #: Record key of the (single) composition relation type.
 COMPOSITION_DEFINITION = "rel_depends_on"
-
-
-def _key_value(attributes: dict[str, Any], key: str) -> str | None:
-    """Returns the business-key value if it is a plain string, else `None`."""
-    value = attributes.get(key)
-    if isinstance(value, str):
-        return value.strip() or None
-    return None
 
 
 async def _fetch_document(
@@ -176,80 +170,60 @@ def _raise_for_core_error(response: httpx.Response) -> None:
     raise RuntimeError(f"HTTP {response.status_code} from {response.request.url.path}: {detail}")
 
 
-async def _upsert_object(
+#: Objects per `POST /objects/batch-upsert` call. The endpoint checks the
+#: business keys, locks them and writes the whole batch in one transaction, so a
+#: single request replaces up to this many single writes (measured 2026-09-16:
+#: the per-object round trips, not the database, dominated an import —
+#: `plan/detail/demodaten-generator.md` §4.3/§5).
+BATCH_UPSERT_SIZE = 200
+
+
+async def _upsert_batch(
     client: httpx.AsyncClient,
     core_url: str,
-    object_type: str,
-    attributes: dict[str, Any],
-    status: str,
-    match_by_key: str | None,
-    source_id: str | None,
-    source: str | None,
+    entries: list[dict[str, Any]],
+    match_by: str,
     emit_events: bool,
-    match_by_id: bool = False,
-) -> tuple[str, str]:
-    """Creates or updates one MEF object; returns `(record_id, action)`.
+    match_key: str | None = None,
+) -> list[tuple[str | None, str, str | None]]:
+    """Upserts prepared objects in one call; returns `(record_id, action, error)` each.
 
-    The object is matched by business key first, then (with `match_by_id`) by an
-    existing core record id, then by source reference (`source` + `source_id`),
-    so keyless objects are idempotent too.
+    `entries` are `{"external_id": str, "payload": {...}}` records. The endpoint
+    answers per entry with the same index, so a reordered answer cannot mix up
+    objects. A whole-batch failure raises: the caller marks every entry failed.
     """
-    existing_id: str | None = None
-    if match_by_key:
-        key_value = _key_value(attributes, match_by_key)
-        if key_value:
-            response = await client.get(
-                f"{core_url}/objects/by-key",
-                params={
-                    "type": object_type,
-                    "key": match_by_key,
-                    "value": key_value,
-                },
-            )
-            if response.status_code == 200:
-                existing_id = str(response.json()["id"])
-            elif response.status_code != 404:
-                response.raise_for_status()
-
-    if existing_id is None and match_by_id and source_id and source_id.startswith("object:"):
-        response = await client.get(f"{core_url}/objects/{source_id}")
-        if response.status_code == 200:
-            existing_id = str(response.json()["id"])
-        elif response.status_code != 404:
-            response.raise_for_status()
-
-    if existing_id is None and source_id:
-        response = await client.get(
-            f"{core_url}/objects/by-source",
-            params={"source": source or DEFAULT_SOURCE, "source_id": source_id},
-        )
-        if response.status_code == 200:
-            existing_id = str(response.json()["id"])
-        elif response.status_code != 404:
-            response.raise_for_status()
-
+    params: dict[str, str] = {"match_by": match_by}
+    if not emit_events:
+        params["emit_events"] = "false"
     body: dict[str, Any] = {
-        "type": object_type,
-        "attributes": attributes,
-        "status": status,
+        "match_by": match_by,
+        "objects": [item["payload"] for item in entries],
     }
-    if source_id:
-        body["source_id"] = source_id
-    if source:
-        body["source"] = source
-
-    params = None if emit_events else {"emit_events": "false"}
-    if existing_id:
-        response = await client.patch(
-            f"{core_url}/objects/{existing_id}",
-            json={"attributes": attributes, "status": status},
-            params=params,
-        )
-        _raise_for_core_error(response)
-        return str(response.json()["id"]), "updated"
-    response = await client.post(f"{core_url}/objects", json=body, params=params)
+    if match_key:
+        # `match_by_key` of the import job: the attribute the core matches on.
+        body["key"] = match_key
+    response = await client.post(
+        f"{core_url}/objects/batch-upsert",
+        params=params,
+        json=body,
+    )
     _raise_for_core_error(response)
-    return str(response.json()["id"]), "created"
+    payload = response.json()
+    outcomes: list[tuple[str | None, str, str | None]] = [
+        (None, "failed", "the core returned no result for this entry") for _ in entries
+    ]
+    for row in payload.get("results", []):
+        try:
+            index = int(row.get("index", -1))
+        except TypeError, ValueError:
+            continue
+        if 0 <= index < len(outcomes):
+            outcomes[index] = (
+                row.get("id"),
+                str(row.get("action") or "failed"),
+                row.get("error"),
+            )
+    return outcomes
 
 
 async def _resolve_missing_endpoint(
@@ -458,6 +432,60 @@ def build_import_handler(
         updated = 0
         failed = 0
         object_results: list[dict[str, Any]] = []
+        # The write is batched (`POST /objects/batch-upsert`): only the preparation
+        # (normalization rules, unit conversion) stays per object. The endpoint
+        # matches like the single write path — business key, then (with
+        # `match_by_id`) the record id, then the source reference.
+        match_by = "id" if match_by_id else "source"
+        batch: list[dict[str, Any]] = []
+
+        async def flush_batch() -> None:
+            nonlocal created, updated, failed
+            if not batch:
+                return
+            pending = list(batch)
+            batch.clear()
+            try:
+                outcomes = await _upsert_batch(
+                    active, core_url, pending, match_by, emit_events, match_by_key
+                )
+            except Exception as exc:  # noqa: BLE001 - one batch must not kill the import
+                logger.exception("batch upsert failed for %d objects", len(pending))
+                message = str(exc)
+                for item in pending:
+                    object_type = str(item["payload"].get("type") or "")
+                    failed += 1
+                    object_results.append(
+                        {
+                            "id": str(item["external_id"] or object_type),
+                            "type": object_type,
+                            "status": "failed",
+                            "error": message,
+                        }
+                    )
+                return
+            for item, (record_id, action, error) in zip(pending, outcomes, strict=True):
+                external_id = str(item["external_id"] or "")
+                object_type = str(item["payload"].get("type") or "")
+                if action == "failed" or record_id is None:
+                    failed += 1
+                    object_results.append(
+                        {
+                            "id": external_id or object_type,
+                            "type": object_type,
+                            "status": "failed",
+                            "error": error,
+                        }
+                    )
+                    continue
+                if external_id:
+                    id_map[external_id] = record_id
+                if action == "created":
+                    created += 1
+                else:
+                    updated += 1
+                object_results.append({"id": record_id, "type": object_type, "status": action})
+
         for entry in objects:
             external_id = str(entry.get("id") or "")
             object_type = str(entry.get("type") or "").strip()
@@ -482,31 +510,25 @@ def build_import_handler(
                     )
                 await _convert_units(active, core_url, attributes)
 
-                record_id, action = await _upsert_object(
-                    active,
-                    core_url,
-                    object_type,
-                    attributes,
-                    str(status),
-                    match_by_key,
-                    external_id or None,
-                    source or None,
-                    emit_events,
-                    match_by_id,
-                )
+                payload: dict[str, Any] = {
+                    "type": object_type,
+                    "attributes": attributes,
+                    "status": str(status),
+                }
                 if external_id:
-                    id_map[external_id] = record_id
-                if action == "created":
-                    created += 1
-                else:
-                    updated += 1
-                object_results.append({"id": record_id, "type": object_type, "status": action})
+                    payload["source_id"] = external_id
+                if source:
+                    payload["source"] = source
+                batch.append({"external_id": external_id, "payload": payload})
+                if len(batch) >= BATCH_UPSERT_SIZE:
+                    await flush_batch()
             except Exception as exc:  # noqa: BLE001 - per-object isolation
                 logger.exception("object import failed for %r", external_id or object_type)
                 failed += 1
                 object_results.append(
                     {"id": external_id, "type": object_type, "status": "failed", "error": str(exc)}
                 )
+        await flush_batch()
 
         reference_results = await _import_references(
             active, core_url, references, id_map, emit_events, source or None

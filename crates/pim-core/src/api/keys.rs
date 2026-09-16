@@ -6,6 +6,8 @@
 //! `attributes` object; uniqueness is enforced per object type at write time
 //! (empty values never collide, values are trimmed before comparison).
 
+use std::collections::HashMap;
+
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::Deserialize;
@@ -267,20 +269,8 @@ pub async fn normalize_key_attributes(
     attributes: &mut Map<String, Value>,
     exclude_key: Option<&str>,
 ) -> Result<(), ApiError> {
-    for name in key_names {
-        let Some(value) = attributes.get(name) else {
-            continue;
-        };
-        let Some(text) = value.as_str() else {
-            // Keys are text-only; ignore non-string values.
-            continue;
-        };
-        let trimmed = text.trim().to_owned();
-        attributes.insert(name.clone(), Value::String(trimmed.clone()));
-        if trimmed.is_empty() {
-            continue;
-        }
-        if key_value_exists(db, object_type, name, &trimmed, exclude_key).await? {
+    for (name, trimmed) in trim_key_values(key_names, attributes) {
+        if key_value_exists(db, object_type, &name, &trimmed, exclude_key).await? {
             return Err(ApiError::conflict(format!(
                 "duplicate business key `{name}`: an object of type `{object_type}` \
                  with value `{trimmed}` already exists"
@@ -288,6 +278,90 @@ pub async fn normalize_key_attributes(
         }
     }
     Ok(())
+}
+
+/// Trims the business-key values in `attributes` and returns `(name, value)` for
+/// every key that has a non-empty text value.
+///
+/// Pure part of [`normalize_key_attributes`]: the batch upsert normalises its
+/// whole payload first and then checks all values in **one** query per key
+/// attribute ([`key_values_in_use`]), so both paths must trim identically —
+/// together with [`key_lock_names`] they define the key semantics.
+pub fn trim_key_values(
+    key_names: &[String],
+    attributes: &mut Map<String, Value>,
+) -> Vec<(String, String)> {
+    let mut values = Vec::new();
+    for name in key_names {
+        let Some(value) = attributes.get(name) else {
+            continue;
+        };
+        // Keys are text-only; ignore non-string values.
+        let Some(text) = value.as_str() else {
+            continue;
+        };
+        let trimmed = text.trim().to_owned();
+        attributes.insert(name.clone(), Value::String(trimmed.clone()));
+        if trimmed.is_empty() {
+            continue;
+        }
+        values.push((name.clone(), trimmed));
+    }
+    values
+}
+
+/// Key values of one type that are already in use, resolved with **one** query.
+///
+/// `key_value_exists` answers for a single value; a batch upsert would pay one
+/// round trip per object, which is exactly the cost that makes an import slow
+/// (`plan/detail/demodaten-generator.md` §4.3). Returns the live object's record
+/// key per value; `exclude_key` skips the object that is being updated, and
+/// values used by *other* types are ignored (the type is filtered in Rust for the
+/// same reason as in `key_value_exists`: the predicate would defeat the index).
+pub async fn key_values_in_use(
+    db: &Db,
+    object_type: &str,
+    key_name: &str,
+    values: &[String],
+    exclude_key: Option<&str>,
+) -> Result<HashMap<String, String>, ApiError> {
+    if values.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let field = key_field_ref(key_name);
+    let (value_expr, type_filter) = match &field {
+        Some(field) => (field.clone(), "deleted_at IS NONE"),
+        None => ("attributes[$key]".to_owned(), "deleted_at IS NONE"),
+    };
+    let mut query = db
+        .inner()
+        .query(format!(
+            "SELECT type::string(id) AS id, type, {value_expr} AS value FROM object \
+             WHERE {value_expr} IN $values AND {type_filter};"
+        ))
+        .bind(("values", values.to_vec()));
+    if field.is_none() {
+        query = query.bind(("key", key_name.to_owned()));
+    }
+    let mut response = query.await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+
+    let mut in_use: HashMap<String, String> = HashMap::new();
+    for row in rows {
+        if row.get("type").and_then(Value::as_str) != Some(object_type) {
+            continue;
+        }
+        let Some(value) = row.get("value").and_then(Value::as_str) else {
+            continue;
+        };
+        let id = row.get("id").and_then(Value::as_str).unwrap_or_default();
+        let key = key_of(id).to_owned();
+        if exclude_key.is_some_and(|excluded| excluded == key) {
+            continue;
+        }
+        in_use.entry(value.to_owned()).or_insert(key);
+    }
+    Ok(in_use)
 }
 
 /// Query parameters for `GET /objects/by-key`.
@@ -353,6 +427,31 @@ pub async fn get_by_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn trim_key_values_trims_and_reports_only_non_empty_text() {
+        let key_names = vec![
+            "sku".to_owned(),
+            "oe_number".to_owned(),
+            "weight".to_owned(),
+        ];
+        let mut attributes: Map<String, Value> = serde_json::from_value(json!({
+            "sku": "  A-1  ",
+            "oe_number": "   ",
+            "weight": 12,
+            "name": "irrelevant",
+        }))
+        .expect("attributes");
+
+        let values = trim_key_values(&key_names, &mut attributes);
+
+        // Only the text key with content takes part in the uniqueness check…
+        assert_eq!(values, vec![("sku".to_owned(), "A-1".to_owned())]);
+        // …and the value in the payload is the trimmed one the check compared.
+        assert_eq!(attributes.get("sku"), Some(&json!("A-1")));
+        assert_eq!(attributes.get("oe_number"), Some(&json!("")));
+    }
 
     #[test]
     fn key_definition_requires_text() {

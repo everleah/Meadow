@@ -29,6 +29,19 @@ pub struct AuditEntry<'a> {
 /// Persists a single audit log entry. Fields without a value are omitted so
 /// that schema defaults (e.g. the `timestamp`) apply.
 pub async fn record(db: &Db, entry: AuditEntry<'_>) -> Result<(), ApiError> {
+    let content = content(entry);
+    let sql = "CREATE audit_log CONTENT $content;";
+    db.inner()
+        .query(sql)
+        .bind(("content", content))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+/// Builds the `audit_log` content of one entry (fields without a value are
+/// omitted so the schema defaults apply).
+pub fn content(entry: AuditEntry<'_>) -> Value {
     let mut content = Map::new();
     content.insert("action".to_owned(), Value::String(entry.action.to_owned()));
     content.insert(
@@ -47,14 +60,32 @@ pub async fn record(db: &Db, entry: AuditEntry<'_>) -> Result<(), ApiError> {
     if let Some(metadata) = entry.metadata {
         content.insert("metadata".to_owned(), metadata);
     }
+    Value::Object(content)
+}
 
-    let sql = "CREATE audit_log CONTENT $content;";
+/// Persists many audit entries in **one** statement.
+///
+/// The batch upsert writes one entry per object (the audit contract of a single
+/// object write stays identical), but pays a single round trip for the whole
+/// batch (`plan/detail/demodaten-generator.md` §4.3).
+pub async fn record_many(db: &Db, entries: Vec<Value>) -> Result<(), ApiError> {
+    if entries.is_empty() {
+        return Ok(());
+    }
     db.inner()
-        .query(sql)
-        .bind(("content", Value::Object(content)))
+        .query("FOR $entry IN $entries { CREATE audit_log CONTENT $entry; };")
+        .bind(("entries", entries))
         .await?
         .check()?;
     Ok(())
+}
+
+/// Writes a batch of audit entries and logs a warning instead of failing the
+/// caller.
+pub async fn record_many_best_effort(db: &Db, entries: Vec<Value>) {
+    if let Err(error) = record_many(db, entries).await {
+        tracing::warn!(?error, "failed to write audit log entries");
+    }
 }
 
 /// Writes an audit entry and logs a warning instead of failing the caller.
