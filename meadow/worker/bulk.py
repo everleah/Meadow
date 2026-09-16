@@ -504,6 +504,9 @@ async def _add_relation(
         f"{core_url}/references",
         json={"source": object_id, "target": target, "definition_id": definition_id},
     )
+    if response.status_code == 409:
+        # The core rejects a duplicate edge: another writer created it in between.
+        return {"relation": definition_id, "target": target, "added": 0, "changed": 0}
     response.raise_for_status()
     return {"relation": definition_id, "target": target, "added": 1, "changed": 1}
 

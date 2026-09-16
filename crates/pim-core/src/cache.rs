@@ -24,6 +24,7 @@ pub struct MetaCache {
     feature_bindings: RwLock<Option<Arc<HashMap<String, String>>>>,
     attribute_vocabulary: RwLock<Option<Arc<String>>>,
     required_names: RwLock<HashMap<String, Arc<Vec<String>>>>,
+    types_with_required: RwLock<Option<Arc<Vec<String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
 }
 
@@ -136,6 +137,7 @@ impl MetaCache {
         *self.attribute_vocabulary.write().await = None;
         // The per-type required names come from `attribute_definition.required_types`.
         self.required_names.write().await.clear();
+        *self.types_with_required.write().await = None;
     }
 
     /// Attribute names an object of `object_type` must carry: the definitions with
@@ -163,10 +165,27 @@ impl MetaCache {
         Ok(names)
     }
 
+    /// Object types that can be **incomplete**: every type an attribute definition
+    /// declares as required plus the types that declare `key_attributes` (a declared
+    /// key counts as mandatory). Cached because it is only needed to narrow a scan:
+    /// objects of all other types have nothing to be incomplete about, so their
+    /// attributes need not be loaded at all.
+    ///
+    /// Cleared by the attribute-definition and object-type writes.
+    pub async fn types_with_required(&self, db: &Db) -> Result<Arc<Vec<String>>, ApiError> {
+        if let Some(names) = self.types_with_required.read().await.clone() {
+            return Ok(names);
+        }
+        let names = Arc::new(load_types_with_required(db).await?);
+        *self.types_with_required.write().await = Some(names.clone());
+        Ok(names)
+    }
+
     /// Invalidates the cached per-type required names after object-type writes
     /// (`key_attributes` belongs to the type registry).
     pub async fn invalidate_object_types(&self) {
         self.required_names.write().await.clear();
+        *self.types_with_required.write().await = None;
     }
 
     /// Invalidates cached fallback chains after language-tree changes.
@@ -227,6 +246,30 @@ async fn load_multilingual_names(db: &Db) -> Result<Vec<String>, ApiError> {
     let sql = "SELECT VALUE name FROM attribute_definition WHERE multilingual = true";
     let mut response = db.inner().query(sql).await?.check()?;
     let names: Vec<String> = response.take(0)?;
+    Ok(names)
+}
+
+/// Object types that can be incomplete: the union of every
+/// `attribute_definition.required_types` plus the type names that declare
+/// `key_attributes` (a declared key counts as mandatory for its type).
+async fn load_types_with_required(db: &Db) -> Result<Vec<String>, ApiError> {
+    let sql = "
+        SELECT VALUE required_types FROM attribute_definition
+          WHERE array::len(required_types) > 0;
+        SELECT VALUE name FROM object_type
+          WHERE array::len(key_attributes) > 0;
+    ";
+    let mut response = db.inner().query(sql).await?.check()?;
+    let from_definitions: Vec<Vec<String>> = response.take(0)?;
+    let from_types: Vec<String> = response.take(1)?;
+    let mut names: Vec<String> = from_definitions.into_iter().flatten().collect();
+    for name in from_types {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    names.dedup();
     Ok(names)
 }
 

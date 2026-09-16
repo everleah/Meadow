@@ -54,6 +54,48 @@ pub(crate) async fn required_names(
     cache.required_names(db, object_type).await
 }
 
+/// Object types whose objects **can** be incomplete: the types with required
+/// attributes (cached) plus the types that are actually categorised — their
+/// classes may mark features as mandatory ([`crate::class_features`]).
+///
+/// Callers that aggregate over a whole dataset (`GET /objects/stats`) use this to
+/// narrow the scan: objects of every other type are complete by definition, so
+/// their attributes never have to be loaded.
+pub(crate) async fn incomplete_candidates(
+    cache: &MetaCache,
+    db: &Db,
+) -> Result<Vec<String>, ApiError> {
+    let mut types = cache.types_with_required(db).await?.as_ref().clone();
+    let relations = crate::class_features::category_relation_keys(db).await?;
+    if !relations.is_empty() {
+        let mut response = db
+            .inner()
+            .query(
+                "SELECT array::distinct(in.type) AS types FROM reference \
+                 WHERE definition_id IN $relations GROUP ALL;",
+            )
+            .bind(("relations", relations))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        for row in rows {
+            for name in row
+                .get("types")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !types.iter().any(|existing| existing == name) {
+                    types.push(name.to_owned());
+                }
+            }
+        }
+    }
+    types.sort();
+    Ok(types)
+}
+
 /// Splits `required` into (set, missing) for an object.
 ///
 /// `own` are the object's own attributes (before inheritance); `resolved` is

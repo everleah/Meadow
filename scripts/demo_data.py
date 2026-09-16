@@ -1366,11 +1366,12 @@ def run_summary(run: dict[str, Any]) -> str:
     result = run.get("result") or {}
     references = result.get("references") or []
     failed_references = sum(1 for entry in references if entry.get("status") == "failed")
+    existing_references = sum(1 for entry in references if entry.get("status") == "existing")
     return (
         f"objects {result.get('processed')} "
         f"(created {result.get('created')}, updated {result.get('updated')}, "
         f"failed {result.get('failed')}) · references {len(references)} "
-        f"(failed {failed_references})"
+        f"(failed {failed_references}, existing {existing_references})"
     )
 
 

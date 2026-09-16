@@ -13,6 +13,9 @@ references:
   MEF object `id` + the document `source`), via `GET /objects/by-source`.
 - References are created between the imported objects, mapping the MEF `id`
   (and the key/source lookups) to the core's record ids.
+- A reference the core reports as a duplicate (`409`: the edge exists already) is
+  recorded as `existing`, not as a failure, so re-importing a document is
+  idempotent for edges too.
 - When `emit_events` is `false` (bulk imports), per-object CRUD events are
   suppressed and a single `import.completed` summary event is emitted.
 
@@ -282,6 +285,18 @@ async def _import_references(
                     },
                     params=params,
                 )
+            if not composition and response.status_code == 409:
+                # The core rejects a duplicate edge (`409`): the reference exists
+                # already, so a repeated import is idempotent instead of failing.
+                results.append(
+                    {
+                        "in": source,
+                        "out": target,
+                        "type": definition_name,
+                        "status": "existing",
+                    }
+                )
+                continue
             response.raise_for_status()
             results.append(
                 {

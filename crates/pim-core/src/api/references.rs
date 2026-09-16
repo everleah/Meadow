@@ -294,6 +294,40 @@ async fn fetch_relation_definition(db: &Db, key: &str) -> Result<Option<Value>, 
     fetch_record(db, "relation_definition", key).await
 }
 
+/// Whether an edge with exactly these endpoints and this relation definition
+/// already exists.
+///
+/// Uses the `(in, definition_id)` index and filters the target afterwards, so the
+/// lookup stays cheap for hub objects with many edges.
+async fn edge_exists(
+    db: &Db,
+    source_key: &str,
+    target_key: &str,
+    definition_id: &str,
+) -> Result<bool, ApiError> {
+    let sql = "
+        LET $src = type::record('object', $source_key);
+        LET $tgt = type::record('object', $target_key);
+        SELECT count() AS n FROM reference
+          WHERE in = $src AND out = $tgt AND definition_id = $definition_id GROUP ALL;
+    ";
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("source_key", source_key))
+        .bind(("target_key", target_key))
+        .bind(("definition_id", definition_id))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(2)?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("n"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        > 0)
+}
+
 /// Returns the composition parent's key of an object (or `None` for the root).
 async fn parent_key(db: &Db, key: &str) -> Result<Option<String>, ApiError> {
     let sql = "
@@ -451,7 +485,8 @@ fn attr_names_array(values: &[String]) -> Value {
         (status = 201, description = "Created reference", body = Value),
         (status = 400, description = "Invalid payload or violation", body = Value),
         (status = 401, description = "Unauthorized", body = Value),
-        (status = 403, description = "Forbidden", body = Value)
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 409, description = "That reference already exists", body = Value)
     )
 )]
 pub async fn create_reference(
@@ -538,6 +573,26 @@ pub async fn create_reference(
     }
 
     let audit_definition_id = body.definition_id.clone();
+    // One edge per (source, target, definition): an identical edge is reported as a
+    // conflict instead of being duplicated silently — a repeated MEF import then
+    // stays idempotent (the worker maps the `409` to `existing`,
+    // `plan/detail/demodaten-generator.md` §9). The check and the write below are
+    // one critical section per edge, otherwise two parallel writers could both
+    // pass the check.
+    let edge_lock = [
+        "edge",
+        body.definition_id.as_str(),
+        body.source.as_str(),
+        body.target.as_str(),
+    ]
+    .join("\u{1}");
+    let _edge_guard = state.key_locks.lock_keys(&[edge_lock]).await;
+    if edge_exists(&state.db, source_key, target_key, &body.definition_id).await? {
+        return Err(ApiError::conflict(format!(
+            "reference `{}` from `{}` to `{}` already exists",
+            audit_definition_id, body.source, body.target
+        )));
+    }
     let outbox = crate::event::content(&crate::event::OutboxEvent {
         event_type: crate::event::EVENT_REFERENCE_CREATED,
         object_type: source_type.to_owned(),

@@ -602,42 +602,84 @@ pub async fn object_stats(
         .map(str::trim)
         .filter(|l| !l.is_empty());
 
-    let sql = "SELECT id, type, status, attributes FROM object WHERE deleted_at IS NONE;";
-    let mut response = state.db.inner().query(sql).await?.check()?;
-    let objects: Vec<Value> = response.take(0)?;
+    // Counts come from a SQL aggregation (one small row per type/status pair): the
+    // handler used to load **every** object with all its attributes just to count
+    // them, which transferred ~5 MB and parsed it in the core.
+    let mut response = state
+        .db
+        .inner()
+        .query(
+            "SELECT type, status, count() AS n FROM object WHERE deleted_at IS NONE \
+             GROUP BY type, status;",
+        )
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
 
     let mut total: i64 = 0;
     let mut by_type: HashMap<String, i64> = HashMap::new();
     let mut by_status: HashMap<String, i64> = HashMap::new();
-    let mut incomplete_by_type: HashMap<String, i64> = HashMap::new();
-
-    // Build the per-object inputs for the batched completeness computation and
-    // the type/status aggregation in a single pass.
-    let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = Vec::new();
-    for object in &objects {
-        let otype = object.get("type").and_then(Value::as_str).unwrap_or("");
-        let status = object.get("status").and_then(Value::as_str).unwrap_or("");
-        let object_id = object.get("id").and_then(Value::as_str).unwrap_or("");
-        let own_attributes = object
-            .get("attributes")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        total += 1;
-        *by_type.entry(otype.to_owned()).or_default() += 1;
-        *by_status.entry(status.to_owned()).or_default() += 1;
-        items.push((object_id.to_owned(), otype.to_owned(), own_attributes));
+    for row in &rows {
+        let count = row.get("n").and_then(Value::as_i64).unwrap_or(0);
+        let otype = row.get("type").and_then(Value::as_str).unwrap_or("");
+        let status = row.get("status").and_then(Value::as_str).unwrap_or("");
+        total += count;
+        *by_type.entry(otype.to_owned()).or_default() += count;
+        *by_status.entry(status.to_owned()).or_default() += count;
     }
 
-    // Resolve completeness for all objects with a single edge query and
-    // in-memory inheritance resolution (no per-ancestor DB round-trips).
-    let completeness =
-        crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
-    for (object_id, otype, _) in &items {
-        if let Some(result) = completeness.get(object_id)
-            && !result.missing.is_empty()
-        {
-            *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
+    // Incomplete counts need the objects' attributes — but only for the types that
+    // can be incomplete at all (required attributes or categorised objects). Every
+    // other type is 100 % complete by definition, so its attributes stay unloaded.
+    let mut incomplete_by_type: HashMap<String, i64> = HashMap::new();
+    let candidates = crate::completeness::incomplete_candidates(&state.cache, &state.db).await?;
+    if !candidates.is_empty() {
+        let mut response = state
+            .db
+            .inner()
+            .query(
+                "SELECT id, type, attributes FROM object \
+                 WHERE deleted_at IS NONE AND type IN $types;",
+            )
+            .bind(("types", candidates))
+            .await?
+            .check()?;
+        let objects: Vec<Value> = response.take(0)?;
+
+        // Build the per-object inputs for the batched completeness computation.
+        let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+            .iter()
+            .map(|object| {
+                (
+                    object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    object
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    object
+                        .get("attributes")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        // Resolve completeness for all candidates with a single edge query and
+        // in-memory inheritance resolution (no per-ancestor DB round-trips).
+        let completeness =
+            crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
+        for (object_id, otype, _) in &items {
+            if let Some(result) = completeness.get(object_id)
+                && !result.missing.is_empty()
+            {
+                *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
+            }
         }
     }
 

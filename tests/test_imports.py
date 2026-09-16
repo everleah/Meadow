@@ -118,6 +118,37 @@ async def test_failures_are_isolated_per_reference() -> None:
     assert results[1]["status"] == "created"
 
 
+async def test_existing_edge_is_reported_as_existing() -> None:
+    """The core rejects a duplicate edge (`409`); the import must not fail on it.
+
+    A repeated MEF import stays idempotent that way: the reference exists already,
+    which is the expected outcome, not an error
+    (`plan/detail/demodaten-generator.md` §9).
+    """
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url).startswith(f"{CORE}/references"):
+            return httpx.Response(409, json={"error": "already exists"})
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        results = await _import_references(
+            client,
+            CORE,
+            [
+                {"in": "child", "out": "other", "type": "related"},
+                {"in": "child", "out": "parent", "type": "depends_on"},
+            ],
+            {"child": "object:child", "parent": "object:parent", "other": "object:other"},
+            False,
+        )
+    assert [result["status"] for result in results] == ["existing", "reparented"]
+    assert "error" not in results[0]
+
+
 @pytest.mark.parametrize("reference_type", ["", None])
 async def test_missing_reference_type_is_reported(reference_type: str | None) -> None:
     results, requests = await run([{"in": "child", "out": "other", "type": reference_type}])
