@@ -177,6 +177,53 @@ async def test_concurrent_write_conflict_is_retryable() -> None:
     assert "conflict" in results[0]["error"]
 
 
+async def test_missing_endpoint_is_resolved_via_its_source_reference() -> None:
+    """An endpoint that this document's map lacks is looked up by source reference.
+
+    A shared object of a chunked import exists in several documents; if its own
+    entry failed (a concurrent write) or another chunk is importing it right now,
+    the object still exists. Without the lookup every reference to it fails with
+    "cannot resolve" and the retry pass cannot repair those edges (found live:
+    one conflicted category cost 17 `category_member` edges).
+    """
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/objects/by-source":
+            source_id = request.url.params.get("source_id")
+            if source_id == "missing-category":
+                return httpx.Response(200, json={"id": "object:category"})
+            return httpx.Response(404, json={"error": "not found"})
+        if request.url.path == "/references":
+            return httpx.Response(201, json={"id": "reference:1"})
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        results = await _import_references(
+            client,
+            CORE,
+            [
+                {"in": "product", "out": "missing-category", "type": "category_member"},
+                {"in": "product", "out": "missing-category", "type": "part_group_member"},
+                {"in": "product", "out": "unknown-category", "type": "category_member"},
+            ],
+            {"product": "object:product"},
+            False,
+            "meadow-demo",
+        )
+    assert [result["status"] for result in results] == ["created", "created", "failed"]
+    lookups = [
+        request.url.params.get("source_id")
+        for request in requests
+        if request.url.path == "/objects/by-source"
+    ]
+    # Once per unknown id (cached in the map), not once per reference.
+    assert lookups == ["missing-category", "unknown-category"]
+    assert results[2]["out"] == "unknown-category"
+
+
 @pytest.mark.parametrize("reference_type", ["", None])
 async def test_missing_reference_type_is_reported(reference_type: str | None) -> None:
     results, requests = await run([{"in": "child", "out": "other", "type": reference_type}])

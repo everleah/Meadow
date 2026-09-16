@@ -252,12 +252,48 @@ async def _upsert_object(
     return str(response.json()["id"]), "created"
 
 
+async def _resolve_missing_endpoint(
+    client: httpx.AsyncClient,
+    core_url: str,
+    source_label: str | None,
+    external_id: str,
+    id_map: dict[str, str],
+) -> str | None:
+    """Resolves a MEF id that this document's map does not know, via its source reference.
+
+    A shared object of a chunked import lives in several documents; if its own
+    entry failed (a concurrent write, for example) or another chunk is importing
+    it right now, the object still exists in the core. Without this lookup every
+    reference pointing at it fails with "cannot resolve", and the retry pass
+    could only fix the object, not those edges (found 2026-09-16: one conflicted
+    category object cost 17 of its `category_member` edges). The result is cached
+    in `id_map`, so the lookup happens once per external id.
+    """
+    cached = id_map.get(external_id)
+    if cached:
+        return cached
+    if not source_label or not external_id:
+        return None
+    response = await client.get(
+        f"{core_url}/objects/by-source",
+        params={"source": source_label, "source_id": external_id},
+    )
+    if response.status_code != 200:
+        return None
+    record_id = str(response.json().get("id") or "")
+    if not record_id:
+        return None
+    id_map[external_id] = record_id
+    return record_id
+
+
 async def _import_references(
     client: httpx.AsyncClient,
     core_url: str,
     references: list[dict[str, Any]],
     id_map: dict[str, str],
     emit_events: bool,
+    source_label: str | None = None,
 ) -> list[dict[str, Any]]:
     """Creates MEF references, mapping external ids via `id_map`.
 
@@ -275,8 +311,14 @@ async def _import_references(
     results: list[dict[str, Any]] = []
     params = None if emit_events else {"emit_events": "false"}
     for reference in references:
-        source = id_map.get(str(reference.get("in") or ""))
-        target = id_map.get(str(reference.get("out") or ""))
+        in_id = str(reference.get("in") or "")
+        out_id = str(reference.get("out") or "")
+        source = id_map.get(in_id) or await _resolve_missing_endpoint(
+            client, core_url, source_label, in_id, id_map
+        )
+        target = id_map.get(out_id) or await _resolve_missing_endpoint(
+            client, core_url, source_label, out_id, id_map
+        )
         definition_name = str(reference.get("type") or "")
         definition_id = (
             definition_name if definition_name.startswith("rel_") else f"rel_{definition_name}"
@@ -467,7 +509,7 @@ def build_import_handler(
                 )
 
         reference_results = await _import_references(
-            active, core_url, references, id_map, emit_events
+            active, core_url, references, id_map, emit_events, source or None
         )
 
         if not emit_events:

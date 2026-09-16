@@ -511,10 +511,14 @@ def test_retry_document_collects_only_failed_entries(dataset) -> None:
     """The retry pass rebuilds a small MEF document from a run report.
 
     Parallel chunks share "hot" objects; a concurrent update can fail with a
-    write conflict (HTTP 500), which the worker reports per entry.
+    write conflict (HTTP `409`, the core maps it), which the worker reports per
+    entry. A reference report mixes **record ids** (the endpoint that resolved)
+    with **MEF ids** (`demo-cat-…`, the one that did not), so the document is
+    only complete when the record ids are mapped back to dataset keys.
     """
     node = dataset.nodes[0]
     reference = dataset.references[0]
+    other = dataset.nodes[-1]
     runs = {
         "run-1": {
             "result": {
@@ -524,7 +528,8 @@ def test_retry_document_collects_only_failed_entries(dataset) -> None:
                 ],
                 "references": [
                     {
-                        "in": reference.source,
+                        # The `in` side resolved, the `out` side did not.
+                        "in": "object:01M2JZ",
                         "out": reference.target,
                         "type": reference.type,
                         "status": "failed",
@@ -534,16 +539,17 @@ def test_retry_document_collects_only_failed_entries(dataset) -> None:
             }
         }
     }
-    document = demo.build_retry_document(runs, dataset)
+    record_ids = {reference.source: "object:01M2JZ", other.key: "object:01M2JY"}
+    document = demo.build_retry_document(runs, dataset, record_ids)
     assert document is not None
     keys = {entry["id"] for entry in document["objects"]}
     assert node.key in keys
-    assert {reference.source, reference.target} <= keys
+    assert reference.source in keys and reference.target in keys
     assert len(document["references"]) == 1
     assert document["references"][0]["type"] == reference.type
     assert document["source"] == demo.SOURCE
 
-    assert demo.build_retry_document({"run-1": {"result": {"references": []}}}, dataset) is None
+    assert demo.build_retry_document({"run-1": {"result": {"references": []}}}, dataset, {}) is None
 
 
 def test_cleanup_deletes_every_object_of_the_source() -> None:

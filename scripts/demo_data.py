@@ -1858,21 +1858,29 @@ def cleanup_extras(
 
 
 def build_retry_document(
-    runs: dict[str, dict[str, Any]], dataset: Dataset
+    runs: dict[str, dict[str, Any]],
+    dataset: Dataset,
+    record_ids: dict[str, str],
 ) -> dict[str, Any] | None:
     """Builds a MEF document for the entries that failed in a run (or `None`).
 
     Parallel chunks update shared objects (vehicle generations, categories,
     assembly groups) even though `masters.mef.json` created them beforehand: two
     chunks updating the same record at the same time can hit a SurrealDB write
-    conflict (`HTTP 500`), which the worker isolates per entry. A second, small
-    pass over exactly those objects and references converges.
+    conflict (`HTTP 409`, the core maps it), which the worker isolates per entry.
+    A second, small pass over exactly those objects and references converges.
+
+    `record_ids` (node key -> record id) is needed because a reference report
+    mixes both: the endpoint that resolved carries a **record id**, the one that
+    did not carries the **MEF id**. Matching only the MEF ids silently dropped
+    those entries from the retry pass.
     """
     nodes_by_key = dataset.node_by_key()
     references_by_key = {
         (reference.source, reference.target, reference.type): reference
         for reference in dataset.references
     }
+    by_record_id = {record_id: key for key, record_id in record_ids.items()}
     failed_nodes: dict[str, Node] = {}
     failed_references: dict[tuple[str, str, str], Reference] = {}
     for run in runs.values():
@@ -1886,7 +1894,13 @@ def build_retry_document(
         for entry in result.get("references") or []:
             if entry.get("status") != "failed":
                 continue
-            key = (str(entry.get("in")), str(entry.get("out")), str(entry.get("type")))
+            known_in = str(entry.get("in"))
+            known_out = str(entry.get("out"))
+            key = (
+                by_record_id.get(known_in, known_in),
+                by_record_id.get(known_out, known_out),
+                str(entry.get("type")),
+            )
             reference = references_by_key.get(key)
             if reference is not None:
                 failed_references[key] = reference
@@ -1965,12 +1979,16 @@ def run_import(
         if run_id == masters_run_id:
             continue
         log.add(f"  chunk {run_id[-6:]}", run_summary(run))
+    # Resolved once, before the retry pass: the retry document matches failed
+    # references by dataset key, but a reference report mixes record ids (the
+    # endpoint that resolved) with MEF ids (the one that did not).
+    resolved = resolve_node_ids(client, headers, dataset, log)
     if failed or failed_references:
         log.add(
             "failed entries",
             f"{failed} objects / {failed_references} references failed, retrying them",
         )
-        retry = build_retry_document(runs, dataset)
+        retry = build_retry_document(runs, dataset, resolved)
         if retry is not None:
             log.add(
                 "retry pass",
@@ -1995,7 +2013,6 @@ def run_import(
     apply_config(client, headers, features, sections="category_attributes")
     log.add("class features", "applied")
 
-    resolved = resolve_node_ids(client, headers, dataset, log)
     apply_extras(client, headers, dataset.extras, resolved, log)
     verify_counts(client, headers, dataset.report, log)
 
