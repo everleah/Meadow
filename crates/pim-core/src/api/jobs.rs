@@ -94,6 +94,16 @@ pub struct ListJobRuns {
     pub limit: u32,
     #[serde(default)]
     pub start: u32,
+    /// `false` omits `result` from the answer.
+    ///
+    /// A bulk import stores its full report there (tens of thousands of entries per
+    /// run), so fetching a handful of runs with results pulls tens of megabytes out
+    /// of SurrealDB and **resets the connection** (found live 2026-09-16 while
+    /// polling an import: `GET /jobs/runs?limit=50` → `500 Connection reset`, which
+    /// killed the import script while its worker kept working). Polling should pass
+    /// `include_result=false` and fetch a single report afterwards.
+    #[serde(default = "default_true")]
+    pub include_result: bool,
 }
 
 /// Payload for a worker status update (`PATCH /jobs/runs/{run_id}`).
@@ -111,6 +121,17 @@ pub struct UpdateJobRun {
 
 fn default_limit() -> u32 {
     100
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// `SELECT` projection of a run listing: the `result` payload only when asked for
+/// (see [`ListJobRuns::include_result`]) — `OMIT` keeps it out of the transfer, a
+/// post-fetch strip would still pull the megabytes through the connection.
+fn run_projection(include_result: bool) -> &'static str {
+    if include_result { "*" } else { "* OMIT result" }
 }
 
 /// Splits a `table:key` path segment and verifies the expected table.
@@ -507,7 +528,10 @@ pub async fn list_definition_runs(
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
-    let mut sql = String::from("SELECT * FROM job_run WHERE job_definition_id = $definition_id");
+    let mut sql = format!(
+        "SELECT {} FROM job_run WHERE job_definition_id = $definition_id",
+        run_projection(params.include_result)
+    );
     if params.status.is_some() {
         sql.push_str(" AND status = $status");
     }
@@ -548,7 +572,10 @@ pub async fn list_job_runs(
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
-    let mut sql = String::from("SELECT * FROM job_run");
+    let mut sql = format!(
+        "SELECT {} FROM job_run",
+        run_projection(params.include_result)
+    );
     let mut conditions: Vec<String> = Vec::new();
     if let Some(ids) = &params.ids {
         let list = ids

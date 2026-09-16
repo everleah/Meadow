@@ -41,6 +41,13 @@ fn key_of(record_id: &str) -> &str {
 /// (a `?ids=` parameter passes user strings through here) and loses nothing:
 /// object record keys are generated ULIDs or explicit seed keys
 /// (`plan/detail/datenmodell.md`), so a key outside that charset cannot exist.
+///
+/// A key containing a dash is **quoted** (`` object:`lang_en-GB` ``): without the
+/// quotes SurrealDB parses `object:ok-1` as the subtraction `object:ok - 1` and
+/// answers `500 Cannot perform subtraction with 'record' and 'none'` — found
+/// 2026-09-16 through a variable id in `POST /references/batch`, the same trap
+/// existed for `?ids=` and `POST /objects/batch-delete`. SurrealDB itself
+/// serialises such a key with backticks, so the quoted form is the canonical one.
 pub(crate) fn record_list_literal<'a>(
     table: &str,
     keys: impl IntoIterator<Item = &'a str>,
@@ -61,7 +68,13 @@ pub(crate) fn record_list_literal<'a>(
         }
         literal.push_str(table);
         literal.push(':');
-        literal.push_str(key);
+        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            literal.push_str(key);
+        } else {
+            literal.push('`');
+            literal.push_str(key);
+            literal.push('`');
+        }
         first = false;
     }
     literal.push(']');
@@ -484,7 +497,21 @@ mod tests {
             "object",
             ["abc", "x'); DELETE object; --", "weird key", "", "ok-1"],
         );
-        assert_eq!(literal, "[object:abc, object:ok-1]");
+        assert_eq!(literal, "[object:abc, object:`ok-1`]");
+    }
+
+    #[test]
+    fn record_list_literal_quotes_a_key_with_a_dash() {
+        // `object:ok-1` would be parsed as `object:ok` minus `1` (found live:
+        // `500 Cannot perform subtraction with 'record' and 'none'`).
+        assert_eq!(
+            record_list_literal("object", ["ok-1", "plain"]),
+            "[object:`ok-1`, object:plain]"
+        );
+        assert_eq!(
+            record_list_literal("language_tree", ["object:lang_en-GB"]),
+            "[language_tree:`lang_en-GB`]"
+        );
     }
 
     #[test]

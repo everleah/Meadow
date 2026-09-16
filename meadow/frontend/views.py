@@ -86,7 +86,7 @@ async def home() -> None:
         except Exception:  # noqa: BLE001 - degrade
             logs = []
         try:
-            job_runs = await client.list_job_runs(token, limit=5)
+            job_runs = await client.list_job_runs(token, limit=5, include_result=False)
         except Exception:  # noqa: BLE001 - degrade
             job_runs = []
 

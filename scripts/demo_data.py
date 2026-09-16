@@ -1417,12 +1417,25 @@ def wait_for_runs(
     timeout: float = 7200.0,
     interval: float = 5.0,
 ) -> dict[str, dict[str, Any]]:
-    """Polls `GET /jobs/runs` until every run finished (or the timeout hits)."""
+    """Polls `GET /jobs/runs` until every run finished (or the timeout hits).
+
+    The poll asks for the runs **without** their `result`: a big import stores its
+    full per-object/per-reference report there (tens of thousands of entries per
+    run), and fetching several of those at once pulls tens of megabytes out of
+    SurrealDB and resets the connection — found live 2026-09-16: `GET
+    /jobs/runs?limit=50` answered `500 Connection reset`, which killed this script
+    while the worker kept importing (the data arrived, the extras never ran). The
+    finished runs are fetched afterwards, one report per request.
+    """
     wanted = set(run_ids)
     finished: dict[str, dict[str, Any]] = {}
     deadline = time.monotonic() + timeout
     while wanted - set(finished) and time.monotonic() < deadline:
-        response = client.get("/jobs/runs", params={"limit": 50}, headers=headers)
+        response = client.get(
+            "/jobs/runs",
+            params={"limit": 50, "include_result": "false"},
+            headers=headers,
+        )
         response.raise_for_status()
         rows = response.json()
         if isinstance(rows, dict):
@@ -1436,6 +1449,19 @@ def wait_for_runs(
     missing = wanted - set(finished)
     if missing:
         raise ImportFailure(f"import jobs did not finish in time: {', '.join(sorted(missing))}")
+    for run_id in run_ids:
+        response = client.get(
+            "/jobs/runs",
+            params={"ids": run_id, "limit": 1},
+            headers=headers,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if isinstance(rows, dict):
+            rows = rows.get("value", rows.get("items", []))
+        for row in rows or []:
+            if str(row.get("id")) == run_id:
+                finished[run_id] = row
     return finished
 
 
@@ -1987,12 +2013,18 @@ def run_import(
     log: ImportLog,
     *,
     timeout: float = 7200.0,
+    skip_chunks: bool = False,
 ) -> None:
     """Applies the generated artefacts: model, shared objects, chunks, features, extras.
 
     The shared objects (`masters.mef.json`) are imported and awaited before the
     parallel chunks are queued — otherwise two chunks create the same object at
     the same time and one of them fails with `409`.
+
+    `skip_chunks` resumes after the object/reference phase: the model, the class
+    features and the extras run, the (expensive) MEF chunks do not. Found live
+    2026-09-16: a `500` in the status poll killed the script while the worker kept
+    importing, so the data was complete but the extras never ran.
     """
     model = json.loads((out_dir / "model.mcf.json").read_text(encoding="utf-8"))
     apply_config(client, headers, model, dry_run=True)
@@ -2003,7 +2035,9 @@ def run_import(
     masters_path = out_dir / "masters.mef.json"
     runs: dict[str, dict[str, Any]] = {}
     masters_run_id: str | None = None
-    if masters_path.exists():
+    if skip_chunks:
+        log.add("chunks", "skipped (--skip-chunks)")
+    elif masters_path.exists():
         masters = json.loads(masters_path.read_text(encoding="utf-8"))
         masters_run_id = submit_mef(client, headers, masters)
         log.add("shared objects", f"{len(masters['objects'])} objects queued (before the chunks)")
@@ -2015,8 +2049,13 @@ def run_import(
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(out_dir.glob("data-*.mef.json"))
     ]
-    run_ids = [submit_mef(client, headers, document) for document in documents]
-    log.add("data import", f"{len(run_ids)} chunks queued")
+    run_ids = (
+        [] if skip_chunks else [submit_mef(client, headers, document) for document in documents]
+    )
+    if skip_chunks:
+        log.add("data import", "8 chunks skipped (--skip-chunks)")
+    else:
+        log.add("data import", f"{len(run_ids)} chunks queued")
     runs.update(wait_for_runs(client, headers, run_ids, timeout=timeout))
     created = sum(int((run.get("result") or {}).get("created") or 0) for run in runs.values())
     updated = sum(int((run.get("result") or {}).get("updated") or 0) for run in runs.values())
@@ -2029,11 +2068,12 @@ def run_import(
         )
         for run in runs.values()
     )
-    log.add(
-        "data import done",
-        f"created {created}, updated {updated}, failed {failed} "
-        f"(references failed: {failed_references})",
-    )
+    if not skip_chunks:
+        log.add(
+            "data import done",
+            f"created {created}, updated {updated}, failed {failed} "
+            f"(references failed: {failed_references})",
+        )
     for run_id, run in sorted(runs.items()):
         if run_id == masters_run_id:
             continue
@@ -2102,6 +2142,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="apply model, chunks, class features and extras to the running core",
     )
     parser.add_argument(
+        "--skip-chunks",
+        action="store_true",
+        help="with --import: run model, class features and extras but skip the MEF chunks "
+        "(resume after a failure without re-importing 70k objects)",
+    )
+    parser.add_argument(
         "--cleanup",
         action="store_true",
         help="soft-delete the objects of this dataset (then optionally re-import)",
@@ -2148,7 +2194,15 @@ def main(argv: list[str] | None = None) -> int:
             cleanup_objects(client, headers, log)
             cleanup_extras(client, headers, log)
         if args.apply:
-            run_import(client, headers, dataset, Path(args.out_dir), log, timeout=args.timeout)
+            run_import(
+                client,
+                headers,
+                dataset,
+                Path(args.out_dir),
+                log,
+                timeout=args.timeout,
+                skip_chunks=args.skip_chunks,
+            )
     if log.problems:
         print(f"\n{len(log.problems)} problem(s):")
         for problem in log.problems:

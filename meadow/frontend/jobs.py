@@ -105,7 +105,7 @@ async def jobs_page() -> None:
         ui.label(t("jobs.load_failed")).classes("text-subtitle1 text-negative")
         return
     try:
-        runs = await client.list_job_runs(token, limit=100)
+        runs = await client.list_job_runs(token, limit=100, include_result=False)
     except Exception:  # noqa: BLE001 - degrade to no runs
         runs = []
 
@@ -493,19 +493,32 @@ async def jobs_page() -> None:
                     detail_info = ui.label("").classes("text-subtitle2 text-gray-500")
                     detail_body = ui.element("div").classes("w-full mt-2")
 
-                    def show_run_detail(run: dict) -> None:
+                    async def show_run_detail(run: dict) -> None:
+                        # The listing omits the `result` payload (a bulk import stores
+                        # megabytes there) — fetch the single run when the report is
+                        # actually shown.
+                        run_id = str(run.get("id") or "")
+                        detail = run
+                        if run_id:
+                            try:
+                                fetched = await client.list_job_runs(token, ids=[run_id], limit=1)
+                                if fetched:
+                                    detail = fetched[0]
+                            except Exception:  # noqa: BLE001 - fall back to the listing row
+                                detail = run
                         detail_title.set_text(t("jobs.detail_title"))
-                        status = str(run.get("status_raw") or run.get("status") or "")
+                        status = str(detail.get("status_raw") or detail.get("status") or "")
                         detail_info.set_text(
-                            f"{_run_job_label(run)} · {_fmt_dt(run.get('created_at'))} · {status}"
+                            f"{_run_job_label(detail)} · {_fmt_dt(detail.get('created_at'))}"
+                            f" · {status}"
                         )
                         detail_body.clear()
                         with detail_body:
                             ui.html(_job_status_badge(status)).classes("mb-2")
-                            if run.get("error"):
+                            if detail.get("error"):
                                 ui.label(t("jobs.col_error")).classes("text-subtitle2")
-                                ui.code(str(run.get("error"))).classes("w-full")
-                            result = run.get("result")
+                                ui.code(str(detail.get("error"))).classes("w-full")
+                            result = detail.get("result")
                             if result is not None:
                                 ui.label("result").classes("text-subtitle2 mt-2")
                                 ui.code(_json_pretty(result)).classes("w-full")
@@ -517,7 +530,7 @@ async def jobs_page() -> None:
                 async def reload_runs() -> None:
                     nonlocal runs
                     try:
-                        runs = await client.list_job_runs(token, limit=100)
+                        runs = await client.list_job_runs(token, limit=100, include_result=False)
                     except Exception:  # noqa: BLE001 - keep the cached list on failure
                         return
                     runs_grid.run_grid_method("setGridOption", "rowData", _run_rows())
@@ -562,10 +575,9 @@ async def jobs_page() -> None:
                             ui.button(t("jobs.delete"), on_click=_go).props("flat color=negative")
                     confirm.open()
 
-                runs_grid.on(
-                    "cellDoubleClicked",
-                    lambda e: show_run_detail(_run_for(e.args.get("data"))),
-                    ["data"],
-                )
+                async def _open_run_detail(event) -> None:
+                    await show_run_detail(_run_for((event.args or {}).get("data")))
+
+                runs_grid.on("cellDoubleClicked", _open_run_detail, ["data"])
 
                 ui.timer(5.0, lambda: reload_runs() if tabs.value == runs_tab else None)

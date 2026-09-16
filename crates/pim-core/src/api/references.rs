@@ -2683,6 +2683,12 @@ pub async fn batch_create_references(
         .iter()
         .filter(|result| result.action == "failed")
         .count();
+    // Report in request order: `references` first, then `reparents`, each by its
+    // own index — the entries are validated in two passes, so the raw order would
+    // mix failures and successes of the same array.
+    results.sort_by(|left, right| {
+        (left.kind != "reference", left.index).cmp(&(right.kind != "reference", right.index))
+    });
     Ok(Json(BatchReferenceResponse {
         created: created_count,
         existing: existing_count,

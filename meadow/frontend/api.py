@@ -1198,13 +1198,23 @@ class CoreClient:
         ids: list[str] | None = None,
         status: str | None = None,
         limit: int = 10,
+        include_result: bool = True,
     ) -> list[dict]:
-        """Lists job runs (newest first) for the dashboard / polling."""
+        """Lists job runs (newest first) for the dashboard / polling.
+
+        `include_result=False` keeps the `result` payload out of the answer: a bulk
+        import stores its full report there (tens of thousands of entries), so a
+        listing of several runs pulls megabytes and the database resets the
+        connection (`500 Connection reset`). List views pass `False` and fetch a
+        single run when a detail dialog needs the report.
+        """
         params: dict[str, str] = {"limit": str(limit)}
         if ids:
             params["ids"] = ",".join(ids)
         if status:
             params["status"] = status
+        if not include_result:
+            params["include_result"] = "false"
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/jobs/runs",
