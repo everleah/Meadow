@@ -1302,6 +1302,65 @@ def login(client: httpx.Client, user: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
+class TokenAuth(httpx.Auth):
+    """Bearer token that logs in again when the core answers `401`.
+
+    The JWT has a TTL (`JWT_TTL_SECONDS`, default 1 h) while an import or a cleanup
+    runs far longer — the `perf` import alone needs ~1 h per chunk, and the first
+    long run died with `401 Unauthorized` in the progress poll although the worker
+    kept importing (`plan/detail/demodaten-generator.md` §9). With this auth object
+    a caller keeps using plain `client.get(...)`/`.post(...)`: the token is attached
+    per request, and on a `401` the client logs in again and **replays the request**
+    once. Auth failures with another cause (wrong password) still surface as errors,
+    because the second attempt returns the same `401`.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        user: str,
+        password: str,
+        log: ImportLog | None = None,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._user = user
+        self._password = password
+        self._log = log
+        self._transport = transport
+        self.refreshes = 0
+        self.token = self._login()
+
+    def _login(self) -> str:
+        # Not through the authenticated client: a login must never recurse into
+        # the refresh path. `transport` exists so tests can drive the login with
+        # an `httpx.MockTransport`.
+        kwargs: dict[str, Any] = {"timeout": 60.0}
+        if self._transport is not None:
+            kwargs["transport"] = self._transport
+        with httpx.Client(**kwargs) as plain:
+            response = plain.post(
+                f"{self._base_url}/auth/login",
+                json={"username": self._user, "password": self._password},
+            )
+        if response.status_code != 200:
+            raise ImportFailure(f"login failed: HTTP {response.status_code}")
+        return str(response.json()["token"])
+
+    def auth_flow(self, request: httpx.Request) -> Any:
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        response = yield request
+        if response.status_code != 401:
+            return
+        self.refreshes += 1
+        if self._log is not None:
+            self._log.add("token expired", f"logging in again (#{self.refreshes})")
+        self.token = self._login()
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
+
+
 def _config_problems(report: dict[str, Any]) -> list[str]:
     """Collects the errors of an MCF report (document level and per section)."""
     problems = [str(error) for error in (report.get("errors") or [])]
@@ -2079,8 +2138,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     log = ImportLog()
-    with httpx.Client(base_url=args.base_url, timeout=120.0) as client:
-        headers = login(client, args.user, args.password)
+    # `TokenAuth` attaches the bearer token and re-logs in when the core answers
+    # `401` (the token's TTL is one hour, an import runs longer).
+    auth = TokenAuth(args.base_url, args.user, args.password, log)
+    with httpx.Client(base_url=args.base_url, timeout=120.0, auth=auth) as client:
+        headers: dict[str, str] = {}
         log.add("login", args.base_url)
         if args.cleanup:
             cleanup_objects(client, headers, log)

@@ -721,6 +721,52 @@ def test_apply_extras_tags_collections_and_searches_with_the_source() -> None:
     assert collections["Bremsen-Sortiment"]["source_id"] == "Bremsen-Sortiment"
 
 
+def test_token_auth_relogs_in_and_replays_the_request() -> None:
+    """A long run hits the JWT's TTL (1 h) while jobs keep running.
+
+    The first `perf` import died with `401 Unauthorized` in its progress poll
+    although the worker kept importing. `TokenAuth` attaches the token per request
+    and, on `401`, logs in again and **replays** the request once — the alternative
+    (a run that aborts after an hour) loses the whole watch loop.
+    """
+    requests: list[tuple[str, str | None]] = []
+    tokens = iter(["first-token", "second-token"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Recorded as a tuple: httpx re-sends the **same** request object on the
+        # replay, so reading the header here is the only way to see both tokens.
+        requests.append((request.url.path, request.headers.get("Authorization")))
+        if request.url.path == "/auth/login":
+            return httpx.Response(200, json={"token": next(tokens)})
+        if request.headers.get("Authorization") == "Bearer second-token":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(401, json={"error": "invalid or expired token"})
+
+    transport = httpx.MockTransport(handler)
+    auth = demo.TokenAuth("http://core", "admin", "admin", transport=transport)
+    with httpx.Client(transport=transport, base_url="http://core", auth=auth) as c:
+        response = c.get("/jobs/runs")
+
+    assert response.status_code == 200
+    assert auth.refreshes == 1
+    assert requests == [
+        ("/auth/login", None),  # the TokenAuth constructor's initial login
+        ("/jobs/runs", "Bearer first-token"),  # the token that has expired
+        ("/auth/login", None),  # refresh after the 401
+        ("/jobs/runs", "Bearer second-token"),  # replayed with the fresh token
+    ]
+
+
+def test_token_auth_raises_when_the_credentials_are_wrong() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/login":
+            return httpx.Response(401, json={"error": "invalid credentials"})
+        return httpx.Response(401, json={"error": "invalid or expired token"})
+
+    with pytest.raises(demo.ImportFailure):
+        demo.TokenAuth("http://core", "admin", "wrong", transport=httpx.MockTransport(handler))
+
+
 def test_every_catalogue_rule_runs_in_the_sandbox(catalog: dict) -> None:
     """Every shipped rule must *execute*, not only compile.
 
