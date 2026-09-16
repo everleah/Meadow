@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
@@ -1999,9 +1999,1003 @@ pub async fn reparent_object(
     Ok(Json(object))
 }
 
+/// Upper bound of rows per `POST /references/batch` call (`references` +
+/// `reparents` together).
+pub const MAX_BATCH_REFERENCE_ROWS: usize = 500;
+
+/// One edge to create (mirrors [`CreateReference`]).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchReferenceItem {
+    /// Source object id (`object:<ulid>`).
+    pub source: String,
+    /// Target object id (`object:<ulid>`).
+    pub target: String,
+    /// `relation_definition` record key (e.g. `rel_fits_vehicle`).
+    pub definition_id: String,
+    /// Edge metadata.
+    #[serde(default = "default_object")]
+    pub attributes: Value,
+}
+
+/// One object to move in the composition tree (`PATCH /objects/{id}/parent`).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchReparentItem {
+    /// Object to move (`object:<ulid>`).
+    pub source: String,
+    /// Its new composition parent (`object:<ulid>`).
+    pub parent: String,
+}
+
+/// Payload of `POST /references/batch`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchReferenceRequest {
+    /// Edges to create.
+    #[serde(default)]
+    pub references: Vec<BatchReferenceItem>,
+    /// Composition moves. The invariant allows exactly one parent edge, so a
+    /// `depends_on` relationship is applied as a re-parent — exactly like a MEF
+    /// `depends_on` reference.
+    #[serde(default)]
+    pub reparents: Vec<BatchReparentItem>,
+}
+
+/// Per-entry outcome of a batch reference write.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchReferenceItemResult {
+    /// `reference` or `reparent`.
+    pub kind: String,
+    /// Position inside the request's `references`/`reparents` array.
+    pub index: usize,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// `created`, `existing`, `reparented` or `failed`.
+    pub action: String,
+    /// Failure message (only for `failed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Result of `POST /references/batch`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchReferenceResponse {
+    pub created: usize,
+    pub existing: usize,
+    pub reparented: usize,
+    pub failed: usize,
+    pub results: Vec<BatchReferenceItemResult>,
+}
+
+/// An entry of [`BatchReferenceRequest::references`] that passed preparation.
+struct PreparedBatchEdge {
+    index: usize,
+    /// Id as it came in (`object:<ulid>`) — used for the lock key and the event.
+    source_id: String,
+    target_id: String,
+    source_key: String,
+    target_key: String,
+    definition_id: String,
+    definition_name: String,
+    attributes: Value,
+    source_type: String,
+    /// Whether the edge is the composition relation (a single parent edge).
+    composition: bool,
+}
+
+/// An entry of [`BatchReferenceRequest::reparents`] that passed preparation.
+struct PreparedBatchReparent {
+    index: usize,
+    source_id: String,
+    parent_id: String,
+    source_key: String,
+    old_parent_id: Option<String>,
+    source_type: String,
+}
+
+/// Creates many references and/or re-parents many objects with **one**
+/// transaction.
+///
+/// `POST /references` costs one HTTP request plus a write path (lookups,
+/// transaction, audit, outbox) **per edge**; an import spends its time there
+/// instead of in the database — measured 2026-09-16: the reference phase of a
+/// 7 992-object chunk ran at **11.5 edges/s** while the same chunk's objects went
+/// through `POST /objects/batch-upsert` at ~141 objects/s
+/// (`plan/detail/demodaten-generator.md` §4.3). This endpoint amortises exactly
+/// those round trips:
+///
+/// - all relation definitions and all involved objects are read in **one** query
+///   each (instead of two lookups per edge),
+/// - existing edges are resolved with **one** query per batch and reported as
+///   `existing` (idempotency without relying on the `409` message),
+/// - missing objects, role violations, edge-attribute violations, cycles and
+///   objects without a composition parent are reported **per entry** — one bad
+///   entry never fails the batch,
+/// - the edges of the batch are locked as one critical section
+///   (`crate::key_lock`, the same key the single endpoint uses),
+/// - all edges, all re-parents and all events go into **one** transaction.
+///
+/// Semantics stay those of the single endpoints: `depends_on` is applied as a
+/// re-parent (see `PATCH /objects/{id}/parent`), everything else is a new edge.
+#[utoipa::path(
+    post,
+    path = "/references/batch",
+    request_body = BatchReferenceRequest,
+    params(ReferenceWriteQuery),
+    responses(
+        (status = 200, description = "Per-entry results", body = BatchReferenceResponse),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 413, description = "Too many rows", body = Value)
+    )
+)]
+pub async fn batch_create_references(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ReferenceWriteQuery>,
+    Json(body): Json<BatchReferenceRequest>,
+) -> Result<Json<BatchReferenceResponse>, ApiError> {
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let total = body.references.len() + body.reparents.len();
+    if total == 0 {
+        return Err(ApiError::bad_request(
+            "`references` and `reparents` are both empty",
+        ));
+    }
+    if total > MAX_BATCH_REFERENCE_ROWS {
+        return Err(ApiError::payload_too_large(format!(
+            "batch exceeds the limit of {MAX_BATCH_REFERENCE_ROWS} rows \
+             (`references` + `reparents`)"
+        )));
+    }
+    let emit_events = params.emit_events.unwrap_or(true);
+    let started = std::time::Instant::now();
+
+    // ---- preparation (no database access) ----------------------------------
+    let mut results: Vec<BatchReferenceItemResult> = Vec::with_capacity(total);
+    let mut edges: Vec<Option<PreparedBatchEdge>> = Vec::with_capacity(body.references.len());
+    let mut moves: Vec<Option<PreparedBatchReparent>> = Vec::with_capacity(body.reparents.len());
+    for (index, item) in body.references.iter().enumerate() {
+        let source_id = item.source.trim().to_owned();
+        let target_id = item.target.trim().to_owned();
+        let definition_id = item.definition_id.trim().to_owned();
+        let mut failure: Option<String> = None;
+        if definition_id.is_empty() {
+            failure = Some("entry without `definition_id`".to_owned());
+        }
+        if !item.attributes.is_object() {
+            failure.get_or_insert_with(|| "`attributes` must be an object".to_owned());
+        }
+        let keys = match (parse_object_key(&source_id), parse_object_key(&target_id)) {
+            (Ok(source_key), Ok(target_key)) => {
+                if source_key == target_key {
+                    failure.get_or_insert_with(|| "source and target must differ".to_owned());
+                }
+                Some((source_key.to_owned(), target_key.to_owned()))
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                failure.get_or_insert(error.message().to_owned());
+                None
+            }
+        };
+        match (failure, keys) {
+            (None, Some((source_key, target_key))) => {
+                edges.push(Some(PreparedBatchEdge {
+                    index,
+                    source_id,
+                    target_id,
+                    source_key,
+                    target_key,
+                    composition: definition_id == COMPOSITION_DEFINITION,
+                    definition_id,
+                    definition_name: String::new(),
+                    attributes: item.attributes.clone(),
+                    source_type: String::new(),
+                }));
+            }
+            (failure, _) => {
+                results.push(reference_result(
+                    "reference",
+                    index,
+                    &source_id,
+                    Some(target_id),
+                    "failed",
+                    failure,
+                ));
+                edges.push(None);
+            }
+        }
+    }
+    for (index, item) in body.reparents.iter().enumerate() {
+        let source_id = item.source.trim().to_owned();
+        let parent_id = item.parent.trim().to_owned();
+        let source_key = match (parse_object_key(&source_id), parse_object_key(&parent_id)) {
+            (Ok(source_key), Ok(parent_key)) => {
+                if source_key == parent_key {
+                    results.push(reference_result(
+                        "reparent",
+                        index,
+                        &source_id,
+                        Some(parent_id.clone()),
+                        "failed",
+                        Some("an object cannot be its own parent".to_owned()),
+                    ));
+                    moves.push(None);
+                    continue;
+                }
+                source_key.to_owned()
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                results.push(reference_result(
+                    "reparent",
+                    index,
+                    &source_id,
+                    Some(parent_id),
+                    "failed",
+                    Some(error.message().to_owned()),
+                ));
+                moves.push(None);
+                continue;
+            }
+        };
+        moves.push(Some(PreparedBatchReparent {
+            index,
+            source_id,
+            parent_id,
+            source_key,
+            old_parent_id: None,
+            source_type: String::new(),
+        }));
+    }
+
+    // ---- one lookup per resource instead of per entry ----------------------
+    let definitions = load_relation_definitions(&state.db).await?;
+    let mut object_keys: Vec<String> = Vec::new();
+    let mut composition_children: Vec<String> = Vec::new();
+    let mut new_parents: Vec<String> = Vec::new();
+    for edge in edges.iter().flatten() {
+        object_keys.push(edge.source_key.clone());
+        object_keys.push(edge.target_key.clone());
+        if edge.composition {
+            composition_children.push(edge.source_id.clone());
+            new_parents.push(edge.target_id.clone());
+        }
+    }
+    for item in moves.iter().flatten() {
+        object_keys.push(item.source_key.clone());
+        object_keys.push(key_of(&item.parent_id));
+        composition_children.push(item.source_id.clone());
+        new_parents.push(item.parent_id.clone());
+    }
+    let composition_definition = definitions.get(COMPOSITION_DEFINITION).cloned();
+    let types = load_object_types(&state.db, &object_keys).await?;
+    // The current composition parent and the ancestors of every new parent are
+    // needed by both arrays (`references` may create a composition edge,
+    // `reparents` moves one) — one query each.
+    let parents = load_composition_parents(&state.db, &composition_children).await?;
+    let ancestors = load_ancestor_keys(&state.db, &new_parents).await?;
+    let category_targets: Option<Vec<String>> = if edges.iter().flatten().any(|edge| {
+        definitions
+            .get(&edge.definition_id)
+            .map(|definition| role_of(definition) == ROLE_CATEGORY)
+            .unwrap_or(false)
+    }) {
+        Some(category_target_types(&state.db).await?)
+    } else {
+        None
+    };
+
+    // ---- validate every entry ----------------------------------------------
+    let mut existing: HashSet<String> = HashSet::new();
+    let mut batch_seen: HashSet<String> = HashSet::new();
+    let mut batch_parents: HashSet<String> = HashSet::new();
+    for entry in edges.iter_mut() {
+        // `take`: what stays `None` is not written (the entry is reported and
+        // dropped); survivors are put back for the write step.
+        let Some(edge) = entry.as_mut() else {
+            continue;
+        };
+        let Some(definition) = definitions.get(&edge.definition_id) else {
+            results.push(reference_result(
+                "reference",
+                edge.index,
+                &edge.source_id,
+                Some(edge.target_id.clone()),
+                "failed",
+                Some(format!(
+                    "unknown relation definition `{}`",
+                    edge.definition_id
+                )),
+            ));
+            *entry = None;
+            continue;
+        };
+        edge.definition_name = definition
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let source_type = types.get(&edge.source_key).cloned();
+        let target_type = types.get(&edge.target_key).cloned();
+        let mut failure = if source_type.is_none() {
+            Some("source object not found".to_owned())
+        } else if target_type.is_none() {
+            Some("target object not found".to_owned())
+        } else {
+            let source_type = source_type.as_deref().unwrap_or_default();
+            let target_type = target_type.as_deref().unwrap_or_default();
+            check_type_restriction(definition, source_type, target_type)
+                .and_then(|()| {
+                    check_edge_role(
+                        definition,
+                        &edge.definition_id,
+                        target_type,
+                        category_targets.as_deref(),
+                    )
+                })
+                .and_then(|()| validate_edge_attribute_names(definition, &edge.attributes))
+                .err()
+                .map(|error| error.message().to_owned())
+        };
+        if failure.is_none() && edge.composition {
+            // A composition edge obeys the single-parent invariant exactly like
+            // `POST /references` (identical messages); `batch_parents` catches a
+            // second composition edge for the same source *inside* the batch.
+            let has_parent = parents.contains_key(&edge.source_key)
+                || !batch_parents.insert(edge.source_key.clone());
+            failure = if has_parent {
+                Some("source object already has a composition parent; use re-parenting".to_owned())
+            } else if ancestors.contains(&edge.target_key) {
+                Some("would create a cycle".to_owned())
+            } else {
+                None
+            };
+        }
+        if failure.is_none() {
+            edge.source_type = source_type.unwrap_or_default();
+            // Duplicates inside the batch would be invisible to the database
+            // (both writes would "succeed").
+            let key = format!(
+                "{}\u{1}{}\u{1}{}",
+                edge.definition_id, edge.source_id, edge.target_id
+            );
+            if !batch_seen.insert(key) {
+                failure = Some("duplicate edge inside the batch".to_owned());
+            }
+        }
+        if let Some(message) = failure {
+            results.push(reference_result(
+                "reference",
+                edge.index,
+                &edge.source_id,
+                Some(edge.target_id.clone()),
+                "failed",
+                Some(message),
+            ));
+            *entry = None;
+        }
+    }
+    // One query for every edge the batch touches.
+    existing.extend(load_existing_edges(&state.db, edges.iter().flatten()).await?);
+
+    let mut reparent_rows: Vec<Value> = Vec::new();
+    for entry in moves.iter_mut() {
+        let Some(item) = entry.as_mut() else {
+            continue;
+        };
+        let Some(source_type) = types.get(&item.source_key).cloned() else {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some("object not found".to_owned()),
+            ));
+            *entry = None;
+            continue;
+        };
+        item.source_type = source_type;
+        let Some(definition) = composition_definition.as_ref() else {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some("composition definition is missing".to_owned()),
+            ));
+            *entry = None;
+            continue;
+        };
+        let child_type = item.source_type.clone();
+        let parent_key = key_of(&item.parent_id);
+        let Some(parent_type) = types.get(&parent_key).cloned() else {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some("parent object not found".to_owned()),
+            ));
+            *entry = None;
+            continue;
+        };
+        let Some(old_parent_id) = parents.get(&item.source_key).cloned() else {
+            // Identical message to `PATCH /objects/{id}/parent`.
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some("object has no composition parent".to_owned()),
+            ));
+            *entry = None;
+            continue;
+        };
+        if let Err(error) = check_type_restriction(definition, &child_type, &parent_type) {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some(error.message().to_owned()),
+            ));
+            *entry = None;
+            continue;
+        }
+        if ancestors.contains(&item.source_key) {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "failed",
+                Some("would create a cycle".to_owned()),
+            ));
+            *entry = None;
+            continue;
+        }
+        // Moving an object to the parent it already has changes nothing.
+        if old_parent_id == item.parent_id {
+            results.push(reference_result(
+                "reparent",
+                item.index,
+                &item.source_id,
+                Some(item.parent_id.clone()),
+                "existing",
+                None,
+            ));
+            *entry = None;
+            continue;
+        }
+        item.old_parent_id = Some(old_parent_id);
+        reparent_rows.push(json!({
+            "source": item.source_key,
+            "parent": parent_key,
+        }));
+    }
+
+    // ---- one critical section for the whole batch ---------------------------
+    let mut lock_names: Vec<String> = Vec::new();
+    for edge in edges.iter().flatten() {
+        lock_names.push(
+            [
+                "edge",
+                edge.definition_id.as_str(),
+                edge.source_id.as_str(),
+                edge.target_id.as_str(),
+            ]
+            .join("\u{1}"),
+        );
+    }
+    for item in moves.iter().flatten() {
+        lock_names.push(format!("reparent\u{1}{}", item.source_id));
+    }
+    let _guards = state.key_locks.lock_keys(&lock_names).await;
+
+    // A parallel writer may have created "(some of) the edges between the lookup
+    // and the lock, so re-check the existing ones with the lock held — the same
+    // order as the single endpoint (lock, then check, then write).
+    if !edges.iter().all(Option::is_none) {
+        existing.extend(load_existing_edges(&state.db, edges.iter().flatten()).await?);
+    }
+
+    // ---- classify and write -----------------------------------------------
+    let mut edge_rows: Vec<Value> = Vec::new();
+    let mut events: Vec<Value> = Vec::new();
+    let mut audits: Vec<Value> = Vec::new();
+    let mut created_count = 0usize;
+    let mut existing_count = 0usize;
+    let mut reparented_count = 0usize;
+    for entry in edges.iter_mut() {
+        // `take` again: an entry is consumed once it is either reported as
+        // `existing` or put into the write rows.
+        let Some(edge) = entry.take() else {
+            continue;
+        };
+        let key = format!(
+            "{}\u{1}{}\u{1}{}",
+            edge.definition_id, edge.source_id, edge.target_id
+        );
+        if existing.contains(&key) {
+            existing_count += 1;
+            results.push(reference_result(
+                "reference",
+                edge.index,
+                &edge.source_id,
+                Some(edge.target_id.clone()),
+                "existing",
+                None,
+            ));
+            continue;
+        }
+        edge_rows.push(json!({
+            "source": edge.source_key,
+            "target": edge.target_key,
+            "definition_id": edge.definition_id,
+            "definition_name": edge.definition_name,
+            "attributes": edge.attributes,
+        }));
+        if emit_events {
+            events.push(crate::event::content(&crate::event::OutboxEvent {
+                event_type: crate::event::EVENT_REFERENCE_CREATED,
+                object_type: edge.source_type.clone(),
+                object_id: edge.source_id.clone(),
+                changes: json!({
+                    "target": edge.target_id.clone(),
+                    "definition_id": edge.definition_id.clone(),
+                }),
+                metadata: json!({ "user_id": user_id.clone() }),
+            }));
+        }
+        audits.push(audit::content(AuditEntry {
+            user_id: &user_id,
+            action: "reference_created",
+            object_id: Some(&edge.source_id),
+            from: None,
+            to: None,
+            metadata: Some(json!({
+                "target": edge.target_id,
+                "definition_id": edge.definition_id,
+            })),
+        }));
+        created_count += 1;
+        results.push(reference_result(
+            "reference",
+            edge.index,
+            &edge.source_id,
+            Some(edge.target_id.clone()),
+            "created",
+            None,
+        ));
+    }
+    for item in moves.iter().flatten() {
+        let old_parent_id = item.old_parent_id.clone().unwrap_or_default();
+        if emit_events {
+            events.push(crate::event::content(&crate::event::OutboxEvent {
+                event_type: crate::event::EVENT_REFERENCE_DELETED,
+                object_type: item.source_type.clone(),
+                object_id: item.source_id.clone(),
+                changes: json!({ "parent": old_parent_id.clone() }),
+                metadata: json!({ "user_id": user_id.clone() }),
+            }));
+            events.push(crate::event::content(&crate::event::OutboxEvent {
+                event_type: crate::event::EVENT_REFERENCE_CREATED,
+                object_type: item.source_type.clone(),
+                object_id: item.source_id.clone(),
+                changes: json!({ "parent": item.parent_id.clone() }),
+                metadata: json!({ "user_id": user_id.clone() }),
+            }));
+        }
+        audits.push(audit::content(AuditEntry {
+            user_id: &user_id,
+            action: "reference_reparented",
+            object_id: Some(&item.source_id),
+            from: Some(json!({ "parent": old_parent_id })),
+            to: Some(json!({ "parent": item.parent_id.clone() })),
+            metadata: None,
+        }));
+        reparented_count += 1;
+        results.push(reference_result(
+            "reparent",
+            item.index,
+            &item.source_id,
+            Some(item.parent_id.clone()),
+            "reparented",
+            None,
+        ));
+    }
+
+    // ---- one transaction for the whole batch -------------------------------
+    if !edge_rows.is_empty() || !reparent_rows.is_empty() {
+        let mut sql = String::from("BEGIN TRANSACTION;\n");
+        if !edge_rows.is_empty() {
+            // `RELATE` needs records, not keys: `RELATE type::record(…)->…` does
+            // not parse ("Unexpected token `::`") although `/sql` accepts it, so
+            // the loop binds both endpoints first (`objects.rs` uses the same
+            // form for the root edges).
+            sql.push_str(
+                "FOR $row IN $edges { LET $src = type::record('object', $row.source); \
+                 LET $tgt = type::record('object', $row.target); \
+                 RELATE $src->reference->$tgt SET definition_id = $row.definition_id, \
+                 type = $row.definition_name, attributes = $row.attributes; };\n",
+            );
+        }
+        if !reparent_rows.is_empty() {
+            // The direction of a relation record is immutable, so re-parenting
+            // deletes the old edge and creates the new one (identical to
+            // `reparent_object`).
+            sql.push_str(
+                "FOR $row IN $reparents { LET $child = type::record('object', $row.source); \
+                 LET $parent = type::record('object', $row.parent); \
+                 DELETE reference WHERE in = $child AND definition_id = 'rel_depends_on'; \
+                 RELATE $child->reference->$parent SET definition_id = 'rel_depends_on', \
+                 type = 'depends_on', attributes = {}; };\n",
+            );
+        }
+        if !events.is_empty() {
+            sql.push_str("FOR $e IN $events { CREATE outbox_event CONTENT $e; };\n");
+        }
+        sql.push_str("COMMIT TRANSACTION;");
+        if let Err(error) = state
+            .db
+            .inner()
+            .query(sql)
+            .bind(("edges", edge_rows))
+            .bind(("reparents", reparent_rows))
+            .bind(("events", events))
+            .await
+            .and_then(|response| response.check())
+        {
+            // The transaction is all-or-nothing: report every entry it contained
+            // as failed so a caller's retry pass re-applies exactly those rows.
+            let message = error.message().to_owned();
+            for result in results.iter_mut() {
+                if matches!(result.action.as_str(), "created" | "reparented") {
+                    result.action = "failed".to_owned();
+                    result.error = Some(message.clone());
+                }
+            }
+            created_count = 0;
+            reparented_count = 0;
+        }
+    }
+    if !audits.is_empty() {
+        audit::record_many_best_effort(&state.db, audits).await;
+    }
+    if created_count > 0 || reparented_count > 0 {
+        // Composition and categorisation edges feed the dashboard aggregation.
+        state.cache.invalidate_stats();
+    }
+    tracing::debug!(
+        total_ms = started.elapsed().as_secs_f64() * 1000.0,
+        created = created_count,
+        existing = existing_count,
+        reparented = reparented_count,
+        "batch references"
+    );
+
+    let failed = results
+        .iter()
+        .filter(|result| result.action == "failed")
+        .count();
+    Ok(Json(BatchReferenceResponse {
+        created: created_count,
+        existing: existing_count,
+        reparented: reparented_count,
+        failed,
+        results,
+    }))
+}
+
+/// Builds one per-entry result.
+fn reference_result(
+    kind: &str,
+    index: usize,
+    source: &str,
+    target: Option<String>,
+    action: &str,
+    error: Option<String>,
+) -> BatchReferenceItemResult {
+    BatchReferenceItemResult {
+        kind: kind.to_owned(),
+        index,
+        source: source.to_owned(),
+        target,
+        action: action.to_owned(),
+        error,
+    }
+}
+
+/// Loads every relation definition once, keyed by record key (without backticks).
+async fn load_relation_definitions(db: &Db) -> Result<HashMap<String, Value>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT *, type::string(id) AS record_id FROM relation_definition;")
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut definitions = HashMap::with_capacity(rows.len());
+    for row in rows {
+        if let Some(id) = row.get("record_id").and_then(Value::as_str) {
+            definitions.insert(key_of(id).trim_matches('`').to_owned(), row);
+        }
+    }
+    Ok(definitions)
+}
+
+/// Loads the object type of every object the batch touches (one query).
+async fn load_object_types(db: &Db, keys: &[String]) -> Result<HashMap<String, String>, ApiError> {
+    let mut wanted: Vec<String> = keys.to_vec();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let mut types = HashMap::with_capacity(wanted.len());
+    if wanted.is_empty() {
+        return Ok(types);
+    }
+    let literal =
+        crate::api::keys::record_list_literal("object", wanted.iter().map(String::as_str));
+    let mut response = db
+        .inner()
+        .query(format!(
+            "SELECT type::string(id) AS id, type FROM object \
+             WHERE id IN {literal} AND deleted_at IS NONE;"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        if let (Some(id), Some(object_type)) = (
+            row.get("id").and_then(Value::as_str),
+            row.get("type").and_then(Value::as_str),
+        ) {
+            types.insert(key_of(id), object_type.to_owned());
+        }
+    }
+    Ok(types)
+}
+
+/// The keys of the edges of `edges` that already exist, as
+/// `definition_id\u{1}source\u{1}target` (one query for the whole batch).
+async fn load_existing_edges<'a>(
+    db: &Db,
+    edges: impl Iterator<Item = &'a PreparedBatchEdge>,
+) -> Result<HashSet<String>, ApiError> {
+    let mut wanted: Vec<&PreparedBatchEdge> = edges.collect();
+    if wanted.is_empty() {
+        return Ok(HashSet::new());
+    }
+    wanted.sort_by(|a, b| a.definition_id.cmp(&b.definition_id));
+    let mut found: HashSet<String> = HashSet::new();
+    let mut start = 0;
+    while start < wanted.len() {
+        let definition = wanted[start].definition_id.clone();
+        let mut end = start;
+        while end < wanted.len() && wanted[end].definition_id == definition {
+            end += 1;
+        }
+        let group = &wanted[start..end];
+        let sources: Vec<String> = group.iter().map(|edge| edge.source_id.clone()).collect();
+        let targets: Vec<String> = group.iter().map(|edge| edge.target_id.clone()).collect();
+        let source_literal =
+            crate::api::keys::record_list_literal("object", sources.iter().map(String::as_str));
+        let target_literal =
+            crate::api::keys::record_list_literal("object", targets.iter().map(String::as_str));
+        let mut response = db
+            .inner()
+            .query(format!(
+                "SELECT type::string(in) AS source, type::string(out) AS target FROM reference \
+                 WHERE definition_id = $definition AND in IN {source_literal} \
+                 AND out IN {target_literal};"
+            ))
+            .bind(("definition", definition.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        for row in rows {
+            if let (Some(source), Some(target)) = (
+                row.get("source").and_then(Value::as_str),
+                row.get("target").and_then(Value::as_str),
+            ) {
+                found.insert(format!("{definition}\u{1}{source}\u{1}{target}"));
+            }
+        }
+        start = end;
+    }
+    Ok(found)
+}
+
+/// The current composition parent of every object the batch moves (one query),
+/// keyed by the child's record key and mapping to the parent's **record id**
+/// (`object:<ulid>`, like the single endpoint reports it).
+async fn load_composition_parents(
+    db: &Db,
+    child_ids: &[String],
+) -> Result<HashMap<String, String>, ApiError> {
+    let mut children: Vec<String> = child_ids.to_vec();
+    children.sort_unstable();
+    children.dedup();
+    let mut parents = HashMap::with_capacity(children.len());
+    if children.is_empty() {
+        return Ok(parents);
+    }
+    let literal =
+        crate::api::keys::record_list_literal("object", children.iter().map(String::as_str));
+    let mut response = db
+        .inner()
+        .query(format!(
+            "SELECT type::string(in) AS child, type::string(out) AS parent FROM reference \
+             WHERE definition_id = 'rel_depends_on' AND in IN {literal};"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        if let (Some(child), Some(parent)) = (
+            row.get("child").and_then(Value::as_str),
+            row.get("parent").and_then(Value::as_str),
+        ) {
+            parents.insert(key_of(child), parent.to_owned());
+        }
+    }
+    Ok(parents)
+}
+
+/// Every ancestor key of the new parents of the batch (one query per hierarchy
+/// level, walking only the batch's own objects).
+async fn load_ancestor_keys(db: &Db, parent_ids: &[String]) -> Result<HashSet<String>, ApiError> {
+    let mut frontier: Vec<String> = parent_ids.iter().map(|id| key_of(id)).collect();
+    frontier.sort_unstable();
+    frontier.dedup();
+    let mut seen: HashSet<String> = frontier.iter().cloned().collect();
+    let mut levels = 0;
+    while !frontier.is_empty() && levels < 1000 {
+        levels += 1;
+        let literal =
+            crate::api::keys::record_list_literal("object", frontier.iter().map(String::as_str));
+        let mut response = db
+            .inner()
+            .query(format!(
+                "SELECT type::string(out) AS parent FROM reference \
+                 WHERE definition_id = 'rel_depends_on' AND in IN {literal};"
+            ))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        let mut next: Vec<String> = Vec::new();
+        for row in rows {
+            if let Some(parent) = row.get("parent").and_then(Value::as_str) {
+                let parent = key_of(parent);
+                if seen.insert(parent.clone()) {
+                    next.push(parent);
+                }
+            }
+        }
+        frontier = next;
+    }
+    Ok(seen)
+}
+
+/// Validates the edge-metadata keys against the already loaded definition
+/// (the batch pendant of [`validate_edge_attributes`], without a query).
+fn validate_edge_attribute_names(definition: &Value, attributes: &Value) -> Result<(), ApiError> {
+    if !attributes.is_object() && !attributes.is_null() {
+        return Err(ApiError::bad_request("`attributes` must be an object"));
+    }
+    let template = definition
+        .get("attributes")
+        .and_then(Value::as_array)
+        .map(|array| array.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if template.is_empty() {
+        return Ok(());
+    }
+    if let Some(map) = attributes.as_object() {
+        for key in map.keys() {
+            if !template.contains(&key.as_str()) {
+                return Err(ApiError::bad_request(format!(
+                    "attribute `{key}` is not declared for this relation type"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The role rule of a relation type against the batch's preloaded taxonomy
+/// types (the batch pendant of the block in [`create_reference`]).
+fn check_edge_role(
+    definition: &Value,
+    definition_id: &str,
+    target_type: &str,
+    category_targets: Option<&[String]>,
+) -> Result<(), ApiError> {
+    let role = role_of(definition);
+    if role == ROLE_CATEGORY {
+        let allowed = category_targets.unwrap_or(&[]);
+        if !allowed.iter().any(|name| name == target_type) {
+            return Err(ApiError::bad_request(format!(
+                "relation type `{}` is a {} relation: the target must be an object of a taxonomy \
+                 type (allowed: {})",
+                definition_id_of(definition, definition_id),
+                role,
+                allowed.join(", ")
+            )));
+        }
+        return Ok(());
+    }
+    for required in role_target_types(role) {
+        if target_type != required {
+            return Err(ApiError::bad_request(format!(
+                "relation type `{}` is a {} relation: the target must be an object of type \
+                 `{required}`",
+                definition_id_of(definition, definition_id),
+                role
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_role_check_mirrors_the_single_endpoint() {
+        // A categorisation may only point at a taxonomy type.
+        let category = json!({ "name": "category_member", "role": "category" });
+        let targets = vec!["category".to_owned(), "etim_class".to_owned()];
+        assert!(
+            check_edge_role(
+                &category,
+                "rel_category_member",
+                "etim_class",
+                Some(&targets)
+            )
+            .is_ok()
+        );
+        let error = check_edge_role(&category, "rel_category_member", "product", Some(&targets))
+            .expect_err("a product is not a taxonomy type");
+        assert!(error.message().contains("taxonomy"));
+
+        // A collection membership is fixed to `collection`.
+        let collection = json!({ "name": "collection_member", "role": "collection" });
+        assert!(check_edge_role(&collection, "rel_collection_member", "collection", None).is_ok());
+        let error = check_edge_role(&collection, "rel_collection_member", "product", None)
+            .expect_err("a product is not a collection");
+        assert!(
+            error
+                .message()
+                .contains("must be an object of type `collection`")
+        );
+
+        // A plain link has no target rule.
+        let link = json!({ "name": "related", "role": "link" });
+        assert!(check_edge_role(&link, "rel_related", "product", None).is_ok());
+    }
+
+    #[test]
+    fn batch_edge_attributes_must_be_declared_for_the_relation_type() {
+        let declared = json!({ "name": "alternative_to", "attributes": ["match_type"] });
+        assert!(validate_edge_attribute_names(&declared, &json!({"match_type": "oe"})).is_ok());
+        // An empty value is allowed (the template only lists the allowed keys).
+        assert!(validate_edge_attribute_names(&declared, &json!({})).is_ok());
+        let error = validate_edge_attribute_names(&declared, &json!({"quality_tier": "a"}))
+            .expect_err("`quality_tier` is not declared");
+        assert!(error.message().contains("not declared"));
+
+        // No template: arbitrary metadata is allowed (built-in types).
+        let open = json!({ "name": "related" });
+        assert!(validate_edge_attribute_names(&open, &json!({"anything": 1})).is_ok());
+        let error = validate_edge_attribute_names(&open, &json!("nope"))
+            .expect_err("attributes must be an object");
+        assert!(error.message().contains("must be an object"));
+    }
 
     #[test]
     fn child_scope_parses_the_documented_values() {

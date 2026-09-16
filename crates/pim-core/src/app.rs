@@ -150,6 +150,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/references", post(api::references::create_reference))
         .route(
+            "/references/batch",
+            post(api::references::batch_create_references),
+        )
+        .route(
             "/references/{id}",
             axum::routing::patch(api::references::update_reference)
                 .delete(api::references::delete_reference),

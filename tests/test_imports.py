@@ -1,9 +1,11 @@
 """Tests for the MEF reference import (`meadow/worker/imports.py`).
 
-Pins the two write paths of `_import_references`: plain aggregation edges go to
-`POST /references`, while `depends_on` is applied as a **re-parenting** (the
-composition invariant allows exactly one parent edge, and a new object is
-attached to the universal root on create).
+Pins the write path of `_import_references`: a batch of edges goes to
+`POST /references/batch` in **one** request (the per-edge round trips dominated an
+import — `plan/detail/demodaten-generator.md` §4.3), plain aggregation edges as
+`references`, `depends_on` as `reparents` (the composition invariant allows
+exactly one parent edge, and a new object is attached to the universal root on
+create). The endpoint answers per entry, so one bad edge never fails the rest.
 """
 
 from __future__ import annotations
@@ -14,55 +16,143 @@ from typing import Any
 import httpx
 import pytest
 
+from meadow.worker import imports as imports_module
 from meadow.worker.imports import _import_references
 
 CORE = "http://127.0.0.1:8080"
 
+IDS = {"child": "object:child", "parent": "object:parent", "other": "object:other"}
 
-def handler(requests: list[httpx.Request], *, fail: str | None = None):
-    """Builds a MockTransport handler that records the requests it receives."""
+
+def batch_body(request: httpx.Request) -> dict[str, Any]:
+    """The decoded body of a `/references/batch` request."""
+    return json.loads(request.content)
+
+
+def core_like_response(
+    payload: dict[str, Any],
+    *,
+    existing_targets: set[str] | None = None,
+    failing_targets: set[str] | None = None,
+) -> httpx.Response:
+    """Answers a batch request like the core does (one result per entry)."""
+    existing_targets = existing_targets or set()
+    failing_targets = failing_targets or set()
+    results: list[dict[str, Any]] = []
+    counts = {"created": 0, "existing": 0, "reparented": 0, "failed": 0}
+    for index, item in enumerate(payload.get("references") or []):
+        target = str(item.get("target"))
+        if target in failing_targets:
+            action, error = "failed", "edge rejected"
+        elif target in existing_targets:
+            action, error = "existing", None
+        else:
+            action, error = "created", None
+        counts[action] += 1
+        entry: dict[str, Any] = {
+            "kind": "reference",
+            "index": index,
+            "source": item.get("source"),
+            "target": target,
+            "action": action,
+        }
+        if error:
+            entry["error"] = error
+        results.append(entry)
+    for index, item in enumerate(payload.get("reparents") or []):
+        counts["reparented"] += 1
+        results.append(
+            {
+                "kind": "reparent",
+                "index": index,
+                "source": item.get("source"),
+                "target": item.get("parent"),
+                "action": "reparented",
+            }
+        )
+    return httpx.Response(200, json={**counts, "results": results})
+
+
+def handler(
+    requests: list[httpx.Request],
+    *,
+    existing_targets: set[str] | None = None,
+    failing_targets: set[str] | None = None,
+    status: int | None = None,
+    error: str = "boom",
+    by_source: dict[str, str] | None = None,
+):
+    """Builds a MockTransport handler that records requests and mimics the core."""
 
     def handle(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if fail and fail in str(request.url):
-            return httpx.Response(400, json={"error": "boom"})
+        if request.url.path == "/objects/by-source":
+            source_id = request.url.params.get("source_id") or ""
+            resolved = (by_source or {}).get(source_id)
+            if resolved:
+                return httpx.Response(200, json={"id": resolved})
+            return httpx.Response(404, json={"error": "not found"})
+        if request.url.path == "/references/batch":
+            if status is not None:
+                return httpx.Response(status, json={"error": error})
+            return core_like_response(
+                batch_body(request),
+                existing_targets=existing_targets,
+                failing_targets=failing_targets,
+            )
         return httpx.Response(200, json={"ok": True})
 
     return handle
 
 
-async def run(references: list[dict[str, Any]], *, emit_events: bool = False):
+async def run(
+    references: list[dict[str, Any]],
+    *,
+    emit_events: bool = False,
+    ids: dict[str, str] | None = None,
+    source_label: str | None = None,
+    **kwargs: Any,
+):
     requests: list[httpx.Request] = []
-    transport = httpx.MockTransport(handler(requests))
+    transport = httpx.MockTransport(handler(requests, **kwargs))
     async with httpx.AsyncClient(transport=transport) as client:
         results = await _import_references(
             client,
             CORE,
             references,
-            {"child": "object:child", "parent": "object:parent", "other": "object:other"},
+            dict(IDS if ids is None else ids),
             emit_events,
+            source_label,
         )
     return results, requests
 
 
-async def test_depends_on_is_applied_as_reparenting() -> None:
+def batch_requests(requests: list[httpx.Request]) -> list[httpx.Request]:
+    return [request for request in requests if request.url.path == "/references/batch"]
+
+
+async def test_depends_on_is_applied_as_a_reparent() -> None:
     results, requests = await run([{"in": "child", "out": "parent", "type": "depends_on"}])
     assert [result["status"] for result in results] == ["reparented"]
-    assert len(requests) == 1
+    assert len(requests) == 1, "one request per batch, not per edge"
     request = requests[0]
-    assert request.method == "PATCH"
-    assert str(request.url).startswith(f"{CORE}/objects/object:child/parent")
-    assert json.loads(request.content) == {"parent": "object:parent"}
+    assert request.method == "POST"
+    assert request.url.path == "/references/batch"
+    body = batch_body(request)
+    assert body["references"] == []
+    assert body["reparents"] == [{"source": "object:child", "parent": "object:parent"}]
     assert request.url.params.get("emit_events") == "false"
 
 
 async def test_prefixed_composition_definition_is_recognised() -> None:
     results, requests = await run([{"in": "child", "out": "parent", "type": "rel_depends_on"}])
     assert results[0]["status"] == "reparented"
-    assert requests[0].method == "PATCH"
+    assert batch_body(requests[0])["reparents"] == [
+        {"source": "object:child", "parent": "object:parent"}
+    ]
 
 
-async def test_aggregation_edges_still_use_the_reference_endpoint() -> None:
+async def test_aggregation_edges_share_one_batch_request() -> None:
     results, requests = await run(
         [
             {"in": "child", "out": "parent", "type": "related"},
@@ -75,11 +165,52 @@ async def test_aggregation_edges_still_use_the_reference_endpoint() -> None:
         ]
     )
     assert [result["status"] for result in results] == ["created", "created"]
-    assert all(request.method == "POST" for request in requests)
-    assert all(str(request.url).startswith(f"{CORE}/references") for request in requests)
-    body = json.loads(requests[1].content)
-    assert body["definition_id"] == "rel_part_group_member"
-    assert body["attributes"] == {"position": "front"}
+    assert len(requests) == 1
+    body = batch_body(requests[0])
+    assert body["reparents"] == []
+    assert body["references"] == [
+        {
+            "source": "object:child",
+            "target": "object:parent",
+            "definition_id": "rel_related",
+            "attributes": {},
+        },
+        {
+            "source": "object:child",
+            "target": "object:other",
+            "definition_id": "rel_part_group_member",
+            "attributes": {"position": "front"},
+        },
+    ]
+
+
+async def test_references_and_reparents_travel_in_one_request() -> None:
+    """A chunk sends both kinds together: one round trip for the whole batch."""
+    results, requests = await run(
+        [
+            {"in": "child", "out": "parent", "type": "depends_on"},
+            {"in": "child", "out": "other", "type": "related"},
+        ]
+    )
+    assert [result["status"] for result in results] == ["reparented", "created"]
+    assert len(requests) == 1
+    body = batch_body(requests[0])
+    assert len(body["reparents"]) == 1
+    assert len(body["references"]) == 1
+
+
+async def test_a_batch_is_split_into_batches_of_the_configured_size(monkeypatch) -> None:
+    monkeypatch.setattr(imports_module, "BATCH_REFERENCE_SIZE", 2)
+    results, requests = await run(
+        [
+            {"in": "child", "out": "parent", "type": "related"},
+            {"in": "child", "out": "other", "type": "related"},
+            {"in": "parent", "out": "other", "type": "related"},
+        ]
+    )
+    assert [result["status"] for result in results] == ["created"] * 3
+    batches = batch_requests(requests)
+    assert [len(batch_body(batch)["references"]) for batch in batches] == [2, 1]
 
 
 async def test_emit_events_true_drops_the_quiet_parameter() -> None:
@@ -91,90 +222,62 @@ async def test_unresolved_endpoints_are_reported_per_reference() -> None:
     results, requests = await run(
         [
             {"in": "child", "out": "missing", "type": "related"},
-            {"in": "child", "out": "parent", "type": "depends_on"},
+            {"in": "child", "out": "parent", "type": "related"},
         ]
     )
     assert results[0]["status"] == "failed"
     assert "cannot resolve reference" in results[0]["error"]
-    assert results[1]["status"] == "reparented"
-    assert len(requests) == 1, "the failed reference must not send a request"
-
-
-async def test_failures_are_isolated_per_reference() -> None:
-    requests: list[httpx.Request] = []
-    transport = httpx.MockTransport(handler(requests, fail="/objects/"))
-    async with httpx.AsyncClient(transport=transport) as client:
-        results = await _import_references(
-            client,
-            CORE,
-            [
-                {"in": "child", "out": "parent", "type": "depends_on"},
-                {"in": "child", "out": "other", "type": "related"},
-            ],
-            {"child": "object:child", "parent": "object:parent", "other": "object:other"},
-            False,
-        )
-    assert results[0]["status"] == "failed"
     assert results[1]["status"] == "created"
+    batches = batch_requests(requests)
+    assert len(batches) == 1
+    assert len(batch_body(batches[0])["references"]) == 1, "the unresolvable edge must not be sent"
 
 
 async def test_existing_edge_is_reported_as_existing() -> None:
-    """The core rejects a duplicate edge (`409`); the import must not fail on it.
-
-    A repeated MEF import stays idempotent that way: the reference exists already,
-    which is the expected outcome, not an error
-    (`plan/detail/demodaten-generator.md` §9).
-    """
-    requests: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if str(request.url).startswith(f"{CORE}/references"):
-            return httpx.Response(409, json={"error": "already exists"})
-        return httpx.Response(200, json={"ok": True})
-
-    transport = httpx.MockTransport(handle)
-    async with httpx.AsyncClient(transport=transport) as client:
-        results = await _import_references(
-            client,
-            CORE,
-            [
-                {"in": "child", "out": "other", "type": "related"},
-                {"in": "child", "out": "parent", "type": "depends_on"},
-            ],
-            {"child": "object:child", "parent": "object:parent", "other": "object:other"},
-            False,
-        )
+    """A repeated import must stay idempotent: an existing edge is not an error."""
+    results, _ = await run(
+        [
+            {"in": "child", "out": "other", "type": "related"},
+            {"in": "child", "out": "parent", "type": "depends_on"},
+        ],
+        existing_targets={"object:other"},
+    )
     assert [result["status"] for result in results] == ["existing", "reparented"]
     assert "error" not in results[0]
 
 
-async def test_concurrent_write_conflict_is_retryable() -> None:
-    """`409` also means "concurrent write conflict" — that one must not be swallowed.
+async def test_per_entry_failures_are_mapped_by_position() -> None:
+    """The core answers per entry; a rejected edge does not fail its neighbours."""
+    results, _ = await run(
+        [
+            {"in": "child", "out": "parent", "type": "related"},
+            {"in": "child", "out": "other", "type": "related"},
+        ],
+        failing_targets={"object:other"},
+    )
+    assert [result["status"] for result in results] == ["created", "failed"]
+    assert results[1]["error"] == "edge rejected"
+
+
+async def test_a_rejected_batch_is_reported_per_entry() -> None:
+    """A `409`/`500` on the whole batch stays retryable: every entry is `failed`.
 
     The core maps a SurrealDB transaction conflict to `409` (the honest answer for
-    a lost race). Treating every `409` as "edge exists already" would silently drop
-    the reference, so the conflict is reported as `failed` and the importer's retry
-    pass re-applies it.
+    a lost race), so the batch is rejected as a whole. Treating that as success
+    would silently drop the edges; reporting them as `failed` lets the retry pass
+    re-apply exactly those references.
     """
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            409,
-            json={"error": "concurrent write conflict, please retry: failed transaction"},
-        )
-
-    transport = httpx.MockTransport(handle)
-    async with httpx.AsyncClient(transport=transport) as client:
-        results = await _import_references(
-            client,
-            CORE,
-            [{"in": "child", "out": "other", "type": "related"}],
-            {"child": "object:child", "other": "object:other"},
-            False,
-        )
-    assert results[0]["status"] == "failed"
-    assert "conflict" in results[0]["error"]
+    results, requests = await run(
+        [
+            {"in": "child", "out": "other", "type": "related"},
+            {"in": "child", "out": "parent", "type": "depends_on"},
+        ],
+        status=409,
+        error="concurrent write conflict, please retry: failed transaction",
+    )
+    assert [result["status"] for result in results] == ["failed", "failed"]
+    assert all("conflict" in str(result["error"]) for result in results)
+    assert len(batch_requests(requests)) == 1
 
 
 async def test_missing_endpoint_is_resolved_via_its_source_reference() -> None:
@@ -186,33 +289,16 @@ async def test_missing_endpoint_is_resolved_via_its_source_reference() -> None:
     "cannot resolve" and the retry pass cannot repair those edges (found live:
     one conflicted category cost 17 `category_member` edges).
     """
-    requests: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == "/objects/by-source":
-            source_id = request.url.params.get("source_id")
-            if source_id == "missing-category":
-                return httpx.Response(200, json={"id": "object:category"})
-            return httpx.Response(404, json={"error": "not found"})
-        if request.url.path == "/references":
-            return httpx.Response(201, json={"id": "reference:1"})
-        return httpx.Response(200, json={"ok": True})
-
-    transport = httpx.MockTransport(handle)
-    async with httpx.AsyncClient(transport=transport) as client:
-        results = await _import_references(
-            client,
-            CORE,
-            [
-                {"in": "product", "out": "missing-category", "type": "category_member"},
-                {"in": "product", "out": "missing-category", "type": "part_group_member"},
-                {"in": "product", "out": "unknown-category", "type": "category_member"},
-            ],
-            {"product": "object:product"},
-            False,
-            "meadow-demo",
-        )
+    results, requests = await run(
+        [
+            {"in": "product", "out": "missing-category", "type": "category_member"},
+            {"in": "product", "out": "missing-category", "type": "part_group_member"},
+            {"in": "product", "out": "unknown-category", "type": "category_member"},
+        ],
+        ids={"product": "object:product"},
+        source_label="meadow-demo",
+        by_source={"missing-category": "object:category"},
+    )
     assert [result["status"] for result in results] == ["created", "created", "failed"]
     lookups = [
         request.url.params.get("source_id")
@@ -222,6 +308,11 @@ async def test_missing_endpoint_is_resolved_via_its_source_reference() -> None:
     # Once per unknown id (cached in the map), not once per reference.
     assert lookups == ["missing-category", "unknown-category"]
     assert results[2]["out"] == "unknown-category"
+    body = batch_body(batch_requests(requests)[0])
+    assert [item["target"] for item in body["references"]] == [
+        "object:category",
+        "object:category",
+    ]
 
 
 @pytest.mark.parametrize("reference_type", ["", None])

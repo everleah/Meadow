@@ -177,6 +177,14 @@ def _raise_for_core_error(response: httpx.Response) -> None:
 #: `plan/detail/demodaten-generator.md` §4.3/§5).
 BATCH_UPSERT_SIZE = 200
 
+#: References per `POST /references/batch` call (the endpoint allows 500 rows in
+#: total, `references` + `reparents` together). One request replaces this many
+#: single `POST /references`/`PATCH …/parent` calls — measured 2026-09-16: the
+#: object phase of a chunk ran at ~141 objects/s (batched), the reference phase at
+#: ~11.5 edges/s (one request per edge), which made a 243 k-edge import a ~6 h
+#: affair (`plan/detail/demodaten-generator.md` §4.3).
+BATCH_REFERENCE_SIZE = 200
+
 
 async def _upsert_batch(
     client: httpx.AsyncClient,
@@ -272,19 +280,25 @@ async def _import_references(
     """Creates MEF references, mapping external ids via `id_map`.
 
     The MEF reference `type` is the relation-definition **name** (e.g.
-    `related`, `category_member`); the core's `POST /references` expects the
-    definition **record key** (seed convention `rel_<name>`, e.g.
-    `rel_related`). An already-prefixed id is passed through unchanged.
+    `related`, `category_member`); the core expects the definition **record key**
+    (seed convention `rel_<name>`, e.g. `rel_related`). An already-prefixed id is
+    passed through unchanged.
 
     `depends_on` is special: a new object is attached to the universal root when
     it is created, and the composition invariant allows exactly one parent edge
     (`plan/detail/relationen.md`), so the reference is applied as a
-    **re-parenting** (`PATCH /objects/{id}/parent`) instead of a second edge.
-    Without that, a MEF document could not express the composition tree at all.
+    **re-parenting** instead of a second edge. Without that, a MEF document could
+    not express the composition tree at all.
+
+    The endpoints are resolved per reference (cached in `id_map`), then the edges
+    are written through `POST /references/batch` in batches of
+    `BATCH_REFERENCE_SIZE` — the batch endpoint reports existing edges as
+    `existing` and failures per entry, so one bad edge never fails the rest.
     """
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any] | None] = [None] * len(references)
     params = None if emit_events else {"emit_events": "false"}
-    for reference in references:
+    pending: list[tuple[int, dict[str, Any]]] = []
+    for position, reference in enumerate(references):
         in_id = str(reference.get("in") or "")
         out_id = str(reference.get("out") or "")
         source = id_map.get(in_id) or await _resolve_missing_endpoint(
@@ -297,72 +311,114 @@ async def _import_references(
         definition_id = (
             definition_name if definition_name.startswith("rel_") else f"rel_{definition_name}"
         )
-        attributes = reference.get("attributes") or {}
-        try:
-            if not source or not target:
-                raise RuntimeError(
-                    f"cannot resolve reference `in={reference.get('in')} "
-                    f"out={reference.get('out')}`"
-                )
-            if not definition_name:
-                raise RuntimeError("reference is missing `type`")
-            composition = definition_id == COMPOSITION_DEFINITION
-            if composition:
-                response = await client.patch(
-                    f"{core_url}/objects/{source}/parent",
-                    json={"parent": target},
-                    params=params,
-                )
-            else:
-                response = await client.post(
-                    f"{core_url}/references",
-                    json={
-                        "source": source,
-                        "target": target,
-                        "definition_id": definition_id,
-                        "attributes": attributes,
-                    },
-                    params=params,
-                )
-            if not composition and response.status_code == 409:
-                # `409` covers two different situations: the edge exists already
-                # (idempotent — a repeated import must not fail) and a concurrent
-                # write on the same records (retryable — dropping the edge here
-                # would silently lose it). The core's message distinguishes them;
-                # a conflict falls through and is reported as `failed`, so the
-                # importer's retry pass re-applies exactly that reference.
-                if "already exists" in response.text:
-                    results.append(
-                        {
-                            "in": source,
-                            "out": target,
-                            "type": definition_name,
-                            "status": "existing",
-                        }
-                    )
-                    continue
-                _raise_for_core_error(response)
-            _raise_for_core_error(response)
-            results.append(
+        reason = None
+        if not source or not target:
+            reason = (
+                f"cannot resolve reference `in={reference.get('in')} out={reference.get('out')}`"
+            )
+        elif not definition_name:
+            reason = "reference is missing `type`"
+        if reason is not None:
+            logger.warning("reference import failed: %s", reason)
+            results[position] = {
+                "in": source or reference.get("in"),
+                "out": target or reference.get("out"),
+                "type": definition_name,
+                "status": "failed",
+                "error": reason,
+            }
+            continue
+        pending.append(
+            (
+                position,
                 {
                     "in": source,
                     "out": target,
                     "type": definition_name,
-                    "status": "reparented" if composition else "created",
-                }
+                    "definition_id": definition_id,
+                    "attributes": reference.get("attributes") or {},
+                    "composition": definition_id == COMPOSITION_DEFINITION,
+                },
             )
-        except Exception as exc:  # noqa: BLE001 - per-reference isolation
-            logger.warning("reference import failed: %s", exc)
-            results.append(
+        )
+
+    for start in range(0, len(pending), BATCH_REFERENCE_SIZE):
+        batch = pending[start : start + BATCH_REFERENCE_SIZE]
+        edges = [item for _, item in batch if not item["composition"]]
+        moves = [item for _, item in batch if item["composition"]]
+        edge_positions = [position for position, item in batch if not item["composition"]]
+        move_positions = [position for position, item in batch if item["composition"]]
+        payload = {
+            "references": [
                 {
-                    "in": source or reference.get("in"),
-                    "out": target or reference.get("out"),
-                    "type": definition_name,
+                    "source": item["in"],
+                    "target": item["out"],
+                    "definition_id": item["definition_id"],
+                    "attributes": item["attributes"],
+                }
+                for item in edges
+            ],
+            "reparents": [{"source": item["in"], "parent": item["out"]} for item in moves],
+        }
+        try:
+            response = await client.post(
+                f"{core_url}/references/batch", json=payload, params=params
+            )
+            _raise_for_core_error(response)
+            body = response.json() or {}
+        except Exception as exc:  # noqa: BLE001 - per-batch isolation
+            # The whole batch was rejected (a `413` or a server/database error):
+            # report every entry so the retry pass re-applies exactly these edges.
+            logger.warning("reference batch failed: %s", exc)
+            for position, item in batch:
+                results[position] = {
+                    "in": item["in"],
+                    "out": item["out"],
+                    "type": item["type"],
                     "status": "failed",
                     "error": str(exc),
                 }
-            )
-    return results
+            continue
+        for entry in body.get("results") or []:
+            kind = str(entry.get("kind") or "")
+            try:
+                index = int(entry.get("index"))
+            except TypeError, ValueError:
+                continue
+            if kind == "reference":
+                items, positions = edges, edge_positions
+            elif kind == "reparent":
+                items, positions = moves, move_positions
+            else:
+                continue
+            if index < 0 or index >= len(items):
+                continue
+            item = items[index]
+            status = str(entry.get("action") or "failed")
+            mapped: dict[str, Any] = {
+                "in": item["in"],
+                "out": item["out"],
+                "type": item["type"],
+                "status": status,
+            }
+            if status == "failed":
+                mapped["error"] = entry.get("error")
+                logger.warning("reference import failed: %s", entry.get("error"))
+            results[positions[index]] = mapped
+    # The report keeps the document's order; an entry the core did not report is a
+    # failure (the retry pass must see it, otherwise the edge would be lost).
+    return [
+        result
+        if result is not None
+        else {
+            "in": None,
+            "out": None,
+            "type": None,
+            "status": "failed",
+            "error": "the core did not report this reference",
+        }
+        for result in results
+    ]
 
 
 async def _complete_import(

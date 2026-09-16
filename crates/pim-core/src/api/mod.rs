@@ -105,6 +105,7 @@ use utoipa::OpenApi;
         languages::list_languages,
         objects::get_by_source,
         references::create_reference,
+        references::batch_create_references,
         references::list_object_references,
         references::list_object_children,
         references::reparent_object,
