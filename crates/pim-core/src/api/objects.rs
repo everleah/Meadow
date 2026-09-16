@@ -232,7 +232,16 @@ pub async fn create_object(
     // Keep the object-type registry complete: an object of a not-yet-registered
     // type auto-registers it (label defaults to the type code).
     crate::api::object_types::ensure_registered(&state.db, &object_type).await?;
-    keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, None).await?;
+    // The uniqueness check and the write below are one critical section per key:
+    // without it two parallel writers both see "no conflict" and leave two live
+    // rows with the same business key (`crate::key_lock`).
+    let key_names = crate::api::object_types::key_attributes_for(&state.db, &object_type).await?;
+    let _key_guards = state
+        .key_locks
+        .lock_keys(&keys::key_lock_names(&object_type, &key_names, &attributes))
+        .await;
+    keys::normalize_key_attributes(&state.db, &object_type, &key_names, &mut attributes, None)
+        .await?;
     // Data-type rules (`url` values must be openable addresses).
     crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
         .await?;
@@ -1309,13 +1318,31 @@ async fn apply_object_update(
 
     let new_status = body.status.clone();
 
+    // Holds the per-key locks (if any) until the write below is done: a PATCH can
+    // change a business key, so it races with a parallel create/update otherwise.
+    let key_names = crate::api::object_types::key_attributes_for(&state.db, &object_type).await?;
+    let lock_names = match &body.attributes {
+        Some(Value::Object(attributes)) => {
+            keys::key_lock_names(&object_type, &key_names, attributes)
+        }
+        _ => Vec::new(),
+    };
+    let _key_guards = state.key_locks.lock_keys(&lock_names).await;
+
     let mut changed_fields: Vec<&str> = Vec::new();
     let mut changes = serde_json::Map::new();
     if let Some(attributes) = body.attributes {
         let Value::Object(mut attributes) = attributes else {
             return Err(ApiError::bad_request("`attributes` must be an object"));
         };
-        keys::normalize_key_attributes(&state.db, &object_type, &mut attributes, Some(key)).await?;
+        keys::normalize_key_attributes(
+            &state.db,
+            &object_type,
+            &key_names,
+            &mut attributes,
+            Some(key),
+        )
+        .await?;
         crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
             .await?;
         changes.insert("attributes".to_owned(), Value::Object(attributes));

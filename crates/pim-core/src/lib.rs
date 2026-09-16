@@ -19,6 +19,7 @@ pub mod error;
 pub mod event;
 pub mod inheritance;
 pub mod jobqueue;
+pub mod key_lock;
 pub mod language;
 pub mod log_cleanup;
 pub mod rate_limit;
@@ -54,6 +55,7 @@ pub async fn run() {
     let state = app::AppState {
         db,
         cache: std::sync::Arc::new(cache::MetaCache::default()),
+        key_locks: std::sync::Arc::new(key_lock::KeyLocks::new()),
         rules: rules::RulesClient::from_config(&config, settings.clone()),
         config,
         settings,

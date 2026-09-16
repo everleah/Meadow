@@ -21,6 +21,8 @@ pub struct AppState {
     pub config: Config,
     /// In-memory cache for slow-changing metadata.
     pub cache: std::sync::Arc<MetaCache>,
+    /// Per-key locks around the business-key check and the write that follows it.
+    pub key_locks: std::sync::Arc<crate::key_lock::KeyLocks>,
     /// Synchronous rule-evaluation client (NATS request/reply).
     pub rules: RulesClient,
     /// Resolved runtime settings snapshot (default < env < db). Refreshed on

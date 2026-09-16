@@ -781,6 +781,32 @@
   ],
   "object_types": [
     {
+      "name": "product",
+      "label": {
+        "de": "Produkt",
+        "en": "Product"
+      },
+      "description": "Kaufartikel; die Artikelnummer ist der Geschäftsschlüssel (Eindeutigkeit + Pflichtfeld)",
+      "key_attributes": [
+        "sku"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
+      "name": "variant",
+      "label": {
+        "de": "Variante",
+        "en": "Variant"
+      },
+      "description": "Ausführung eines Produkts; eigene Artikelnummer als Geschäftsschlüssel",
+      "key_attributes": [
+        "sku"
+      ],
+      "label_attribute": "name",
+      "taxonomy": false
+    },
+    {
       "name": "part_group",
       "label": {
         "de": "Baugruppe",

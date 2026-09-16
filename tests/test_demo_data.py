@@ -277,6 +277,23 @@ def test_model_declares_every_generated_type(catalog: dict, dataset) -> None:
     assert model["created_at"] == demo.CREATED_AT
 
 
+def test_model_declares_the_article_number_as_a_business_key(catalog: dict) -> None:
+    """`sku` must be a real business key of product/variant.
+
+    The core enforces uniqueness through `object_type.key_attributes` (not through
+    the attribute's `is_key` flag), so without these entries two parallel writers
+    could create two products with the same article number —
+    `plan/detail/demodaten-generator.md` §4.4.
+    """
+    model = demo.build_model(catalog)
+    keys = {
+        entry["name"]: entry.get("key_attributes") or []
+        for entry in model["sections"]["object_types"]
+    }
+    assert keys.get("product") == ["sku"]
+    assert keys.get("variant") == ["sku"]
+
+
 def test_model_carries_the_category_role_types(catalog: dict) -> None:
     """The additional category dimensions travel with the model.
 

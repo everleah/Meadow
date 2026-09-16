@@ -128,6 +128,32 @@ async fn key_value_exists(
     Ok(false)
 }
 
+/// Lock names for the business keys present in `attributes`.
+///
+/// The names are what `KeyLocks` serialises on: they must therefore contain the
+/// **trimmed** value that the uniqueness check compares, so that two writers of
+/// the same key always compute the same name. Keys without a text value are not
+/// part of the check and get no lock.
+pub fn key_lock_names(
+    object_type: &str,
+    key_names: &[String],
+    attributes: &Map<String, Value>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for name in key_names {
+        let Some(text) = attributes.get(name).and_then(Value::as_str) else {
+            continue;
+        };
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // `\u{1}` cannot appear in an object type or attribute name.
+        names.push(format!("{object_type}\u{1}{name}\u{1}{trimmed}"));
+    }
+    names
+}
+
 /// Trims all business-key values in `attributes` and enforces uniqueness per
 /// object type. Empty values are allowed and never collide. `exclude_key`
 /// excludes the object being updated from the uniqueness check.
@@ -135,15 +161,20 @@ async fn key_value_exists(
 /// The key attributes come from the **object type registry** (`object_type
 /// .key_attributes`) for the given type — not from a global `is_key` flag. A
 /// type without keys (or an unregistered type) enforces nothing.
+///
+/// The caller passes the names in (`object_types::key_attributes_for`), so it can
+/// lock them for the write that follows the check: check and write are one
+/// critical section (`crate::key_lock`), otherwise two parallel writers can leave
+/// two live rows with the same key.
 pub async fn normalize_key_attributes(
     db: &Db,
     object_type: &str,
+    key_names: &[String],
     attributes: &mut Map<String, Value>,
     exclude_key: Option<&str>,
 ) -> Result<(), ApiError> {
-    let names = crate::api::object_types::key_attributes_for(db, object_type).await?;
-    for name in names {
-        let Some(value) = attributes.get(&name) else {
+    for name in key_names {
+        let Some(value) = attributes.get(name) else {
             continue;
         };
         let Some(text) = value.as_str() else {
@@ -155,7 +186,7 @@ pub async fn normalize_key_attributes(
         if trimmed.is_empty() {
             continue;
         }
-        if key_value_exists(db, object_type, &name, &trimmed, exclude_key).await? {
+        if key_value_exists(db, object_type, name, &trimmed, exclude_key).await? {
             return Err(ApiError::conflict(format!(
                 "duplicate business key `{name}`: an object of type `{object_type}` \
                  with value `{trimmed}` already exists"
@@ -266,5 +297,34 @@ mod tests {
     #[test]
     fn record_list_literal_of_nothing_is_an_empty_list() {
         assert_eq!(record_list_literal("object", [] as [&str; 0]), "[]");
+    }
+
+    #[test]
+    fn key_lock_names_use_the_trimmed_value() {
+        let names = vec!["sku".to_owned(), "ean".to_owned()];
+        let attributes = Map::from_iter([
+            ("sku".to_owned(), Value::String("  A-1 ".to_owned())),
+            ("ean".to_owned(), Value::String(String::new())),
+            ("other".to_owned(), Value::String("ignored".to_owned())),
+        ]);
+        assert_eq!(
+            key_lock_names("product", &names, &attributes),
+            vec!["product\u{1}sku\u{1}A-1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn key_lock_names_skip_non_text_and_unknown_keys() {
+        let names = vec!["sku".to_owned(), "missing".to_owned()];
+        let attributes = Map::from_iter([
+            ("sku".to_owned(), json_number(42)),
+            ("other".to_owned(), Value::String("x".to_owned())),
+        ]);
+        assert!(key_lock_names("product", &names, &attributes).is_empty());
+    }
+
+    /// `serde_json::json!` is not imported in this test module on purpose.
+    fn json_number(value: i64) -> Value {
+        Value::Number(value.into())
     }
 }
