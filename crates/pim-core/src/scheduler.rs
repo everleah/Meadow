@@ -47,6 +47,23 @@ async fn load_scheduled_definitions(
     Ok(rows.iter().filter_map(extract_definition).collect())
 }
 
+/// Validates a cron expression with the parser the scheduler itself uses.
+///
+/// `tokio-cron-scheduler` wants **six** fields (seconds first): `0 0 3 * * *`
+/// fires daily at 03:00, while the five-field `0 3 * * *` parses to an error.
+/// Storing such a schedule would create a definition that never fires, so the
+/// write paths (collection `refresh_interval`, `POST`/`PATCH /jobs`) reject it
+/// with `400` instead of letting the sync loop log it every minute.
+pub fn validate_schedule(schedule: &str) -> Result<(), ApiError> {
+    Job::new_async(schedule, |_uuid, _lock| Box::pin(async {}))
+        .map(|_| ())
+        .map_err(|error| {
+            ApiError::bad_request(format!(
+                "invalid cron schedule `{schedule}` (6 fields, seconds first): {error}"
+            ))
+        })
+}
+
 /// Registers a cron job for a definition and returns its scheduler guid.
 async fn register_job(
     sched: &JobScheduler,
@@ -124,7 +141,22 @@ async fn sync(
                 ApiError::internal(format!("failed to remove cron job: {error}"))
             })?;
         }
-        let guid = register_job(sched, db, config, &id, &job_type, &schedule, parameters).await?;
+        // One unusable definition must not stall the others: skip it (the write
+        // paths reject invalid expressions, so this is a legacy row at worst) and
+        // keep the rest of the tick working.
+        let guid =
+            match register_job(sched, db, config, &id, &job_type, &schedule, parameters).await {
+                Ok(guid) => guid,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error.message(),
+                        %id,
+                        schedule = %schedule,
+                        "skipping job definition with an unusable schedule"
+                    );
+                    continue;
+                }
+            };
         registered.insert(id, (guid, schedule));
     }
 
@@ -200,5 +232,18 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn validate_schedule_requires_six_fields() {
+        // Six fields (seconds first) — the form the scheduler fires.
+        assert!(validate_schedule("0 0 3 * * *").is_ok());
+        assert!(validate_schedule("0 30 4 * * *").is_ok());
+        // Five fields parse to `ParseSchedule`; the write paths reject them with
+        // `400` instead of storing a definition that only logs a warning.
+        let error = validate_schedule("0 3 * * *").expect_err("five fields must be rejected");
+        assert!(matches!(error, ApiError::BadRequest(_)), "{error:?}");
+        assert!(error.message().contains("6 fields"));
+        assert!(validate_schedule("not a cron").is_err());
     }
 }

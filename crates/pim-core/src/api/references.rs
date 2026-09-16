@@ -663,6 +663,8 @@ pub async fn create_reference(
     )
     .await;
 
+    // Composition and categorisation edges feed the dashboard aggregation.
+    state.cache.invalidate_stats();
     Ok((StatusCode::CREATED, Json(edge)))
 }
 
@@ -796,6 +798,8 @@ pub async fn create_relation_definition(
         },
     )
     .await;
+    // A relation definition's role decides which edges count as categorisation.
+    state.cache.invalidate_stats();
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -922,6 +926,8 @@ pub async fn update_relation_definition(
         },
     )
     .await;
+    // A role change reclassifies the edges of that relation.
+    state.cache.invalidate_stats();
     Ok(Json(record))
 }
 
@@ -996,6 +1002,7 @@ pub async fn delete_relation_definition(
         },
     )
     .await;
+    state.cache.invalidate_stats();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1068,6 +1075,7 @@ pub async fn update_reference(
         },
     )
     .await;
+    state.cache.invalidate_stats();
     Ok(Json(record))
 }
 
@@ -1204,6 +1212,7 @@ pub async fn delete_reference(
         .bind(("key", key))
         .await?
         .check()?;
+    state.cache.invalidate_stats();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1596,7 +1605,22 @@ pub async fn get_object_tree(
 /// keys, breadth-first. Used for the server-side subtree filter
 /// (`GET /objects?ancestor=...`) that replaces client-side tree traversal once
 /// the structure tree is lazy-loaded.
+///
+/// Loads the whole `rel_depends_on` edge set; callers that need several subtrees
+/// (batch delete) load it once via [`composition_children`] and use
+/// [`subtree_keys_in`].
 pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiError> {
+    let children = composition_children(db).await?;
+    Ok(subtree_keys_in(&children, root_id))
+}
+
+/// Loads the composition tree as a parent -> children adjacency map.
+///
+/// One query for the whole edge set; a per-root `WHERE out = …` query looks
+/// cheap but repeats the traversal for every root — for a batch that is N full
+/// scans of `reference` where one is enough
+/// (`plan/detail/demodaten-generator.md` §4.3).
+pub async fn composition_children(db: &Db) -> Result<HashMap<String, Vec<String>>, ApiError> {
     let sql =
         "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
     let mut response = db.inner().query(sql).await?.check()?;
@@ -1609,6 +1633,12 @@ pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiErro
             children.entry(parent).or_default().push(child);
         }
     }
+    Ok(children)
+}
+
+/// Returns `root_id` and every composition descendant as bare object keys,
+/// using a preloaded adjacency map (see [`composition_children`]).
+pub fn subtree_keys_in(children: &HashMap<String, Vec<String>>, root_id: &str) -> Vec<String> {
     let mut result: Vec<String> = vec![root_id.to_owned()];
     let mut seen: HashSet<String> = HashSet::new();
     let mut queue: Vec<String> = vec![root_id.to_owned()];
@@ -1625,7 +1655,7 @@ pub async fn subtree_keys(db: &Db, root_id: &str) -> Result<Vec<String>, ApiErro
             }
         }
     }
-    Ok(result.iter().map(|id| key_of(id)).collect())
+    result.iter().map(|id| key_of(id)).collect()
 }
 
 /// Returns the bare keys of every object assigned (via the given category
@@ -1910,6 +1940,8 @@ pub async fn reparent_object(
     )
     .await;
 
+    // Re-parenting moves an object inside the composition tree.
+    state.cache.invalidate_stats();
     Ok(Json(object))
 }
 

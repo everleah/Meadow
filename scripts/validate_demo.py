@@ -3,9 +3,10 @@
 Runs the checklist of `plan/detail/demodaten-generator.md` §7 against a running
 instance: it compares `GET /objects/stats` with the generated `report.json`,
 looks for duplicate business keys, checks channel releases, business rules,
-collections, saved searches, the composition path, the class features and — unless
-`--skip-export` — exports one collection as BMEcat and validates it against the
-ETIM XSD if `resources/etim/bmecat_etim_501.xsd` is present.
+collections, saved searches (and that both carry the generator's `source`, which
+is what `--cleanup` deletes by), the composition path, the class features and —
+unless `--skip-export` — exports one collection as BMEcat and validates it
+against the ETIM XSD if `resources/etim/bmecat_etim_501.xsd` is present.
 
 The script only reads; the single write is the export job (which stores a file in
 the object storage). It exits with `1` as soon as one check fails, so it can be
@@ -85,7 +86,7 @@ def login(client: httpx.Client, user: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['token']}"}
 
 
-def _load_extras(path: Path) -> dict[str, list[str]]:
+def _load_extras(path: Path) -> dict[str, Any]:
     """Reads the generated extras: which collections and searches to check.
 
     Without the file the checks fall back to the empty list so that the script
@@ -93,13 +94,17 @@ def _load_extras(path: Path) -> dict[str, list[str]]:
     """
     if not path.exists():
         print(f"note: {path} not found, skipping the collection/search checks")
-        return {"collections": [], "searches": []}
+        return {"collections": [], "searches": [], "source": DEFAULT_SOURCE}
     extras = json.loads(path.read_text(encoding="utf-8"))
     collections = [str(entry["name"]) for entry in extras.get("collections") or []]
     searches = [str(entry["name"]) for entry in extras.get("saved_searches") or []]
     # The importer creates a filter search per collection ("<name> (Auswahl)").
     searches += [f"{name} (Auswahl)" for name in collections]
-    return {"collections": collections, "searches": searches}
+    return {
+        "collections": collections,
+        "searches": searches,
+        "source": str(extras.get("source") or DEFAULT_SOURCE),
+    }
 
 
 def pages(
@@ -289,6 +294,42 @@ def check_searches(
         checks.ok("saved searches", ", ".join(details))
 
 
+def check_artefact_sources(
+    checks: Checks,
+    client: httpx.Client,
+    headers: dict[str, str],
+    extras: dict[str, Any],
+) -> None:
+    """Every generated collection and search must carry the generator's `source`.
+
+    `scripts/demo_data.py --cleanup` deletes exactly the artefacts of that
+    source; an untagged collection of an older catalogue revision would survive
+    every cleanup. The check therefore reads the artefacts through the very
+    filter the cleanup uses (`?source=`) instead of listing everything.
+    """
+    source = str(extras.get("source") or "")
+    wanted = {
+        "/collections": set(extras["collections"]),
+        "/saved-searches": set(extras["searches"]),
+    }
+    if not source or not any(wanted.values()):
+        return
+    untagged: list[str] = []
+    for path, expected in wanted.items():
+        tagged = {
+            str((row.get("attributes") or {}).get("name"))
+            for row in client.get(
+                path, params={"source": source, "limit": LIST_PAGE}, headers=headers
+            ).json()
+        }
+        untagged += sorted(expected - tagged)
+    if untagged:
+        checks.fail("artefact source", f"not tagged `{source}`: {untagged[:5]}")
+    else:
+        total = sum(len(names) for names in wanted.values())
+        checks.ok("artefact source", f"{total} collections/searches tagged `{source}`")
+
+
 def check_composition_path(
     checks: Checks,
     client: httpx.Client,
@@ -469,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         check_rules(checks, client, headers)
         collections = check_collections(checks, client, headers, extras["collections"])
         check_searches(checks, client, headers, extras["searches"])
+        check_artefact_sources(checks, client, headers, extras)
         check_composition_path(checks, client, headers)
         check_class_features(checks, client, headers)
         if args.skip_export:

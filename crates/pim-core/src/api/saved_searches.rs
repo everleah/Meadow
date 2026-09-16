@@ -174,6 +174,13 @@ pub struct CreateSavedSearch {
     pub query: SavedSearchQuery,
     #[serde(default)]
     pub refresh_interval: Option<String>,
+    /// Origin of the artefact (`source` field of an importing generator), so
+    /// the generator can find and remove its own artefacts again.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Id of the artefact inside that source (e.g. the catalogue entry name).
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Payload for updating a saved search.
@@ -185,6 +192,12 @@ pub struct UpdateSavedSearch {
     pub query: Option<SavedSearchQuery>,
     #[serde(default)]
     pub refresh_interval: Option<Option<String>>,
+    /// Origin label; absent keeps the current value, an empty string clears it.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Source-side id; absent keeps the current value, empty clears it.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Payload for creating a collection.
@@ -195,6 +208,12 @@ pub struct CreateCollection {
     pub saved_search_id: String,
     #[serde(default)]
     pub refresh_interval: Option<String>,
+    /// Origin of the artefact (`source` field of an importing generator).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Id of the artefact inside that source.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Payload for updating a collection.
@@ -206,6 +225,12 @@ pub struct UpdateCollection {
     pub saved_search_id: Option<String>,
     #[serde(default)]
     pub refresh_interval: Option<Option<String>>,
+    /// Origin label; absent keeps the current value, an empty string clears it.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Source-side id; absent keeps the current value, empty clears it.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Query parameters for listing saved searches / collections.
@@ -216,10 +241,50 @@ pub struct ListParams {
     pub limit: u32,
     #[serde(default)]
     pub start: u32,
+    /// Filters by origin label (e.g. `meadow-demo`); absent returns every source.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 fn default_list_limit() -> u32 {
     100
+}
+
+/// Resolves the `source`/`source_id` fields of an update.
+///
+/// `None` keeps the current value (so a client that only renames a saved search
+/// keeps its origin), an empty string clears the field, any other value replaces
+/// it, trimmed. Returns the `SET` fragment plus the value to bind: no fragment
+/// for absent, `= NONE` for clearing, `= $<field>` plus value otherwise. The
+/// field name is a literal from this module, never client input.
+fn source_assignment(field: &str, patch: Option<&str>) -> (String, Option<String>) {
+    match patch.map(str::trim) {
+        None => (String::new(), None),
+        Some("") => (format!(", {field} = NONE"), None),
+        Some(value) => (format!(", {field} = ${field}"), Some(value.to_owned())),
+    }
+}
+
+/// Writes `source`/`source_id` into a create payload's record content.
+fn insert_source(content: &mut Map<String, Value>, source: Option<&str>, source_id: Option<&str>) {
+    for (field, value) in [("source", source), ("source_id", source_id)] {
+        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+            content.insert(field.to_owned(), Value::String(value.to_owned()));
+        }
+    }
+}
+
+/// SQL for the saved-search / collection lists, optionally filtered by source.
+fn list_sql(by_source: bool) -> String {
+    let filter = if by_source {
+        " AND source = $source"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT * FROM object WHERE type = $t AND deleted_at IS NONE{filter} \
+         ORDER BY created_at DESC LIMIT $limit START $start"
+    )
 }
 
 /// Splits a `table:key` id / checks the table. Returns the bare key.
@@ -344,17 +409,18 @@ pub async fn list_saved_searches(
     }
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
-    let mut response = state
+    let source = params.source.as_deref().map(str::trim);
+    let mut query = state
         .db
         .inner()
-        .query(
-            "SELECT * FROM object WHERE type = $t AND deleted_at IS NONE ORDER BY created_at DESC LIMIT $limit START $start",
-        )
+        .query(list_sql(source.is_some()))
         .bind(("t", SAVED_SEARCH_TYPE))
         .bind(("limit", limit))
-        .bind(("start", start))
-        .await?
-        .check()?;
+        .bind(("start", start));
+    if let Some(source) = source {
+        query = query.bind(("source", source.to_owned()));
+    }
+    let mut response = query.await?.check()?;
     let rows: Vec<Value> = response.take(0)?;
     Ok(Json(rows))
 }
@@ -422,19 +488,28 @@ pub async fn create_saved_search(
         );
     }
 
+    let mut content = Map::new();
+    content.insert(
+        "type".to_owned(),
+        Value::String(SAVED_SEARCH_TYPE.to_owned()),
+    );
+    content.insert("attributes".to_owned(), Value::Object(attributes));
+    content.insert("status".to_owned(), Value::String("active".to_owned()));
+    content.insert("version".to_owned(), Value::from(1));
+    content.insert("updated_by".to_owned(), Value::String(claims.sub.clone()));
+    insert_source(
+        &mut content,
+        body.source.as_deref(),
+        body.source_id.as_deref(),
+    );
+
     let mut response = state
         .db
         .inner()
         .query(
             "LET $o = type::record('object', rand::ulid()); CREATE $o CONTENT $content; SELECT * FROM $o;",
         )
-        .bind(("content", json!({
-            "type": SAVED_SEARCH_TYPE,
-            "attributes": Value::Object(attributes),
-            "status": "active",
-            "version": 1,
-            "updated_by": claims.sub.clone(),
-        })))
+        .bind(("content", Value::Object(content)))
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(2)?;
@@ -515,16 +590,26 @@ pub async fn update_saved_search(
             }
         }
     }
-    let mut response = state
+    let source = source_assignment("source", body.source.as_deref());
+    let source_id = source_assignment("source_id", body.source_id.as_deref());
+    let sql = format!(
+        "LET $o = type::record('object', $key); UPDATE $o SET attributes = $attributes, \
+         updated_at = time::now(){}{}; SELECT * FROM $o;",
+        source.0, source_id.0
+    );
+    let mut query = state
         .db
         .inner()
-        .query(
-            "LET $o = type::record('object', $key); UPDATE $o SET attributes = $attributes, updated_at = time::now(); SELECT * FROM $o;",
-        )
+        .query(sql)
         .bind(("key", key))
-        .bind(("attributes", Value::Object(attributes)))
-        .await?
-        .check()?;
+        .bind(("attributes", Value::Object(attributes)));
+    if let Some(value) = source.1 {
+        query = query.bind(("source", value));
+    }
+    if let Some(value) = source_id.1 {
+        query = query.bind(("source_id", value));
+    }
+    let mut response = query.await?.check()?;
     let rows: Vec<Value> = response.take(2)?;
     let object = rows
         .into_iter()
@@ -745,17 +830,18 @@ pub async fn list_collections(
     }
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
-    let mut response = state
+    let source = params.source.as_deref().map(str::trim);
+    let mut query = state
         .db
         .inner()
-        .query(
-            "SELECT * FROM object WHERE type = $t AND deleted_at IS NONE ORDER BY created_at DESC LIMIT $limit START $start",
-        )
+        .query(list_sql(source.is_some()))
         .bind(("t", COLLECTION_TYPE))
         .bind(("limit", limit))
-        .bind(("start", start))
-        .await?
-        .check()?;
+        .bind(("start", start));
+    if let Some(source) = source {
+        query = query.bind(("source", source.to_owned()));
+    }
+    let mut response = query.await?.check()?;
     let mut rows: Vec<Value> = response.take(0)?;
     with_member_counts(&state.db, &mut rows).await?;
     Ok(Json(rows))
@@ -808,6 +894,9 @@ async fn sync_collection_job(
         .take(0)?;
     match refresh_interval.map(str::trim).filter(|i| !i.is_empty()) {
         Some(interval) => {
+            // A five-field expression would be accepted here and never fire; the
+            // scheduler only logs it (`tokio-cron-scheduler` wants 6 fields).
+            crate::scheduler::validate_schedule(interval)?;
             let content = json!({
                 "name": job_name,
                 "type": "collection_refresh",
@@ -895,19 +984,25 @@ pub async fn create_collection(
         );
     }
 
+    let mut content = Map::new();
+    content.insert("type".to_owned(), Value::String(COLLECTION_TYPE.to_owned()));
+    content.insert("attributes".to_owned(), Value::Object(attributes));
+    content.insert("status".to_owned(), Value::String("active".to_owned()));
+    content.insert("version".to_owned(), Value::from(1));
+    content.insert("updated_by".to_owned(), Value::String(claims.sub.clone()));
+    insert_source(
+        &mut content,
+        body.source.as_deref(),
+        body.source_id.as_deref(),
+    );
+
     let mut response = state
         .db
         .inner()
         .query(
             "LET $o = type::record('object', rand::ulid()); CREATE $o CONTENT $content; SELECT * FROM $o;",
         )
-        .bind(("content", json!({
-            "type": COLLECTION_TYPE,
-            "attributes": Value::Object(attributes),
-            "status": "active",
-            "version": 1,
-            "updated_by": claims.sub.clone(),
-        })))
+        .bind(("content", Value::Object(content)))
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(2)?;
@@ -990,16 +1085,26 @@ pub async fn update_collection(
             }
         }
     }
-    let mut response = state
+    let source = source_assignment("source", body.source.as_deref());
+    let source_id = source_assignment("source_id", body.source_id.as_deref());
+    let sql = format!(
+        "LET $o = type::record('object', $key); UPDATE $o SET attributes = $attributes, \
+         updated_at = time::now(){}{}; SELECT * FROM $o;",
+        source.0, source_id.0
+    );
+    let mut query = state
         .db
         .inner()
-        .query(
-            "LET $o = type::record('object', $key); UPDATE $o SET attributes = $attributes, updated_at = time::now(); SELECT * FROM $o;",
-        )
+        .query(sql)
         .bind(("key", key))
-        .bind(("attributes", Value::Object(attributes)))
-        .await?
-        .check()?;
+        .bind(("attributes", Value::Object(attributes)));
+    if let Some(value) = source.1 {
+        query = query.bind(("source", value));
+    }
+    if let Some(value) = source_id.1 {
+        query = query.bind(("source_id", value));
+    }
+    let mut response = query.await?.check()?;
     let rows: Vec<Value> = response.take(2)?;
     let object = rows
         .into_iter()
@@ -1370,4 +1475,45 @@ pub async fn list_collection_members(
         }));
     }
     Ok(Json(members))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_patch_keeps_clears_or_replaces_the_field() {
+        // Absent -> no fragment, so a client that only renames keeps the origin.
+        assert_eq!(source_assignment("source", None), (String::new(), None));
+        // Empty -> clear the field.
+        assert_eq!(
+            source_assignment("source", Some("  ")),
+            (", source = NONE".to_owned(), None)
+        );
+        // A value replaces it, trimmed, and binds under the field name.
+        assert_eq!(
+            source_assignment("source_id", Some(" other ")),
+            (
+                ", source_id = $source_id".to_owned(),
+                Some("other".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn create_payload_writes_only_non_empty_source_fields() {
+        let mut content = Map::new();
+        insert_source(&mut content, Some(" meadow-demo "), Some(""));
+        assert_eq!(
+            content.get("source").and_then(Value::as_str),
+            Some("meadow-demo")
+        );
+        assert!(!content.contains_key("source_id"));
+    }
+
+    #[test]
+    fn list_sql_only_filters_when_a_source_is_given() {
+        assert!(!list_sql(false).contains("source = $source"));
+        assert!(list_sql(true).contains("AND source = $source"));
+    }
 }

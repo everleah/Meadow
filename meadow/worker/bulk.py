@@ -505,7 +505,11 @@ async def _add_relation(
         json={"source": object_id, "target": target, "definition_id": definition_id},
     )
     if response.status_code == 409:
-        # The core rejects a duplicate edge: another writer created it in between.
+        # Duplicate edge: another writer created it in between → nothing changed.
+        # A concurrent write conflict carries the same status but is retryable;
+        # reporting it as "unchanged" would hide a link that was never created.
+        if "already exists" not in response.text:
+            response.raise_for_status()
         return {"relation": definition_id, "target": target, "added": 0, "changed": 0}
     response.raise_for_status()
     return {"relation": definition_id, "target": target, "added": 1, "changed": 1}

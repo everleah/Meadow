@@ -356,6 +356,7 @@ pub async fn create_object(
         },
     )
     .await;
+    state.cache.invalidate_stats();
     Ok((StatusCode::CREATED, Json(object)))
 }
 
@@ -465,6 +466,8 @@ pub async fn delete_object(
         .await?
         .check()?;
 
+    // A deleted subtree (often a whole family) changes the counts and completeness.
+    state.cache.invalidate_stats();
     audit::record_best_effort(
         &state.db,
         AuditEntry {
@@ -479,6 +482,225 @@ pub async fn delete_object(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Maximum number of ids per batch delete call.
+const MAX_BATCH_DELETE_ROWS: usize = 500;
+
+/// Payload for `POST /objects/batch-delete`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BatchDeleteRequest {
+    /// Object record ids (`object:<key>`) or bare keys; duplicates are ignored.
+    pub ids: Vec<String>,
+}
+
+/// Result of `POST /objects/batch-delete`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BatchDeleteResult {
+    /// Root objects that were deleted (one per existing input id).
+    pub deleted: usize,
+    /// Additional objects the composition cascade removed below them.
+    pub cascaded: usize,
+    /// Ids that do not exist (deleted already, or removed by a cascade) — not an
+    /// error, so a cleanup can pass a stale list.
+    pub missing: Vec<String>,
+}
+
+/// Normalises and validates the ids of a batch delete (duplicates dropped).
+fn normalize_delete_ids(ids: &[String]) -> Result<Vec<String>, ApiError> {
+    if ids.is_empty() {
+        return Err(ApiError::bad_request("`ids` must not be empty"));
+    }
+    if ids.len() > MAX_BATCH_DELETE_ROWS {
+        return Err(ApiError::payload_too_large(format!(
+            "batch exceeds the limit of {MAX_BATCH_DELETE_ROWS} ids"
+        )));
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut keys: Vec<String> = Vec::with_capacity(ids.len());
+    for id in ids {
+        let key = id
+            .split_once(':')
+            .map(|(_, key)| key)
+            .unwrap_or(id.as_str())
+            .trim();
+        if key.is_empty()
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(ApiError::bad_request(format!("invalid object id `{id}`")));
+        }
+        if key == "object_root" {
+            return Err(ApiError::bad_request(
+                "the universal root cannot be deleted",
+            ));
+        }
+        if seen.insert(key.to_owned()) {
+            keys.push(key.to_owned());
+        }
+    }
+    Ok(keys)
+}
+
+/// Deletes many objects in **one** transaction (cascade included).
+///
+/// `DELETE /objects/{id}` costs ~0,4 s for a leaf and ~1–3 s for a subtree: the
+/// statements themselves run in 80–400 µs, the time sits in the per-request
+/// write path (transaction, audit, outbox, HTTP). A cleanup of 3 000 objects is
+/// therefore dominated by call overhead, not by the deletion
+/// (`plan/detail/demodaten-generator.md` §4.3/§9). This endpoint amortises that:
+/// one request, one transaction, **one** composition-edge query for all
+/// subtrees, one audit row — and one outbox event per deleted root, so event
+/// consumers see exactly the same messages as before.
+///
+/// Unknown ids are reported in `missing` instead of failing the call: a cleanup
+/// passes a list it fetched itself, and a parent's cascade may have removed a
+/// child in the meantime.
+#[utoipa::path(
+    post,
+    path = "/objects/batch-delete",
+    request_body = BatchDeleteRequest,
+    params(WriteObjectQuery),
+    responses(
+        (status = 200, description = "Deleted", body = BatchDeleteResult),
+        (status = 400, description = "Invalid id or undeletable object", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 413, description = "Too many ids", body = Value)
+    )
+)]
+pub async fn batch_delete_objects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<WriteObjectQuery>,
+    Json(body): Json<BatchDeleteRequest>,
+) -> Result<Json<BatchDeleteResult>, ApiError> {
+    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let keys = normalize_delete_ids(&body.ids)?;
+    let emit_events = params.emit_events.unwrap_or(true);
+
+    // Which of the requested objects exist? One index-backed id-list query (the
+    // literal list, never `array::map` — that form is per-row and quadratic).
+    let literal = crate::api::keys::record_list_literal(TABLE, keys.iter().map(String::as_str));
+    let mut response = state
+        .db
+        .inner()
+        .query(format!(
+            "SELECT type::string(id) AS id FROM object WHERE id IN {literal} AND deleted_at IS NONE;"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let existing: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .map(|id| {
+            id.rsplit_once(':')
+                .map(|(_, key)| key)
+                .unwrap_or(id)
+                .to_owned()
+        })
+        .collect();
+    let missing: Vec<String> = keys
+        .iter()
+        .filter(|key| !existing.iter().any(|found| found == *key))
+        .map(|key| format!("object:{key}"))
+        .collect();
+    if existing.is_empty() {
+        return Ok(Json(BatchDeleteResult {
+            deleted: 0,
+            cascaded: 0,
+            missing,
+        }));
+    }
+
+    // Cascade set: the requested objects plus every `depends_on` descendant,
+    // computed from **one** edge query instead of one traversal per root.
+    let children = crate::api::references::composition_children(&state.db).await?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cascade_keys: Vec<String> = Vec::new();
+    for key in &existing {
+        for member in crate::api::references::subtree_keys_in(&children, &format!("object:{key}")) {
+            if seen.insert(member.clone()) {
+                cascade_keys.push(member);
+            }
+        }
+    }
+    let cascaded = cascade_keys.len() - existing.len();
+
+    // Statements: BEGIN(0), LET(1), UPDATE(2), DELETE refs(3), DELETE releases(4),
+    // DELETE class features(5), [CREATE outbox(6)], COMMIT(6|7).
+    let sql = if emit_events {
+        "
+        BEGIN TRANSACTION;
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
+        DELETE reference WHERE in IN $recs OR out IN $recs;
+        FOR $r IN $recs { DELETE release WHERE object_id = $r; };
+        FOR $r IN $recs { DELETE category_attribute WHERE category_id = $r; };
+        FOR $event IN $events { CREATE outbox_event CONTENT $event; };
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    } else {
+        "
+        BEGIN TRANSACTION;
+        LET $recs = array::map($keys, |$k| type::record('object', $k));
+        UPDATE object SET deleted_at = time::now(), deleted_by = $user_id, updated_at = time::now() WHERE id IN $recs;
+        DELETE reference WHERE in IN $recs OR out IN $recs;
+        FOR $r IN $recs { DELETE release WHERE object_id = $r; };
+        FOR $r IN $recs { DELETE category_attribute WHERE category_id = $r; };
+        COMMIT TRANSACTION;
+        "
+        .to_owned()
+    };
+    let events: Vec<Value> = if emit_events {
+        let cascade = cascade_keys.len();
+        existing
+            .iter()
+            .map(|key| {
+                crate::event::content(&crate::event::OutboxEvent {
+                    event_type: crate::event::EVENT_OBJECT_DELETED,
+                    object_type: "object".to_owned(),
+                    object_id: format!("object:{key}"),
+                    changes: json!({ "cascade": cascade, "batch": existing.len() }),
+                    metadata: json!({ "user_id": user_id.clone() }),
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("keys", cascade_keys))
+        .bind(("user_id", user_id.clone()))
+        .bind(("events", events))
+        .await?
+        .check()?;
+
+    state.cache.invalidate_stats();
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &user_id,
+            action: "objects_deleted",
+            object_id: None,
+            from: None,
+            to: Some(json!({ "deleted": existing.len(), "cascaded": cascaded })),
+            metadata: None,
+        },
+    )
+    .await;
+
+    Ok(Json(BatchDeleteResult {
+        deleted: existing.len(),
+        cascaded,
+        missing,
+    }))
 }
 
 /// Loads a single object by id, optionally resolving multilingual attributes.
@@ -602,6 +824,16 @@ pub async fn object_stats(
         .map(str::trim)
         .filter(|l| !l.is_empty());
 
+    // The aggregation reads every object's attributes, the composition edges and the
+    // class features (~1 s at demo scale in a release build). It is cached per
+    // working language and bound to the data version that every write path bumps, so
+    // a stale payload is never returned.
+    let cache_key = locale.unwrap_or_default().to_owned();
+    let version = state.cache.stats_version();
+    if let Some(cached) = state.cache.cached_stats(&cache_key, version).await {
+        return Ok(Json((*cached).clone()));
+    }
+
     // Counts come from a SQL aggregation (one small row per type/status pair): the
     // handler used to load **every** object with all its attributes just to count
     // them, which transferred ~5 MB and parsed it in the core.
@@ -683,12 +915,17 @@ pub async fn object_stats(
         }
     }
 
-    Ok(Json(json!({
+    let payload = json!({
         "total": total,
         "by_type": by_type,
         "by_status": by_status,
         "incomplete_by_type": incomplete_by_type,
-    })))
+    });
+    state
+        .cache
+        .store_stats(&cache_key, version, std::sync::Arc::new(payload.clone()))
+        .await;
+    Ok(Json(payload))
 }
 
 /// Lists objects, optionally filtered by type.
@@ -1617,6 +1854,9 @@ async fn apply_object_update(
         }
     }
 
+    // The dashboard aggregation counts objects and resolves completeness, so any
+    // write to an object invalidates it.
+    state.cache.invalidate_stats();
     Ok(object)
 }
 
@@ -1942,6 +2182,8 @@ pub async fn update_computed(
     )
     .await;
 
+    // Computed values change an object's completeness.
+    state.cache.invalidate_stats();
     Ok(Json(object))
 }
 
@@ -2033,5 +2275,33 @@ mod tests {
         let result = completeness(90, &[]);
         assert!(passes_completeness_filter(&result, Some(95), false));
         assert!(!passes_completeness_filter(&result, Some(95), true));
+    }
+
+    #[test]
+    fn batch_delete_ids_are_normalised_and_validated() {
+        // Bare keys and full record ids are both accepted, duplicates dropped.
+        let keys = normalize_delete_ids(&[
+            "object:01ABC".to_owned(),
+            "01ABC".to_owned(),
+            "demo-group-PG-BRK".to_owned(),
+        ])
+        .expect("valid ids");
+        assert_eq!(keys, vec!["01ABC", "demo-group-PG-BRK"]);
+
+        // The universal root never goes away, and junk is refused instead of
+        // being dropped silently (the caller would wonder where it went).
+        assert!(normalize_delete_ids(&["object:object_root".to_owned()]).is_err());
+        assert!(normalize_delete_ids(&["object:".to_owned()]).is_err());
+        assert!(normalize_delete_ids(&["object:a b".to_owned()]).is_err());
+        assert!(normalize_delete_ids(&[]).is_err());
+    }
+
+    #[test]
+    fn batch_delete_is_capped() {
+        let ids: Vec<String> = (0..MAX_BATCH_DELETE_ROWS + 1)
+            .map(|index| format!("object:{index}"))
+            .collect();
+        assert!(normalize_delete_ids(&ids).is_err());
+        assert!(normalize_delete_ids(&ids[..MAX_BATCH_DELETE_ROWS]).is_ok());
     }
 }

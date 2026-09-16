@@ -245,6 +245,8 @@ pub async fn create_category_attribute(
         },
     )
     .await;
+    // Mandatory class features take part in completeness.
+    state.cache.invalidate_stats();
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -364,6 +366,7 @@ pub async fn delete_category_attribute(
         },
     )
     .await;
+    state.cache.invalidate_stats();
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -25,7 +25,10 @@ output directory:
     searches, the collection refresh jobs, the standard class membership and the
     business rules to activate (MCF-imported rules start ``disabled`` by design).
     Node keys (``demo-group-PG-BRK``) inside a collection query are resolved by
-    the importer.
+    the importer. Collections and saved searches are created with
+    ``source: meadow-demo`` + ``source_id``, which is what lets ``--cleanup``
+    find and remove **their own** artefacts — including those of an older
+    catalogue revision, whose names may have changed since.
 ``report.json``
     Counts per object type and relation plus the parameter set — the evidence
     checked by ``tests/test_demo_data.py``.
@@ -268,6 +271,15 @@ def validate_catalog(data: dict[str, Any]) -> list[str]:
         query = collection.get("query") or {}
         if not query.get("where") and not query.get("references"):
             problems.append(f"collection {collection.get('name')}: query without filter")
+        # The core registers the refresh as a cron job; `tokio-cron-scheduler`
+        # needs six fields (seconds first). A five-field expression is accepted
+        # by the API but never fires — the scheduler only logs it every minute.
+        interval = (collection.get("refresh_interval") or "").strip()
+        if interval and len(interval.split()) != 6:
+            problems.append(
+                f"collection {collection['name']}: refresh_interval `{interval}` "
+                "must have 6 cron fields (seconds first)"
+            )
 
     for relation in data.get("relation_definitions", []):
         for attribute in relation.get("attributes", []):
@@ -1251,6 +1263,13 @@ CLEANUP_TYPES = ("product", "vehicle_make", "part_group", "category", "oem_numbe
 #: cascade ever reaches the other row.
 CLEANUP_ORPHAN_TYPES = ("variant", "vehicle_model", "vehicle_generation")
 
+#: Ids per `POST /objects/batch-delete` call. Measured on the dev instance
+#: (debug build, leaves): one object at a time **591 ms**, 30 per request 22 ms,
+#: **100 per request 12 ms**, 200 per request 12 ms — the per-request write path
+#: (transaction, audit, outbox, HTTP) dominates, not the deletion. The endpoint
+#: accepts 500, but 100 already saturates the curve.
+CLEANUP_BATCH = 100
+
 
 class ImportFailure(RuntimeError):
     """Raised when a step of the import does not succeed."""
@@ -1493,13 +1512,16 @@ def apply_extras(
     updated_searches = 0
     for entry in extras["saved_searches"]:
         query = resolve_query(entry["query"], resolved)
+        origin = {"source": SOURCE, "source_id": entry["name"]}
         existing_id = searches.get(entry["name"])
         if existing_id:
             # Upsert: the artefacts are the source of truth, so a re-run brings an
             # existing search back in line (names come from the demo catalogue).
+            # `source`/`source_id` also adopt a search of an older revision, which
+            # is what lets `--cleanup` find it again.
             response = client.patch(
                 f"/saved-searches/{existing_id}",
-                json={"query": query},
+                json={"query": query, **origin},
                 headers=headers,
             )
             if response.status_code != 200:
@@ -1510,7 +1532,7 @@ def apply_extras(
             continue
         response = client.post(
             "/saved-searches",
-            json={"name": entry["name"], "query": query},
+            json={"name": entry["name"], "query": query, **origin},
             headers=headers,
         )
         if response.status_code not in (200, 201):
@@ -1530,11 +1552,13 @@ def apply_extras(
     member_counts: list[str] = []
     for entry in extras["collections"]:
         filter_name = f"{entry['name']} (Auswahl)"
+        filter_query = resolve_query(entry["query"], resolved)
+        filter_origin = {"source": SOURCE, "source_id": filter_name}
         search_id = searches.get(filter_name)
         if search_id is None:
             response = client.post(
                 "/saved-searches",
-                json={"name": filter_name, "query": resolve_query(entry["query"], resolved)},
+                json={"name": filter_name, "query": filter_query, **filter_origin},
                 headers=headers,
             )
             if response.status_code not in (200, 201):
@@ -1546,13 +1570,15 @@ def apply_extras(
         else:
             client.patch(
                 f"/saved-searches/{search_id}",
-                json={"query": resolve_query(entry["query"], resolved)},
+                json={"query": filter_query, **filter_origin},
                 headers=headers,
             ).raise_for_status()
         collection_id = collections.get(entry["name"])
         payload = {
             "saved_search_id": search_id,
             "refresh_interval": entry["refresh_interval"] or None,
+            "source": SOURCE,
+            "source_id": entry["name"],
         }
         if collection_id is None:
             response = client.post(
@@ -1693,6 +1719,34 @@ def _list_source_objects(
         start += LIST_PAGE
 
 
+def _delete_batch(
+    client: httpx.Client,
+    headers: dict[str, str],
+    targets: list[str],
+    failed: list[str],
+) -> tuple[int, int, int]:
+    """Deletes the targets in batches; returns `(deleted, cascaded, gone)`.
+
+    `gone` counts ids the instance does not know any more — a parent's cascade
+    went first (or a duplicate row was already deleted), which is the expected
+    outcome during a cleanup, not an error.
+    """
+    deleted = 0
+    cascaded = 0
+    gone = 0
+    for start in range(0, len(targets), CLEANUP_BATCH):
+        chunk = targets[start : start + CLEANUP_BATCH]
+        response = client.post("/objects/batch-delete", json={"ids": chunk}, headers=headers)
+        if response.status_code != 200:
+            failed.append(f"batch of {len(chunk)}: HTTP {response.status_code}")
+            continue
+        payload = response.json()
+        deleted += int(payload.get("deleted") or 0)
+        cascaded += int(payload.get("cascaded") or 0)
+        gone += len(payload.get("missing") or [])
+    return deleted, cascaded, gone
+
+
 def cleanup_objects(
     client: httpx.Client,
     headers: dict[str, str],
@@ -1710,41 +1764,93 @@ def cleanup_objects(
     then the types that a cascade normally takes. That second phase is almost free
     (the cascade already soft-deleted them) but catches **orphans** — rows whose
     parent edge a concurrent import applied to a duplicate twin only, so no
-    cascade reaches them.
+    cascade reaches them. A row that is gone by then is reported as `gone`, not as
+    a failure.
 
-    The deletion stays sequential: `DELETE /objects/{id}` costs ~0.4 s for a leaf
-    and ~1-3 s for a subtree, and four parallel workers did not make the demo
-    rebuild measurably faster (18 min vs 19 min) — the core serialises those
-    writes (`plan/detail/demodaten-generator.md` §9).
+    The deletion is **batched** (`POST /objects/batch-delete`, `CLEANUP_BATCH`
+    ids per call): one request and one transaction for up to 100 objects instead
+    of one request each. Measured on the dev instance: 591 ms per object
+    sequentially, 12 ms per object batched — a rebuild's cleanup (3 000+ objects)
+    drops from ~20–27 min to a couple of minutes
+    (`plan/detail/demodaten-generator.md` §4.3/§9). Four *parallel* clients never
+    helped, because the core serialises the individual writes.
     """
     deleted = 0
     cascaded = 0
-    orphans = 0
+    gone = 0
     failed: list[str] = []
     for object_type in CLEANUP_TYPES:
         targets = _list_source_objects(client, headers, object_type)
         log.add("cleanup targets", f"{object_type}: {len(targets)} objects to delete")
-        for object_id in targets:
-            response = client.delete(f"/objects/{object_id}", headers=headers)
-            if response.status_code in (200, 204):
-                deleted += 1
-            elif response.status_code == 404:
-                # A parent's cascade went first (sub-assembly groups, categories,
-                # variants, vehicle models).
-                cascaded += 1
-            else:
-                failed.append(f"{object_id}: HTTP {response.status_code}")
+        type_deleted, type_cascaded, type_gone = _delete_batch(client, headers, targets, failed)
+        deleted += type_deleted
+        cascaded += type_cascaded
+        gone += type_gone
+    orphans = 0
     for object_type in CLEANUP_ORPHAN_TYPES:
-        for object_id in _list_source_objects(client, headers, object_type):
-            response = client.delete(f"/objects/{object_id}", headers=headers)
-            if response.status_code in (200, 204):
-                orphans += 1
-            elif response.status_code != 404:
-                failed.append(f"{object_id}: HTTP {response.status_code}")
+        targets = _list_source_objects(client, headers, object_type)
+        if not targets:
+            continue
+        log.add("cleanup orphans", f"{object_type}: {len(targets)} left over")
+        orphan_deleted, _, _ = _delete_batch(client, headers, targets, failed)
+        orphans += orphan_deleted
     log.add(
         "cleanup",
-        f"{deleted} objects deleted, {cascaded} removed by cascade, "
-        f"{orphans} orphans, {len(failed)} failed",
+        f"{deleted} objects deleted, {cascaded} subtrees removed with them, "
+        f"{gone} already gone (cascade/duplicate), {orphans} orphans, "
+        f"{len(failed)} failed",
+    )
+    for entry in failed[:5]:
+        log.problem(f"delete failed {entry}")
+    return deleted + orphans
+
+
+def _list_source_artefacts(client: httpx.Client, headers: dict[str, str], path: str) -> list[str]:
+    """Lists the record ids of this generator's collections / saved searches.
+
+    The endpoints filter by the top-level `source` field (like objects), so an
+    artefact of an older catalogue revision is found even after it was renamed —
+    a name lookup would leave it behind.
+    """
+    response = client.get(path, params={"source": SOURCE, "limit": LIST_PAGE}, headers=headers)
+    response.raise_for_status()
+    rows = response.json()
+    if isinstance(rows, dict):
+        rows = rows.get("value", rows.get("items", []))
+    return [str(row["id"]) for row in rows if row.get("id")]
+
+
+def cleanup_extras(
+    client: httpx.Client,
+    headers: dict[str, str],
+    log: ImportLog,
+) -> int:
+    """Soft-deletes the generated collections and saved searches.
+
+    Collections go first: deleting a collection removes its members and its
+    `collection_refresh` job, and the core rejects deleting a saved search that a
+    collection still references (`409`). The demo's collections and their
+    `(Auswahl)` filter searches therefore disappear without leaving a cron job
+    behind, while artefacts the user created in the UI stay untouched (they carry
+    no `source`).
+    """
+    deleted = 0
+    failed: list[str] = []
+    for path, label in (
+        ("/collections", "collections"),
+        ("/saved-searches", "saved searches"),
+    ):
+        targets = _list_source_artefacts(client, headers, path)
+        log.add("cleanup artefacts", f"{label}: {len(targets)} to delete")
+        for artefact_id in targets:
+            response = client.delete(f"{path}/{artefact_id}", headers=headers)
+            if response.status_code in (200, 204):
+                deleted += 1
+            elif response.status_code != 404:
+                failed.append(f"{artefact_id}: HTTP {response.status_code}")
+    log.add(
+        "cleanup extras",
+        f"{deleted} collections/searches deleted, {len(failed)} failed",
     )
     for entry in failed[:5]:
         log.problem(f"delete failed {entry}")
@@ -1961,6 +2067,7 @@ def main(argv: list[str] | None = None) -> int:
         log.add("login", args.base_url)
         if args.cleanup:
             cleanup_objects(client, headers, log)
+            cleanup_extras(client, headers, log)
         if args.apply:
             run_import(client, headers, dataset, Path(args.out_dir), log, timeout=args.timeout)
     if log.problems:

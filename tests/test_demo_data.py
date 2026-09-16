@@ -111,6 +111,23 @@ def test_catalogue_reports_unknown_references() -> None:
     assert "unknown dimension" in joined
 
 
+def test_catalogue_rejects_a_five_field_refresh_interval(catalog: dict) -> None:
+    """The core schedules the refresh as a cron job with **six** fields.
+
+    `tokio-cron-scheduler` wants seconds first; a five-field expression is stored
+    happily and then never fires (the scheduler only logs `ParseSchedule` every
+    minute). The catalogue check catches it before the import does.
+    """
+    broken = {**catalog, "collections": [dict(entry) for entry in catalog["collections"]]}
+    broken["collections"][0]["refresh_interval"] = "0 3 * * *"
+    problems = demo.validate_catalog(broken)
+    assert any("6 cron fields" in problem for problem in problems), problems
+
+    # The curated catalogue itself carries the correct form.
+    intervals = [entry.get("refresh_interval", "") for entry in catalog["collections"]]
+    assert intervals and all(len(interval.split()) == 6 for interval in intervals)
+
+
 def test_generation_is_deterministic(catalog: dict) -> None:
     first = demo.generate_dataset(catalog, "tiny", seed=11)
     second = demo.generate_dataset(catalog, "tiny", seed=11)
@@ -380,7 +397,9 @@ def test_extras_reference_generated_objects(dataset) -> None:
         # A collection is the materialised form of a saved-search query: the
         # query selects the members, the importer resolves node keys inside it.
         assert collection["query"]["where"]["conditions"]
-        assert collection["refresh_interval"].count(" ") == 4
+        # The core schedules the refresh as a cron job: six fields, seconds first
+        # (`tokio-cron-scheduler`) — a five-field expression never fires.
+        assert len(collection["refresh_interval"].split()) == 6
     for membership in extras["standard_memberships"]:
         assert membership["object"] in keys
         assert membership["key_attribute"] == "code"
@@ -534,7 +553,8 @@ def test_cleanup_deletes_every_object_of_the_source() -> None:
     business key, so a key lookup would only ever find one of the two and the
     other would survive every cleanup. Page two of the list must be requested
     too, objects of other sources must stay untouched, and the second phase must
-    pick up a row whose parent cascade never reached it.
+    pick up a row whose parent cascade never reached it. The deletion itself goes
+    through `POST /objects/batch-delete` (`CLEANUP_BATCH` ids per call).
     """
     page = demo.LIST_PAGE
     pages = {
@@ -552,12 +572,23 @@ def test_cleanup_deletes_every_object_of_the_source() -> None:
         # Cascade would have taken it; here it is an orphan from a lost race.
         "vehicle_model": [[{"id": "object:orphan", "source": demo.SOURCE, "attributes": {}}]],
     }
-    deleted: list[str] = []
+    batches: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "DELETE":
-            deleted.append(request.url.path.rsplit("/", 1)[-1])
-            return httpx.Response(204)
+        if request.method == "POST":
+            payload = json.loads(request.content)
+            batches.append(payload)
+            ids = payload["ids"]
+            # The instance reports what it deleted, what the cascade took below
+            # the roots and which ids were gone already.
+            return httpx.Response(
+                200,
+                json={
+                    "deleted": len(ids),
+                    "cascaded": 0,
+                    "missing": ["object:gone"] if "object:1" in ids else [],
+                },
+            )
         requested = request.url.params.get("type")
         start = int(request.url.params.get("start") or 0)
         rows = pages.get(requested or "", [[]])
@@ -568,13 +599,120 @@ def test_cleanup_deletes_every_object_of_the_source() -> None:
     log = demo.ImportLog()
     count = demo.cleanup_objects(client, {}, log)
 
-    assert count == 1_003  # two products, the full first make page and the last one
-    assert len(deleted) == 1_004  # plus the orphan of the second phase
-    assert deleted.count("object:1") == 2  # both duplicate rows, not just one
-    assert "object:make-last" in deleted  # the second page was requested
-    assert "object:orphan" in deleted  # the orphan phase found it
-    assert "object:foreign" not in deleted
+    ids = [object_id for batch in batches for object_id in batch["ids"]]
+    # Two products, the full first make page plus the last one, and the orphan.
+    assert count == 1_004
+    assert len(batches) >= 2  # batched, not one request per object
+    assert all(len(batch["ids"]) <= demo.CLEANUP_BATCH for batch in batches)
+    assert "object:1" in ids and "object:make-last" in ids  # the second page too
+    assert "object:orphan" in ids  # the orphan phase found it
+    assert "object:foreign" not in ids
     assert any(step == "cleanup" for step, _ in log.steps)
+    details = " ".join(detail for step, detail in log.steps if step == "cleanup")
+    assert "already gone" in details
+
+
+def test_cleanup_removes_the_generated_collections_and_searches() -> None:
+    """Extras get deleted through their `source`, not through their names.
+
+    A saved search of an older catalogue revision may have been renamed (or never
+    matched a name lookup at all), so the demo tags every collection and search
+    with `source` + `source_id` and cleans up by that filter. Collections go
+    first: the core rejects deleting a saved search a collection still references.
+    """
+    listed: list[str] = []
+    deleted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            deleted.append(request.url.path)
+            return httpx.Response(204)
+        listed.append(request.url.path + "?source=" + (request.url.params.get("source") or ""))
+        if request.url.path == "/collections":
+            return httpx.Response(200, json=[{"id": "object:c1"}, {"id": "object:c2"}])
+        return httpx.Response(
+            200,
+            json=[{"id": "object:s1"}, {"id": "object:s2"}, {"id": "object:s3"}],
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://core")
+    log = demo.ImportLog()
+    count = demo.cleanup_extras(client, {}, log)
+
+    assert count == 5
+    assert listed == [
+        f"/collections?source={demo.SOURCE}",
+        f"/saved-searches?source={demo.SOURCE}",
+    ]
+    # Both collections first, then the searches (the core 409s otherwise).
+    assert deleted[:2] == ["/collections/object:c1", "/collections/object:c2"]
+    assert deleted[2:] == [
+        "/saved-searches/object:s1",
+        "/saved-searches/object:s2",
+        "/saved-searches/object:s3",
+    ]
+    assert any(step == "cleanup extras" for step, _ in log.steps)
+
+
+def test_apply_extras_tags_collections_and_searches_with_the_source() -> None:
+    """Every created/updated artefact carries `source` + `source_id`.
+
+    The collection filter search is created from the collection name, so it gets
+    its own `source_id`; that is how `--cleanup` recognises it as demo-owned.
+    """
+    payloads: list[tuple[str, str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            if request.url.path == "/rules":
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[])
+        payloads.append(
+            (
+                request.method,
+                request.url.path,
+                json.loads(request.content) if request.content else {},
+            )
+        )
+        if request.url.path == "/collections":
+            return httpx.Response(201, json={"id": "object:c1"})
+        if request.url.path == "/collections/object:c1/refresh":
+            return httpx.Response(200, json={"count": 3})
+        return httpx.Response(201, json={"id": "object:s1"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://core")
+    extras = {
+        "source": demo.SOURCE,
+        "releases": [],
+        "saved_searches": [{"name": "Offene Gewichte", "query": {"where": {"conditions": []}}}],
+        "collections": [
+            {
+                "name": "Bremsen-Sortiment",
+                "query": {"where": {"conditions": []}},
+                "refresh_interval": "",
+            }
+        ],
+        "standard_memberships": [],
+        "activate_rules": [],
+    }
+    demo.apply_extras(client, {}, extras, {}, demo.ImportLog())
+
+    searches = {
+        body["name"]: body
+        for method, path, body in payloads
+        if method == "POST" and path == "/saved-searches"
+    }
+    assert set(searches) == {"Offene Gewichte", "Bremsen-Sortiment (Auswahl)"}
+    for name, body in searches.items():
+        assert body["source"] == demo.SOURCE
+        assert body["source_id"] == name
+    collections = {
+        body["name"]: body
+        for method, path, body in payloads
+        if method == "POST" and path == "/collections"
+    }
+    assert collections["Bremsen-Sortiment"]["source"] == demo.SOURCE
+    assert collections["Bremsen-Sortiment"]["source_id"] == "Bremsen-Sortiment"
 
 
 def test_cli_check_accepts_the_curated_catalogue() -> None:

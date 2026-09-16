@@ -5,9 +5,18 @@
 //! or the language tree change, so the cache is invalidated explicitly by the
 //! corresponding write handlers. Redis remains optional for multi-instance
 //! deployments (see plan Phase 3).
+//!
+//! Also holds the **dashboard aggregation** (`GET /objects/stats`): computing it
+//! reads every object's attributes, the composition edges and the class features,
+//! which cost ~1 s per call at demo scale (release build, 2026-09-16). The cached
+//! payload is bound to a **monotonic data version** that every write path touching
+//! objects, references, the data model or the language tree bumps
+//! ([`MetaCache::invalidate_stats`]) — a stale payload is therefore never served,
+//! the next call recomputes it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -26,6 +35,10 @@ pub struct MetaCache {
     required_names: RwLock<HashMap<String, Arc<Vec<String>>>>,
     types_with_required: RwLock<Option<Arc<Vec<String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
+    /// `GET /objects/stats` payloads per working language, bound to `stats_version`.
+    stats: RwLock<HashMap<String, (u64, Arc<Value>)>>,
+    /// Bumped by every write that can change the aggregation.
+    stats_version: AtomicU64,
 }
 
 /// A `url` attribute: its name and whether it holds one value per language.
@@ -138,6 +151,7 @@ impl MetaCache {
         // The per-type required names come from `attribute_definition.required_types`.
         self.required_names.write().await.clear();
         *self.types_with_required.write().await = None;
+        self.invalidate_stats();
     }
 
     /// Attribute names an object of `object_type` must carry: the definitions with
@@ -186,11 +200,49 @@ impl MetaCache {
     pub async fn invalidate_object_types(&self) {
         self.required_names.write().await.clear();
         *self.types_with_required.write().await = None;
+        self.invalidate_stats();
+    }
+
+    /// Current data version of the dashboard aggregation.
+    pub fn stats_version(&self) -> u64 {
+        self.stats_version.load(Ordering::Relaxed)
+    }
+
+    /// Invalidates every cached `GET /objects/stats` payload.
+    ///
+    /// Must be called by every write that can change the aggregation: objects and
+    /// their attributes/status (`create`/`update`/`delete`/batch/computed),
+    /// references (composition and categorisation edges), the data model
+    /// (attribute definitions, object types, class features, relation
+    /// definitions) and the language tree (locale fallback chains). The version
+    /// is bumped, so a payload computed concurrently with a write is never served
+    /// afterwards.
+    pub fn invalidate_stats(&self) {
+        self.stats_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A cached aggregation for `key`, if it matches the current data version.
+    pub async fn cached_stats(&self, key: &str, version: u64) -> Option<Arc<Value>> {
+        self.stats
+            .read()
+            .await
+            .get(key)
+            .filter(|(stored, _)| *stored == version)
+            .map(|(_, payload)| payload.clone())
+    }
+
+    /// Stores an aggregation for `key`, computed for `version`.
+    pub async fn store_stats(&self, key: &str, version: u64, payload: Arc<Value>) {
+        self.stats
+            .write()
+            .await
+            .insert(key.to_owned(), (version, payload));
     }
 
     /// Invalidates cached fallback chains after language-tree changes.
     pub async fn invalidate_language_tree(&self) {
         self.fallback_chains.write().await.clear();
+        self.invalidate_stats();
     }
 }
 

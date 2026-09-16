@@ -15,7 +15,10 @@ references:
   (and the key/source lookups) to the core's record ids.
 - A reference the core reports as a duplicate (`409`: the edge exists already) is
   recorded as `existing`, not as a failure, so re-importing a document is
-  idempotent for edges too.
+  idempotent for edges too. The same status also covers a **concurrent write
+  conflict** (`409`, "concurrent write conflict") — that one is retryable and is
+  reported as `failed`, so the importer's retry pass re-applies the edge instead
+  of silently dropping it.
 - When `emit_events` is `false` (bulk imports), per-object CRUD events are
   suppressed and a single `import.completed` summary event is emitted.
 
@@ -153,6 +156,26 @@ async def _convert_units(
         attributes[name] = response.json()["value"]
 
 
+def _raise_for_core_error(response: httpx.Response) -> None:
+    """Raises for a non-2xx core response, keeping the core's error message.
+
+    `raise_for_status()` drops the body, which is exactly the interesting part
+    (`{"error": "concurrent write conflict, please retry: …"}` or
+    `{"error": "duplicate business key …"}`) — the message ends up in the run
+    report, where an operator reads it.
+    """
+    if response.is_success:
+        return
+    detail = ""
+    try:
+        payload = response.json()
+    except ValueError:
+        detail = response.text[:200]
+    else:
+        detail = str(payload.get("error") or payload)[:200] if isinstance(payload, dict) else ""
+    raise RuntimeError(f"HTTP {response.status_code} from {response.request.url.path}: {detail}")
+
+
 async def _upsert_object(
     client: httpx.AsyncClient,
     core_url: str,
@@ -222,10 +245,10 @@ async def _upsert_object(
             json={"attributes": attributes, "status": status},
             params=params,
         )
-        response.raise_for_status()
+        _raise_for_core_error(response)
         return str(response.json()["id"]), "updated"
     response = await client.post(f"{core_url}/objects", json=body, params=params)
-    response.raise_for_status()
+    _raise_for_core_error(response)
     return str(response.json()["id"]), "created"
 
 
@@ -286,18 +309,24 @@ async def _import_references(
                     params=params,
                 )
             if not composition and response.status_code == 409:
-                # The core rejects a duplicate edge (`409`): the reference exists
-                # already, so a repeated import is idempotent instead of failing.
-                results.append(
-                    {
-                        "in": source,
-                        "out": target,
-                        "type": definition_name,
-                        "status": "existing",
-                    }
-                )
-                continue
-            response.raise_for_status()
+                # `409` covers two different situations: the edge exists already
+                # (idempotent — a repeated import must not fail) and a concurrent
+                # write on the same records (retryable — dropping the edge here
+                # would silently lose it). The core's message distinguishes them;
+                # a conflict falls through and is reported as `failed`, so the
+                # importer's retry pass re-applies exactly that reference.
+                if "already exists" in response.text:
+                    results.append(
+                        {
+                            "in": source,
+                            "out": target,
+                            "type": definition_name,
+                            "status": "existing",
+                        }
+                    )
+                    continue
+                _raise_for_core_error(response)
+            _raise_for_core_error(response)
             results.append(
                 {
                     "in": source,

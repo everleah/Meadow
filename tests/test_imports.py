@@ -149,6 +149,34 @@ async def test_existing_edge_is_reported_as_existing() -> None:
     assert "error" not in results[0]
 
 
+async def test_concurrent_write_conflict_is_retryable() -> None:
+    """`409` also means "concurrent write conflict" — that one must not be swallowed.
+
+    The core maps a SurrealDB transaction conflict to `409` (the honest answer for
+    a lost race). Treating every `409` as "edge exists already" would silently drop
+    the reference, so the conflict is reported as `failed` and the importer's retry
+    pass re-applies it.
+    """
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={"error": "concurrent write conflict, please retry: failed transaction"},
+        )
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        results = await _import_references(
+            client,
+            CORE,
+            [{"in": "child", "out": "other", "type": "related"}],
+            {"child": "object:child", "other": "object:other"},
+            False,
+        )
+    assert results[0]["status"] == "failed"
+    assert "conflict" in results[0]["error"]
+
+
 @pytest.mark.parametrize("reference_type", ["", None])
 async def test_missing_reference_type_is_reported(reference_type: str | None) -> None:
     results, requests = await run([{"in": "child", "out": "other", "type": reference_type}])

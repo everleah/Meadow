@@ -205,7 +205,11 @@ pub async fn create_job_definition(
     content.insert("name".to_owned(), Value::String(name));
     content.insert("type".to_owned(), Value::String(body.job_type));
     if let Some(schedule) = body.schedule {
-        content.insert("schedule".to_owned(), Value::String(schedule));
+        let schedule = schedule.trim().to_owned();
+        if !schedule.is_empty() {
+            crate::scheduler::validate_schedule(&schedule)?;
+            content.insert("schedule".to_owned(), Value::String(schedule));
+        }
     }
     content.insert("parameters".to_owned(), body.parameters);
     content.insert("enabled".to_owned(), Value::Bool(body.enabled));
@@ -361,7 +365,13 @@ pub async fn update_job_definition(
     if let Some(schedule) = body.schedule {
         match schedule {
             Some(value) => {
-                changes.insert("schedule".to_owned(), Value::String(value));
+                let value = value.trim().to_owned();
+                if value.is_empty() {
+                    clear_schedule = true;
+                } else {
+                    crate::scheduler::validate_schedule(&value)?;
+                    changes.insert("schedule".to_owned(), Value::String(value));
+                }
             }
             None => {
                 clear_schedule = true;

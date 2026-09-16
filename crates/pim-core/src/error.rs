@@ -84,6 +84,69 @@ impl IntoResponse for ApiError {
 
 impl From<surrealdb::Error> for ApiError {
     fn from(error: surrealdb::Error) -> Self {
-        ApiError::Internal(error.to_string())
+        from_db_message(error.to_string())
+    }
+}
+
+/// Maps a SurrealDB error message to an API error.
+///
+/// Two writers touching the same record at the same time make SurrealDB abort
+/// the later transaction; `409` is the honest answer because the caller can
+/// simply retry the write (the demo importer's retry pass collects exactly these
+/// entries). Everything else stays an internal error.
+pub fn from_db_message(message: String) -> ApiError {
+    if is_transaction_conflict(&message) {
+        return ApiError::conflict(format!(
+            "concurrent write conflict, please retry: {message}"
+        ));
+    }
+    ApiError::Internal(message)
+}
+
+/// Detects a SurrealDB transaction conflict (concurrent write on one record).
+///
+/// The database answers a losing transaction with "The query was not executed
+/// due to a failed transaction"; the other markers cover the wording variants of
+/// the conflict itself, so a rephrased message does not silently turn back into
+/// a `500`.
+pub fn is_transaction_conflict(message: &str) -> bool {
+    const MARKERS: [&str; 4] = [
+        "failed transaction",
+        "read/write conflict",
+        "transaction conflict",
+        "Transaction conflict",
+    ];
+    MARKERS.iter().any(|marker| message.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_conflicts_become_409() {
+        // The exact message SurrealDB produces for two concurrent writers on one
+        // record (reproduced live with 10 parallel writers on a vehicle variant).
+        assert!(is_transaction_conflict(
+            "The query was not executed due to a failed transaction"
+        ));
+        assert!(is_transaction_conflict(
+            "Failed to commit: read/write conflict"
+        ));
+        // Everything else stays an internal error.
+        assert!(!is_transaction_conflict("unique index violated"));
+        assert!(!is_transaction_conflict("table `object` not found"));
+    }
+
+    #[test]
+    fn conflict_message_invites_a_retry() {
+        let conflict =
+            from_db_message("The query was not executed due to a failed transaction".to_owned());
+        assert!(matches!(conflict, ApiError::Conflict(_)), "{conflict:?}");
+        assert!(conflict.message().contains("concurrent write conflict"));
+        // A different database failure keeps its `500` and its message.
+        let internal = from_db_message("table `object` not found".to_owned());
+        assert!(matches!(internal, ApiError::Internal(_)), "{internal:?}");
+        assert_eq!(internal.message(), "table `object` not found");
     }
 }

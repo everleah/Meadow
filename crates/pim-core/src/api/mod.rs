@@ -98,6 +98,7 @@ use utoipa::OpenApi;
         objects::delete_object,
         objects::update_computed,
         objects::batch_update_objects,
+        objects::batch_delete_objects,
         objects::bulk_objects,
         keys::get_by_key,
         languages::list_languages,
