@@ -62,6 +62,12 @@ import httpx
 SOURCE = "meadow-demo"
 #: Fixed document timestamp: keeps the output byte-identical for a given seed.
 CREATED_AT = "2026-09-15T00:00:00Z"
+#: HTTP timeout of the importer's client. A **collection refresh** runs a saved
+#: search over the whole dataset and replaces its members — measured **124,7 s**
+#: at 70 363 objects (perf profile), so the earlier 120 s cut it off (found live
+#: 2026-09-16: the extras run died on `httpx.ReadTimeout` right after the saved
+#: searches had been created).
+CLIENT_TIMEOUT_SECONDS = 600.0
 #: Curated master data next to this script.
 CATALOG_PATH = Path(__file__).with_name("demo_data_catalog.json")
 #: Default output directory (gitignored).
@@ -2187,7 +2193,7 @@ def main(argv: list[str] | None = None) -> int:
     # `TokenAuth` attaches the bearer token and re-logs in when the core answers
     # `401` (the token's TTL is one hour, an import runs longer).
     auth = TokenAuth(args.base_url, args.user, args.password, log)
-    with httpx.Client(base_url=args.base_url, timeout=120.0, auth=auth) as client:
+    with httpx.Client(base_url=args.base_url, timeout=CLIENT_TIMEOUT_SECONDS, auth=auth) as client:
         headers: dict[str, str] = {}
         log.add("login", args.base_url)
         if args.cleanup:

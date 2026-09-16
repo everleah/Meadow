@@ -1717,55 +1717,78 @@ pub async fn object_stats(
     // Incomplete counts need the objects' attributes — but only for the types that
     // can be incomplete at all (required attributes or categorised objects). Every
     // other type is 100 % complete by definition, so its attributes stay unloaded.
+    //
+    // The candidates are read in **pages**: with the full `perf` dataset (70 315
+    // objects) one response carried ~30 MB of attribute maps and SurrealDB reset
+    // the connection (`500 Connection reset`, found live 2026-09-16 — the endpoint
+    // is the dashboard's, and `scripts/demo_data.py`'s verification step died on
+    // it). Page size 10 000 keeps a response in the few-megabyte range; the
+    // completeness of a page is computed with the same `compute_batch` call.
+    const STATS_PAGE: i64 = 10_000;
     let mut incomplete_by_type: HashMap<String, i64> = HashMap::new();
     let candidates = crate::completeness::incomplete_candidates(&state.cache, &state.db).await?;
     if !candidates.is_empty() {
-        let mut response = state
-            .db
-            .inner()
-            .query(
-                "SELECT id, type, attributes FROM object \
-                 WHERE deleted_at IS NONE AND type IN $types;",
-            )
-            .bind(("types", candidates))
-            .await?
-            .check()?;
-        let objects: Vec<Value> = response.take(0)?;
-
-        // Build the per-object inputs for the batched completeness computation.
-        let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
-            .iter()
-            .map(|object| {
-                (
-                    object
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    object
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    object
-                        .get("attributes")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default(),
+        let mut offset: i64 = 0;
+        loop {
+            let mut response = state
+                .db
+                .inner()
+                .query(
+                    "SELECT id, type, attributes FROM object \
+                     WHERE deleted_at IS NONE AND type IN $types \
+                     ORDER BY id LIMIT $limit START $start;",
                 )
-            })
-            .collect();
-
-        // Resolve completeness for all candidates with a single edge query and
-        // in-memory inheritance resolution (no per-ancestor DB round-trips).
-        let completeness =
-            crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
-        for (object_id, otype, _) in &items {
-            if let Some(result) = completeness.get(object_id)
-                && !result.missing.is_empty()
-            {
-                *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
+                .bind(("types", candidates.clone()))
+                .bind(("limit", STATS_PAGE))
+                .bind(("start", offset))
+                .await?
+                .check()?;
+            let objects: Vec<Value> = response.take(0)?;
+            if objects.is_empty() {
+                break;
             }
+            let scanned = objects.len();
+
+            // Build the per-object inputs for the batched completeness computation.
+            let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+                .iter()
+                .map(|object| {
+                    (
+                        object
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        object
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        object
+                            .get("attributes")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+
+            // Resolve completeness for the page with a single edge query and
+            // in-memory inheritance resolution (no per-ancestor DB round-trips).
+            let completeness =
+                crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
+            for (object_id, otype, _) in &items {
+                if let Some(result) = completeness.get(object_id)
+                    && !result.missing.is_empty()
+                {
+                    *incomplete_by_type.entry(otype.to_owned()).or_default() += 1;
+                }
+            }
+
+            if scanned < STATS_PAGE as usize {
+                break;
+            }
+            offset += STATS_PAGE;
         }
     }
 
