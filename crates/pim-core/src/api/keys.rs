@@ -92,6 +92,24 @@ pub fn validate_key_definition(
 }
 
 /// Whether another object of the same type already carries the given key value.
+///
+/// The lookup must be **index-backed**: scanning the candidates of a type costs
+/// ~150 ms per write at demo size, which dominated `POST /objects` (measured
+/// 2026-09-16: 143 ms of a 220 ms request). Two details make the difference
+/// (measured against the live instance):
+///
+/// - the **static** field path (`attributes.sku`) uses the index that
+///   [`ensure_key_indexes`] defines for every declared key attribute, while the
+///   dynamic form (`attributes[$key]`) stays on `idx_object_type` (71 ms vs
+///   ~1 000 ms for the same lookup);
+/// - the **type is filtered in Rust**, not in SQL: with `type = $type` in the
+///   predicate the planner prefers `idx_object_type` and scans every object of
+///   that type (~615 ms), even though the key index would answer directly. The
+///   result set is tiny (objects that share a key *value*, usually none or one),
+///   so filtering it here is exact and free.
+///
+/// Attribute names that are not plain identifiers (and therefore not indexable)
+/// keep the dynamic form with the type filter: correct, just slower.
 async fn key_value_exists(
     db: &Db,
     object_type: &str,
@@ -99,33 +117,109 @@ async fn key_value_exists(
     value: &str,
     exclude_key: Option<&str>,
 ) -> Result<bool, ApiError> {
-    let sql = "
-        SELECT id FROM object WHERE type = $type AND attributes[$key] = $value
-        AND deleted_at IS NONE;
-    ";
-    let mut response = db
+    let field = key_field_ref(key_name);
+    let sql = match &field {
+        Some(field) => format!(
+            "SELECT type::string(id) AS id, type FROM object \
+             WHERE {field} = $value AND deleted_at IS NONE;"
+        ),
+        None => "SELECT type::string(id) AS id, type FROM object \
+                 WHERE type = $type AND attributes[$key] = $value AND deleted_at IS NONE;"
+            .to_owned(),
+    };
+    let mut query = db
         .inner()
         .query(sql)
-        .bind(("type", object_type.to_owned()))
-        .bind(("key", key_name.to_owned()))
         .bind(("value", value.to_owned()))
-        .await?
-        .check()?;
+        .bind(("type", object_type.to_owned()));
+    if field.is_none() {
+        query = query.bind(("key", key_name.to_owned()));
+    }
+    let mut response = query.await?.check()?;
     let rows: Vec<Value> = response.take(0)?;
     for row in rows {
-        let id = row
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if let Some(excluded) = exclude_key
-            && key_of(&id) == excluded
-        {
+        if row.get("type").and_then(Value::as_str) != Some(object_type) {
+            continue;
+        }
+        let id = row.get("id").and_then(Value::as_str).unwrap_or_default();
+        if exclude_key.is_some_and(|excluded| key_of(id) == excluded) {
             continue;
         }
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Static field reference of an attribute, when the name is a plain identifier.
+///
+/// Only such names can be indexed as `object.attributes.<name>`; anything else
+/// (dots, spaces, leading digits) is rejected by SurrealQL's parser and falls back
+/// to the dynamic access form at the call site.
+pub fn key_field_ref(attribute: &str) -> Option<String> {
+    let mut chars = attribute.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(format!("attributes.{attribute}"))
+}
+
+/// Index name for a key attribute (`idx_object_key_<name>`).
+fn key_index_name(attribute: &str) -> String {
+    format!("idx_object_key_{}", attribute.to_ascii_lowercase())
+}
+
+/// Defines a lookup index for every declared business-key attribute.
+///
+/// Uniqueness is checked on **every** create/update with a key in the payload, so
+/// that lookup has to be index-backed (see [`key_value_exists`]). The index is
+/// defined per attribute name, which is why it cannot live in `schema.rs`: the
+/// registry decides which attributes are keys. Idempotent (`IF NOT EXISTS`), so
+/// callers can run it at startup and after an object-type write.
+pub async fn ensure_key_indexes(db: &Db, key_attributes: &[String]) -> Result<usize, ApiError> {
+    let mut defined = 0;
+    for attribute in key_attributes {
+        let Some(field) = key_field_ref(attribute) else {
+            tracing::debug!(%attribute, "business key is not a plain identifier; no index defined");
+            continue;
+        };
+        let sql = format!(
+            "DEFINE INDEX IF NOT EXISTS {} ON TABLE object FIELDS {field};",
+            key_index_name(attribute)
+        );
+        let mut response = db.inner().query(sql).await?.check()?;
+        let _: Vec<Value> = response.take(0)?;
+        defined += 1;
+    }
+    Ok(defined)
+}
+
+/// Key attributes of every registered object type (for the startup index sync).
+pub async fn registered_key_attributes(db: &Db) -> Result<Vec<String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT key_attributes FROM object_type;")
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut names: Vec<String> = Vec::new();
+    for row in rows {
+        for name in row
+            .get("key_attributes")
+            .and_then(Value::as_array)
+            .map(|array| array.iter().filter_map(Value::as_str))
+            .into_iter()
+            .flatten()
+        {
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    Ok(names)
 }
 
 /// Lock names for the business keys present in `attributes`.

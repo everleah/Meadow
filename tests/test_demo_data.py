@@ -721,6 +721,73 @@ def test_apply_extras_tags_collections_and_searches_with_the_source() -> None:
     assert collections["Bremsen-Sortiment"]["source_id"] == "Bremsen-Sortiment"
 
 
+def test_every_catalogue_rule_runs_in_the_sandbox(catalog: dict) -> None:
+    """Every shipped rule must *execute*, not only compile.
+
+    The sandbox raised `NameError` at runtime for helpers it did not expose
+    (`enumerate` in the GTIN check, `getattr` in the publish guard) while
+    `compile_rule` accepted the scripts — so two of the six demo rules silently
+    never ran (found 2026-09-16). This test executes each script against a
+    published product and fails on any exception.
+    """
+    from meadow.rules import Context, execute_rule
+
+    obj = {
+        "id": "object:01M2MGP8PAQ2154PMCPE7MWS37",
+        "type": "product",
+        "status": "published",
+        "attributes": {
+            "sku": "demo-1",
+            "name": "Demo",
+            "net_price": 100.0,
+            "list_price": 120.0,
+            "gtin": "4006381333931",
+            "warranty_months": 24,
+        },
+    }
+    rules = catalog["business_rules"]
+    assert len(rules) >= 6
+    for rule in rules:
+        context = Context(
+            rule_type=str(rule["type"]),
+            object_type="product",
+            mode="save",
+            actor="user:admin",
+            missing_features=("EF000123",),
+        )
+        result = execute_rule(str(rule["script"]), obj, context)
+        assert result.errors == [], f"{rule['name']} reported errors: {result.errors}"
+
+    # The publish guard blocks a user who publishes an incomplete product, but
+    # lets the automated import through (the demo data is published deliberately).
+    guard = next(rule for rule in rules if rule["name"] == "guard_publish_features")
+    user = execute_rule(
+        str(guard["script"]),
+        obj,
+        Context(
+            rule_type="workflow_guard",
+            object_type="product",
+            mode="save",
+            actor="user:admin",
+            missing_features=("EF000123",),
+        ),
+    )
+    assert user.allowed is False
+    assert "EF000123" in (user.deny_reason or "")
+    system = execute_rule(
+        str(guard["script"]),
+        obj,
+        Context(
+            rule_type="workflow_guard",
+            object_type="product",
+            mode="save",
+            actor="system",
+            missing_features=("EF000123",),
+        ),
+    )
+    assert system.allowed is True
+
+
 def test_cli_check_accepts_the_curated_catalogue() -> None:
     assert demo.main(["--check"]) == 0
 

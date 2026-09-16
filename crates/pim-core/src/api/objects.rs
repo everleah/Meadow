@@ -218,6 +218,9 @@ pub async fn create_object(
         source,
     } = body;
     let object_type = object_type.trim().to_owned();
+    let started = std::time::Instant::now();
+    let mut last;
+    let mut phases: Vec<(&'static str, f64)> = Vec::new();
     let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
     let locale = params
         .locale
@@ -236,6 +239,8 @@ pub async fn create_object(
     // without it two parallel writers both see "no conflict" and leave two live
     // rows with the same business key (`crate::key_lock`).
     let key_names = crate::api::object_types::key_attributes_for(&state.db, &object_type).await?;
+    phases.push(("registry", started.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
     let _key_guards = state
         .key_locks
         .lock_keys(&keys::key_lock_names(&object_type, &key_names, &attributes))
@@ -245,6 +250,8 @@ pub async fn create_object(
     // Data-type rules (`url` values must be openable addresses).
     crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
         .await?;
+    phases.push(("prepare", last.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     // Resolved view for rule evaluation. A new object has no inherited values
     // yet; multilingual own values are resolved to `locale`.
@@ -279,6 +286,8 @@ pub async fn create_object(
     for (name, value) in computed {
         attributes.insert(name, value);
     }
+    phases.push(("rules", last.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     let mut content = serde_json::Map::new();
     content.insert("type".to_owned(), Value::String(object_type.clone()));
@@ -328,7 +337,7 @@ pub async fn create_object(
         .inner()
         .query(sql)
         .bind(("content", Value::Object(content)))
-        .bind(("object_type", object_type))
+        .bind(("object_type", object_type.clone()))
         .bind(("changes", changes))
         .bind(("metadata", json!({ "user_id": user_id.clone() })))
         .await?
@@ -344,6 +353,14 @@ pub async fn create_object(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    phases.push(("write", last.elapsed().as_secs_f64() * 1000.0));
+    tracing::debug!(
+        total_ms = started.elapsed().as_secs_f64() * 1000.0,
+        ?phases,
+        object_type = %object_type,
+        emit_events,
+        "object create phases"
+    );
     audit::record_best_effort(
         &state.db,
         AuditEntry {
@@ -1565,6 +1582,13 @@ async fn apply_object_update(
     body: UpdateObject,
     params: WriteObjectQuery,
 ) -> Result<Value, ApiError> {
+    // Phase timings for the write path (debug level): the per-request write cost
+    // is what an import or a grid batch pays per object, and it is spread over
+    // lookups, rule evaluation and the transaction. Enable with
+    // `RUST_LOG=info,pim_core::api::objects=debug`.
+    let started = std::time::Instant::now();
+    let mut last;
+    let mut phases: Vec<(&'static str, f64)> = Vec::new();
     let key = parse_key(id, TABLE)?;
     let user_id = crate::auth::api_key_or_role(headers, &state.config, crate::auth::ROLE_EDITOR)?;
 
@@ -1596,6 +1620,8 @@ async fn apply_object_update(
         .map(str::to_owned);
 
     let new_status = body.status.clone();
+    phases.push(("load", started.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     // Holds the per-key locks (if any) until the write below is done: a PATCH can
     // change a business key, so it races with a parallel create/update otherwise.
@@ -1646,8 +1672,11 @@ async fn apply_object_update(
     if changes.is_empty() && remove_attributes.is_empty() {
         return Ok(current);
     }
+    phases.push(("prepare", last.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     let status_changed = changed_fields.contains(&"status");
+    let _ = &mut phases;
     let locale = params
         .locale
         .as_deref()
@@ -1687,6 +1716,8 @@ async fn apply_object_update(
         &mut eval_attributes,
     )
     .await?;
+    phases.push(("inheritance", last.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     let candidate_status = changes
         .get("status")
@@ -1745,6 +1776,8 @@ async fn apply_object_update(
         .await?;
         crate::rules::enforce(&guard)?;
     }
+    phases.push(("rules", last.elapsed().as_secs_f64() * 1000.0));
+    last = std::time::Instant::now();
 
     let outbox = crate::event::content(&crate::event::OutboxEvent {
         event_type: crate::event::EVENT_OBJECT_UPDATED,
@@ -1809,6 +1842,14 @@ async fn apply_object_update(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))?;
+    phases.push(("write", last.elapsed().as_secs_f64() * 1000.0));
+    tracing::debug!(
+        total_ms = started.elapsed().as_secs_f64() * 1000.0,
+        ?phases,
+        %object_type,
+        emit_events,
+        "object update phases"
+    );
 
     let (from, to) = if status_changed {
         (old_status.map(Value::String), new_status.map(Value::String))

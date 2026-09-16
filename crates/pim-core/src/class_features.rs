@@ -43,7 +43,10 @@ pub(crate) fn key_of(record_id: &str) -> &str {
 
 /// Relation keys (`rel_…`) of every categorisation relation, i.e. of every
 /// relation type whose usage is `category` (any dimension).
-pub(crate) async fn category_relation_keys(db: &Db) -> Result<Vec<String>, ApiError> {
+///
+/// Callers on a hot path use [`crate::cache::MetaCache::category_relation_keys`],
+/// which caches this answer (it changes only when a relation definition does).
+pub(crate) async fn load_category_relation_keys(db: &Db) -> Result<Vec<String>, ApiError> {
     let mut response = db
         .inner()
         .query("SELECT id FROM relation_definition WHERE role = $role;")
@@ -225,7 +228,7 @@ pub(crate) async fn resolved_features(
     db: &Db,
     object_key: &str,
 ) -> Result<Vec<ResolvedFeature>, ApiError> {
-    let relations = category_relation_keys(db).await?;
+    let relations = cache.category_relation_keys(db).await?;
     let assigned = assigned_node_keys(db, object_key, &relations).await?;
     let bindings = feature_bindings(cache, db).await?;
     let mut features: HashMap<String, ResolvedFeature> = HashMap::new();
@@ -288,7 +291,7 @@ pub(crate) async fn class_required_names_batch(
     if object_keys.is_empty() {
         return Ok(out);
     }
-    let relations = category_relation_keys(db).await?;
+    let relations = cache.category_relation_keys(db).await?;
     if relations.is_empty() {
         return Ok(out);
     }

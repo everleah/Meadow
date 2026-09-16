@@ -66,7 +66,7 @@ pub(crate) async fn incomplete_candidates(
     db: &Db,
 ) -> Result<Vec<String>, ApiError> {
     let mut types = cache.types_with_required(db).await?.as_ref().clone();
-    let relations = crate::class_features::category_relation_keys(db).await?;
+    let relations = cache.category_relation_keys(db).await?;
     if !relations.is_empty() {
         let mut response = db
             .inner()

@@ -30,7 +30,14 @@ pub mod seed;
 
 /// Starts the `pim-core` HTTP server.
 pub async fn run() {
-    tracing_subscriber::fmt().init();
+    // `RUST_LOG` selects the level (e.g. `RUST_LOG=info,pim_core::api::objects=debug`
+    // for the write-path phase timings); without it the filter stays at `info`.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let config = config::Config::load();
     let db = db::Db::connect(&config)
@@ -39,6 +46,18 @@ pub async fn run() {
     schema::apply(&db)
         .await
         .expect("failed to apply database schema");
+    // Business-key uniqueness is checked on every write, so the lookup index has
+    // to exist for every declared key attribute (the registry decides which these
+    // are, which is why they cannot live in `schema.rs`). Idempotent; the first
+    // run on an existing dataset pays the index build once.
+    match api::keys::registered_key_attributes(&db).await {
+        Ok(names) => {
+            if let Err(error) = api::keys::ensure_key_indexes(&db, &names).await {
+                tracing::warn!(?error, "failed to define the business-key indexes");
+            }
+        }
+        Err(error) => tracing::warn!(?error, "failed to read the business-key attributes"),
+    }
     seed::apply(&db).await.expect("failed to seed system data");
     seed::ensure_default_admin(&db)
         .await

@@ -2229,7 +2229,7 @@
         "product"
       ],
       "state": "active",
-      "script": "def run(obj, ctx, result):\n    missing = list(getattr(ctx, \"missing_features\", None) or ())\n    if missing and obj.get(\"status\") == \"published\":\n        result.allow(False, \"Klassen-Merkmale fehlen: \" + \", \".join(missing))\n        return\n    result.allow(True, None)\n"
+      "script": "def run(obj, ctx, result):\n    if ctx.actor == \"system\":\n        result.allow(True, None)\n        return\n    missing = list(getattr(ctx, \"missing_features\", None) or ())\n    if missing and obj.get(\"status\") == \"published\":\n        result.allow(False, \"Klassen-Merkmale fehlen: \" + \", \".join(missing))\n        return\n    result.allow(True, None)\n"
     },
     {
       "name": "normalize_import",

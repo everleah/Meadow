@@ -41,6 +41,73 @@ def test_validation_rule_adds_errors() -> None:
     assert result.errors[0].code == "required"
 
 
+def test_a_script_is_compiled_once_and_reused() -> None:
+    """The write path evaluates every rule on every save — compiling each time is waste.
+
+    `compile_restricted_exec` parses, rewrites and compiles the script; the result
+    only depends on the script and the policy, so it is cached and reused with
+    fresh globals (measured: it dominated the per-save cost of a rule).
+    """
+    from meadow.rules import sandbox
+
+    sandbox._compiled.cache_clear()
+    calls = 0
+    original = sandbox.compile_rule
+
+    def counting_compile(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    sandbox.compile_rule = counting_compile  # type: ignore[assignment]
+    try:
+        source = 'def run(obj, ctx, result):\n    result.computed["checked"] = True\n'
+        obj = {"id": "object:1", "type": "product", "attributes": {}}
+        for _ in range(5):
+            result = execute_rule(source, obj, _ctx(rule_type="computed"))
+            assert result.computed["checked"] is True
+        assert calls == 1, "the same script must compile once"
+
+        execute_rule(source.replace("checked", "other"), obj, _ctx(rule_type="computed"))
+        assert calls == 2, "a changed script compiles fresh"
+
+        # A broken script keeps failing (errors are not cached as success).
+        for _ in range(2):
+            with pytest.raises(RuleCompileError):
+                execute_rule("def run(:", obj, _ctx())
+    finally:
+        sandbox.compile_rule = original  # type: ignore[assignment]
+        sandbox._compiled.cache_clear()
+
+
+def test_helper_builtins_and_guarded_getattr() -> None:
+    """Rules get the pure helpers they need — and a getattr that stays guarded.
+
+    RestrictedPython's sets omit `enumerate`/`reversed`/`getattr`, which made the
+    shipped demo rules fail with `NameError` at runtime while compiling fine.
+    `getattr` is exposed as the **guarded** variant, so the convenience does not
+    open a way to private names.
+    """
+    source = (
+        "def run(obj, ctx, result):\n"
+        '    labels = [f"{index}:{name}" for index, name in enumerate(["a", "b"])]\n'
+        '    result.computed["joined"] = "|".join(reversed(labels))\n'
+        '    result.computed["rule_type"] = getattr(ctx, "rule_type", "none")\n'
+        '    result.computed["fallback"] = getattr(ctx, "does_not_exist", "fallback")\n'
+    )
+    result = execute_rule(source, {"id": "object:1", "type": "product", "attributes": {}}, _ctx())
+    assert result.computed["joined"] == "1:b|0:a"
+    assert result.computed["rule_type"] == "validation"
+    assert result.computed["fallback"] == "fallback"
+    assert result.errors == []
+
+
+def test_getattr_cannot_reach_private_names() -> None:
+    source = 'def run(obj, ctx, result):\n    result.computed["x"] = getattr(obj, "__class__")\n'
+    with pytest.raises(AttributeError):
+        execute_rule(source, {"id": "object:1", "type": "product", "attributes": {}}, _ctx())
+
+
 def test_computed_rule_sets_value() -> None:
     source = (
         "def run(obj, ctx, result):\n"

@@ -353,6 +353,9 @@ pub async fn create_object_type(
     .await;
     // The type registry feeds the cached required names (`key_attributes`).
     state.cache.invalidate_object_types().await;
+    // A newly declared key attribute becomes a uniqueness lookup — give it an
+    // index right away (idempotent, see `keys::ensure_key_indexes`).
+    crate::api::keys::ensure_key_indexes(&state.db, &key_attributes).await?;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -390,12 +393,14 @@ pub async fn update_object_type(
             }
         }
     }
+    let mut updated_keys: Option<Vec<String>> = None;
     if let Some(key_attributes) = body.key_attributes {
         let la = current
             .get("label_attribute")
             .and_then(Value::as_str)
             .map(str::to_owned);
         validate_attribute_references(&state.db, &key_attributes, la.as_deref()).await?;
+        updated_keys = Some(key_attributes.clone());
         content.insert(
             "key_attributes".to_owned(),
             Value::Array(
@@ -468,6 +473,9 @@ pub async fn update_object_type(
     )
     .await;
     state.cache.invalidate_object_types().await;
+    if let Some(key_attributes) = updated_keys {
+        crate::api::keys::ensure_key_indexes(&state.db, &key_attributes).await?;
+    }
     Ok(Json(record))
 }
 

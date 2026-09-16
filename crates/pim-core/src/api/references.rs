@@ -800,6 +800,7 @@ pub async fn create_relation_definition(
     .await;
     // A relation definition's role decides which edges count as categorisation.
     state.cache.invalidate_stats();
+    state.cache.invalidate_relation_definitions().await;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
@@ -928,6 +929,7 @@ pub async fn update_relation_definition(
     .await;
     // A role change reclassifies the edges of that relation.
     state.cache.invalidate_stats();
+    state.cache.invalidate_relation_definitions().await;
     Ok(Json(record))
 }
 
@@ -1656,6 +1658,58 @@ pub fn subtree_keys_in(children: &HashMap<String, Vec<String>>, root_id: &str) -
         }
     }
     result.iter().map(|id| key_of(id)).collect()
+}
+
+/// Returns the bare keys of the objects **below** `root_id` in the composition
+/// tree (children, grandchildren, …), breadth-first with **one indexed query per
+/// level**.
+///
+/// Use this instead of [`subtree_keys`] when a single object is inspected on a hot
+/// path: `subtree_keys` loads the whole `rel_depends_on` edge set (~12 k rows on a
+/// demo-sized dataset, ~1–2 MB JSON) on every call, which cost ~300 ms per write
+/// when the inherited-computed cascade asked for a leaf's descendants
+/// (`plan/detail/demodaten-generator.md` §4.3). Here a leaf costs one small
+/// indexed query, and a node with a subtree costs a handful of level queries
+/// instead of one table scan.
+pub async fn descendant_keys(
+    db: &Db,
+    root_id: &str,
+    max_depth: usize,
+) -> Result<Vec<String>, ApiError> {
+    let mut result: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::from([key_of(root_id)]);
+    let mut level: Vec<String> = vec![key_of(root_id)];
+    for _ in 0..max_depth {
+        if level.is_empty() {
+            break;
+        }
+        let literal =
+            crate::api::keys::record_list_literal("object", level.iter().map(String::as_str));
+        if literal == "[]" {
+            break;
+        }
+        let mut response = db
+            .inner()
+            .query(format!(
+                "SELECT VALUE in FROM reference \
+                 WHERE out IN {literal} AND definition_id = 'rel_depends_on';"
+            ))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        let mut next: Vec<String> = Vec::new();
+        for row in rows {
+            let Some(key) = row.as_str().map(key_of) else {
+                continue;
+            };
+            if seen.insert(key.clone()) {
+                result.push(key.clone());
+                next.push(key);
+            }
+        }
+        level = next;
+    }
+    Ok(result)
 }
 
 /// Returns the bare keys of every object assigned (via the given category

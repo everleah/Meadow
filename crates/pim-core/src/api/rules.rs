@@ -273,6 +273,8 @@ pub async fn create_rule(
         },
     )
     .await;
+    // The write path reads the applicable active rules from the cache.
+    state.cache.invalidate_rules().await;
 
     Ok((StatusCode::CREATED, Json(rule)))
 }
@@ -466,6 +468,7 @@ pub async fn update_rule(
         },
     )
     .await;
+    state.cache.invalidate_rules().await;
 
     Ok(Json(rule))
 }
@@ -536,6 +539,7 @@ pub async fn activate_rule(
         },
     )
     .await;
+    state.cache.invalidate_rules().await;
 
     Ok(Json(rule))
 }
@@ -601,6 +605,7 @@ pub async fn disable_rule(
         },
     )
     .await;
+    state.cache.invalidate_rules().await;
 
     Ok(Json(rule))
 }
@@ -651,6 +656,7 @@ pub async fn delete_rule(
         },
     )
     .await;
+    state.cache.invalidate_rules().await;
 
     Ok(StatusCode::NO_CONTENT)
 }

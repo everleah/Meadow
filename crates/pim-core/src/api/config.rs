@@ -2235,6 +2235,9 @@ pub async fn import_config(
     if mode != Mode::DryRun {
         state.cache.invalidate_attribute_definitions().await;
         state.cache.invalidate_object_types().await;
+        // The import can create/update rules and relation definitions.
+        state.cache.invalidate_rules().await;
+        state.cache.invalidate_relation_definitions().await;
     }
     Ok((
         StatusCode::OK,

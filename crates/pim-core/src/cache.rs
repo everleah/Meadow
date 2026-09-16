@@ -35,6 +35,15 @@ pub struct MetaCache {
     required_names: RwLock<HashMap<String, Arc<Vec<String>>>>,
     types_with_required: RwLock<Option<Arc<Vec<String>>>>,
     fallback_chains: RwLock<HashMap<String, Arc<Vec<String>>>>,
+    /// Active rule specs per `(rule types, object type)`: the blocking write path
+    /// evaluates the applicable rules for **every** save, so this lookup used to
+    /// run once per write for data that only the rules administration changes.
+    active_rules: RwLock<HashMap<String, Arc<Vec<crate::rules::RuleSpec>>>>,
+    /// Rules whose computed value reads inherited values (the cascade questions).
+    inherited_rules: RwLock<Option<Arc<Vec<crate::rules::InheritedComputedRule>>>>,
+    /// Relation keys (`rel_…`) of every categorisation relation, asked on every
+    /// class-feature and completeness lookup.
+    category_relations: RwLock<Option<Arc<Vec<String>>>>,
     /// `GET /objects/stats` payloads per working language, bound to `stats_version`.
     stats: RwLock<HashMap<String, (u64, Arc<Value>)>>,
     /// Bumped by every write that can change the aggregation.
@@ -243,6 +252,68 @@ impl MetaCache {
     pub async fn invalidate_language_tree(&self) {
         self.fallback_chains.write().await.clear();
         self.invalidate_stats();
+    }
+
+    /// Active rules applicable to an object type, per `(rule types, object type)`.
+    ///
+    /// The blocking write path evaluates the applicable rules for **every** save,
+    /// so this lookup ran once per write for data that only the rules
+    /// administration changes. Cleared by [`Self::invalidate_rules`].
+    pub(crate) async fn active_rules(
+        &self,
+        db: &Db,
+        rule_types: &[&str],
+        object_type: &str,
+    ) -> Result<Arc<Vec<crate::rules::RuleSpec>>, ApiError> {
+        let key = format!("{}|{object_type}", rule_types.join(","));
+        if let Some(rules) = self.active_rules.read().await.get(&key).cloned() {
+            return Ok(rules);
+        }
+        let rules = Arc::new(crate::rules::load_active_rules(db, rule_types, object_type).await?);
+        self.active_rules.write().await.insert(key, rules.clone());
+        Ok(rules)
+    }
+
+    /// Rules whose computed value reads inherited values (the inherited-computed
+    /// cascade questions). Cached like [`Self::active_rules`].
+    pub(crate) async fn inherited_computed_rules(
+        &self,
+        db: &Db,
+    ) -> Result<Arc<Vec<crate::rules::InheritedComputedRule>>, ApiError> {
+        if let Some(rules) = self.inherited_rules.read().await.clone() {
+            return Ok(rules);
+        }
+        let rules = Arc::new(crate::rules::load_inherited_computed_rules(db).await?);
+        *self.inherited_rules.write().await = Some(rules.clone());
+        Ok(rules)
+    }
+
+    /// Relation keys of every categorisation relation (`role = category`).
+    ///
+    /// Needed for every class-feature and completeness lookup; cached because the
+    /// answer only changes when a relation definition does.
+    pub(crate) async fn category_relation_keys(
+        &self,
+        db: &Db,
+    ) -> Result<Arc<Vec<String>>, ApiError> {
+        if let Some(keys) = self.category_relations.read().await.clone() {
+            return Ok(keys);
+        }
+        let keys = Arc::new(crate::class_features::load_category_relation_keys(db).await?);
+        *self.category_relations.write().await = Some(keys.clone());
+        Ok(keys)
+    }
+
+    /// Invalidates the cached rule lookups (create/update/delete/activate/disable).
+    pub async fn invalidate_rules(&self) {
+        self.active_rules.write().await.clear();
+        *self.inherited_rules.write().await = None;
+    }
+
+    /// Invalidates the cached categorisation relation keys (relation-definition
+    /// writes, including the MCF import).
+    pub async fn invalidate_relation_definitions(&self) {
+        *self.category_relations.write().await = None;
     }
 }
 

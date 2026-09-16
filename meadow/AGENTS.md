@@ -7,7 +7,7 @@ Owns the Python package `meadow`: the shared business-rules engine (`meadow.rule
 ## Ownership
 
 - Owns all files under `meadow/`.
-- `meadow/rules/` — RestrictedPython sandbox and the script contract `run(obj, ctx, result)`.
+- `meadow/rules/` — RestrictedPython sandbox and the script contract `run(obj, ctx, result)`; the publish-guard example in the demo catalogue skips `ctx.actor == "system"`, so automated imports/bulk jobs may store published objects while a user publishing an incomplete product is blocked.
 - `meadow/tabular.py` — shared CSV/XLSX ↔ MEF adapter (pure parsing/mapping helpers).
 - `meadow/mef.py` — pure MEF JSON helpers (detect/parse/summarize, preview rows) for the import page.
 - `meadow/frontend/display.py` — pure display helpers shared by all pages (`resolve_value`, `status_badge`, `completeness_badge`, `release_badges`, `channel_label`, `channel_options`, `dimension_options`, `taxonomy_type_names`, `taxonomy_options` and the release vocabulary `RELEASE_STATUSES`/`DEFAULT_RELEASE_STATUS`; no NiceGUI state). `dimension_options(definitions, locale, primary_label=…)` builds the **category dimension** switcher (primary categorisation first, then every custom `category` relation type), `taxonomy_type_names(object_types)`/`taxonomy_options` the **taxonomy** switcher (node object types with `taxonomy: true`, fallback to the built-in `category`); both stay pure by taking translated labels from the caller. Pages import them from here (not from `grid.py`), which also keeps the admin page out of the other pages' import graph (import cycles: `grid` → `channels` → `multilang` → `grid`).
@@ -113,6 +113,7 @@ removed edges. **`add_category`/`remove_category`** address a specific category 
 
 - Code, comments, and docstrings are written in English (root Coding Guidelines).
 - Sandbox limits default to the blocking write path (~1.5 s budget, 256 MiB, 64 KB source); bulk jobs may pass looser limits.
+- **Sandbox helper set (2026-09-16):** the globals expose RestrictedPython's `safe_builtins`/`limited_builtins`/`utility_builtins` plus pure helpers that its sets omit — `dict`, `sum`, `min`, `max`, `any`, `all`, **`enumerate`**, **`reversed`** — and `getattr` as the **guarded** `RestrictedPython.Guards.safer_getattr` (behaves like the builtin including the default, refuses every `_`-prefixed name). Without `enumerate`/`getattr` the shipped demo rules (`validate_gtin`, `guard_publish_features`) compiled fine but raised `NameError` at runtime, i.e. they silently never ran — `tests/test_demo_data.py::test_every_catalogue_rule_runs_in_the_sandbox` now executes every catalogue rule so this class of gap fails the gate. Compiled scripts are cached per `(source, whitelist, max_source_bytes)` (`sandbox._compiled`, `lru_cache`): `compile_restricted_exec` runs for every rule of every write; errors are not cached, so a broken script keeps failing loudly.
 - **A slow core read must never become a 500:** every `@ui.page(...)` passes `response_timeout=PAGE_TIMEOUT` — the constant lives in `layout.py` (env `PIM_PAGE_TIMEOUT`, default 60 s) and each page imports it, because NiceGUI's own default is 3 s per page and there is **no** global switch (`ui.run(response_timeout=…)` does not exist and raises `TypeError`). Fix the read path first; keep this ceiling generous on top.
 
 ## Verification

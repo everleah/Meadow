@@ -349,7 +349,7 @@ pub async fn evaluate_for_write(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let rules = load_active_rules(db, rule_types, object_type).await?;
+    let rules = cache.active_rules(db, rule_types, object_type).await?;
     if rules.is_empty() {
         return Ok(RuleOutcome::default());
     }
@@ -685,7 +685,11 @@ pub struct InheritedComputedRule {
 
 /// Returns the active `computed` rules whose attribute definitions are marked
 /// `computed_reads_inherited: true`.
-pub async fn inherited_computed_rules(db: &Db) -> Result<Vec<InheritedComputedRule>, ApiError> {
+/// Loads the rules that compute a value from inherited data (cached by
+/// [`crate::cache::MetaCache::inherited_computed_rules`]).
+pub async fn load_inherited_computed_rules(
+    db: &Db,
+) -> Result<Vec<InheritedComputedRule>, ApiError> {
     let defs: Vec<Value> = db
         .inner()
         .query(
@@ -760,37 +764,42 @@ pub async fn inherited_computed_rules(db: &Db) -> Result<Vec<InheritedComputedRu
 /// recompute is eventual-consistent with the ancestor change. Locale is
 /// threaded through so the worker resolves the view consistently with the
 /// write path.
+/// Depth bound for the descendant walk of the inherited-computed cascade. The
+/// composition tree is shallow (make → model → generation → variant in the demo
+/// data); the walk is cycle-safe on top of this bound.
+const MAX_CASCADE_DEPTH: usize = 64;
+
 pub async fn queue_inherited_cascade(
     state: &AppState,
     root_id: &str,
     locale: Option<&str>,
     actor: &str,
 ) -> Result<(), ApiError> {
-    let rules = inherited_computed_rules(&state.db).await?;
+    let rules = state.cache.inherited_computed_rules(&state.db).await?;
     if rules.is_empty() {
         return Ok(());
     }
-    // `subtree_keys` expects the full record id (`object:…`) as the root.
-    let subtree = crate::api::references::subtree_keys(&state.db, root_id).await?;
-    let root_bare = root_id.strip_prefix("object:").unwrap_or(root_id);
-    let descendants: Vec<String> = subtree
-        .iter()
-        .filter(|key| key.as_str() != root_bare)
-        .cloned()
-        .collect();
+    // Descendants level by level instead of `subtree_keys`: that helper loads the
+    // **whole** `rel_depends_on` edge set per call, which cost ~300 ms on every
+    // attribute PATCH of a demo-sized dataset — even for a leaf without children
+    // (`plan/detail/demodaten-generator.md` §4.3).
+    let descendants: Vec<String> =
+        crate::api::references::descendant_keys(&state.db, root_id, MAX_CASCADE_DEPTH).await?;
     if descendants.is_empty() {
         return Ok(());
     }
     // Load the descendant object types so each rule can be filtered by its
-    // `applies_to` before a recompute is scheduled.
+    // `applies_to` before a recompute is scheduled. The keys are rendered as a
+    // record list literal: `id IN array::map($keys, …)` is evaluated per row and
+    // quadratic (`crate::api::keys::record_list_literal`).
+    let literal =
+        crate::api::keys::record_list_literal("object", descendants.iter().map(String::as_str));
     let records: Vec<Value> = state
         .db
         .inner()
-        .query(
-            "SELECT id, type FROM object \
-             WHERE id IN array::map($keys, |$k| type::record('object', $k));",
-        )
-        .bind(("keys", descendants.clone()))
+        .query(format!(
+            "SELECT type::string(id) AS id, type FROM object WHERE id IN {literal} AND deleted_at IS NONE;"
+        ))
         .await?
         .check()?
         .take(0)?;
@@ -804,7 +813,7 @@ pub async fn queue_inherited_cascade(
             type_by_key.insert(bare.to_owned(), ty.to_owned());
         }
     }
-    for rule in rules {
+    for rule in rules.iter() {
         // Filter on the bare keys, then hand the worker full `object:` ids
         // (the recompute/worker loads via `GET /objects/{id}`).
         let matches: Vec<String> = descendants
