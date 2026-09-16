@@ -2238,6 +2238,17 @@ pub async fn import_config(
         // The import can create/update rules and relation definitions.
         state.cache.invalidate_rules().await;
         state.cache.invalidate_relation_definitions().await;
+        // The imported `object_types` section declares the **business keys**
+        // (`key_attributes`), and the uniqueness lookup is only index-backed once
+        // the index exists (`keys::ensure_key_indexes`, started for the whole
+        // registry). The import writes the types directly, so without this call a
+        // freshly imported model kept scanning a type's objects per key check
+        // (~150 ms per create at demo scale) until the next core restart — which
+        // is what slowed the `perf` import down.
+        let keys = crate::api::keys::registered_key_attributes(&state.db).await?;
+        if !keys.is_empty() {
+            crate::api::keys::ensure_key_indexes(&state.db, &keys).await?;
+        }
     }
     Ok((
         StatusCode::OK,
