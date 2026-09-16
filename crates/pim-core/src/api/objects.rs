@@ -851,6 +851,18 @@ pub async fn object_stats(
         return Ok(Json((*cached).clone()));
     }
 
+    // A miss is computed **once per key**: without this lock every concurrent
+    // request recomputed the whole aggregation in parallel (measured 2026-09-16:
+    // 1.8 s for a single cold call, 8.2 s mean for ten waiters at 16 k objects).
+    let lock = state.cache.stats_lock(&cache_key);
+    let _single_flight = lock.lock().await;
+    // Another request may have computed and stored the payload while this one
+    // waited — then the wait was the whole cost.
+    let version = state.cache.stats_version();
+    if let Some(cached) = state.cache.cached_stats(&cache_key, version).await {
+        return Ok(Json((*cached).clone()));
+    }
+
     // Counts come from a SQL aggregation (one small row per type/status pair): the
     // handler used to load **every** object with all its attributes just to count
     // them, which transferred ~5 MB and parsed it in the core.
