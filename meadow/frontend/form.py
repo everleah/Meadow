@@ -41,7 +41,7 @@ from meadow.frontend.display import (
     taxonomy_type_names,
 )
 from meadow.frontend.enums import enum_options
-from meadow.frontend.help_page import chapter_button, info_button
+from meadow.frontend.help_page import info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.object_picker import open_object_picker, render_picker_hit
@@ -179,16 +179,6 @@ async def product_form(object_id: str) -> None:
     with ui.column().classes("w-full p-6"):
         origin_url = edit_queue.queue_origin()
         in_sequence = edit_queue.is_active(object_id)
-
-        def go_back() -> None:
-            """Leaves the form; a running sequence ends here as well."""
-            edit_queue.stop_queue()
-            ui.navigate.to(origin_url if in_sequence else "/products")
-
-        with ui.row().classes("items-center gap-1"):
-            ui.button(t("form.back"), icon="arrow_back", on_click=go_back).props("flat")
-            # Teaching the form is the handbook's job — one entry point, no extra text.
-            chapter_button("product-form")
 
         client = CoreClient(config.CORE_URL)
         token = app.storage.user.get("token", "")

@@ -1,6 +1,7 @@
 """Admin page for the object-type registry (admin/superadmin only).
 
-Object types are the managed business types (STIBO STEP / Akeneo family model).
+Object types are the managed business types of a catalogue — a **flat** registry
+(no type inheritance), so every object belongs to exactly one type.
 Each type may declare `key_attributes` (the unique + mandatory business-key
 attribute names for that type; empty = no key) and an optional `label_attribute`
 (the attribute used as the display name). Attributes associate with types via

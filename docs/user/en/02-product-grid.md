@@ -27,6 +27,18 @@ For **Categories** you also choose:
   dimensions use the same categories; the choice only changes which assignments
   the tree considers.
 
+## Creating objects
+
+The **+** symbol above the tree creates a new object (in the *Structure* view).
+In the dialog you pick the **object type** (*Product* by default), the **name**
+— multilingual via the language icon — and the type's **business keys** (e.g.
+`sku` for a product). A business key has to be unique per type and counts as a
+required field; the core rejects a duplicate with a message.
+
+The **Placement** line shows where the object lands: under the node selected in
+the tree, or at the universal root without a selection. After creating it, the
+[object form](/help?page=product-form) opens for the remaining details.
+
 ## Searching and filtering
 
 - **Filter** — full-text search over the loaded objects.

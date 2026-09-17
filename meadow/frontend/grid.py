@@ -22,7 +22,7 @@ from fastapi import Request
 from nicegui import app, ui
 
 from meadow.frontend import config, edit_queue, search_form, taxonomy_tree
-from meadow.frontend.api import CoreClient, is_session_expired
+from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.display import (
     DEFAULT_RELEASE_STATUS,
@@ -41,6 +41,7 @@ from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
+from meadow.frontend.multilang import multilingual_value_editor
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 from meadow.frontend.range_values import format_range
 from meadow.frontend.reference_data import has_value, visible_in_picker
@@ -329,6 +330,24 @@ def present_attribute_names(objects: Iterable[Mapping[str, object]]) -> set[str]
             if has_value(attributes, str(name)):
                 names.add(str(name))
     return names
+
+
+def creatable_types(object_types: Iterable[Mapping[str, object]]) -> list[dict]:
+    """The object types the product grid offers for a **new** object.
+
+    System types (`root`, `category`, `collection`, `saved_search`, `asset`) are
+    maintained on their own pages and taxonomy node types in the categories view —
+    offering them here would file objects where nobody looks for them. `product`
+    comes first (the usual case), the rest keeps the registry order.
+    """
+    offered = [
+        dict(item)
+        for item in object_types
+        if item.get("name") and not item.get("system") and not item.get("taxonomy")
+    ]
+    return sorted(
+        offered, key=lambda item: (str(item.get("name")) != "product", str(item.get("name")))
+    )
 
 
 def offered_definitions(
@@ -943,6 +962,10 @@ async def products_page(request: Request) -> None:
         except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
             object_types = []
         taxonomy_types = taxonomy_type_names(object_types)
+        # The object types a **new** object may have on this page (system and
+        # taxonomy types belong to their own pages) — `set_view` needs this to
+        # show/hide the create action.
+        create_types = creatable_types(object_types)
 
         async def fetch_filtered() -> list[dict]:
             """Loads the objects matching the active filters (see `active`)."""
@@ -2808,6 +2831,9 @@ async def products_page(request: Request) -> None:
                         view != "collection" and bool(tree_nodes or category_roots)
                     )
                     reload_btn.set_visibility(view == "collection")
+                    # A new object hangs in the composition tree, so the action
+                    # belongs to the structure view (categories have their own page).
+                    create_btn.set_visibility(view == "structure" and bool(create_types))
                     if view != "collection" and active["collection"]:
                         active["collection"] = None
                         active_collection["id"] = None
@@ -2877,6 +2903,11 @@ async def products_page(request: Request) -> None:
                 # collection reload for the flat Collections view).
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
+                    create_btn = (
+                        ui.button(icon="add", on_click=lambda: open_create())
+                        .props("flat dense shrink-0")
+                        .tooltip(t("grid.create_object"))
+                    )
                     collapse_btn = (
                         ui.button(icon="unfold_less", on_click=collapse_all)
                         .props("flat dense shrink-0")
@@ -3117,6 +3148,162 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="view_column").props("outline").tooltip(
                         t("grid.columns")
                     ).on_click(columns_dialog.open)
+
+                # --- New object ------------------------------------------
+                # Creating an object needs its **composition parent** (root
+                # contract), so the dialog passes it with the write: the selected
+                # node of the structure tree is the parent, the universal root is
+                # the fallback (`POST /objects` defaults to it). The type registry
+                # supplies the display attribute (`label_attribute`) and the
+                # mandatory business keys (`key_attributes`) — a key counts as a
+                # required field for completeness (`cache.rs`, `completeness.rs`).
+                type_options = {
+                    str(item.get("name")): (
+                        resolve_value(item.get("label"), locale) or str(item.get("name"))
+                    )
+                    for item in create_types
+                }
+                type_by_name = {str(item.get("name")): item for item in create_types}
+                create_state: dict = {"parent": None}
+                create_key_inputs: dict[str, ui.element] = {}
+
+                def label_attribute_of(type_name: str) -> str:
+                    """The type's display attribute (`label_attribute`, default `name`)."""
+                    return str((type_by_name.get(type_name) or {}).get("label_attribute") or "name")
+
+                def is_multilingual_name(attribute: str) -> bool:
+                    """`name` is multilingual by convention, others by definition."""
+                    if attribute == "name":
+                        return True
+                    return bool((definitions_by_name.get(attribute) or {}).get("multilingual"))
+
+                @ui.refreshable
+                def render_create_fields() -> None:
+                    """Label attribute + business keys of the chosen type."""
+                    create_key_inputs.clear()
+                    type_name = str(create_type_select.value or "")
+                    label_attribute = label_attribute_of(type_name)
+                    if is_multilingual_name(label_attribute):
+                        multilingual_value_editor(
+                            field_label=t("grid.create_name"),
+                            locale=locale,
+                            languages=languages,
+                            value=None,
+                            store=create_state,
+                            key=label_attribute,
+                        )
+                    else:
+                        single = (
+                            ui.input(t("grid.create_name")).props("filled dense").classes("w-full")
+                        )
+                        single.on_value_change(
+                            lambda e, k=label_attribute: create_state.__setitem__(
+                                k, str(e.value or "")
+                            )
+                        )
+                    for key_name in [
+                        str(item)
+                        for item in (type_by_name.get(type_name) or {}).get("key_attributes") or []
+                    ]:
+                        definition = definitions_by_name.get(key_name) or {}
+                        label = resolve_value(definition.get("label"), locale) or key_name
+                        create_key_inputs[key_name] = (
+                            ui.input(label if label == key_name else f"{label} ({key_name})")
+                            .props("filled dense")
+                            .classes("w-full")
+                        )
+                    if create_key_inputs:
+                        ui.label(t("grid.create_key_hint")).classes("text-caption text-gray-500")
+
+                async def parent_caption(parent: str | None) -> str:
+                    """`Placement: <name>` of the composition parent (id as fallback)."""
+                    if not parent:
+                        return t("grid.create_parent_root")
+                    try:
+                        parent_object = await client.get_object(token, parent, locale=locale)
+                    except Exception:  # noqa: BLE001 - show the raw reference
+                        return str(parent)
+                    attributes = parent_object.get("attributes") or {}
+                    label = resolve_value(attributes.get("name"), locale)
+                    return str(label or parent_object.get("id") or parent)
+
+                async def open_create() -> None:
+                    """Opens the create dialog for the tree's selection (else the root)."""
+                    create_state.clear()
+                    create_state["parent"] = active["ancestor"]
+                    default_type = next(iter(type_options), None)
+                    if create_type_select.value != default_type:
+                        create_type_select.set_value(default_type)
+                    render_create_fields.refresh()
+                    create_parent_label.set_text(
+                        t("grid.create_parent").format(
+                            parent=await parent_caption(active["ancestor"])
+                        )
+                    )
+                    create_dialog.open()
+
+                async def save_new_object() -> None:
+                    type_name = str(create_type_select.value or "")
+                    label_attribute = label_attribute_of(type_name)
+                    raw_name = create_state.get(label_attribute)
+                    if isinstance(raw_name, dict):
+                        name_value: object = {
+                            str(lang): str(text)
+                            for lang, text in raw_name.items()
+                            if str(text or "").strip()
+                        }
+                        has_name = bool(name_value)
+                    else:
+                        name_value = str(raw_name or "").strip()
+                        has_name = bool(name_value)
+                    if not has_name:
+                        ui.notify(t("grid.create_name_required"), color="warning")
+                        return
+                    attributes: dict[str, object] = {label_attribute: name_value}
+                    for key_name, field in create_key_inputs.items():
+                        value = str(getattr(field, "value", "") or "").strip()
+                        if not value:
+                            ui.notify(
+                                t("grid.create_key_required").format(name=key_name), color="warning"
+                            )
+                            return
+                        attributes[key_name] = value
+                    try:
+                        created = await client.create_object(
+                            token,
+                            object_type=type_name,
+                            attributes=attributes,
+                            parent=create_state.get("parent"),
+                        )
+                    except CoreError as error:
+                        ui.notify(f"{t('grid.create_failed')}: {error}", color="negative")
+                        return
+                    create_dialog.close()
+                    type_label = type_options.get(type_name, type_name)
+                    ui.notify(t("grid.created").format(type=type_label), color="positive")
+                    # Straight into the form: the new object is still empty.
+                    ui.navigate.to(f"/products/{created['id']}")
+
+                create_dialog = ui.dialog()
+                with create_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
+                    ui.label(t("grid.create_title")).classes("text-h6")
+                    ui.label(t("grid.create_hint")).classes("text-caption text-gray-600")
+                    create_type_select = (
+                        ui.select(type_options, label=t("grid.create_type"))
+                        .props("filled dense")
+                        .classes("w-full")
+                    )
+                    create_type_select.on_value_change(lambda e: render_create_fields.refresh())
+                    create_parent_label = ui.label().classes("text-caption text-gray-500")
+                    with ui.column().classes("w-full gap-2"):
+                        render_create_fields()
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button(t("grid.close"), on_click=create_dialog.close).props("flat")
+                        ui.button(
+                            t("grid.create_save"),
+                            icon="add",
+                            on_click=lambda: save_new_object(),
+                        ).props("flat")
 
                 # --- Filter bar (server-side filters) --------------------------
                 # The grid can be empty (no tree node picked), so both filters are

@@ -613,6 +613,7 @@ class CoreClient:
         object_type: str,
         attributes: dict | None = None,
         status: str = "draft",
+        parent: str | None = None,
         source_id: str | None = None,
         source: str | None = None,
         locale: str | None = None,
@@ -621,7 +622,11 @@ class CoreClient:
         """Creates an object (``POST /objects``).
 
         Categories are ordinary objects of ``type: "category"``; ``attributes``
-        may carry a multilingual ``name`` map (``{en: ..., de: ...}``).
+        may carry a multilingual ``name`` map (``{en: ..., de: ...}``). ``parent``
+        is the **composition parent** of the new object (``object:<key>``); it is
+        part of the write, so a create never lands at the wrong place first and
+        gets moved afterwards (`crates/AGENTS.md`: the parent is validated against
+        the composition definition before anything is written).
         """
         params: dict[str, str] = {}
         if locale:
@@ -633,6 +638,8 @@ class CoreClient:
             "attributes": attributes or {},
             "status": status,
         }
+        if parent:
+            payload["parent"] = parent
         if source_id:
             payload["source_id"] = source_id
         if source:

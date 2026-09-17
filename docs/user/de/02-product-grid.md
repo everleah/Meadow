@@ -27,6 +27,19 @@ Bei **Kategorien** wählen Sie zusätzlich:
   Dimensionen verwenden dieselben Kategorien; die Auswahl ändert nur, welche
   Zuordnungen der Baum berücksichtigt.
 
+## Neue Objekte anlegen
+
+Das Symbol **+** über dem Baum legt ein neues Objekt an (in der Sicht
+*Struktur*). Im Dialog wählen Sie den **Objekttyp** (standardmäßig *Produkt*),
+den **Namen** — mehrsprachig über das Sprachsymbol — und die
+**Geschäftsschlüssel** des Typs (z. B. `sku` beim Produkt). Ein
+Geschäftsschlüssel muss je Typ eindeutig sein und zählt als Pflichtfeld; der
+Kern lehnt ein Duplikat mit einer Meldung ab.
+
+Die Zeile **Ablage** zeigt, wo das Objekt entsteht: unter dem im Baum
+ausgewählten Knoten, ohne Auswahl am Universal-Root. Nach dem Anlegen öffnet
+sich das [Objektformular](/help?page=product-form) für die weiteren Angaben.
+
 ## Suchen und filtern
 
 - **Filtern** — Freitextsuche über die geladenen Objekte.
