@@ -54,7 +54,8 @@ Administrator-Rolle.
 
 Das Dashboard ist Ihre Startseite:
 
-- **Objekte** — Anzahl der Objekte je Typ.
+- **Objekte** — Anzahl der Objekte je Typ; darüber eine stille Zeile mit dem
+  Gesamtbestand (Objekte und Relationen).
 - **Vollständigkeit** — wie viele Objekte je Typ noch Pflichtangaben vermissen.
   Ein Klick auf eine Kachel öffnet die gefilterte Objektliste.
 - **Status** — Verteilung über die Workflow-Status.

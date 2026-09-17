@@ -266,6 +266,7 @@
   "password.impersonated": "You cannot change the password of an impersonated session.",
   "dashboard.subtitle": "Your product information at a glance.",
   "dashboard.objects": "Objects",
+  "dashboard.totals": "Inventory: {objects} objects · {references} relations",
   "dashboard.completeness": "Completeness",
   "dashboard.incomplete": "incomplete ({type})",
   "dashboard.no_incomplete": "All objects are complete.",

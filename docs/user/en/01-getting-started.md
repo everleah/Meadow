@@ -49,7 +49,8 @@ jobs, users, rules, connectors …) require an administrator role.
 
 The dashboard is your home page:
 
-- **Objects** — the number of objects per type.
+- **Objects** — the number of objects per type, with a quiet line above them
+  showing the inventory totals (objects and relations).
 - **Completeness** — how many objects of each type still miss required values.
   Clicking a tile opens the filtered object list.
 - **Status** — the distribution across workflow statuses.

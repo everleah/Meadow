@@ -266,6 +266,7 @@
   "password.impersonated": "Impossible de modifier le mot de passe d'une session simulée.",
   "dashboard.subtitle": "Vos informations produit en un coup d'œil.",
   "dashboard.objects": "Objets",
+  "dashboard.totals": "Inventaire : {objects} objets · {references} relations",
   "dashboard.completeness": "Complétude",
   "dashboard.incomplete": "incomplets ({type})",
   "dashboard.no_incomplete": "Tous les objets sont complets.",

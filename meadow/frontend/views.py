@@ -97,6 +97,13 @@ async def home() -> None:
         # Objects by type (compact pills).
         with ui.card().classes("w-full mt-4"):
             ui.label(t("dashboard.objects")).classes("text-subtitle1")
+            # Inventory totals — informational, one quiet line.
+            ui.label(
+                t("dashboard.totals").format(
+                    objects=stats.get("total") or 0,
+                    references=stats.get("references") or 0,
+                )
+            ).classes("text-caption text-gray-500")
             with ui.row().classes("gap-2 w-full mt-2 flex-wrap"):
                 if not counts_by_type:
                     ui.label(t("grid.no_objects")).classes("text-caption text-gray-500")

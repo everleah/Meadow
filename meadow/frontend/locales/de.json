@@ -266,6 +266,7 @@
   "password.impersonated": "In einer simulierten Sitzung kann das Passwort nicht geändert werden.",
   "dashboard.subtitle": "Ihre Produktinformationen auf einen Blick.",
   "dashboard.objects": "Objekte",
+  "dashboard.totals": "Bestand: {objects} Objekte · {references} Relationen",
   "dashboard.completeness": "Vollständigkeit",
   "dashboard.incomplete": "unvollständig ({type})",
   "dashboard.no_incomplete": "Alle Objekte sind vollständig.",
