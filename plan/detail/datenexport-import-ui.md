@@ -41,7 +41,7 @@ Für **normale Anwender** fehlt etwas, das sich direkt über die Oberfläche kon
 
 | Schritt | Auswahl |
 |---|---|
-| Quelle | Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **Kanal (für den Kanal freigegebene Objekte)** · **aktuelle Grid-Auswahl/Filter** |
+| Quelle | **Gesamter Bestand (Komplett-Export)** · Objekttyp · Kategorie(-baum) · **Collection** · gespeicherte Suche · **Kanal (für den Kanal freigegebene Objekte)** · **aktuelle Grid-Auswahl/Filter** |
 | Felder | Basis-Felder (`id`, `type`, `status`, `updated_at`, …) + Attributdefinitionen des Typs; **gruppiert nach Attributgruppe** (je Gruppe eine `ui.expansion` mit Sammel-Checkbox), nur Attribute, die der gewählten Objekttyp **erlaubt** (`applicable_types`); „ohne Gruppe" als eigener Abschnitt, „alle auswählen" über die sichtbaren Felder |
 | Format | **CSV** (UTF-8, Excel/Plain) · **XLSX** (openpyxl) · JSON (MEF) · **BMEcat/ETIM** (XML, eigenes Profil statt Feldauswahl, §5.6) |
 | Sprache | Eine oder **mehrere** Locales (Fallback-Kette); pro Sprache eine Spalte `<attribut>_<code>` |
@@ -81,7 +81,8 @@ Neuer Endpunkt `POST /exports` (`editor+`, JWT) mit **strukturierten** Parameter
 
 - **Vorgaben aus dem `json_export`-Konnektor (Stage 2b, implementiert):** `format`, `fields`, `locales` und `options.email_to` sind optional — fehlen sie in der Anfrage, zieht der Kern die Werte des ersten aktivierten `json_export`-Konnektors (Profil). Ohne Konnektor bleibt `format` bei `json` und der Worker leitet die Felder wie bisher ab. Analog füllt `POST /imports` `match_by_key`/`match_by_id`/`emit_events`/`source` aus dem `json_import`-Profil.
 
-- **`source.kind`:** Bestimmt die Auflösung der Objektmenge. `selection` = Grid-Auswahl (explizite `object_ids`); `channel` = Objekte, die für `source.channel` freigegeben sind (optional `source.release_status`, Default `published`; der Kern filtert über `?released_for=`).
+- **`source.kind`:** Bestimmt die Auflösung der Objektmenge. `all` = **jeder lebende Bestand** (ohne Universal-Wurzel) — die Datenhälfte einer Wiederherstellung; `selection` = Grid-Auswahl (explizite `object_ids`); `channel` = Objekte, die für `source.channel` freigegeben sind (optional `source.release_status`, Default `published`; der Kern filtert über `?released_for=`). Jede Quelle wird **seitenweise vollständig** gelesen (`limit` ist auf 1000 gedeckelt; die Kern-Sortierung `created_at DESC, id` hält die Seitengrenzen stabil) — vorher brach ein Export nach 1000 Objekten still ab.
+- **`options.include_ancestors` (Default `true`):** Bei einer Teilmenge werden die **Kompositions-Vorfahren** ins Dokument geholt. Ein Objekt wird beim Import nur **mit** seinem Elternteil angelegt (`relationen.md`), ein Teil-Export ohne Vorfahren wäre also nicht importierbar. Beim Komplett-Export wirkungslos.
 - **Auflösung:**
   - `collection` → `GET /collections/{id}/members` (nur Mitglieder).
   - `type` → `GET /objects?type=<type>`.
@@ -101,10 +102,12 @@ Erweitert den `outbound_export`-Handler um die strukturierte Quelle und Formate:
 2. **Spalten** bauen: `["id", "type", "status", …]` + Attributnamen (je Locale erweitert); Reihenfolge = `fields`.
 3. **Zeilen** bauen: je Objekt je Spalte den Wert extrahieren — Basis-Felder direkt, Attributwerte via Locale-Fallback (`language::resolve`-Konvention), mehrsprachig je Spalte. Quantifizierte Werte → `{"value","unit"}` in der Anzeigeeinheit über `GET /units/convert`.
 4. **Ergebnis** in `job_run.result`:
-   - `json`: `{ "format": "json", "exported": N, "columns": […], "document": {…MEF…} }`
+   - `json`: `{ "format": "json", "exported": N, "references": N, "skipped_references": N, "added_ancestors": N, "columns": […], "document": {…MEF…} }`
    - `csv`/`xlsx`: `{ "format": "csv"|"xlsx", "exported": N, "columns": […], "rows": [{col: val, …}] }`
    - `bmecat`: `{ "format": "bmecat", "exported": N, "catalog": "…", "xml": "…", "report": {…} }` (§5.6)
 5. Datei wird beim Download aus `columns`/`rows` serialisiert (siehe 5.3) — kein binäres Blob im Ergebnis.
+
+**Das JSON-Dokument trägt die Beziehungen (2026-09-17, ersetzt `“references”: []`):** Nach den Objekten lädt der Worker die Kanten in Massen (`POST /references/query`, 500 IDs je Aufruf, seitenweise) und schreibt sie als MEF-`references` (`in`, `out`, `type` = Definitionsname, Kanten-`attributes`). Kanten, deren Endpunkt nicht im Dokument liegt, werden weggelassen und als `skipped_references` **gezählt**; Kanten zur Universal-Wurzel entfallen still (die Wurzel existiert in jeder Instanz, eine Baumspitze hängt der Kern selbst an). Mit `?releases=true` liefert der Kern je Objekt `[{channel, status}]`, das Dokument schreibt sie als `releases` mit. Zusammen mit `source.kind='all'` ist das Dokument damit **wiederherstellbar**: MCF zuerst (Modell), dann MEF (Daten) — Details: [integration-eventsystem.md](integration-eventsystem.md), Nachweis: [demodaten-generator.md](demodaten-generator.md) §4.4 Punkt 13.
 
 ### 5.3 Download-Endpunkt (`GET /exports/{run_id}/file`)
 
@@ -182,7 +185,7 @@ Ein Export wiederholt sich: dieselben Spalten, dieselbe Sprache, dieselben Optio
 
 - Neue Seite **`/export`** (Wizard, `editor+`-Rolle):
   0. **Gespeichertes Profil** (§5.7) — Auswahl lädt Format, Sprachen, Optionen, Spalten und BMEcat-Block; „Als Profil speichern" (admin) legt den Ist-Stand ab. Die **Quelle** ist bewusst nicht Teil eines Profils.
-  1. **Quelle** (Select: Typ / Kategorie-Baum / Collection / gespeicherte Suche / Grid-Auswahl; abhängig davon Detailselektor).
+  1. **Quelle** (Select: **Gesamter Bestand** / Typ / Kategorie-Baum / Collection / gespeicherte Suche / Grid-Auswahl; abhängig davon Detailselektor — bei „Gesamter Bestand“ keiner).
   2. **Felder** — **gruppiert nach Attributgruppe** (Basis-Felder zuerst, je Gruppe eine `ui.expansion` mit Anzahl und Sammel-Checkbox, „Attribute ohne Gruppe" zuletzt); gezeigt werden **nur die Attribute, die der gewählte Objekttyp erlaubt** (`applicable_types`, leere Liste = alle Typen — die Quellen Collection/Suche/Kanal legen keinen Typ fest, dort bleiben alle sichtbar, mit Hinweiszeile). Die Checkbox zeigt `Label (name)`, weil der Spaltenname bei einem importierten Standard der Merkmalscode ist. Die Auswahl bleibt beim Umschalten der Quelle erhalten (Zustand außerhalb des Renderers); gerendert wird von `meadow/frontend/export_fields.py` (rein, getestet).
   3. **Format + Sprache + Optionen** — Format-Select (CSV/XLSX/JSON/**BMEcat**), **Locale-Mehrfachauswahl**, Optionen (Header, Trenner, quantifizierte Werte, `include_system`). Bei Format **BMEcat** entfallen Feldauswahl und CSV-Optionen; stattdessen erscheint die Profilkarte (§5.6).
   4. **„Vorschau"** (Beispielzeilen für die gewählten Spalten) und **„Exportieren"** → Report (Anzahl, Download via `GET /exports/{run_id}/file`).

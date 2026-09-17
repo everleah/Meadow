@@ -2136,8 +2136,12 @@ pub async fn list_objects(
     } else {
         "*"
     };
+    // `id` is the tiebreaker of `created_at`: a batch writes many objects in the
+    // same transaction, so their timestamps collide and an unordered page boundary
+    // is not stable — a paging client (the complete MEF export) would then skip or
+    // repeat rows.
     let sql = format!(
-        "SELECT {projection} FROM object{where_clause} ORDER BY created_at DESC LIMIT $limit START $start"
+        "SELECT {projection} FROM object{where_clause} ORDER BY created_at DESC, id LIMIT $limit START $start"
     );
 
     let mut query = state.db.inner().query(sql);

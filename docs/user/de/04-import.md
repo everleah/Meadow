@@ -57,7 +57,10 @@ nachgelagerten Systeme (Konnektoren, Webhooks) informiert.
 Ein MEF-Dokument importieren Sie ohne Spalten-Mapping. Die Oberfläche zeigt
 stattdessen eine Zusammenfassung: Formatversion, Quelle, Anzahl der Objekte und
 Referenzen sowie die vorkommenden Typen. Referenzen werden mit den Objekten
-zusammen angelegt, sodass Verknüpfungen aus dem Dokument erhalten bleiben.
+zusammen angelegt, sodass Verknüpfungen aus dem Dokument erhalten bleiben —
+ein aus Meadow exportiertes Dokument bringt die Struktur (Komposition),
+Kategorien, Collections und Kanalfreigaben mit und stellt sie im Zielsystem
+wieder her.
 
 ## Ausführen und Ergebnis
 

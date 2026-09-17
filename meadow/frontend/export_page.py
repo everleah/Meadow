@@ -46,7 +46,8 @@ from meadow.frontend.reference_data import reference_names, visible_in_picker
 #: Base fields always offered (the worker maps these onto each object row).
 BASE_FIELDS = ("id", "type", "status")
 #: The selectable export source kinds (matches the core `ExportSource.kind`).
-SOURCE_KINDS = ("type", "category", "collection", "saved_search", "channel", "selection")
+#: `all` is the complete export (every live object) — the data half of a restore.
+SOURCE_KINDS = ("all", "type", "category", "collection", "saved_search", "channel", "selection")
 #: The selectable output formats (matches the core's `format`).
 FORMATS = ("csv", "xlsx", "json", "bmecat")
 #: Mime type per format, used for the browser download.
@@ -219,6 +220,9 @@ async def export_page(request: Request) -> None:
         if not detail_value:
             return None
         try:
+            if kind == "all":
+                stats = await client.get_object_stats(token)
+                return int(stats.get("total") or 0)
             if kind == "collection":
                 members = await client.list_collection_members(token, detail_value, limit=1000)
                 return len(members)
@@ -252,6 +256,8 @@ async def export_page(request: Request) -> None:
         return {}
 
     def _source_payload(kind: str, detail_value: str) -> dict:
+        if kind == "all":
+            return {"kind": "all"}
         if kind == "type":
             return {"kind": "type", "type": detail_value}
         if kind == "category":
@@ -263,6 +269,12 @@ async def export_page(request: Request) -> None:
         if kind == "channel":
             return {"kind": "channel", "channel": detail_value}
         return {"kind": "selection", "object_ids": _split_ids(detail_value)}
+
+    def _source_value(kind: str) -> str:
+        """The chosen source detail — empty for `all`, which needs none."""
+        if kind == "all":
+            return "all"
+        return str(ids_box.value or "") if kind == "selection" else str(detail_select.value or "")
 
     def _compute_columns(fields: list[str], locales: list[str]) -> list[str]:
         columns: list[str] = []
@@ -484,7 +496,12 @@ async def export_page(request: Request) -> None:
             ids_pick.on_click(lambda: pick_selection())
 
             def update_source_editor(kind: str) -> None:
-                if kind == "selection":
+                if kind == "all":
+                    # Every live object — no detail, no id list.
+                    detail_select.set_visibility(False)
+                    ids_box.set_visibility(False)
+                    ids_pick.set_visibility(False)
+                elif kind == "selection":
                     detail_select.set_visibility(False)
                     ids_box.set_visibility(True)
                     ids_pick.set_visibility(True)
@@ -652,6 +669,9 @@ async def export_page(request: Request) -> None:
             with ui.row().classes("flex-wrap gap-6 mt-1"):
                 inherit_switch = ui.switch(t("export.resolve_inheritance")).tooltip(
                     t("export.resolve_inheritance_hint")
+                )
+                ancestors_switch = ui.switch(t("export.include_ancestors"), value=True).tooltip(
+                    t("export.include_ancestors_hint")
                 )
 
             email_input = (
@@ -884,6 +904,7 @@ async def export_page(request: Request) -> None:
                 "separator": str(separator_select.value or ","),
                 "include_system": bool(include_system_switch.value),
                 "resolve_inheritance": bool(inherit_switch.value),
+                "include_ancestors": bool(ancestors_switch.value),
             }
             parameters: dict = {
                 "fields": _selected_fields(),
@@ -959,6 +980,7 @@ async def export_page(request: Request) -> None:
                     separator_select.set_value(separator)
                 include_system_switch.set_value(bool(options.get("include_system", False)))
                 inherit_switch.set_value(bool(options.get("resolve_inheritance", False)))
+                ancestors_switch.set_value(bool(options.get("include_ancestors", True)))
             fields = parameters.get("fields")
             wanted = {str(name) for name in fields} if isinstance(fields, list) else set()
             if isinstance(fields, list):
@@ -1053,9 +1075,7 @@ async def export_page(request: Request) -> None:
 
         async def on_preview() -> None:
             kind = str(kind_select.value)
-            detail_value = (
-                str(detail_select.value) if kind != "selection" else str(ids_box.value or "")
-            )
+            detail_value = _source_value(kind)
             if not detail_value:
                 ui.notify(t("export.source_required"), type="warning")
                 return
@@ -1076,9 +1096,7 @@ async def export_page(request: Request) -> None:
 
         async def on_export() -> None:
             kind = str(kind_select.value)
-            detail_value = (
-                str(detail_select.value) if kind != "selection" else str(ids_box.value or "")
-            )
+            detail_value = _source_value(kind)
             if not detail_value:
                 ui.notify(t("export.source_required"), type="warning")
                 return
@@ -1093,6 +1111,7 @@ async def export_page(request: Request) -> None:
                 "separator": str(separator_select.value or ","),
                 "include_system": bool(include_system_switch.value),
                 "resolve_inheritance": bool(inherit_switch.value),
+                "include_ancestors": bool(ancestors_switch.value),
             }
             recipients = _email_recipients()
             if recipients:
@@ -1320,9 +1339,7 @@ async def export_page(request: Request) -> None:
 
             async def _create_schedule() -> None:
                 kind = str(kind_select.value)
-                detail_value = (
-                    str(detail_select.value) if kind != "selection" else str(ids_box.value or "")
-                )
+                detail_value = _source_value(kind)
                 if not detail_value:
                     ui.notify(t("export.source_required"), type="warning")
                     return
@@ -1348,6 +1365,7 @@ async def export_page(request: Request) -> None:
                         "separator": str(separator_select.value or ","),
                         "include_system": bool(include_system_switch.value),
                         "resolve_inheritance": bool(inherit_switch.value),
+                        "include_ancestors": bool(ancestors_switch.value),
                     },
                 }
                 recipients = _email_recipients()

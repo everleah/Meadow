@@ -3040,6 +3040,108 @@ fn check_edge_role(
     Ok(())
 }
 
+/// Upper bound of object ids per `POST /references/query` call.
+pub const MAX_QUERY_REFERENCE_IDS: usize = 500;
+
+/// Default page size (rows) of `POST /references/query`.
+const DEFAULT_REFERENCE_PAGE: usize = 5_000;
+
+/// Upper bound of rows per `POST /references/query` page.
+pub const MAX_REFERENCE_PAGE: usize = 50_000;
+
+/// Payload of `POST /references/query`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReferenceQueryRequest {
+    /// Objects whose edges should be read (`object:<ulid>`), at most
+    /// [`MAX_QUERY_REFERENCE_IDS`] per call.
+    pub ids: Vec<String>,
+    /// Rows per page (default 5 000, max 50 000).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Rows to skip (paging through a result larger than `limit`).
+    #[serde(default)]
+    pub start: Option<usize>,
+}
+
+/// Result of `POST /references/query`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReferenceQueryResponse {
+    /// Raw edge rows (`id`, `definition_id`, `in`, `out`, `attributes`).
+    pub references: Vec<Value>,
+    /// `true` when the page is full — another call with `start += limit` may
+    /// return more rows.
+    pub truncated: bool,
+}
+
+/// Reads many references in **one** request (incoming and outgoing).
+///
+/// `GET /objects/{id}/references` answers per object and enriches every row with
+/// both endpoint objects (two extra lookups per edge, plus a label resolution):
+/// for an export over thousands of objects that is thousands of round trips for
+/// projections the export does not need. This endpoint returns the **raw** edges
+/// of up to [`MAX_QUERY_REFERENCE_IDS`] objects in one query and pages the rows
+/// (`limit`/`start`, `ORDER BY id`), so a hub node (a category with thousands of
+/// members) cannot blow up the response.
+///
+/// The id list is rendered as a **record list literal** — a bound key list would
+/// be evaluated per candidate row (see [`crate::api::keys::record_list_literal`]).
+#[utoipa::path(
+    post,
+    path = "/references/query",
+    request_body = ReferenceQueryRequest,
+    responses(
+        (status = 200, description = "Raw reference rows", body = ReferenceQueryResponse),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 413, description = "Too many ids", body = Value)
+    )
+)]
+pub async fn query_references(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReferenceQueryRequest>,
+) -> Result<Json<ReferenceQueryResponse>, ApiError> {
+    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    if body.ids.is_empty() {
+        return Err(ApiError::bad_request("`ids` must not be empty"));
+    }
+    if body.ids.len() > MAX_QUERY_REFERENCE_IDS {
+        return Err(ApiError::payload_too_large(format!(
+            "`ids` exceeds the limit of {MAX_QUERY_REFERENCE_IDS} objects"
+        )));
+    }
+    let limit = body
+        .limit
+        .unwrap_or(DEFAULT_REFERENCE_PAGE)
+        .clamp(1, MAX_REFERENCE_PAGE) as i64;
+    let start = body.start.unwrap_or(0) as i64;
+    let keys: Vec<String> = body
+        .ids
+        .iter()
+        .map(|id| parse_object_key(id).map(str::to_owned))
+        .collect::<Result<_, _>>()?;
+    let literal = crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+    let sql = format!(
+        "SELECT id, definition_id, in, out, attributes FROM reference \
+         WHERE in IN {literal} OR out IN {literal} ORDER BY id LIMIT $limit START $start;"
+    );
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("limit", limit))
+        .bind(("start", start))
+        .await?
+        .check()?;
+    let references: Vec<Value> = response.take(0)?;
+    let truncated = references.len() as i64 >= limit;
+    Ok(Json(ReferenceQueryResponse {
+        references,
+        truncated,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

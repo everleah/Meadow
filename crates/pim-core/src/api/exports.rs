@@ -30,7 +30,11 @@ use crate::error::ApiError;
 /// The object source for an export.
 #[derive(Debug, Clone, Deserialize, serde::Serialize, ToSchema)]
 pub struct ExportSource {
-    /// `collection` | `type` | `category` | `saved_search` | `selection` | `channel`.
+    /// `all` | `collection` | `type` | `category` | `saved_search` | `selection` | `channel`.
+    ///
+    /// `all` is the **complete export** (every live object): the MEF document it
+    /// produces is the data half of a restore, together with the MCF document
+    /// (`GET /config/export`, model/metadata).
     pub kind: String,
     /// Collection or saved-search id (for `collection`/`saved_search`).
     #[serde(default)]
@@ -66,6 +70,14 @@ pub struct ExportOptions {
     /// the finished export as an attachment.
     #[serde(default)]
     pub email_to: Option<Vec<String>>,
+    /// Fill the MEF document (`format: "json"`) up with the **composition
+    /// ancestors** of the exported objects. An object may only be written with
+    /// its parent (`POST /objects`), so a document that names a parent it does
+    /// not contain cannot be imported — and without the ancestors a partial
+    /// selection could not rebuild the structure tree on a fresh system.
+    /// Default `true`; for a complete export it is a no-op.
+    #[serde(default = "default_true")]
+    pub include_ancestors: bool,
 }
 
 impl Default for ExportOptions {
@@ -76,6 +88,7 @@ impl Default for ExportOptions {
             separator: default_separator(),
             include_system: false,
             email_to: None,
+            include_ancestors: true,
         }
     }
 }
@@ -237,7 +250,7 @@ pub async fn create_export(
     let kind = source.kind.as_str();
     if !matches!(
         kind,
-        "collection" | "type" | "category" | "saved_search" | "selection" | "channel"
+        "all" | "collection" | "type" | "category" | "saved_search" | "selection" | "channel"
     ) {
         return Err(ApiError::bad_request(format!(
             "unsupported source kind `{kind}`"

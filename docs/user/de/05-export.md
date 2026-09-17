@@ -12,6 +12,7 @@ Wählen Sie, **welche** Objekte exportiert werden:
 
 | Quelle | Bedeutung |
 | --- | --- |
+| **Gesamter Bestand** | Alle Objekte der Instanz — der Komplett-Export für einen Umzug auf ein frisches System. |
 | **Objekttyp** | Alle Objekte eines Typs. |
 | **Kategorie** | Objekte, die einer Kategorie zugeordnet sind. |
 | **Collection** | Die Mitglieder einer gespeicherten Zusammenstellung. |
@@ -36,7 +37,7 @@ eines importierten Klassifikationsstandards bleibt standardmäßig ausgeblendet;
 | --- | --- |
 | **CSV** | Textdatei mit wählbarem Trennzeichen. |
 | **Excel** | Arbeitsmappe (`.xlsx`). |
-| **JSON** | MEF-Dokument für den maschinellen Austausch. |
+| **JSON** | MEF-Dokument für den maschinellen Austausch: Objekte **mit** ihren Beziehungen (Komposition, Kategorien, Collections) und ihren Kanalfreigaben. |
 | **BMEcat** | Katalogformat für Klassifikationsstandards (z. B. ETIM). |
 
 Weitere Optionen:
@@ -46,6 +47,10 @@ Weitere Optionen:
 - **Systemfelder aufnehmen** — ergänzt technische Felder wie Zeitstempel.
 - **Auch vererbte Werte exportieren** — nimmt Werte mit auf, die das Objekt
   selbst nicht pflegt, sondern vom übergeordneten Objekt erbt.
+- **Übergeordnete Objekte mitnehmen** — ergänzt die übergeordneten Objekte der
+  Auswahl. Ein Objekt wird beim Import immer **mit** seinem Elternteil
+  geschrieben; ohne diesen Schalter könnte eine Auswahl (etwa nur Varianten)
+  nicht wieder eingespielt werden. Beim Komplett-Export ändert er nichts.
 
 ### BMEcat
 
@@ -77,6 +82,27 @@ Administratoren können einen Export **planen**: Der Lauf wiederholt sich dann
 nach einem Zeitplan, und die Ergebnisse bleiben in der Liste der letzten Exporte
 abrufbar. Ist ein Mailversand konfiguriert, kann der Export zusätzlich per
 E-Mail verschickt werden.
+
+## Komplette Wiederherstellung (Umzug auf ein frisches System)
+
+Ein PIM-Bestand besteht aus zwei Teilen, und beide werden getrennt exportiert:
+
+1. **Modell und Metadaten** — unter **Konfiguration** alle Bereiche exportieren
+   (MCF-Datei): Objekttypen, Attributdefinitionen, Relationstypen, Regeln,
+   Einheiten, Sprachen, Kanäle, Klassifikationsstandards.
+2. **Daten** — hier im Assistenten die Quelle **Gesamter Bestand** im Format
+   **JSON** wählen (MEF-Datei): Objekte, Struktur (Komposition), Kategorien,
+   Collections, Verknüpfungen und Kanalfreigaben.
+
+Auf dem frischen System dann in dieser Reihenfolge importieren: **zuerst** das
+MCF-Dokument unter **Konfiguration**, **danach** das MEF-Dokument unter
+**Import** (dort wird die Option „Über Objekt-ID abgleichen“ automatisch
+aktiviert). Beide Importe sind wiederholbar: ein zweiter Lauf aktualisiert,
+statt zu verdoppeln.
+
+Nicht im Dokument enthalten sind **Benutzer und Gruppen**, **Konnektoren**,
+**Job-Definitionen** und **Systemeinstellungen** — das ist Umgebungskonfiguration
+und wird je Umgebung gepflegt.
 
 ## Weiterlesen
 

@@ -110,6 +110,36 @@ curl -X POST "$PIM_CORE_URL/imports?match_by_key=sku&source=erp" \
 
 The `json_export` connector produces MEF documents from selected objects (`filter.type` / `filter.status`). The result is placed in the `job_run.result` as `{ "connector": "json_export", "exported": N, "document": { ... } }`.
 
+**The document carries the relations and the channel releases (2026-09-17):** every object entry holds
+`id`, `type`, `status`, `attributes` (quantified values re-emitted in the display unit) and `releases`
+(`[{channel, status}]` when the object is released), and `references` holds the edges — `{in, out, type, attributes?}`
+with `type` being the relation-definition **name** (`depends_on`, `category_member`, a custom name). The worker reads
+them in bulk (`POST /references/query`, ≤ 500 objects per call, paged), so a complete export of the demo inventory is
+11 632 objects plus 22 738 references in one run (8 MB file). Edges whose other endpoint is outside the document are
+left out and **counted** (`skipped_references`) instead of silently breaking the import; edges to the universal root
+are dropped without counting — the root exists in every instance and the core attaches a top-level object by itself.
+
+The **source kind `all`** (`POST /exports` with `{"source": {"kind": "all"}}`) is the complete export: every live object
+except the universal root, read page by page (`limit` is capped at 1000 — before this an export silently stopped after
+1000 rows). For a partial source, `options.include_ancestors` (default `true`) adds the composition ancestors, because
+an imported object may only be written **with** its parent (see §1.4): without that a selection like "all variants"
+would not be importable at all.
+
+**Restoring an instance (MCF + MEF):** the model first, then the data, then the class features.
+
+1. `GET /config/export` on the source instance, `POST /config/import?mode=merge` on the target. The section
+   `category_attributes` (the ETIM class features) **cannot** be applied yet when the standard's class nodes travel as
+   data: those entries are reported as `class not found in the target; import the taxonomy data first` — expected, they
+   are re-imported in step 3.
+2. Export the data here (source **Everything**, format **JSON**) and import it with `POST /imports`. The import UI
+   presets `match_by_id` because the document says `source: "meadow"`, so re-importing into the *same* instance updates
+   in place; on a fresh instance the objects are created, parents first, and the relations and releases follow.
+3. Export `GET /config/export?sections=category_attributes` and import it — now the class nodes exist and the features
+   are written (the demo generator orders its import the same way, `scripts/demo_data.py`).
+
+Not part of either document: **users and groups**, **connectors**, **job definitions** and **system settings** — that is
+environment configuration and is maintained per environment.
+
 ## 2. Event System
 
 Every CRUD operation in the core emits an **event** describing the change. Events are written **atomically** with the change into a transactional outbox and relayed to NATS JetStream, where consumers (webhooks, middleware, analytics) subscribe.

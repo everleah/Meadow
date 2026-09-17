@@ -37,6 +37,27 @@ logger = logging.getLogger(__name__)
 #: Default cap for exported objects per run.
 DEFAULT_EXPORT_LIMIT = 1000
 
+#: Page size of the core's list endpoints (`limit` is capped there).
+OBJECT_PAGE_SIZE = 1000
+
+#: Object ids per `POST /references/query` call (core limit).
+REFERENCE_QUERY_SIZE = 500
+
+#: Rows per `POST /references/query` page (core default is 5000).
+REFERENCE_QUERY_PAGE = 5000
+
+#: Composition relation definition (record key in the core, `depends_on` as name).
+COMPOSITION_DEFINITION = "rel_depends_on"
+
+#: Object type of the universal root (a system object, never part of a document).
+ROOT_TYPE = "root"
+
+#: Record key of the universal root (exists in every instance).
+ROOT_KEY = "object_root"
+
+#: Upper bound of composition levels the ancestor walk follows (a cycle guard).
+MAX_ANCESTOR_ROUNDS = 50
+
 #: Font of a hyperlinked export cell (blue + underlined, like a browser link).
 URL_CELL_FONT = Font(color="FF0563C1", underline="single")
 
@@ -114,83 +135,151 @@ def _strip_object_id(value: Any) -> str:
     return text.split(":", 1)[1] if ":" in text else text
 
 
+def _chunks(items: list[Any], size: int) -> Iterable[list[Any]]:
+    """Yields `items` in chunks of at most `size` entries."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+async def _page_get(
+    active: httpx.AsyncClient,
+    url: str,
+    params: Mapping[str, Any] | None = None,
+) -> list[Any]:
+    """Reads a `limit`/`start` paged list endpoint **completely**.
+
+    Every list endpoint of the core caps `limit` at [`OBJECT_PAGE_SIZE`], so an
+    export that asked for one page silently stopped at 1 000 rows — a 2 000-product
+    catalogue lost half of its objects, which is why a "complete" export was not
+    one. The `id`s of a page are tracked as a safety net: if a page brings nothing
+    new (an unstable order), the loop stops instead of running forever.
+    """
+    rows: list[Any] = []
+    seen: set[str] = set()
+    start = 0
+    while True:
+        response = await active.get(
+            url,
+            params={**(params or {}), "limit": OBJECT_PAGE_SIZE, "start": start},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        page = payload if isinstance(payload, list) else []
+        fresh = 0
+        for row in page:
+            object_id = str(row.get("id")) if isinstance(row, dict) and row.get("id") else ""
+            if not object_id:
+                fresh += 1
+            elif object_id not in seen:
+                seen.add(object_id)
+                fresh += 1
+        rows.extend(page)
+        if len(page) < OBJECT_PAGE_SIZE or fresh == 0:
+            return rows
+        start += OBJECT_PAGE_SIZE
+
+
+async def _page_objects(
+    active: httpx.AsyncClient,
+    core_url: str,
+    params: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Every object of a `GET /objects` query (see [`_page_get`] for the paging)."""
+    return [
+        row
+        for row in await _page_get(active, f"{core_url}/objects", params)
+        if isinstance(row, dict)
+    ]
+
+
+async def _load_objects_by_ids(
+    active: httpx.AsyncClient,
+    core_url: str,
+    ids: Iterable[Any],
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Reads objects by id, chunked by the core's `?ids=` page size."""
+    objects: list[dict[str, Any]] = []
+    for chunk in _chunks([str(item) for item in ids], OBJECT_PAGE_SIZE):
+        objects.extend(
+            await _page_objects(active, core_url, {"ids": ",".join(chunk), **(extra or {})})
+        )
+    return objects
+
+
 async def _resolve_objects(
     active: httpx.AsyncClient,
     core_url: str,
     source: dict[str, Any],
     *,
     resolve_inheritance: bool = False,
+    with_releases: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolves the export source to a list of full object records.
 
+    Every source kind is read **completely** (`_page_get`): the list endpoints cap
+    `limit` at 1000, so a type with more objects used to be truncated silently.
+    `kind='all'` is the complete export — every live object except the universal
+    root, which is a system object present in every instance.
+
     With ``resolve_inheritance`` the objects are requested with
     `?resolve_inheritance=true`, so attributes maintained on an ancestor are
-    exported with the child's effective value. `source.kind='channel'` exports
-    the objects **released for that channel** (`?released_for=`, optionally with
-    `source.release_status`).
+    exported with the child's effective value. With ``with_releases`` they are
+    requested with `?releases=true`: the channel releases are part of a MEF
+    document (a restore without them has released nothing). `source.kind='channel'`
+    exports the objects **released for that channel** (`?released_for=`, optionally
+    with `source.release_status`).
     """
     extra: dict[str, str] = {"resolve_inheritance": "true"} if resolve_inheritance else {}
+    if with_releases:
+        extra["releases"] = "true"
     kind = source.get("kind")
-    if kind == "type":
+    objects: list[dict[str, Any]]
+    if kind == "all":
+        objects = await _page_objects(active, core_url, dict(extra))
+    elif kind == "type":
         object_type = source.get("type")
         if not object_type:
             raise RuntimeError("`source.kind='type'` requires `type`")
-        resp = await active.get(
-            f"{core_url}/objects", params={"type": object_type, "limit": 1000, **extra}
-        )
-        resp.raise_for_status()
-        return resp.json()
-    if kind == "category":
+        objects = await _page_objects(active, core_url, {"type": object_type, **extra})
+    elif kind == "category":
         category = source.get("category")
         if not category:
             raise RuntimeError("`source.kind='category'` requires `category`")
-        resp = await active.get(
-            f"{core_url}/objects", params={"category": category, "limit": 1000, **extra}
-        )
-        resp.raise_for_status()
-        return resp.json()
-    if kind == "channel":
+        objects = await _page_objects(active, core_url, {"category": category, **extra})
+    elif kind == "channel":
         channel = source.get("channel")
         if not channel:
             raise RuntimeError("`source.kind='channel'` requires `channel`")
-        params = {"released_for": channel, "limit": 1000, **extra}
+        params: dict[str, Any] = {"released_for": channel, **extra}
         release_status = source.get("release_status")
         if release_status:
             params["release_status"] = str(release_status)
-        resp = await active.get(f"{core_url}/objects", params=params)
-        resp.raise_for_status()
-        return resp.json()
-
-    ids: list[str] = []
-    if kind == "collection":
-        collection_id = source.get("id")
-        if not collection_id:
-            raise RuntimeError("`source.kind='collection'` requires `id`")
-        resp = await active.get(
-            f"{core_url}/collections/{collection_id}/members",
-            params={"limit": 1000},
-        )
-        resp.raise_for_status()
-        ids = [_strip_object_id(item.get("id")) for item in resp.json()]
-    elif kind == "saved_search":
-        search_id = source.get("id")
-        if not search_id:
-            raise RuntimeError("`source.kind='saved_search'` requires `id`")
-        resp = await active.post(f"{core_url}/saved-searches/{search_id}/execute")
-        resp.raise_for_status()
-        ids = [_strip_object_id(item) for item in (resp.json().get("ids") or [])]
-    elif kind == "selection":
-        ids = [_strip_object_id(item) for item in (source.get("object_ids") or [])]
+        objects = await _page_objects(active, core_url, params)
     else:
-        raise RuntimeError(f"unsupported `source.kind` {kind!r}")
-
-    if not ids:
-        return []
-    resp = await active.get(
-        f"{core_url}/objects", params={"ids": ",".join(ids), "limit": 1000, **extra}
-    )
-    resp.raise_for_status()
-    return resp.json()
+        ids: list[str] = []
+        if kind == "collection":
+            collection_id = source.get("id")
+            if not collection_id:
+                raise RuntimeError("`source.kind='collection'` requires `id`")
+            rows = await _page_get(active, f"{core_url}/collections/{collection_id}/members")
+            ids = [_strip_object_id(item.get("id")) for item in rows]
+        elif kind == "saved_search":
+            search_id = source.get("id")
+            if not search_id:
+                raise RuntimeError("`source.kind='saved_search'` requires `id`")
+            resp = await active.post(f"{core_url}/saved-searches/{search_id}/execute")
+            resp.raise_for_status()
+            ids = [_strip_object_id(item) for item in (resp.json().get("ids") or [])]
+        elif kind == "selection":
+            ids = [_strip_object_id(item) for item in (source.get("object_ids") or [])]
+        else:
+            raise RuntimeError(f"unsupported `source.kind` {kind!r}")
+        objects = await _load_objects_by_ids(active, core_url, ids, extra=extra) if ids else []
+    # The universal root is a system object that exists in every instance — it is
+    # never part of an export (and never a parent a document has to carry).
+    return [obj for obj in objects if str(obj.get("type") or "") != ROOT_TYPE]
 
 
 async def _load_languages(client: httpx.AsyncClient, core_url: str) -> dict[str, list[str]]:
@@ -471,35 +560,31 @@ async def _structured_export(
 
     # Resolve objects (synchronously for the requested source).
     objects = await _resolve_objects(
-        active, core_url, source, resolve_inheritance=resolve_inheritance
+        active,
+        core_url,
+        source,
+        resolve_inheritance=resolve_inheritance,
+        with_releases=format_ == "json",
     )
-
     if format_ == "json":
         unit_map = await _load_unit_map(active, core_url)
-        mef_objects: list[dict[str, Any]] = []
-        for obj in objects:
-            attributes = dict(obj.get("attributes") or {})
-            await _emit_quantified(active, core_url, attributes, unit_map)
-            mef_objects.append(
-                {
-                    "id": obj.get("id"),
-                    "type": obj.get("type"),
-                    "attributes": attributes,
-                    "status": obj.get("status") or "draft",
-                }
-            )
-        document = {
-            "format_version": "1.0",
-            "source": "meadow",
-            "created_at": _now_iso_utc(),
-            "objects": mef_objects,
-            "references": [],
-        }
+        # Relations (+ the composition ancestors of a partial source) are part of
+        # the document: without them a fresh system gets a flat tree, and the
+        # import refuses an object whose parent the document does not contain.
+        objects, references, counters = await _collect_mef_data(
+            active,
+            core_url,
+            objects,
+            include_ancestors=bool(options.get("include_ancestors", True)),
+            with_releases=True,
+        )
+        mef_objects = await _mef_objects(active, core_url, objects, unit_map)
         result: dict[str, Any] = {
             "format": "json",
             "exported": len(mef_objects),
             "columns": fields,
-            "document": document,
+            "document": _mef_document(mef_objects, references),
+            **counters,
         }
     else:
         columns = _build_columns(fields, locales, multilingual)  # type: ignore
@@ -749,6 +834,248 @@ async def _load_standards(client: httpx.AsyncClient, core_url: str) -> dict[str,
     return systems
 
 
+def _record_key(value: Any) -> str:
+    """The bare record key of a `table:<key>` id (a bare key passes through)."""
+    text = str(value or "")
+    return text.split(":", 1)[1] if ":" in text else text
+
+
+async def _load_relation_names(
+    active: httpx.AsyncClient,
+    core_url: str,
+) -> dict[str, str]:
+    """`relation_definition` record key -> MEF reference `type` (the definition name).
+
+    A MEF reference carries the relation-definition **name** (`depends_on`,
+    `category_member`, a custom name) because the importer prepends the seed
+    convention `rel_`; the core speaks record keys. The mapping is read once per
+    export from `GET /relation-definitions`; a definition without a name (or an
+    unreachable registry) falls back to stripping `rel_` from the key.
+    """
+    names: dict[str, str] = {}
+    try:
+        response = await active.get(f"{core_url}/relation-definitions")
+        response.raise_for_status()
+        for definition in response.json() or []:
+            if not isinstance(definition, dict):
+                continue
+            key = _record_key(definition.get("id"))
+            name = str(definition.get("name") or "")
+            if key and name:
+                names[key] = name
+    except Exception as exc:  # noqa: BLE001 - the seed convention is the fallback
+        logger.warning("relation definitions unavailable, using the seed convention: %s", exc)
+    return names
+
+
+def _definition_name(definition_id: Any, names: Mapping[str, str]) -> str:
+    """The MEF reference `type` of a relation-definition id (see `_load_relation_names`)."""
+    key = _record_key(definition_id)
+    if key in names:
+        return names[key]
+    return key[4:] if key.startswith("rel_") else key
+
+
+async def _load_references(
+    active: httpx.AsyncClient,
+    core_url: str,
+    ids: Iterable[Any],
+) -> dict[str, dict[str, Any]]:
+    """Every edge touching one of `ids`, keyed by edge id (raw rows).
+
+    `POST /references/query` answers both directions for up to
+    [`REFERENCE_QUERY_SIZE`] ids and pages the rows, so a hub node (a category with
+    thousands of members) cannot overflow a single response.
+    """
+    edges: dict[str, dict[str, Any]] = {}
+    for chunk in _chunks([str(item) for item in ids], REFERENCE_QUERY_SIZE):
+        start = 0
+        while True:
+            response = await active.post(
+                f"{core_url}/references/query",
+                json={"ids": chunk, "limit": REFERENCE_QUERY_PAGE, "start": start},
+            )
+            response.raise_for_status()
+            body = response.json() or {}
+            rows = [row for row in (body.get("references") or []) if isinstance(row, dict)]
+            for row in rows:
+                edges[str(row.get("id"))] = row
+            if not body.get("truncated"):
+                break
+            start += REFERENCE_QUERY_PAGE
+    return edges
+
+
+def _mef_references(
+    edges: Mapping[str, Mapping[str, Any]],
+    id_of: Mapping[str, str],
+    names: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], int]:
+    """MEF reference entries for the edges with **both** endpoints in the document.
+
+    An edge pointing out of the document (a category selection keeps its products,
+    not the taxonomy) cannot be imported — the core refuses an unresolvable
+    endpoint — so it is left out and **counted** instead of silently vanishing.
+    Edges to the universal root are dropped without counting: the root exists in
+    every instance and the core attaches a top-level object to it by itself.
+    """
+    entries: list[dict[str, Any]] = []
+    skipped = 0
+    for edge_id in sorted(edges):
+        edge = edges[edge_id]
+        source_key = _record_key(edge.get("in"))
+        target_key = _record_key(edge.get("out"))
+        if source_key == ROOT_KEY or target_key == ROOT_KEY:
+            continue
+        source = id_of.get(source_key)
+        target = id_of.get(target_key)
+        if not source or not target:
+            skipped += 1
+            continue
+        entry: dict[str, Any] = {
+            "in": source,
+            "out": target,
+            "type": _definition_name(edge.get("definition_id"), names),
+        }
+        attributes = edge.get("attributes")
+        if isinstance(attributes, dict) and attributes:
+            entry["attributes"] = attributes
+        entries.append(entry)
+    return entries, skipped
+
+
+def _mef_releases(obj: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The channel releases of an object (`GET /objects?releases=true`).
+
+    A release is channel state in its own table, not an attribute — the MEF object
+    carries it as `[{channel, status}]` and the import replays it (`_
+    import_releases` in `meadow/worker/imports.py`).
+    """
+    rows = obj.get("releases")
+    if not isinstance(rows, list):
+        return []
+    return [
+        {"channel": str(row.get("channel")), "status": str(row.get("status"))}
+        for row in rows
+        if isinstance(row, dict) and row.get("channel") and row.get("status")
+    ]
+
+
+async def _mef_objects(
+    active: httpx.AsyncClient,
+    core_url: str,
+    objects: list[dict[str, Any]],
+    unit_map: Mapping[str, tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """The `objects` entries of a MEF document (values, quantified re-emitted)."""
+    entries: list[dict[str, Any]] = []
+    for obj in objects:
+        attributes = obj.get("attributes")
+        attributes = dict(attributes) if isinstance(attributes, dict) else {}
+        await _emit_quantified(active, core_url, attributes, unit_map)
+        entry: dict[str, Any] = {
+            "id": obj.get("id"),
+            "type": obj.get("type"),
+            "attributes": attributes,
+            "status": obj.get("status") or "draft",
+        }
+        releases = _mef_releases(obj)
+        if releases:
+            entry["releases"] = releases
+        entries.append(entry)
+    return entries
+
+
+async def _collect_mef_data(
+    active: httpx.AsyncClient,
+    core_url: str,
+    objects: list[dict[str, Any]],
+    *,
+    include_ancestors: bool = True,
+    with_releases: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+    """Values **and** relations of the exported objects.
+
+    Returns `(objects, references, counters)`. The objects may have grown by the
+    **composition ancestors** of the source (`include_ancestors`), and `references`
+    are `{in, out, type, attributes?}` entries — exactly what
+    `meadow/worker/imports.py` consumes (composition becomes a re-parent, every
+    other relation an edge).
+
+    The ancestor walk exists because a MEF object is always written **with** its
+    parent and the import refuses an object whose parent is missing: a document
+    that names a parent it does not contain, or omits the relation entirely, cannot
+    rebuild the structure tree on a fresh system (`plan/detail/relationen.md`). For
+    a complete export the walk stops after the first round — every parent is part
+    of the document anyway.
+    """
+    by_key: dict[str, dict[str, Any]] = {
+        _record_key(obj.get("id")): obj for obj in objects if obj.get("id")
+    }
+    names = await _load_relation_names(active, core_url)
+    edges = await _load_references(active, core_url, [str(obj["id"]) for obj in by_key.values()])
+    added = 0
+    if include_ancestors:
+        for _ in range(MAX_ANCESTOR_ROUNDS):
+            missing = sorted(
+                {
+                    _record_key(edge.get("out"))
+                    for edge in edges.values()
+                    if _record_key(edge.get("definition_id")) == COMPOSITION_DEFINITION
+                    and _record_key(edge.get("in")) in by_key
+                    and _record_key(edge.get("out")) not in by_key
+                    and _record_key(edge.get("out")) != ROOT_KEY
+                }
+            )
+            if not missing:
+                break
+            fetched = await _load_objects_by_ids(
+                active,
+                core_url,
+                missing,
+                extra={"releases": "true"} if with_releases else None,
+            )
+            if not fetched:
+                # A parent that does not exist (deleted). Its edge cannot be part
+                # of the document; it is reported as skipped below.
+                logger.warning("composition parent(s) missing in the system: %s", missing)
+                break
+            for obj in fetched:
+                key = _record_key(obj.get("id"))
+                if key and key not in by_key:
+                    by_key[key] = obj
+                    added += 1
+            edges.update(
+                await _load_references(
+                    active, core_url, [f"object:{_record_key(obj.get('id'))}" for obj in fetched]
+                )
+            )
+    id_of = {
+        _record_key(obj.get("id")): str(obj.get("id")) for obj in by_key.values() if obj.get("id")
+    }
+    references, skipped = _mef_references(edges, id_of, names)
+    counters = {
+        "references": len(references),
+        "skipped_references": skipped,
+        "added_ancestors": added,
+    }
+    return list(by_key.values()), references, counters
+
+
+def _mef_document(
+    objects: list[dict[str, Any]],
+    references: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The MEF document envelope (`objects` + `references` + header)."""
+    return {
+        "format_version": "1.0",
+        "source": "meadow",
+        "created_at": _now_iso_utc(),
+        "objects": objects,
+        "references": references,
+    }
+
+
 def build_export_handler(
     core_url: str,
     *,
@@ -776,7 +1103,7 @@ def build_export_handler(
         status = filter_.get("status")
         limit = int(parameters.get("limit") or DEFAULT_EXPORT_LIMIT)
 
-        query: dict[str, Any] = {"limit": min(max(limit, 1), 1000)}
+        query: dict[str, Any] = {"limit": min(max(limit, 1), 1000), "releases": "true"}
         if object_type:
             query["type"] = str(object_type)
         response = await active.get(f"{core_url}/objects", params=query)
@@ -786,35 +1113,23 @@ def build_export_handler(
         if status:
             objects = [obj for obj in objects if obj.get("status") == str(status)]
 
+        objects, references, counters = await _collect_mef_data(
+            active, core_url, objects, with_releases=True
+        )
         unit_map = await _load_unit_map(active, core_url)
 
-        mef_objects: list[dict[str, Any]] = []
-        for obj in objects:
-            attributes = obj.get("attributes")
-            attributes = dict(attributes) if isinstance(attributes, dict) else {}
-            await _emit_quantified(active, core_url, attributes, unit_map)
-            mef_objects.append(
-                {
-                    "id": obj.get("id"),
-                    "type": obj.get("type"),
-                    "attributes": attributes,
-                    "status": obj.get("status") or "draft",
-                }
-            )
+        mef_objects = await _mef_objects(active, core_url, objects, unit_map)
 
-        document: dict[str, Any] = {
-            "format_version": "1.0",
-            "source": "meadow",
-            "created_at": _now_iso_utc(),
-            "objects": mef_objects,
-            "references": [],
-        }
-
-        logger.info("json_export exported %d objects", len(mef_objects))
+        logger.info(
+            "json_export exported %d objects with %d references",
+            len(mef_objects),
+            len(references),
+        )
         return {
             "connector": "json_export",
             "exported": len(mef_objects),
-            "document": document,
+            "document": _mef_document(mef_objects, references),
+            **counters,
         }
 
     async def handle(message: JobMessage) -> dict[str, Any]:

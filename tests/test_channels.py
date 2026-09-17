@@ -185,7 +185,9 @@ async def test_export_source_channel_filters_by_release() -> None:
     )
 
     assert objects == [{"id": "object:1", "type": "product"}]
-    assert seen == [{"released_for": "webshop", "limit": "1000"}]
+    # `start` is part of every page request: the list endpoint caps `limit` at 1000,
+    # so a source with more objects has to be read page by page.
+    assert seen == [{"released_for": "webshop", "limit": "1000", "start": "0"}]
 
 
 async def test_export_source_channel_accepts_a_release_status() -> None:
@@ -202,7 +204,9 @@ async def test_export_source_channel_accepts_a_release_status() -> None:
         {"kind": "channel", "channel": "webshop", "release_status": "approved"},
     )
 
-    assert seen == [{"released_for": "webshop", "limit": "1000", "release_status": "approved"}]
+    assert seen == [
+        {"released_for": "webshop", "limit": "1000", "start": "0", "release_status": "approved"}
+    ]
 
 
 async def test_export_source_channel_requires_a_code() -> None:

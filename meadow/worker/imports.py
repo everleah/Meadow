@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -657,6 +658,66 @@ async def _complete_import(
     response.raise_for_status()
 
 
+async def _import_releases(
+    client: httpx.AsyncClient,
+    core_url: str,
+    objects: list[dict[str, Any]],
+    id_map: Mapping[str, str],
+) -> dict[str, Any]:
+    """Applies the `releases` of a MEF document (`PUT /objects/{id}/releases`).
+
+    A channel release is not an attribute but a row in the `release` table
+    (`plan/detail/workflow-freigaben.md`), so a MEF object carries its releases and
+    the import replays them — the MCF document ships the channels, not who is
+    released for them. Without this a restored instance has objects but no channel
+    releases at all.
+
+    `PUT` replaces the row of that channel, so a repeated import stays idempotent,
+    and the write runs through the core, which keeps the `workflow_guard` rules in
+    force: a rejected release is reported per entry and never fails the run. A
+    release of an object that was not written is reported too (there is nothing to
+    release).
+    """
+    applied = 0
+    failures: list[dict[str, Any]] = []
+    for entry in objects:
+        releases = entry.get("releases")
+        if not isinstance(releases, list) or not releases:
+            continue
+        external_id = str(entry.get("id") or "")
+        record_id = id_map.get(external_id)
+        for release in releases:
+            if not isinstance(release, dict):
+                continue
+            channel = str(release.get("channel") or "").strip()
+            status = str(release.get("status") or "").strip()
+            if not channel or not status:
+                continue
+            if record_id is None:
+                failures.append(
+                    {
+                        "id": external_id,
+                        "channel": channel,
+                        "error": "object was not written",
+                    }
+                )
+                continue
+            try:
+                response = await client.put(
+                    f"{core_url}/objects/{record_id}/releases",
+                    json={"channel": channel, "status": status},
+                )
+                _raise_for_core_error(response)
+            except Exception as exc:  # noqa: BLE001 - per-release isolation
+                logger.warning("release import failed for %s/%s: %s", record_id, channel, exc)
+                failures.append({"id": record_id, "channel": channel, "error": str(exc)})
+                continue
+            applied += 1
+    if applied or failures:
+        logger.info("imported %d channel release(s), %d failed", applied, len(failures))
+    return {"applied": applied, "failed": len(failures), "failures": failures}
+
+
 def build_import_handler(
     core_url: str,
     *,
@@ -870,6 +931,9 @@ def build_import_handler(
         reference_results = await _import_references(
             active, core_url, references, id_map, emit_events, source or None, unresolved_parents
         )
+        # Channel releases come last: they are channel state of a written object and
+        # the `workflow_guard` rules may inspect its attributes and categories.
+        release_result = await _import_releases(active, core_url, objects, id_map)
 
         if not emit_events:
             await _complete_import(
@@ -890,6 +954,7 @@ def build_import_handler(
             "updated": updated,
             "failed": failed,
             "references": reference_results,
+            "releases": release_result,
             "results": object_results,
         }
 

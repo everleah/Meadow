@@ -53,7 +53,9 @@ You control whether an object is created or updated through:
 A MEF document is imported without any column mapping. Instead the interface
 shows a summary: format version, source, the number of objects and references,
 and the types involved. References are created together with the objects, so the
-relationships in the document survive.
+relationships in the document survive — a document exported from Meadow brings
+the structure (composition), categories, collections and channel releases with it
+and rebuilds them in the target system.
 
 ## Running and reading the result
 

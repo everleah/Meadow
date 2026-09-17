@@ -255,7 +255,7 @@ Die Merkmale der Taxonomie-Klassen ([kategorisierung.md](kategorisierung.md), St
 
 ### `POST /config/import` (admin/superadmin)
 
-- Body: MCF als JSON (`Content-Type: application/json`) **oder** `multipart/form-data` (Feld `file`), analog `POST /imports`.
+- Body: MCF als JSON (`Content-Type: application/json`) **oder** `multipart/form-data` (Feld `file`), analog `POST /imports`. **Body-Limit 100 MiB** wie bei `/imports` (2026-09-17): ein vollständiges MCF des Demo-Bestands ist 15 MB (17 462 Attributdefinitionen aus dem ETIM-Standard) und lief am globalen 10-MiB-Limit in ein `413` — ein Restore war damit nicht möglich.
 - Query:
   - `mode` (string, Default `merge`): `dry_run` | `merge` | `replace`.
   - `dry_run` (bool, Alias): `?dry_run=true` == `mode=dry_run`.

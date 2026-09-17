@@ -45,7 +45,13 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/me", get(api::auth::me))
         .route("/auth/password", post(api::auth::change_password))
         .route("/config/export", get(api::config::export_config))
-        .route("/config/import", post(api::config::import_config))
+        // A complete MCF document (the whole model, ETIM included) is far larger
+        // than the default body limit: the demo instance exports 15 MB, so a
+        // restore would fail with `413` before reaching the importer.
+        .route(
+            "/config/import",
+            post(api::config::import_config).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
         .route("/exports", post(api::exports::create_export))
         .route("/exports/{run_id}/file", get(api::exports::get_export_file))
         .route(
@@ -153,6 +159,7 @@ pub fn router(state: AppState) -> Router {
             "/references/batch",
             post(api::references::batch_create_references),
         )
+        .route("/references/query", post(api::references::query_references))
         .route(
             "/references/{id}",
             axum::routing::patch(api::references::update_reference)

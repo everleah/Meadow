@@ -11,8 +11,7 @@ four steps.
 Choose **which** objects are exported:
 
 | Source | Meaning |
-| --- | --- |
-| **Object type** | Every object of one type. |
+| --- | --- || **Everything** | Every object of the instance — the complete export for a move to a fresh system. || **Object type** | Every object of one type. |
 | **Category** | Objects assigned to a category. |
 | **Collection** | The members of a saved grouping. |
 | **Saved search** | The hits of a saved search. |
@@ -35,7 +34,7 @@ it as well.
 | --- | --- |
 | **CSV** | A text file with a selectable separator. |
 | **Excel** | A workbook (`.xlsx`). |
-| **JSON** | A MEF document for machine exchange. |
+| **JSON** | A MEF document for machine exchange: objects **with** their relations (composition, categories, collections) and their channel releases. |
 | **BMEcat** | The catalog format for classification standards (e.g. ETIM). |
 
 Further options:
@@ -45,6 +44,10 @@ Further options:
 - **Include system fields** — adds technical fields such as timestamps.
 - **Also export inherited values** — includes values the object does not
   maintain itself but inherits from its parent.
+- **Include parent objects** — adds the parent objects of the selection. An
+  object is always written **with** its parent when it is imported, so without
+  this switch a selection (variants only, say) could not be restored. For the
+  complete export it changes nothing.
 
 ### BMEcat
 
@@ -74,6 +77,26 @@ stored — both belong to the individual run, not to the configuration.
 Administrators can **schedule** an export: the run then repeats on a time plan,
 and its results stay available in the list of recent exports. When mail delivery
 is configured, the export can also be sent by e-mail.
+
+## Complete restore (moving to a fresh system)
+
+A PIM inventory has two halves, and both are exported separately:
+
+1. **Model and metadata** — under **Configuration**, export every section
+   (MCF file): object types, attribute definitions, relation types, rules,
+   units, languages, channels, classification standards.
+2. **Data** — in this assistant, pick the source **Everything** with the format
+   **JSON** (MEF file): objects, structure (composition), categories,
+   collections, links and channel releases.
+
+On the fresh system import in this order: **first** the MCF document under
+**Configuration**, **then** the MEF document under **Import** (where the option
+"Match by object ID" is enabled automatically). Both imports are repeatable: a
+second run updates instead of duplicating.
+
+**Users and groups**, **connectors**, **job definitions** and **system settings**
+are not part of the document — that is environment configuration and is
+maintained per environment.
 
 ## Read on
 
