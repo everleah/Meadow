@@ -59,8 +59,15 @@ promoted and what was skipped.
 
 The **Categories** section contains one block per kind of assignment (the
 primary categorisation first, then further dimensions). The picker button opens
-the search, where you choose one or more categories; every assignment appears as
+the dialog, where you choose one or more categories; every assignment appears as
 a chip and can be removed with its ✕.
+
+The dialog shows **the tree of that kind of assignment**: under *Assembly group
+membership* you see the assembly groups, under *ETIM class membership* the
+classes. When an assignment kind is not fixed (the primary *Categories*
+assignment), you first choose the **taxonomy** (categories, assembly groups,
+classes …) and then the node; the taxonomy the object already carries
+assignments from is preselected.
 
 The **Class features** section shows which attributes the classes assigned to
 this object require. Required features count towards completeness, and missing

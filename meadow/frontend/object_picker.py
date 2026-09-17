@@ -25,9 +25,15 @@ from collections.abc import Awaitable, Callable, Iterable
 from nicegui import ui
 
 from meadow.frontend.api import CoreClient
-from meadow.frontend.display import completeness_badge, resolve_value, taxonomy_type_names
+from meadow.frontend.display import (
+    completeness_badge,
+    resolve_value,
+    taxonomy_options,
+    taxonomy_type_names,
+)
 from meadow.frontend.i18n import t
 from meadow.frontend.lazy_tree import LazyTree
+from meadow.frontend.relation_roles import taxonomy_choices
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +80,7 @@ async def open_structure_picker(
     search: SearchFn | None = None,
     render_hit: HitRenderer | None = None,
     hint: str | None = None,
+    taxonomy: tuple[dict[str, str], dict] | None = None,
 ) -> None:
     """Opens the picker dialog (search tab if ``search`` is given + structure tree).
 
@@ -81,6 +88,12 @@ async def open_structure_picker(
     ``{id, label, type?, allowed, selectable, lazy}``. With ``multi=True`` a pick
     **toggles** the selection (chips) and ``on_pick`` receives the **list** of hits
     when the user applies; single mode passes one hit and closes immediately.
+
+    ``taxonomy`` adds a **switcher** above the tree for a target set that accepts
+    several taxonomy node types: ``(options, state)`` — ``options`` is
+    ``{type: label}`` and ``state`` carries the chosen type under ``key``, which the
+    caller's ``load_children`` reads. The tree is reloaded on every switch, because
+    each taxonomy is its own tree.
     """
     node_hits: dict[str, dict] = {}
 
@@ -98,6 +111,19 @@ async def open_structure_picker(
 
     with ui.dialog() as dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
         ui.label(title).classes("text-subtitle1")
+        # A generic target set (several taxonomy types) needs one choice first: which
+        # tree. The tree is reloaded on every switch (each taxonomy is its own tree).
+        taxonomy_select: ui.select | None = None
+        if taxonomy is not None:
+            taxonomy_select = (
+                ui.select(
+                    taxonomy[0],
+                    value=taxonomy[1].get("key"),
+                    label=t("categories.taxonomy"),
+                )
+                .props("filled dense")
+                .classes("w-full pb-1")
+            )
         hits: ui.column | None = None
         search_input: ui.input | None = None
         if search is not None:
@@ -224,6 +250,30 @@ async def open_structure_picker(
                 return  # greyed out (not an allowed target)
             await choose(hit)
 
+        if taxonomy_select is not None:
+            taxonomy_state = taxonomy[1]
+
+            async def on_taxonomy_change(event) -> None:
+                """Switches the shown taxonomy and reloads its tree.
+
+                The parameter must stay **required**: NiceGUI passes the event only
+                when the handler expects an argument without a default
+                (`helpers.expects_arguments`), so `event=None` would be called with
+                nothing and every switch would be ignored.
+                """
+                key = str(getattr(event, "value", None) or "")
+                if not key or key == taxonomy_state.get("key"):
+                    return
+                taxonomy_state["key"] = key
+                tree_loaded["value"] = False
+                node_hits.clear()
+                tree_host.clear()
+                if hits is not None:
+                    hits.clear()
+                await ensure_structure()
+
+            taxonomy_select.on_value_change(on_taxonomy_change)
+
         async def apply_multi() -> None:
             """Hands the accumulated selection to ``on_pick`` and closes."""
             if not chosen:
@@ -254,6 +304,7 @@ async def open_object_picker(
     exclude_ids: Iterable[str] = (),
     root_id: str = OBJECT_ROOT_ID,
     multi: bool = False,
+    taxonomy: str | None = None,
 ) -> None:
     """Picks objects: search via ``GET /objects/picker``, tree via ``/objects/{id}/children``.
 
@@ -262,20 +313,29 @@ async def open_object_picker(
     selectable (e.g. the current object) and are filtered out of the search hits too.
     A hit is ``{id, label, type}`` plus a ``completeness`` value for the working
     language.
+
+    **Taxonomy targets walk one tree, never a mix.** When every allowed type is a
+    taxonomy node type, the tree is loaded with ``?scope=taxonomy&type=<one type>``:
+    all taxonomy trees hang under the same universal root, so without the type filter
+    the dialog showed the first page of *that* list — with an installed
+    classification standard, 100 greyed-out ETIM classes in every dimension
+    (2026-09-17). A dimension that allows **several** taxonomy types is generic
+    (`target_types` empty): the dialog then offers a taxonomy switcher and
+    ``taxonomy`` preselects it (e.g. the type the object already carries).
     """
     allowed_types = {str(target) for target in (target_types or []) if target}
     excluded = {str(entry) for entry in exclude_ids if entry}
-    taxonomy_cache: dict[str, set[str]] = {}
-
-    async def _taxonomy_types() -> set[str]:
-        """The taxonomy node types, loaded once per dialog (lazy + cached)."""
-        if "types" not in taxonomy_cache:
-            try:
-                rows = await client.list_object_types(token, limit=1000)
-            except Exception:  # noqa: BLE001 - degrade to "no taxonomy"
-                rows = []
-            taxonomy_cache["types"] = set(taxonomy_type_names(rows))
-        return taxonomy_cache["types"]
+    try:
+        object_types = await client.list_object_types(token, limit=1000)
+    except Exception:  # noqa: BLE001 - degrade to "no taxonomy"
+        object_types = []
+    taxonomy_types = taxonomy_type_names(object_types)
+    # The taxonomy trees a target set may point at: one entry = that tree, several =
+    # a generic dimension (the user chooses), none = composition scope.
+    choices = taxonomy_choices(allowed_types, taxonomy_types)
+    taxonomy_state: dict = {
+        "key": taxonomy if taxonomy in choices else (choices[0] if choices else None)
+    }
 
     def node_for(child: dict) -> dict:
         """Maps an object to a tree node (allowed = selectable)."""
@@ -299,22 +359,18 @@ async def open_object_picker(
         }
 
     async def load_children(node_id: str) -> list[dict]:
-        # A taxonomy target (picking a category or a class) walks the taxonomy
-        # tree; everything else picks from the composition. Without the split the
-        # picker would show the thousands of taxonomy nodes that hang under the
-        # same root next to the products.
-        # The await must be **outside** the comprehension: `await` inside a
-        # generator expression produces an async generator, which `all()` cannot
-        # iterate (`TypeError: 'async_generator' object is not an iterator`).
-        taxonomy = await _taxonomy_types()
-        picks_taxonomy = bool(allowed_types) and all(
-            node_type in taxonomy for node_type in allowed_types
-        )
+        # A taxonomy target (picking a category, an assembly group or a class) walks
+        # the taxonomy tree of **one** type; everything else picks from the
+        # composition. Both halves are needed: without the scope the panel shows the
+        # products *and* the trees, and without the type filter it shows the first
+        # page of the universal root's taxonomy children — a mix that, with an
+        # installed standard, is 100 ETIM classes in every dimension (2026-09-17).
         children = await client.list_object_children(
             token,
             node_id,
             limit=100,
-            scope="taxonomy" if picks_taxonomy else "composition",
+            scope="taxonomy" if choices else "composition",
+            object_type=taxonomy_state["key"] if choices else None,
         )
         return [node_for(child) for child in children]
 
@@ -325,10 +381,13 @@ async def open_object_picker(
         still be the excluded object itself (e.g. the object being edited) — such
         hits are dropped so the search tab offers the same set as the tree.
         """
+        # A generic dimension searches the tree the user is looking at (the switcher
+        # decides); a bound one searches exactly its types.
+        search_types = [taxonomy_state["key"]] if choices and taxonomy_state["key"] else []
         found = await client.picker_search(
             token,
             query,
-            types=sorted(allowed_types) or None,
+            types=search_types or sorted(allowed_types) or None,
             locale=locale,
             limit=20,
             # A partial `code` must find the target too (`EC0123`): the core's
@@ -350,4 +409,7 @@ async def open_object_picker(
         multi=multi,
         search=search,
         render_hit=lambda hit, cb: render_picker_hit(hit, cb, locale),
+        taxonomy=(
+            (taxonomy_options(object_types, locale), taxonomy_state) if len(choices) > 1 else None
+        ),
     )

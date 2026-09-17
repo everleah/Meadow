@@ -35,7 +35,11 @@ from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.lazy_tree import LazyTree
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker
-from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, primary_category_key
+from meadow.frontend.relation_roles import (
+    PRIMARY_CATEGORY_DEF,
+    category_dimension_bindings,
+    primary_category_key,
+)
 
 ROOT_ID = OBJECT_ROOT_ID
 
@@ -129,11 +133,19 @@ async def categories_page() -> None:
         dimensions = dimension_options(
             relation_definitions, locale, primary_label=t("categories.dimension_primary")
         )
+        # A dimension with an explicit `target_types` is bound to that taxonomy (the
+        # core rejects every other target with `400`), so it decides the shown tree:
+        # the taxonomy switcher follows it and is disabled while it is bound. Generic
+        # dimensions (empty `target_types`) leave the switcher to the user.
+        dimension_bindings = category_dimension_bindings(relation_definitions, taxonomy_types)
         # Taxonomies shown/edited on this page (node types; switcher labels).
         taxonomies = taxonomy_options(object_types, locale)
 
         # --- state -----------------------------------------------------------
         dimension: dict = {"key": primary_category_key(relation_definitions)}
+        #: The taxonomy switcher (built later in this scope; `apply_dimension_taxonomy`
+        #: disables it while the chosen dimension is bound to one taxonomy).
+        taxonomy_select: ui.select | None = None
         selected_category: dict = {"id": None, "label": "", "type": "", "status": ""}
         selected_tree: dict = {"id": None}
         current_tree: dict = {"tree": None, "nodes": []}
@@ -459,8 +471,27 @@ async def categories_page() -> None:
             if key == dimension["key"]:
                 return
             dimension["key"] = key
+            apply_dimension_taxonomy(key)
+            selected_category.update({"id": None, "label": "", "type": "", "status": ""})
+            selected_tree["id"] = None
+            tree_override.clear()
+            tree_path.clear()
+            tree_query["value"] = ""
+            filter_input.set_value("")
             await reload_tree()
             await render_detail()
+
+        def apply_dimension_taxonomy(key: str) -> None:
+            """Follows a bound dimension: its taxonomy becomes the shown tree."""
+            bound = dimension_bindings.get(key)
+            if taxonomy_select is not None:
+                taxonomy_select.set_enabled(not bound)
+                taxonomy_select.props(f'hint="{t("grid.taxonomy_bound")}"' if bound else 'hint=""')
+                if bound:
+                    taxonomy_select.set_value(bound)
+                taxonomy_select.update()
+            if bound:
+                nodes["key"] = bound
 
         # --- detail panel -----------------------------------------------------
         def grid_url() -> str:
@@ -683,7 +714,7 @@ async def categories_page() -> None:
                 ui.notify(f"{t('categories.save_failed')}: {exc}", color="negative")
                 return
             category_objects.clear()
-            category_objects.update(await _category_objects(client, token, locale))
+            category_objects.update(await _category_objects(client, token, locale, nodes["all"]))
             selected_category["label"] = resolve_value(name, locale) or selected_category["label"]
             await reload_tree()
             await render_detail()
@@ -922,6 +953,9 @@ async def categories_page() -> None:
                         t("categories.dimension_hint")
                     )
                     dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
+                # A dimension may be bound to one taxonomy: reflect that in the
+                # switcher (disabled + hint) as soon as it exists.
+                apply_dimension_taxonomy(dimension["key"])
                 with ui.row().classes("items-center gap-2 w-full px-2").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     ui.button(icon="unfold_less", on_click=collapse_all).props(

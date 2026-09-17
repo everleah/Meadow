@@ -21,11 +21,12 @@ The tree has three views (toolbar above the tree):
 
 For **Categories** you also choose:
 
+- **Dimension** — which kind of assignment is counted and filtered. The choice
+  only changes which assignments the tree takes into account.
 - **Taxonomy** — which kind of node the tree is built from (your own categories
-  or an imported classification).
-- **Dimension** — which kind of assignment is counted and filtered. All
-  dimensions use the same categories; the choice only changes which assignments
-  the tree considers.
+  or an imported classification). When a dimension is bound to one taxonomy (for
+  example *Assembly group membership*), the application sets the tree itself and
+  the field is locked — the two always match then.
 
 ## Creating objects
 

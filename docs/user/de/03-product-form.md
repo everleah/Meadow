@@ -60,9 +60,16 @@ eine Vorschau und meldet danach, was übernommen und was übersprungen wurde.
 
 Der Abschnitt **Kategorien** enthält je Zuordnungsart einen eigenen Block (die
 primäre Kategorisierung zuerst, danach weitere Dimensionen). Über die
-Auswahl-Schaltfläche öffnen Sie die Suche, wählen eine oder mehrere Kategorien
-und ordnen sie zu; jede Zuordnung erscheint als Chip und lässt sich über das ✕
+Auswahl-Schaltfläche öffnen Sie den Dialog und wählen eine oder mehrere
+Kategorien; jede Zuordnung erscheint als Chip und lässt sich über das ✕
 wieder entfernen.
+
+Der Dialog zeigt **den Baum der jeweiligen Zuordnungsart**: Unter *Baugruppen-Zuordnung*
+stehen die Baugruppen, unter *ETIM-Klassen-Zuordnung* die Klassen. Ist eine
+Zuordnungsart nicht festgelegt (die primäre *Kategorien*-Zuordnung), wählen Sie
+im Dialog zuerst die **Taxonomie** (Kategorien, Baugruppen, Klassen …) und darin
+den Knoten; vorausgewählt ist die Taxonomie, aus der das Objekt hier schon
+Zuordnungen trägt.
 
 Der Abschnitt **Klassen-Merkmale** zeigt, welche Merkmale die Klassen
 verlangen, denen das Objekt zugeordnet ist. Pflichtmerkmale zählen in die

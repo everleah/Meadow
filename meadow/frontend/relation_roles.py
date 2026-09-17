@@ -93,6 +93,69 @@ def effective_target_types(
     return role_target_types(role) or None
 
 
+def taxonomy_choices(
+    allowed_types: Iterable[str] | None, taxonomy_types: Iterable[str] | None
+) -> list[str]:
+    """Taxonomy node types a picker may show for these allowed target types.
+
+    Empty when the allowed targets are not **all** taxonomy nodes: such a picker
+    walks the composition tree (products, structure objects). More than one entry
+    means the dimension is **generic** — it accepts every taxonomy type, so the
+    user chooses the tree; the built-in taxonomy (`category`) comes first, the rest
+    in catalogue order.
+
+    The list is what the picker needs to load **one** tree instead of the first
+    page of the universal root's taxonomy children (which is a random mix of all
+    trees — with an installed classification standard, 100 ETIM classes).
+    """
+    allowed = {str(name) for name in (allowed_types or []) if name}
+    taxonomies = [str(name) for name in (taxonomy_types or []) if name]
+    if not allowed or not allowed.issubset(set(taxonomies)):
+        return []
+    ordered = [name for name in taxonomies if name in allowed]
+    return sorted(ordered, key=lambda name: (name != PRIMARY_CATEGORY_TYPE, name))
+
+
+def bound_dimension_taxonomy(
+    definition: dict | None, taxonomy_types: Iterable[str] | None = None
+) -> str | None:
+    """The taxonomy node type a categorisation is **bound** to (`None` = generic).
+
+    An explicit `target_types` list with exactly one type is a binding the core
+    enforces (`check_target_types` rejects every other target type with `400`), so
+    the UI derives the tree from the dimension instead of asking again. A missing,
+    empty or multi-entry list keeps the dimension generic — the user chooses.
+    """
+    if definition is None or role_of(definition) != ROLE_CATEGORY:
+        return None
+    targets = [str(name) for name in (definition.get("target_types") or []) if name]
+    if len(targets) != 1:
+        return None
+    known = {str(name) for name in (taxonomy_types or []) if name}
+    if known and targets[0] not in known:
+        return None
+    return targets[0]
+
+
+def category_dimension_bindings(
+    definitions: Iterable[dict], taxonomy_types: Iterable[str] | None = None
+) -> dict[str, str]:
+    """Taxonomy node type each categorisation is bound to, by record key.
+
+    Used by the grid and `/categories`: choosing a **bound** dimension fixes the
+    shown tree, so the taxonomy switcher follows the dimension instead of leaving
+    the user with a combination that can only be empty (the core rejects the
+    assignment anyway). Generic dimensions are absent from the map — the switcher
+    stays theirs.
+    """
+    bindings: dict[str, str] = {}
+    for definition in definitions:
+        bound = bound_dimension_taxonomy(definition, taxonomy_types)
+        if bound:
+            bindings[definition_key(definition)] = bound
+    return bindings
+
+
 def allows_source(definition: dict | None, object_type: str) -> bool:
     """True when `object_type` may be the **source** of the relation.
 

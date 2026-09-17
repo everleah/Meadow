@@ -49,6 +49,7 @@ from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     association_definitions,
     category_definitions,
+    category_dimension_bindings,
     definition_key,
     effective_target_types,
     usable_definitions,
@@ -1382,7 +1383,19 @@ async def products_page(request: Request) -> None:
         # hang under the same universal root as the products. One taxonomy at a
         # time — a catalogue with a classification standard installed has
         # thousands of nodes, and mixing every tree is neither readable nor cheap.
-        taxonomy_state: dict = {"key": taxonomy_types[0] if taxonomy_types else None}
+        #
+        # The **dimension** decides it where it can: a categorisation with an
+        # explicit `target_types` is bound to that taxonomy (the core rejects every
+        # other target with `400`), so the tree follows it and the taxonomy switcher
+        # is disabled. A generic dimension (empty `target_types`, e.g. the built-in
+        # primary one which accepts every taxonomy type) leaves the switcher to the
+        # user.
+        initial_dimension = active["definition_id"] or PRIMARY_CATEGORY_DEF
+        dimension_bindings = category_dimension_bindings(relation_definitions, taxonomy_types)
+        taxonomy_state: dict = {
+            "key": dimension_bindings.get(initial_dimension)
+            or (taxonomy_types[0] if taxonomy_types else None)
+        }
         # Special "Nicht kategorisiert" entry (lists objects with no category_member).
         uncategorized_id = "__uncategorized__"
         uncategorized_node = {"id": uncategorized_id, "label": t("grid.uncategorized")}
@@ -1442,14 +1455,30 @@ async def products_page(request: Request) -> None:
             render_tree("category")
 
         # Category dimension: the category relation type whose members are counted
-        # in the tree and filtered by `?category=`/`?uncategorized=`. The tree and
-        # its category objects are shared by all dimensions (the role contract
-        # fixes the target type to `category`) — only the counters and the filter
-        # follow the selection. Empty = the built-in primary taxonomy.
-        dimension: dict = {"key": active["definition_id"] or PRIMARY_CATEGORY_DEF}
+        # in the tree and filtered by `?category=`/`?uncategorized=`. Its binding (see
+        # `dimension_bindings` above) decides the shown tree where it exists.
+        dimension: dict = {"key": initial_dimension}
         dimensions = dimension_options(
             relation_definitions, locale, primary_label=t("categories.dimension_primary")
         )
+        #: The taxonomy switcher of the category view (built later in this scope).
+        taxonomy_select: ui.select | None = None
+
+        def apply_dimension_taxonomy(key: str) -> None:
+            """Follows a bound dimension: its taxonomy becomes the shown tree.
+
+            Does not load anything — the caller reloads the roots, so a dimension
+            switch costs one tree load and not two.
+            """
+            bound = dimension_bindings.get(key)
+            if taxonomy_select is not None:
+                taxonomy_select.set_enabled(not bound)
+                taxonomy_select.props(f'hint="{t("grid.taxonomy_bound")}"' if bound else 'hint=""')
+                if bound:
+                    taxonomy_select.set_value(bound)
+                taxonomy_select.update()
+            if bound:
+                taxonomy_state["key"] = bound
 
         async def change_dimension(value: str) -> None:
             """Switches the counted/filtered category dimension and reloads the view."""
@@ -1459,6 +1488,11 @@ async def products_page(request: Request) -> None:
                 return
             dimension["key"] = key
             active["definition_id"] = None if key == PRIMARY_CATEGORY_DEF else key
+            apply_dimension_taxonomy(key)
+            selected_tree["id"] = None
+            tree_override.clear()
+            tree_path.clear()
+            tree_query["value"] = ""
             category_roots = await load_category_roots()
             roots_has_more = taxonomy_tree.has_more(len(category_roots))
             refresh_tree_options()
@@ -2899,6 +2933,9 @@ async def products_page(request: Request) -> None:
                     )
                     dimension_help = info_button("grid.category_dimension_hint", "product-grid")
                     dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
+                    # A dimension chosen via `?definition_id=` may be bound to a
+                    # taxonomy: apply it to the switcher once the switcher exists.
+                    apply_dimension_taxonomy(dimension["key"])
                 # Line 2: filter + action button (collapse for structure/category,
                 # collection reload for the flat Collections view).
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):

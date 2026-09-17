@@ -21,11 +21,12 @@ Der Baum hat drei Sichten (Symbolleiste über dem Baum):
 
 Bei **Kategorien** wählen Sie zusätzlich:
 
+- **Dimension** — welche Zuordnungsart gezählt und gefiltert wird. Die Auswahl
+  ändert nur, welche Zuordnungen der Baum berücksichtigt.
 - **Taxonomie** — welche Knotenart der Baum zeigt (z. B. eigene Kategorien oder
-  eine importierte Klassifikation).
-- **Dimension** — welche Zuordnungsart gezählt und gefiltert wird. Alle
-  Dimensionen verwenden dieselben Kategorien; die Auswahl ändert nur, welche
-  Zuordnungen der Baum berücksichtigt.
+  eine importierte Klassifikation). Ist eine Dimension fest an eine Taxonomie
+  gebunden (etwa *Baugruppen-Zuordnung*), stellt die Anwendung den Baum selbst
+  ein und das Feld ist gesperrt — dann passt beides immer zusammen.
 
 ## Neue Objekte anlegen
 

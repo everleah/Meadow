@@ -38,6 +38,7 @@ from meadow.frontend.display import (
     completeness_badge,
     resolve_value,
     status_badge,
+    taxonomy_options,
     taxonomy_type_names,
 )
 from meadow.frontend.enums import enum_options
@@ -51,6 +52,7 @@ from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     ROLE_CATEGORY,
     allows_source,
+    bound_dimension_taxonomy,
     category_definitions,
     definition_key,
     effective_target_types,
@@ -207,12 +209,14 @@ async def product_form(object_id: str) -> None:
                 channels = []
             try:
                 # Taxonomy node types: the valid targets of a categorisation
-                # (built-in `category` plus custom `taxonomy: true` types).
-                taxonomy_types = taxonomy_type_names(
-                    await client.list_object_types(token, limit=1000)
-                )
+                # (built-in `category` plus custom `taxonomy: true` types). The rows
+                # carry their labels, so a dimension bound to one taxonomy can name
+                # it in the hint.
+                object_type_rows = await client.list_object_types(token, limit=1000)
             except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
-                taxonomy_types = taxonomy_type_names([])
+                object_type_rows = []
+            taxonomy_types = taxonomy_type_names(object_type_rows)
+            taxonomy_labels = taxonomy_options(object_type_rows, locale)
             try:
                 # Class features (Stage B): the features of the object's taxonomy
                 # classes, incl. the mandatory ones that are still unset.
@@ -1259,15 +1263,55 @@ async def product_form(object_id: str) -> None:
                         assigned[cat_id] = created["id"]
                 render_sections.refresh()
 
+            # A dimension with an explicit `target_types` is **bound** to that
+            # taxonomy: the picker then walks exactly that tree, and the title names
+            # the dimension instead of always saying "categories". A generic
+            # dimension (empty `target_types`) accepts every taxonomy type — the
+            # picker offers its taxonomy switcher, preselected to the tree the object
+            # already carries here.
+            bound = bound_dimension_taxonomy(definition, taxonomy_types)
             await open_object_picker(
                 client=client,
                 token=token,
                 locale=locale,
-                title=t("form.categories_pick"),
+                title=t("form.categories_pick")
+                if def_key == PRIMARY_CATEGORY_DEF
+                else t("form.categories_pick_named").format(name=dimension_title(definition)),
                 on_pick=on_pick,
                 target_types=effective_target_types(definition, taxonomy_types),
                 exclude_ids=[object_id],
                 multi=True,
+                taxonomy=bound or assigned_taxonomy(def_key),
+            )
+
+        def assigned_taxonomy(def_key: str) -> str | None:
+            """The taxonomy node type the object already carries in this dimension."""
+            types = {
+                str(cat_state.get(cat_id, {}).get("type") or "")
+                for cat_id in (cat_ref_ids.get(def_key) or {})
+            }
+            types.discard("")
+            return next(iter(types)) if len(types) == 1 else None
+
+        def dimension_title(definition: dict) -> str:
+            """Section/button title of a category dimension.
+
+            The built-in primary categorisation keeps the page's own word
+            ("Categories"); every custom dimension is named after its definition, so
+            "Assembly group membership" no longer hides behind "Choose categories".
+            """
+            def_key = definition_key(definition)
+            if def_key == PRIMARY_CATEGORY_DEF:
+                return t("form.categories")
+            return resolve_value(definition.get("label"), locale) or def_key
+
+        def dimension_hint(definition: dict) -> str:
+            """Hint of a category section: naming the taxonomy a bound dimension uses."""
+            bound = bound_dimension_taxonomy(definition, taxonomy_types)
+            if not bound:
+                return t("form.categories_hint")
+            return t("form.categories_hint_named").format(
+                taxonomy=taxonomy_labels.get(bound, bound)
             )
 
         async def unassign_category(def_key: str, cat_id: str) -> None:
@@ -1452,11 +1496,7 @@ async def product_form(object_id: str) -> None:
             assigned = cat_ref_ids.setdefault(def_key, {})
             # The primary type keeps the established title; custom types are
             # labelled with their own (multilingual) name.
-            title = (
-                t("form.categories")
-                if def_key == PRIMARY_CATEGORY_DEF
-                else (resolve_value(definition.get("label"), locale) or def_key)
-            )
+            title = dimension_title(definition)
             state_key = f"__categories__:{def_key}"
             expansion = (
                 ui.expansion(
@@ -1473,9 +1513,11 @@ async def product_form(object_id: str) -> None:
                 content = ui.column().classes("w-full gap-2 p-2")
             with expansion, content:
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
-                    ui.label(t("form.categories_hint")).classes("grow text-caption text-gray-500")
+                    ui.label(dimension_hint(definition)).classes("grow text-caption text-gray-500")
                     ui.button(
-                        t("form.categories_pick"),
+                        t("form.categories_pick")
+                        if def_key == PRIMARY_CATEGORY_DEF
+                        else t("form.categories_pick_named").format(name=title),
                         icon="account_tree",
                         on_click=lambda d=definition: assign_categories(d),
                     ).props("flat")
