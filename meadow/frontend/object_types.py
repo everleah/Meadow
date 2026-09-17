@@ -257,7 +257,7 @@ async def object_types_page() -> None:
                 name_input = (
                     ui.input(t("object_types.field_name")).props("filled dense").classes("w-full")
                 )
-                type_label_store: dict[str, object] = {"label": {}}
+                type_label_store: dict[str, dict] = {"label": {}}
                 type_label_field = multilingual_value_editor(
                     field_label=t("object_types.col_label"),
                     locale=locale,
@@ -313,7 +313,7 @@ async def object_types_page() -> None:
             name_input.disable() if editing else name_input.enable()
             label = (record.get("label") if editing else {}) or {}
             type_label_store["label"] = dict(label)
-            type_label_field.set_value(str(type_label_store["label"].get(base_lang(locale)) or ""))
+            type_label_field.set_value(str(type_label_store["label"].get(base_lang(locale)) or ""))  # type: ignore
             description_area.set_value(str(record.get("description") or "") if editing else "")
             key_select.set_value(list(record.get("key_attributes") or []) if editing else [])
             label_attr_select.set_value(str(record.get("label_attribute")) if editing else None)
