@@ -93,6 +93,11 @@ pub(crate) async fn node_features(
 }
 
 /// Class nodes an object is assigned to (through any categorisation relation).
+///
+/// The object is rendered as a **record literal** (see
+/// `crate::api::keys::record_literal`): a bound record would make SurrealDB scan
+/// the whole `reference` table, while the literal drives `idx_ref_in`; the
+/// relation list stays bound and is applied as a filter on top of the index scan.
 pub(crate) async fn assigned_node_keys(
     db: &Db,
     object_key: &str,
@@ -101,13 +106,15 @@ pub(crate) async fn assigned_node_keys(
     if relations.is_empty() {
         return Ok(Vec::new());
     }
+    let Some(source) = crate::api::keys::record_literal("object", object_key) else {
+        return Ok(Vec::new());
+    };
     let mut response = db
         .inner()
-        .query(
+        .query(format!(
             "SELECT VALUE out FROM reference \
-             WHERE in = type::record('object', $key) AND definition_id IN $relations;",
-        )
-        .bind(("key", object_key.to_owned()))
+             WHERE in = {source} AND definition_id IN $relations;"
+        ))
         .bind(("relations", relations.to_vec()))
         .await?
         .check()?;

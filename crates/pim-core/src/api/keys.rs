@@ -26,6 +26,45 @@ fn key_of(record_id: &str) -> &str {
         .unwrap_or(record_id)
 }
 
+/// Renders a single SurrealDB **record literal** (`object:key`) for a filter
+/// comparison, or `None` when the key cannot be rendered.
+///
+/// Use this instead of comparing against a **bound** record (`out = $parent`):
+/// SurrealDB plans a bound record as a plain filter, so the statement falls back
+/// to scanning the whole table (or the whole `definition_id` partition) —
+/// measured on the `perf` dataset (275 863 `reference` rows, 70 314 of them
+/// `rel_depends_on`): the `/objects/{id}/children` page took **245 ms** for a
+/// childless object (scan + `SortTopKByKey` over the partition) with the bound
+/// form, **23 ms** with the literal (`IndexScan idx_ref_out_def`, access
+/// `[object:…, 'rel_depends_on']`). A `WITH INDEX` hint does **not** help while
+/// the value stays bound (it degrades to a full `TableScan`, 441 ms measured).
+/// A **bound** `definition_id` on top of an inlined record is fine — the index
+/// scan drives the lookup and the definition stays a cheap filter.
+///
+/// Same charset rule as [`record_list_literal`]: plain identifiers
+/// (`[A-Za-z0-9_-]`) only, a key with a dash is backquoted.
+pub(crate) fn record_literal(table: &str, key: &str) -> Option<String> {
+    let key = key_of(key);
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    let mut literal = String::with_capacity(table.len() + key.len() + 2);
+    literal.push_str(table);
+    literal.push(':');
+    if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        literal.push_str(key);
+    } else {
+        literal.push('`');
+        literal.push_str(key);
+        literal.push('`');
+    }
+    Some(literal)
+}
+
 /// Renders a SurrealDB **record list literal** (`[object:a, object:b]`) from record
 /// keys, for `WHERE id IN <list>`.
 ///
@@ -55,26 +94,13 @@ pub(crate) fn record_list_literal<'a>(
     let mut literal = String::from("[");
     let mut first = true;
     for key in keys {
-        let key = key_of(key);
-        if key.is_empty()
-            || !key
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
+        let Some(record) = record_literal(table, key) else {
             continue;
-        }
+        };
         if !first {
             literal.push_str(", ");
         }
-        literal.push_str(table);
-        literal.push(':');
-        if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            literal.push_str(key);
-        } else {
-            literal.push('`');
-            literal.push_str(key);
-            literal.push('`');
-        }
+        literal.push_str(&record);
         first = false;
     }
     literal.push(']');
@@ -512,6 +538,27 @@ mod tests {
             record_list_literal("language_tree", ["object:lang_en-GB"]),
             "[language_tree:`lang_en-GB`]"
         );
+    }
+
+    #[test]
+    fn record_literal_quotes_dashes_and_rejects_other_keys() {
+        // Single-record filters must be **literals** in the query text (a bound
+        // record makes SurrealDB scan the whole table, see the doc comment).
+        assert_eq!(
+            record_literal("object", "abc").as_deref(),
+            Some("object:abc")
+        );
+        assert_eq!(
+            record_literal("object", "object:ok-1").as_deref(),
+            Some("object:`ok-1`")
+        );
+        assert_eq!(
+            record_literal("language_tree", "lang_en-GB").as_deref(),
+            Some("language_tree:`lang_en-GB`")
+        );
+        assert_eq!(record_literal("object", ""), None);
+        assert_eq!(record_literal("object", "weird key"), None);
+        assert_eq!(record_literal("object", "x'); DELETE object; --"), None);
     }
 
     #[test]

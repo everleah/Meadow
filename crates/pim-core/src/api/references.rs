@@ -297,29 +297,34 @@ async fn fetch_relation_definition(db: &Db, key: &str) -> Result<Option<Value>, 
 /// Whether an edge with exactly these endpoints and this relation definition
 /// already exists.
 ///
-/// Uses the `(in, definition_id)` index and filters the target afterwards, so the
-/// lookup stays cheap for hub objects with many edges.
+/// Uses the `(out, definition_id)` index and filters the source afterwards, so the
+/// lookup stays cheap for hub objects with many edges. Both endpoints are rendered
+/// as **record literals**: with bound records the planner falls back to a full
+/// `TableScan` over all 275 863 edges (see `keys::record_literal`); the bound
+/// *definition* stays a filter on top of the index scan.
 async fn edge_exists(
     db: &Db,
     source_key: &str,
     target_key: &str,
     definition_id: &str,
 ) -> Result<bool, ApiError> {
-    let sql = "
-        LET $src = type::record('object', $source_key);
-        LET $tgt = type::record('object', $target_key);
-        SELECT count() AS n FROM reference
-          WHERE in = $src AND out = $tgt AND definition_id = $definition_id GROUP ALL;
-    ";
+    let (Some(source), Some(target)) = (
+        crate::api::keys::record_literal("object", source_key),
+        crate::api::keys::record_literal("object", target_key),
+    ) else {
+        return Ok(false);
+    };
+    let sql = format!(
+        "SELECT count() AS n FROM reference
+          WHERE in = {source} AND out = {target} AND definition_id = $definition_id GROUP ALL;"
+    );
     let mut response = db
         .inner()
         .query(sql)
-        .bind(("source_key", source_key))
-        .bind(("target_key", target_key))
-        .bind(("definition_id", definition_id))
+        .bind(("definition_id", definition_id.to_owned()))
         .await?
         .check()?;
-    let rows: Vec<Value> = response.take(2)?;
+    let rows: Vec<Value> = response.take(0)?;
     Ok(rows
         .first()
         .and_then(|row| row.get("n"))
@@ -1114,18 +1119,17 @@ pub async fn list_object_references(
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
     }
-    let sql = "
-        LET $src = type::record('object', $key);
-        SELECT * FROM reference WHERE in = $src OR out = $src;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(sql)
-        .bind(("key", key))
-        .await?
-        .check()?;
-    let references: Vec<Value> = response.take(1)?;
+    // The object is rendered as a **record literal** in both comparisons: with a
+    // bound record SurrealDB scans all edges (`TableScan`); the literal turns it
+    // into a `UnionIndexScan` over `idx_ref_in`/`idx_ref_out` (see
+    // `keys::record_literal`). This runs on every object delete, so the difference
+    // grows with the reference table.
+    let Some(source) = crate::api::keys::record_literal("object", key) else {
+        return Err(ApiError::bad_request(format!("invalid object id `{id}`")));
+    };
+    let sql = format!("SELECT * FROM reference WHERE in = {source} OR out = {source};");
+    let mut response = state.db.inner().query(sql).await?.check()?;
+    let references: Vec<Value> = response.take(0)?;
 
     let locale = params
         .locale
@@ -1331,10 +1335,17 @@ pub async fn list_object_children(
     // 5648 of them taxonomy nodes) the subquery shape needs **31.7 s**, because the
     // planner evaluates that subquery per candidate row, while `in.type …` answers
     // in 0.7 s (the `idx_ref_out_def` index still drives the lookup).
-    let mut children_sql = String::from(
-        "LET $parent = type::record('object', $key);
-         SELECT in AS child FROM reference
-         WHERE out = $parent AND definition_id = 'rel_depends_on'",
+    //
+    // The parent is rendered as a **record literal** (see `keys::record_literal`):
+    // bound as a param the same page needs **245 ms** on the `perf` dataset — the
+    // planner scans the whole `rel_depends_on` partition (70 314 edges) and sorts
+    // it — while the literal drives `idx_ref_out_def` and answers in **23 ms**.
+    let Some(parent) = crate::api::keys::record_literal("object", key) else {
+        return Err(ApiError::bad_request(format!("invalid object id `{id}`")));
+    };
+    let mut children_sql = format!(
+        "SELECT in AS child FROM reference
+         WHERE out = {parent} AND definition_id = 'rel_depends_on'"
     );
     let taxonomy = match scope {
         ChildScope::All => None,
@@ -1354,7 +1365,6 @@ pub async fn list_object_children(
         .db
         .inner()
         .query(children_sql)
-        .bind(("key", key.to_owned()))
         .bind(("limit", params.limit.unwrap_or(1000).clamp(1, 1000) as i64))
         .bind(("offset", params.offset as i64));
     if let Some(taxonomy) = &taxonomy {
@@ -1364,7 +1374,7 @@ pub async fn list_object_children(
         query = query.bind(("node_type", node_type.clone()));
     }
     let mut response = query.await?.check()?;
-    let child_rows: Vec<Value> = response.take(1)?;
+    let child_rows: Vec<Value> = response.take(0)?;
     let child_ids: Vec<String> = child_rows
         .iter()
         .filter_map(|row| row.get("child").and_then(Value::as_str).map(str::to_owned))
@@ -2269,11 +2279,10 @@ pub async fn batch_create_references(
     }
     let composition_definition = definitions.get(COMPOSITION_DEFINITION).cloned();
     let types = load_object_types(&state.db, &object_keys).await?;
-    // The current composition parent and the ancestors of every new parent are
-    // needed by both arrays (`references` may create a composition edge,
-    // `reparents` moves one) — one query each.
+    // The current composition parent (single-parent invariant, no-op detection)
+    // and the parent chain of every **new parent** (cycle check) — one query each.
     let parents = load_composition_parents(&state.db, &composition_children).await?;
-    let ancestors = load_ancestor_keys(&state.db, &new_parents).await?;
+    let chain = load_parent_chain(&state.db, &new_parents).await?;
     let category_targets: Option<Vec<String>> = if edges.iter().flatten().any(|edge| {
         definitions
             .get(&edge.definition_id)
@@ -2288,7 +2297,10 @@ pub async fn batch_create_references(
     // ---- validate every entry ----------------------------------------------
     let mut existing: HashSet<String> = HashSet::new();
     let mut batch_seen: HashSet<String> = HashSet::new();
-    let mut batch_parents: HashSet<String> = HashSet::new();
+    // New composition parent of every source the batch touches (edge *or* move),
+    // so a cycle inside the batch is caught as well (the database does not know
+    // those assignments yet).
+    let mut batch_parents: HashMap<String, String> = HashMap::new();
     for entry in edges.iter_mut() {
         // `take`: what stays `None` is not written (the entry is reported and
         // dropped); survivors are put back for the write step.
@@ -2342,14 +2354,17 @@ pub async fn batch_create_references(
             // `POST /references` (identical messages); `batch_parents` catches a
             // second composition edge for the same source *inside* the batch.
             let has_parent = parents.contains_key(&edge.source_key)
-                || !batch_parents.insert(edge.source_key.clone());
+                || batch_parents.contains_key(&edge.source_key);
             failure = if has_parent {
                 Some("source object already has a composition parent; use re-parenting".to_owned())
-            } else if ancestors.contains(&edge.target_key) {
+            } else if creates_cycle(&chain, &batch_parents, &edge.source_key, &edge.target_key) {
                 Some("would create a cycle".to_owned())
             } else {
                 None
             };
+            if failure.is_none() {
+                batch_parents.insert(edge.source_key.clone(), edge.target_key.clone());
+            }
         }
         if failure.is_none() {
             edge.source_type = source_type.unwrap_or_default();
@@ -2447,7 +2462,7 @@ pub async fn batch_create_references(
             *entry = None;
             continue;
         }
-        if ancestors.contains(&item.source_key) {
+        if creates_cycle(&chain, &batch_parents, &item.source_key, &parent_key) {
             results.push(reference_result(
                 "reparent",
                 item.index,
@@ -2473,6 +2488,7 @@ pub async fn batch_create_references(
             continue;
         }
         item.old_parent_id = Some(old_parent_id);
+        batch_parents.insert(item.source_key.clone(), parent_key.clone());
         reparent_rows.push(json!({
             "source": item.source_key,
             "parent": parent_key,
@@ -2851,22 +2867,27 @@ async fn load_composition_parents(
     Ok(parents)
 }
 
-/// Every ancestor key of the new parents of the batch (one query per hierarchy
-/// level, walking only the batch's own objects).
-async fn load_ancestor_keys(db: &Db, parent_ids: &[String]) -> Result<HashSet<String>, ApiError> {
+/// Current composition parent (`child key → parent key`) of every new parent of
+/// the batch plus, walking upwards, of all of their ancestors (one query per
+/// level) — the data the cycle check walks.
+async fn load_parent_chain(
+    db: &Db,
+    parent_ids: &[String],
+) -> Result<HashMap<String, String>, ApiError> {
+    let mut chain: HashMap<String, String> = HashMap::new();
     let mut frontier: Vec<String> = parent_ids.iter().map(|id| key_of(id)).collect();
     frontier.sort_unstable();
     frontier.dedup();
-    let mut seen: HashSet<String> = frontier.iter().cloned().collect();
+    let mut visited: HashSet<String> = frontier.iter().cloned().collect();
     let mut levels = 0;
-    while !frontier.is_empty() && levels < 1000 {
+    while !frontier.is_empty() && levels < MAX_ANCESTOR_DEPTH {
         levels += 1;
         let literal =
             crate::api::keys::record_list_literal("object", frontier.iter().map(String::as_str));
         let mut response = db
             .inner()
             .query(format!(
-                "SELECT type::string(out) AS parent FROM reference \
+                "SELECT type::string(in) AS child, type::string(out) AS parent FROM reference \
                  WHERE definition_id = 'rel_depends_on' AND in IN {literal};"
             ))
             .await?
@@ -2874,16 +2895,64 @@ async fn load_ancestor_keys(db: &Db, parent_ids: &[String]) -> Result<HashSet<St
         let rows: Vec<Value> = response.take(0)?;
         let mut next: Vec<String> = Vec::new();
         for row in rows {
-            if let Some(parent) = row.get("parent").and_then(Value::as_str) {
-                let parent = key_of(parent);
-                if seen.insert(parent.clone()) {
-                    next.push(parent);
-                }
+            let (Some(child), Some(parent)) = (
+                row.get("child").and_then(Value::as_str),
+                row.get("parent").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let child = key_of(child).to_owned();
+            let parent = key_of(parent).to_owned();
+            chain.insert(child, parent.clone());
+            // The universal root is the parent of every top-level node, not part
+            // of a path — and it has no parent of its own.
+            if parent != "object_root" && visited.insert(parent.clone()) {
+                next.push(parent);
             }
         }
         frontier = next;
     }
-    Ok(seen)
+    Ok(chain)
+}
+
+/// Whether adding the composition edge **source → target** would close a cycle.
+///
+/// Walks **up from the new parent** (`target`): the edge is a cycle exactly when
+/// the source is already above the target, i.e. the target sits below the source
+/// today. Each level prefers the **batch** assignment (those are not in the
+/// database yet) and falls back to the stored parent, so chains inside the batch
+/// are covered as well. A self-edge counts as a cycle.
+///
+/// The previous version collected the new parents **and** their ancestors into a
+/// set and compared the *source* against it. Because the new parents themselves
+/// were part of that set, every source that happened to be a parent elsewhere in
+/// the same batch was rejected: the model import of the perf dataset lost 10
+/// category edges with "would create a cycle"— although both ends were siblings
+/// (found live 2026-09-16, `demo` never hit it because it ran through the
+/// single-write path).
+fn creates_cycle(
+    chain: &HashMap<String, String>,
+    batch_parents: &HashMap<String, String>,
+    source_key: &str,
+    target_key: &str,
+) -> bool {
+    if source_key == target_key {
+        return true;
+    }
+    let mut current = target_key.to_owned();
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        let Some(parent) = batch_parents.get(&current).or_else(|| chain.get(&current)) else {
+            return false;
+        };
+        if parent == source_key {
+            return true;
+        }
+        if parent == "object_root" {
+            return false;
+        }
+        current = parent.clone();
+    }
+    false
 }
 
 /// Validates the edge-metadata keys against the already loaded definition
@@ -3001,6 +3070,49 @@ mod tests {
         let error = validate_edge_attribute_names(&open, &json!("nope"))
             .expect_err("attributes must be an object");
         assert!(error.message().contains("must be an object"));
+    }
+
+    #[test]
+    fn batch_cycle_check_walks_up_from_the_new_parent() {
+        // `s` and `t` are children of the universal root, `deep` sits below `t`.
+        let chain: HashMap<String, String> = HashMap::from([
+            ("s".to_owned(), "object_root".to_owned()),
+            ("t".to_owned(), "object_root".to_owned()),
+            ("deep".to_owned(), "t".to_owned()),
+        ]);
+        let empty: HashMap<String, String> = HashMap::new();
+        // The false positive of the old check: `s` is a parent of `deep`, and the
+        // model import created `s → t` — nothing cyclic, both are siblings.
+        assert!(!creates_cycle(&chain, &empty, "s", "t"));
+        assert!(!creates_cycle(&chain, &empty, "deep", "s"));
+        // `deep` is below `t`: re-parenting `t` under `deep` closes the cycle.
+        assert!(creates_cycle(&chain, &empty, "t", "deep"));
+        // `deep → t` is the parent it already has (a no-op, not a cycle).
+        assert!(!creates_cycle(&chain, &empty, "deep", "t"));
+        // A self-edge is always a cycle.
+        assert!(creates_cycle(&chain, &empty, "s", "s"));
+        // Unknown objects end the walk at the universal root.
+        assert!(!creates_cycle(&chain, &empty, "other", "t"));
+    }
+
+    #[test]
+    fn batch_cycle_check_sees_assignments_of_the_same_batch() {
+        // The batch moves `t` below `s` first; creating `s → t` afterwards closes
+        // the cycle even though the database knows nothing about it yet.
+        let chain: HashMap<String, String> = HashMap::from([
+            ("s".to_owned(), "object_root".to_owned()),
+            ("t".to_owned(), "object_root".to_owned()),
+        ]);
+        let batch: HashMap<String, String> = HashMap::from([("t".to_owned(), "s".to_owned())]);
+        assert!(creates_cycle(&chain, &batch, "s", "t"));
+        // The other direction stays valid: `s` may go under `t`.
+        assert!(!creates_cycle(&chain, &HashMap::new(), "t", "s"));
+        // A longer in-batch chain is followed as well (`t → u → s`).
+        let batch2: HashMap<String, String> = HashMap::from([
+            ("t".to_owned(), "u".to_owned()),
+            ("u".to_owned(), "s".to_owned()),
+        ]);
+        assert!(creates_cycle(&chain, &batch2, "s", "t"));
     }
 
     #[test]
