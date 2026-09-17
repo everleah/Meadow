@@ -247,6 +247,7 @@ async def _resolve_missing_endpoint(
     source_label: str | None,
     external_id: str,
     id_map: dict[str, str],
+    unresolved: set[str] | None = None,
 ) -> str | None:
     """Resolves a MEF id that this document's map does not know, via its source reference.
 
@@ -257,20 +258,31 @@ async def _resolve_missing_endpoint(
     could only fix the object, not those edges (found 2026-09-16: one conflicted
     category object cost 17 of its `category_member` edges). The result is cached
     in `id_map`, so the lookup happens once per external id.
+
+    `unresolved` is the shared **negative** cache: an id that was looked up and is
+    not in the system is remembered, so a document with many children of one
+    missing parent (or a parent that failed inside this run) does not fire one
+    lookup per child — `id_map` only caches successes.
     """
     cached = id_map.get(external_id)
     if cached:
         return cached
     if not source_label or not external_id:
         return None
+    if unresolved is not None and external_id in unresolved:
+        return None
     response = await client.get(
         f"{core_url}/objects/by-source",
         params={"source": source_label, "source_id": external_id},
     )
     if response.status_code != 200:
+        if unresolved is not None:
+            unresolved.add(external_id)
         return None
     record_id = str(response.json().get("id") or "")
     if not record_id:
+        if unresolved is not None:
+            unresolved.add(external_id)
         return None
     id_map[external_id] = record_id
     return record_id
@@ -318,6 +330,121 @@ def _record_batch_results(
         results[positions[index]] = mapped
 
 
+def _composition_parents(
+    objects: list[dict[str, Any]],
+    references: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The document's `depends_on` parents (`child id -> parent id`) plus conflicts.
+
+    Only `depends_on` counts as composition (`rel_depends_on`); references whose
+    `in` is not an object of this document are ignored (they cannot create a child).
+    Two `depends_on` entries for the same child are a **conflict**: the composition
+    invariant allows exactly one parent, so the child must not be written at all
+    (`MEADOW` rejects the second edge, and guessing which one is meant would be a
+    silent data decision). The first entry wins for the parent lookup, the conflict
+    is reported per object.
+    """
+    ids = {str(entry.get("id") or "") for entry in objects}
+    parents: dict[str, str] = {}
+    conflicts: dict[str, str] = {}
+    for reference in references:
+        definition = str(reference.get("type") or "")
+        if definition not in ("depends_on", "rel_depends_on"):
+            continue
+        child = str(reference.get("in") or "")
+        parent = str(reference.get("out") or "")
+        if not child or not parent or child not in ids:
+            continue
+        known = parents.get(child)
+        if known is None:
+            parents[child] = parent
+        elif known != parent:
+            conflicts[child] = (
+                f"composition conflict: `{child}` is declared under both `{known}` and `{parent}`"
+            )
+    return parents, conflicts
+
+
+def _parents_first_levels(
+    objects: list[dict[str, Any]],
+    parents: dict[str, str],
+) -> tuple[list[list[int]], dict[str, str]]:
+    """Object indices in **parents-first levels** plus a per-object error map.
+
+    Objects may appear in any order in a MEF document; a child must be written
+    *after* its parent, because it is created **with** its parent in one write
+    (`POST /objects/batch-upsert` `parent`) — a parent missing at that moment would
+    leave the object parked on the universal root (measured 2026-09-17).
+
+    The order is breadth-first over the document's `depends_on` edges: a whole level
+    is written and flushed before the next one starts. That is the batch-friendly
+    form of "parents first" — a strictly topological order interleaves parents and
+    children (product → variant → variant → …), which forces a write per child and
+    drops the import from ~73 obj/s to single-write speed. Parents that are not part
+    of the document (they exist in the system or not at all) impose no constraint and
+    belong to level 0; levels are stable within the document order.
+
+    Objects on a cycle have no valid order: they are reported and skipped, and their
+    indices are appended as a last level so every document entry gets a report slot.
+    A duplicated MEF id is reported the same way (the document is ambiguous).
+    """
+    ids = [str(entry.get("id") or "") for entry in objects]
+    position: dict[str, int] = {}
+    duplicates: set[str] = set()
+    for index, key in enumerate(ids):
+        if key in position:
+            duplicates.add(key)
+            continue
+        position[key] = index
+    errors: dict[str, str] = {
+        key: (
+            f"duplicate MEF id `{key}` in `objects`: the document is ambiguous, so the "
+            "object is not written"
+        )
+        for key in duplicates
+    }
+
+    # In-document dependencies: how many parents a child still waits for, and which
+    # children a parent has (only edges whose *both* ends are in the document).
+    pending: dict[str, int] = {key: 0 for key in position}
+    children: dict[str, list[str]] = {}
+    for child, parent in parents.items():
+        if child not in position or parent not in position or child == parent:
+            continue
+        pending[child] += 1
+        children.setdefault(parent, []).append(child)
+
+    level: list[str] = sorted(
+        (key for key, count in pending.items() if count == 0),
+        key=lambda key: position[key],
+    )
+    levels: list[list[int]] = []
+    written: set[str] = set()
+    while level:
+        levels.append([position[key] for key in level])
+        written.update(level)
+        next_level: list[str] = []
+        for key in level:
+            for child in children.get(key, []):
+                pending[child] -= 1
+                if pending[child] == 0:
+                    next_level.append(child)
+        level = sorted(next_level, key=lambda key: position[key])
+
+    for key, count in pending.items():
+        if count > 0 and key not in written:
+            errors[key] = (
+                f"composition cycle in the document: `{key}` has no parent written before it"
+            )
+    # Append every index that got no slot yet (cycle members, duplicated ids) so the
+    # report covers the whole document.
+    covered = {index for entry in levels for index in entry}
+    rest = [index for index in range(len(objects)) if index not in covered]
+    if rest:
+        levels.append(rest)
+    return levels, errors
+
+
 async def _import_references(
     client: httpx.AsyncClient,
     core_url: str,
@@ -325,6 +452,7 @@ async def _import_references(
     id_map: dict[str, str],
     emit_events: bool,
     source_label: str | None = None,
+    unresolved: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Creates MEF references, mapping external ids via `id_map`.
 
@@ -353,10 +481,10 @@ async def _import_references(
         in_id = str(reference.get("in") or "")
         out_id = str(reference.get("out") or "")
         source = id_map.get(in_id) or await _resolve_missing_endpoint(
-            client, core_url, source_label, in_id, id_map
+            client, core_url, source_label, in_id, id_map, unresolved
         )
         target = id_map.get(out_id) or await _resolve_missing_endpoint(
-            client, core_url, source_label, out_id, id_map
+            client, core_url, source_label, out_id, id_map, unresolved
         )
         definition_name = str(reference.get("type") or "")
         definition_id = (
@@ -569,7 +697,27 @@ def build_import_handler(
         created = 0
         updated = 0
         failed = 0
-        object_results: list[dict[str, Any]] = []
+        # The report keeps the document's order even though the writes run
+        # parents-first; one slot per MEF object.
+        object_results: list[dict[str, Any]] = [
+            {
+                "id": str(entry.get("id") or entry.get("type") or ""),
+                "type": str(entry.get("type") or ""),
+                "status": "failed",
+                "error": "the object was not processed",
+            }
+            for entry in objects
+        ]
+
+        # Composition: which object hangs on which. An object is created **with**
+        # its parent (`parent` in the batch payload), so the parent has to be
+        # written first — the document's order does not have to respect that.
+        parents, parent_conflicts = _composition_parents(objects, references)
+        levels, ordering_errors = _parents_first_levels(objects, parents)
+        # A parent that could not be resolved is not looked up again per child; the
+        # reference phase shares this cache (a skipped object is unknown there too).
+        unresolved_parents: set[str] = set()
+
         # The write is batched (`POST /objects/batch-upsert`): only the preparation
         # (normalization rules, unit conversion) stays per object. The endpoint
         # matches like the single write path — business key, then (with
@@ -593,28 +741,24 @@ def build_import_handler(
                 for item in pending:
                     object_type = str(item["payload"].get("type") or "")
                     failed += 1
-                    object_results.append(
-                        {
-                            "id": str(item["external_id"] or object_type),
-                            "type": object_type,
-                            "status": "failed",
-                            "error": message,
-                        }
-                    )
+                    object_results[item["index"]] = {
+                        "id": str(item["external_id"] or object_type),
+                        "type": object_type,
+                        "status": "failed",
+                        "error": message,
+                    }
                 return
             for item, (record_id, action, error) in zip(pending, outcomes, strict=True):
                 external_id = str(item["external_id"] or "")
                 object_type = str(item["payload"].get("type") or "")
                 if action == "failed" or record_id is None:
                     failed += 1
-                    object_results.append(
-                        {
-                            "id": external_id or object_type,
-                            "type": object_type,
-                            "status": "failed",
-                            "error": error,
-                        }
-                    )
+                    object_results[item["index"]] = {
+                        "id": external_id or object_type,
+                        "type": object_type,
+                        "status": "failed",
+                        "error": error,
+                    }
                     continue
                 if external_id:
                     id_map[external_id] = record_id
@@ -622,14 +766,62 @@ def build_import_handler(
                     created += 1
                 else:
                     updated += 1
-                object_results.append({"id": record_id, "type": object_type, "status": action})
+                object_results[item["index"]] = {
+                    "id": record_id,
+                    "type": object_type,
+                    "status": action,
+                }
 
-        for entry in objects:
+        # The level each object belongs to; a level is fully written (flushed) before
+        # the next one starts, so every parent of an object is alread written when the
+        # object itself is created with `parent` — one write batch per level, not one
+        # per child (which would drop the import back to single-write speed).
+        level_of: dict[int, int] = {
+            index: number for number, level in enumerate(levels) for index in level
+        }
+        current_level = -1
+        for index in [index for level in levels for index in level]:
+            if level_of[index] != current_level:
+                await flush_batch()
+                current_level = level_of[index]
+            entry = objects[index]
             external_id = str(entry.get("id") or "")
             object_type = str(entry.get("type") or "").strip()
             try:
                 if not object_type:
                     raise RuntimeError("MEF object is missing `type`")
+                conflict = parent_conflicts.get(external_id)
+                if conflict:
+                    raise RuntimeError(conflict)
+                cycle = ordering_errors.get(external_id)
+                if cycle:
+                    raise RuntimeError(cycle)
+
+                # The composition parent must exist **before** the child is written:
+                # every parent belongs to an earlier level, which the previous
+                # iteration flushed, or it exists in the system. Otherwise the child
+                # is not created at all — an object parked on the universal root is
+                # worse than a reported failure (measured 2026-09-17: the import
+                # reported `success` while the object hung on `object:object_root`).
+                parent_record_id: str | None = None
+                parent_mef_id = parents.get(external_id)
+                if parent_mef_id:
+                    parent_record_id = id_map.get(parent_mef_id)
+                    if parent_record_id is None and parent_mef_id not in unresolved_parents:
+                        parent_record_id = await _resolve_missing_endpoint(
+                            active,
+                            core_url,
+                            source or None,
+                            parent_mef_id,
+                            id_map,
+                            unresolved_parents,
+                        )
+                    if parent_record_id is None:
+                        raise RuntimeError(
+                            f"composition parent `{parent_mef_id}` is neither written in this "
+                            "document nor present in the system"
+                        )
+
                 attributes = entry.get("attributes")
                 if not isinstance(attributes, dict):
                     raise RuntimeError("MEF object `attributes` must be an object")
@@ -657,19 +849,26 @@ def build_import_handler(
                     payload["source_id"] = external_id
                 if source:
                     payload["source"] = source
-                batch.append({"external_id": external_id, "payload": payload})
+                if parent_record_id:
+                    # Ignored by the core when the entry updates an existing object
+                    # (a move is a re-parent / a MEF `depends_on` reference).
+                    payload["parent"] = parent_record_id
+                batch.append({"external_id": external_id, "payload": payload, "index": index})
                 if len(batch) >= BATCH_UPSERT_SIZE:
                     await flush_batch()
             except Exception as exc:  # noqa: BLE001 - per-object isolation
                 logger.exception("object import failed for %r", external_id or object_type)
                 failed += 1
-                object_results.append(
-                    {"id": external_id, "type": object_type, "status": "failed", "error": str(exc)}
-                )
+                object_results[index] = {
+                    "id": external_id,
+                    "type": object_type,
+                    "status": "failed",
+                    "error": str(exc),
+                }
         await flush_batch()
 
         reference_results = await _import_references(
-            active, core_url, references, id_map, emit_events, source or None
+            active, core_url, references, id_map, emit_events, source or None, unresolved_parents
         )
 
         if not emit_events:

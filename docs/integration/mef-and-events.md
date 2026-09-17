@@ -72,19 +72,25 @@ MEF is a generic JSON exchange format that maps Meadow PIM core entities (object
 | `type` | `string` | Relation-definition **name** (e.g. `related`, `category_member`). The worker maps it to the core definition key `rel_<name>`. |
 | `attributes` | `object` | Optional relation attributes (e.g. `position`). |
 
-**`depends_on` (composition):** a new object is attached to the universal root when it
-is created and an object has exactly one composition parent, so a `depends_on`
-reference is applied as a **re-parenting** (`PATCH /objects/{id}/parent`) instead of a
-second edge. That is how a MEF document expresses the composition tree (variants under
-their product, vehicle generations under their model).
+**`depends_on` (composition):** an object has exactly one composition parent, so a
+`depends_on` reference sets that parent. On **import** the parent is applied in the
+same write that creates the object (`parent` of `POST /objects/batch-upsert`), i.e.
+the object is never parked on the universal root first: the document's objects are
+written **parents-first**, an object may appear anywhere in the `objects` array, and
+the worker writes them level by level (breadth-first over the composition edges: a
+whole parent level before the objects that hang on it). If the parent is neither written in this
+document nor already present in the target system, the object is **not created** and
+reported as `failed` (writing it would put it in the wrong place in the structure
+tree). For an object that already exists the reference is a **re-parenting**, so a
+repeated import can also repair an object that lost its parent.
 
 ### 1.4 Semantics
 
 - **Upsert by business key:** if `match_by_key` is set (e.g. `sku`), an existing object of the same type with the same key value is updated instead of created.
 - **Idempotent dedup:** objects without a key are matched by their **source reference** — the MEF `id` plus the document `source` — against `GET /objects/by-source`, so re-importing the same record updates rather than duplicates.
 - **Superset behavior:** attributes not present in the MEF document are left unchanged on update / empty on create.
-- **Self-contained references:** both endpoints of a reference must be part of the document (`objects`), because the worker resolves `in`/`out` through the ids it just imported. A document may repeat an object that another document owns — the second import updates it.
-- **Validation:** the core only validates the document shallowly (`objects`/`references` must be arrays); full processing happens in the worker.
+- **References need a resolvable endpoint:** both endpoints of a reference must be part of the document (`objects`) **or** already exist in the target system (matched by source reference). For a composition (`depends_on`) parent this is mandatory *before* the child is written: an object whose parent cannot be resolved is not created at all and reported as an error — the target system must not guess a parent.
+- **Validation:** the core only validates the document shallowly (`objects`/`references` must be arrays); full processing happens in the worker. Reference integrity (unresolvable endpoints, conflicting composition parents, cycles inside the document) is reported per entry in the job result; the run's `failed` counter covers objects that were not written.
 - **Dates:** all timestamps are ISO-8601 with timezone, normalized to UTC on receipt.
 
 ### 1.5 Inbound (import)

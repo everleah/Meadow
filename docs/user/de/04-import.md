@@ -74,6 +74,11 @@ Laufdaten finden Sie zusätzlich unter **Jobs**.
   den Entwurfsstatus — prüfen Sie die Zuordnung daher in der Vorschau.
 - Ohne Geschäftsschlüssel oder ID-Abgleich legt jeder Import **neue** Objekte
   an. Genau das ist der häufigste Grund für Dubletten.
+- Steht im Dokument eine **Zugehörigkeit** (`depends_on`, z. B. Variante an
+  Produkt), legt der Import die Objekte in der Reihenfolge des Baums an: der
+  Elternteil zuerst. Fehlt der Elternteil im Dokument **und** im System, wird das
+  Objekt **nicht** angelegt und als Fehler gemeldet — so landet es nicht an der
+  falschen Stelle in der Struktur.
 
 ## Weiterlesen
 

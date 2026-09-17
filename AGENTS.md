@@ -99,6 +99,7 @@ Meadow PIM is a modern, performant Product Information Management (PIM) system f
   - Operations: Docker + Docker Compose (MVP), optional Kubernetes (k3s).
 - SurrealDB server core is BSL 1.1 licensed (change date 2030-01-01 → Apache 2.0). Self-hosted production use for Meadow PIM is allowed; offering SurrealDB as a "Database Service" is not.
 - jsonwebtoken v10+/v11 requires a crypto backend feature (`aws_lc_rs` or `rust_crypto`); crate MSRV is 1.88.
+- **The composition parent is part of the write:** an object is created *with* its composition parent (`POST /objects` / `POST /objects/batch-upsert`, field `parent`; the import worker writes a document parents-first in breadth-first levels and re-attaches legacy edgeless objects). If the parent is neither written in the document nor present in the system, the object must **not** be created — the job reports an error. The composition edge cannot be deleted via `DELETE /references/{id}`; re-parenting goes through `PATCH /objects/{id}/parent`. Types without a composition edge: `collection`, `saved_search`.
 
 ## Work Guidance
 

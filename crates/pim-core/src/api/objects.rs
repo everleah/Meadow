@@ -18,6 +18,7 @@ use crate::api::keys;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
+use crate::db::Db;
 use crate::error::ApiError;
 
 const TABLE: &str = "object";
@@ -40,6 +41,12 @@ pub struct CreateObject {
     /// Source-system label (MEF document `source`).
     #[serde(default)]
     pub source: Option<String>,
+    /// **Composition parent** of the new object (`object:<key>`); default is the
+    /// universal root. The parent must exist, and the composition definition's
+    /// type restrictions apply. A move of an existing object is
+    /// `PATCH /objects/{id}/parent`, not a create.
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 fn default_status() -> String {
@@ -188,6 +195,104 @@ pub(crate) fn parse_object_key(id: &str) -> Result<&str, ApiError> {
     parse_key(id, TABLE)
 }
 
+/// The object type of a **live** object, or `None` when it does not exist.
+async fn live_object_type(db: &Db, key: &str) -> Result<Option<String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT type FROM type::record('object', $key) WHERE deleted_at IS NONE;")
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("type"))
+        .and_then(Value::as_str)
+        .map(str::to_owned))
+}
+
+/// The object types of many **live** objects in one query (`key -> type`); keys
+/// that do not exist are absent. Used by the batch upsert, which must not run one
+/// lookup per entry.
+async fn live_object_types(db: &Db, keys: &[String]) -> Result<HashMap<String, String>, ApiError> {
+    let mut wanted: Vec<&str> = keys.iter().map(String::as_str).collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let mut types = HashMap::with_capacity(wanted.len());
+    if wanted.is_empty() {
+        return Ok(types);
+    }
+    let literal = crate::api::keys::record_list_literal(TABLE, wanted.iter().copied());
+    let mut response = db
+        .inner()
+        .query(format!(
+            "SELECT type::string(id) AS id, type FROM object WHERE id IN {literal} AND deleted_at IS NONE;"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        if let (Some(id), Some(object_type)) = (
+            row.get("id").and_then(Value::as_str),
+            row.get("type").and_then(Value::as_str),
+        ) {
+            let key = id.split_once(':').map(|(_, key)| key).unwrap_or(id);
+            types.insert(key.to_owned(), object_type.to_owned());
+        }
+    }
+    Ok(types)
+}
+
+/// Validates a `parent` value against the composition definition.
+///
+/// `parent` addresses the composition parent as `object:<key>` (a bare key is
+/// accepted). `None`/empty means the universal root. The type restriction of the
+/// composition definition applies (`check_type_restriction`).
+async fn check_composition_parent_type(
+    state: &AppState,
+    child_type: &str,
+    parent_type: &str,
+) -> Result<(), ApiError> {
+    let definition = crate::api::references::fetch_relation_definition(
+        &state.db,
+        crate::api::references::COMPOSITION_DEFINITION,
+    )
+    .await?
+    .ok_or_else(|| ApiError::internal("composition definition is missing"))?;
+    crate::api::references::check_type_restriction(&definition, child_type, parent_type)
+}
+
+/// The composition parent's bare key of a **new** object, or `None` for the
+/// universal root.
+///
+/// A parent that does not exist — or whose type the composition definition does
+/// not allow — rejects the create. Rationale (measured 2026-09-17): creating the
+/// object anyway would park it on `object:object_root`, i.e. in the wrong place in
+/// the structure tree, and the caller would only see a failed reference
+/// afterwards (the import reported `success` while the object had the wrong
+/// parent). Object writes must therefore never create an object whose intended
+/// parent is missing.
+async fn validate_composition_parent(
+    state: &AppState,
+    parent: Option<&str>,
+    child_type: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(raw) = parent.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let key = raw.strip_prefix("object:").unwrap_or(raw);
+    if key.is_empty() {
+        return Err(ApiError::bad_request("`parent` must not be empty"));
+    }
+    let Some(parent_type) = live_object_type(&state.db, key).await? else {
+        return Err(ApiError::bad_request(format!(
+            "parent object `{raw}` not found"
+        )));
+    };
+    check_composition_parent_type(state, child_type, &parent_type).await?;
+    Ok(Some(key.to_owned()))
+}
+
 /// Creates a new object with a `depends_on` edge to the universal root.
 #[utoipa::path(
     post,
@@ -217,6 +322,7 @@ pub async fn create_object(
         status,
         source_id,
         source,
+        parent,
     } = body;
     let object_type = object_type.trim().to_owned();
     let started = std::time::Instant::now();
@@ -229,6 +335,12 @@ pub async fn create_object(
         .map(str::trim)
         .filter(|l| !l.is_empty());
     let emit_events = params.emit_events.unwrap_or(true);
+    // The composition parent is resolved **before** anything is written: an object
+    // whose intended parent does not exist must not be created at all (it would
+    // otherwise live on the universal root, in the wrong place in the tree, and
+    // the caller would only see a failed reference afterwards — measured
+    // 2026-09-17). `None` = the universal root.
+    let parent_key = validate_composition_parent(&state, parent.as_deref(), &object_type).await?;
 
     let Value::Object(mut attributes) = attributes else {
         return Err(ApiError::bad_request("`attributes` must be an object"));
@@ -309,29 +421,40 @@ pub async fn create_object(
             .unwrap_or_else(|| json!({})),
     });
 
-    // Statements: BEGIN(0), LET(1), CREATE(2), RELATE(3), [CREATE outbox(4)],
-    // SELECT(4|5), COMMIT(5|6).
+    // Statements: BEGIN(0), LET $obj(1), LET $parent(2), CREATE(3), RELATE(4),
+    // [CREATE outbox(5)], SELECT(5|6), COMMIT(6|7). The parent is bound in the
+    // same transaction: either the requested parent or the universal root, so the
+    // edge is the object's **first** and only composition edge (no root edge that
+    // a later re-parent has to replace).
+    let parent_let = match parent_key {
+        Some(_) => "LET $parent = type::record('object', $parent_key);",
+        None => "LET $parent = object:object_root;",
+    };
     let sql = if emit_events {
-        "
+        format!(
+            "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', rand::ulid());
+        {parent_let}
         CREATE $obj CONTENT $content;
-        RELATE $obj->reference->object:object_root SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
+        RELATE $obj->reference->$parent SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {{}};
         CREATE outbox_event SET event_type = 'object.created', object_type = $object_type, object_id = type::string($obj.id), changes = $changes, metadata = $metadata, status = 'pending';
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
         "
-        .to_owned()
+        )
     } else {
-        "
+        format!(
+            "
         BEGIN TRANSACTION;
         LET $obj = type::record('object', rand::ulid());
+        {parent_let}
         CREATE $obj CONTENT $content;
-        RELATE $obj->reference->object:object_root SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {};
+        RELATE $obj->reference->$parent SET definition_id = 'rel_depends_on', type = 'depends_on', attributes = {{}};
         SELECT * FROM $obj;
         COMMIT TRANSACTION;
         "
-        .to_owned()
+        )
     };
     let mut response = state
         .db
@@ -341,9 +464,10 @@ pub async fn create_object(
         .bind(("object_type", object_type.clone()))
         .bind(("changes", changes))
         .bind(("metadata", json!({ "user_id": user_id.clone() })))
+        .bind(("parent_key", parent_key.clone().unwrap_or_default()))
         .await?
         .check()?;
-    let select_index = if emit_events { 5 } else { 4 };
+    let select_index = if emit_events { 6 } else { 5 };
     let objects: Vec<Value> = response.take(select_index)?;
     let object = objects
         .into_iter()
@@ -766,6 +890,14 @@ pub struct BatchUpsertItem {
     /// Identifier in the source system.
     #[serde(default)]
     pub source_id: Option<String>,
+    /// **Composition parent for a new object** (`object:<key>`, bare key accepted);
+    /// default is the universal root. Ignored for entries that update an existing
+    /// object (moving is `PATCH /objects/{id}/parent` or a `depends_on`
+    /// reference). A parent that does not exist fails the entry — the object is
+    /// then **not** created (2026-09-17: an object must never be parked on the
+    /// root because its intended parent is missing).
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 /// Payload of `POST /objects/batch-upsert`.
@@ -907,6 +1039,13 @@ pub async fn batch_upsert_objects(
             attributes: attributes.clone(),
             source: item.source.clone(),
             source_id: item.source_id.clone(),
+            // `object:<key>` (a bare key is accepted); empty = universal root.
+            parent: item
+                .parent
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.strip_prefix("object:").unwrap_or(value).to_owned()),
         }));
         results.push(pending_result(prepared.len() - 1));
     }
@@ -1180,6 +1319,24 @@ pub async fn batch_upsert_objects(
         }
     }
 
+    // Composition parents of the entries that will be **created** (one query for
+    // the whole batch): a missing parent must fail the entry instead of parking the
+    // object on the universal root, and the composition definition's type
+    // restriction has to hold. Updates keep their parent (a move is a re-parent).
+    let parent_keys: Vec<String> = prepared
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| existing[*index].is_none())
+        .filter_map(|(_, item)| item.as_ref().and_then(|entry| entry.parent.clone()))
+        .collect();
+    let parent_types = live_object_types(&state.db, &parent_keys).await?;
+    let composition_definition = crate::api::references::fetch_relation_definition(
+        &state.db,
+        crate::api::references::COMPOSITION_DEFINITION,
+    )
+    .await?
+    .ok_or_else(|| ApiError::internal("composition definition is missing"))?;
+
     // ---- per-entry validation, rules and content ----------------------------
     let mut creates: Vec<Value> = Vec::new();
     let mut updates: Vec<Value> = Vec::new();
@@ -1197,6 +1354,7 @@ pub async fn batch_upsert_objects(
             mut attributes,
             source,
             source_id,
+            parent,
         }) = item
         else {
             failed_count += 1;
@@ -1218,6 +1376,34 @@ pub async fn batch_upsert_objects(
             results[index] = failed_at(index, &conflict);
             failed_count += 1;
             continue;
+        }
+        // A new object is created **under its intended parent** or not at all: the
+        // parent must be a live object and the composition type restriction must
+        // hold. (Updates keep their parent; moving is a re-parent.)
+        if existing[index].is_none()
+            && let Some(parent_key) = parent.as_deref()
+        {
+            match parent_types.get(parent_key) {
+                None => {
+                    results[index] = failed_at(
+                        index,
+                        &format!("parent object `object:{parent_key}` not found"),
+                    );
+                    failed_count += 1;
+                    continue;
+                }
+                Some(parent_type) => {
+                    if let Err(error) = crate::api::references::check_type_restriction(
+                        &composition_definition,
+                        &object_type,
+                        parent_type,
+                    ) {
+                        results[index] = failed_at(index, error.message());
+                        failed_count += 1;
+                        continue;
+                    }
+                }
+            }
         }
         if let Err(error) =
             crate::attribute_values::validate_attribute_values(&state.cache, &state.db, &attributes)
@@ -1386,7 +1572,15 @@ pub async fn batch_upsert_objects(
                     .get("attributes")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
-                creates.push(json!({ "id": ulid, "content": Value::Object(content) }));
+                // The parent key is attached only when one was requested: the
+                // transaction's `RELATE` falls back to the universal root when the
+                // key is `NONE` (a bound JSON `null` would be `NULL`, not `NONE`,
+                // and `type::record('object', NULL)` fails).
+                let mut row = json!({ "id": ulid, "content": Value::Object(content) });
+                if let Some(parent_key) = parent.as_deref() {
+                    row["parent"] = Value::String(parent_key.to_owned());
+                }
+                creates.push(row);
                 audits.push(audit::content(AuditEntry {
                     user_id: &user_id,
                     action: "object_created",
@@ -1420,16 +1614,20 @@ pub async fn batch_upsert_objects(
         let mut sql = String::from("BEGIN TRANSACTION;\n");
         if !creates.is_empty() {
             sql.push_str("FOR $c IN $creates { CREATE type::record('object', $c.id) CONTENT $c.content; };\n");
-            // The root edge needs `RELATE`: a directly created edge record
+            // The composition edge needs `RELATE`: a directly created edge record
             // (`CREATE reference SET in = …, out = …`) is stored but is **not** a
             // relation ("Found record … which is not a relation, but expected a
             // RELATION"), so no traversal finds it. `RELATE <function call>->…`
             // does not parse ("Unexpected token `::`"), therefore the loop binds a
             // record first — verified against the running server, including that
-            // the edge is traversable afterwards.
+            // the edge is traversable afterwards. A row with a `parent` key hangs on
+            // that parent instead of the universal root (the object is then created
+            // **with** its intended parent, in one transaction).
             sql.push_str(
                 "FOR $c IN $creates { LET $new = type::record('object', $c.id); \
-                 RELATE $new->reference->object:object_root SET definition_id = 'rel_depends_on', \
+                 LET $parent = IF $c.parent IS NONE THEN object:object_root \
+                 ELSE type::record('object', $c.parent) END; \
+                 RELATE $new->reference->$parent SET definition_id = 'rel_depends_on', \
                  type = 'depends_on', attributes = {}; };\n",
             );
         }
@@ -1493,6 +1691,8 @@ struct PreparedBatchItem {
     attributes: Map<String, Value>,
     source: Option<String>,
     source_id: Option<String>,
+    /// Composition parent key for a **new** object (`None` = universal root).
+    parent: Option<String>,
 }
 
 /// Fallback source label when an entry carries a `source_id` but no `source`

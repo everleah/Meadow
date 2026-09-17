@@ -19,7 +19,7 @@ use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
-const COMPOSITION_DEFINITION: &str = "rel_depends_on";
+pub(crate) const COMPOSITION_DEFINITION: &str = "rel_depends_on";
 
 /// Usage classification of a relation type (`relation_definition.role`):
 /// * `composition` – the (single) composition type: inheritance, cascade, tree.
@@ -290,7 +290,10 @@ async fn fetch_object(db: &Db, key: &str) -> Result<Option<Value>, ApiError> {
     fetch_record(db, "object", key).await
 }
 
-async fn fetch_relation_definition(db: &Db, key: &str) -> Result<Option<Value>, ApiError> {
+pub(crate) async fn fetch_relation_definition(
+    db: &Db,
+    key: &str,
+) -> Result<Option<Value>, ApiError> {
     fetch_record(db, "relation_definition", key).await
 }
 
@@ -367,7 +370,7 @@ async fn is_ancestor(db: &Db, start_key: &str, maybe_ancestor_key: &str) -> Resu
 }
 
 /// Validates the source/target types against the relation definition.
-fn check_type_restriction(
+pub(crate) fn check_type_restriction(
     def: &Value,
     source_type: &str,
     target_type: &str,

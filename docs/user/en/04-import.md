@@ -69,6 +69,11 @@ does not stop the rest. The full run data is also available under **Jobs**.
   status — so check the mapping in the preview.
 - Without a business key or the ID match, every import creates **new** objects.
   That is by far the most common cause of duplicates.
+- If the document states a **belonging** (`depends_on`, e.g. a variant under a
+  product), the import writes the objects in tree order: the parent first. If the
+  parent is missing from the document **and** from the system, the object is
+  **not** created and reported as an error — that way it never ends up in the
+  wrong place in the structure.
 
 ## Read on
 
