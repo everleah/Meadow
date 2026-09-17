@@ -160,7 +160,12 @@ async def categories_page() -> None:
         if not any(str(lang.get("code")) == locale for lang in name_langs):
             name_langs = [{"code": locale, "label": {locale: locale}}] + name_langs
 
-        edit_state: dict[str, object] = {"id": None, "name": {}, "status": "draft", "sub": False}
+        edit_state: dict[str, object] = {
+            "id": None,
+            "name": {},
+            "status": "draft",
+            "parent": None,
+        }
         name_input_ref: dict[str, ui.element | None] = {"el": None}
 
         name_dialog = ui.dialog()
@@ -718,7 +723,9 @@ async def categories_page() -> None:
             edit_state["id"] = None
             edit_state["name"] = {}
             edit_state["status"] = "draft"
-            edit_state["sub"] = bool(parent_id)
+            #: Parent of the new node: the selected category (a sub-category) or
+            #: the universal root (`None` — the core's default, nothing is sent).
+            edit_state["parent"] = parent_id
             title_label.set_text(
                 t("categories.create_sub") if parent_id else t("categories.create_root")
             )
@@ -734,16 +741,18 @@ async def categories_page() -> None:
                 ui.notify(t("categories.name_required"), color="warning")
                 return
             try:
-                created = await client.create_object(
+                # The parent is part of the write (`POST /objects`): a sub-category
+                # is created **under** the selected node. The core validates the
+                # composition type restriction before anything is written, so a
+                # rejected parent leaves no orphan at the root behind (the earlier
+                # "create at the root, then re-parent" left one behind on failure).
+                await client.create_object(
                     token,
                     object_type=nodes["key"],
                     attributes={"name": name},
                     status=str(edit_state.get("status") or "draft"),
+                    parent=edit_state.get("parent"),
                 )
-                # A sub-category is re-parented from the universal root to the
-                # selected category.
-                if edit_state.get("sub") and selected_category["id"]:
-                    await client.reparent_object(token, created["id"], selected_category["id"])
             except CoreError as exc:
                 ui.notify(f"{t('categories.save_failed')}: {exc}", color="negative")
                 return
