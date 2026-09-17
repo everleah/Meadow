@@ -52,6 +52,13 @@ DEFAULT_SOURCE = "default"
 #: Record key of the (single) composition relation type.
 COMPOSITION_DEFINITION = "rel_depends_on"
 
+#: Answer of the core when a `depends_on` move is asked for an object that has no
+#: composition edge (`PATCH /objects/{id}/parent`, `POST /references/batch`
+#: `reparents`). A move is a move, so the core rejects it; a MEF document instead
+#: describes the **desired** parent, which for an edge-less object means "attach".
+#: The message is matched literally (the core sends it unchanged).
+MISSING_COMPOSITION_PARENT = "object has no composition parent"
+
 
 async def _fetch_document(
     client: httpx.AsyncClient,
@@ -269,6 +276,48 @@ async def _resolve_missing_endpoint(
     return record_id
 
 
+def _record_batch_results(
+    body: dict[str, Any],
+    results: list[dict[str, Any] | None],
+    *,
+    edges: list[dict[str, Any]],
+    edge_positions: list[int],
+    moves: list[dict[str, Any]],
+    move_positions: list[int],
+) -> None:
+    """Maps the per-entry `results` of one batch response onto the report positions.
+
+    `references` and `reparents` are indexed separately (the endpoint validates
+    them in two passes), so each kind is mapped against its own list.
+    """
+    for entry in body.get("results") or []:
+        kind = str(entry.get("kind") or "")
+        try:
+            index = int(entry.get("index"))
+        except TypeError, ValueError:
+            continue
+        if kind == "reference":
+            items, positions = edges, edge_positions
+        elif kind == "reparent":
+            items, positions = moves, move_positions
+        else:
+            continue
+        if index < 0 or index >= len(items):
+            continue
+        item = items[index]
+        status = str(entry.get("action") or "failed")
+        mapped: dict[str, Any] = {
+            "in": item["in"],
+            "out": item["out"],
+            "type": item["type"],
+            "status": status,
+        }
+        if status == "failed":
+            mapped["error"] = entry.get("error")
+            logger.warning("reference import failed: %s", entry.get("error"))
+        results[positions[index]] = mapped
+
+
 async def _import_references(
     client: httpx.AsyncClient,
     core_url: str,
@@ -288,7 +337,9 @@ async def _import_references(
     it is created, and the composition invariant allows exactly one parent edge
     (`plan/detail/relationen.md`), so the reference is applied as a
     **re-parenting** instead of a second edge. Without that, a MEF document could
-    not express the composition tree at all.
+    not express the composition tree at all. An object **without** any composition
+    edge cannot be moved — the core answers `MISSING_COMPOSITION_PARENT` — so that
+    entry is re-applied as the initial attach.
 
     The endpoints are resolved per reference (cached in `id_map`), then the edges
     are written through `POST /references/batch` in batches of
@@ -379,32 +430,63 @@ async def _import_references(
                     "error": str(exc),
                 }
             continue
+        _record_batch_results(
+            body,
+            results,
+            edges=edges,
+            edge_positions=edge_positions,
+            moves=moves,
+            move_positions=move_positions,
+        )
+        reattach: list[tuple[int, dict[str, Any]]] = []
         for entry in body.get("results") or []:
-            kind = str(entry.get("kind") or "")
-            try:
-                index = int(entry.get("index"))
-            except TypeError, ValueError:
+            if str(entry.get("kind") or "") != "reparent" or entry.get("action") != "failed":
                 continue
-            if kind == "reference":
-                items, positions = edges, edge_positions
-            elif kind == "reparent":
-                items, positions = moves, move_positions
-            else:
+            if entry.get("error") != MISSING_COMPOSITION_PARENT:
                 continue
-            if index < 0 or index >= len(items):
+            index = entry.get("index")
+            if not isinstance(index, int) or not 0 <= index < len(moves):
                 continue
-            item = items[index]
-            status = str(entry.get("action") or "failed")
-            mapped: dict[str, Any] = {
-                "in": item["in"],
-                "out": item["out"],
-                "type": item["type"],
-                "status": status,
-            }
-            if status == "failed":
-                mapped["error"] = entry.get("error")
-                logger.warning("reference import failed: %s", entry.get("error"))
-            results[positions[index]] = mapped
+            reattach.append((move_positions[index], moves[index]))
+        if not reattach:
+            continue
+        # The object has no composition edge at all, so the move has nothing to
+        # move. A MEF document states the desired parent, and for an edge-less
+        # object that is the **initial attach** — which the `references` side of
+        # the endpoint performs (`has_parent == false` is exactly this case).
+        # Without this the import could never repair such an object: every run
+        # reported the same failure (found 2026-09-17: 65 demo variants stayed
+        # parent-less and invisible in the structure tree).
+        logger.info("re-applying %d composition edge(s) as an initial attach", len(reattach))
+        attach_payload = {
+            "references": [
+                {
+                    "source": item["in"],
+                    "target": item["out"],
+                    "definition_id": item["definition_id"],
+                    "attributes": item["attributes"],
+                }
+                for _, item in reattach
+            ],
+            "reparents": [],
+        }
+        try:
+            response = await client.post(
+                f"{core_url}/references/batch", json=attach_payload, params=params
+            )
+            _raise_for_core_error(response)
+            attach_body = response.json() or {}
+        except Exception as exc:  # noqa: BLE001 - keep the reported failure
+            logger.warning("composition attach failed: %s", exc)
+            continue
+        _record_batch_results(
+            attach_body,
+            results,
+            edges=[item for _, item in reattach],
+            edge_positions=[position for position, _ in reattach],
+            moves=[],
+            move_positions=[],
+        )
     # The report keeps the document's order; an entry the core did not report is a
     # failure (the retry pass must see it, otherwise the edge would be lost).
     return [

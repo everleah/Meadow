@@ -169,10 +169,7 @@ pub(crate) async fn compute_with_required(
     // Fast path: if every required name is already present in `own` (even an
     // explicit empty/null value, which stops inheritance), the object is
     // complete without resolving inheritance.
-    if required
-        .iter()
-        .all(|name| own_attributes.contains_key(name.as_str()))
-    {
+    if all_required_present(required, own_attributes) {
         return Ok(Completeness {
             percent: 100,
             missing: Vec::new(),
@@ -203,6 +200,18 @@ async fn load_parent_map(db: &Db) -> Result<HashMap<String, String>, ApiError> {
         }
     }
     Ok(map)
+}
+
+/// Whether `own` carries every required name itself — the completeness fast path.
+///
+/// A name that is absent from `own` can still be complete through inheritance,
+/// but only if it is `inheritable`; a non-inheritable name can never be filled.
+/// The fast path must therefore ask `own`, **not** the inheritable subset:
+/// asking the subset reported objects as complete whose only deficits were
+/// non-inheritable class features (found 2026-09-17 — `GET /objects` said 100 %
+/// for a variant that the single-object endpoint scored 40 %).
+fn all_required_present(required: &[String], own: &Map<String, Value>) -> bool {
+    required.iter().all(|name| own.contains_key(name.as_str()))
 }
 
 /// Computes completeness for many objects in one pass (Phase 8 optimization).
@@ -284,15 +293,8 @@ pub(crate) async fn compute_batch(
             );
             continue;
         }
-        // Only inheritable names missing from `own` need inheritance resolution.
-        let missing: Vec<String> = required
-            .iter()
-            .filter(|name| {
-                !own.contains_key(name.as_str()) && inheritable_set.contains(name.as_str())
-            })
-            .cloned()
-            .collect();
-        if missing.is_empty() {
+        // Same fast path as `compute_with_required` (see `all_required_present`).
+        if all_required_present(&required, own) {
             out.insert(
                 object_id.clone(),
                 Completeness {
@@ -302,6 +304,15 @@ pub(crate) async fn compute_batch(
             );
             continue;
         }
+        // Only inheritable names missing from `own` can be filled from an ancestor;
+        // the others stay missing and are counted by `split_set` below.
+        let missing: Vec<String> = required
+            .iter()
+            .filter(|name| {
+                !own.contains_key(name.as_str()) && inheritable_set.contains(name.as_str())
+            })
+            .cloned()
+            .collect();
         let resolved = resolve_missing_in_memory(
             own,
             &missing,
@@ -483,6 +494,21 @@ mod tests {
         let resolved =
             resolve_missing_in_memory(&own, &missing, &parents, &attrs, None, None, "child");
         assert_eq!(resolved.get("sku").and_then(Value::as_str), Some("SKU-1"));
+    }
+
+    #[test]
+    fn fast_path_requires_the_names_in_own_attributes() {
+        let required = vec!["sku".to_owned(), "weight_kg".to_owned()];
+        let mut own = Map::new();
+        own.insert("sku".to_owned(), Value::from("SKU-1"));
+        // One name is absent → the object is **not** complete, no matter whether
+        // the name could be inherited (`compute_batch` used to ask the inheritable
+        // subset here and therefore reported such objects as 100 %).
+        assert!(!all_required_present(&required, &own));
+        own.insert("weight_kg".to_owned(), Value::Null);
+        // Present even with a `null` value counts as "own" (it stops inheritance).
+        assert!(all_required_present(&required, &own));
+        assert!(all_required_present(&[], &Map::new()));
     }
 
     #[test]

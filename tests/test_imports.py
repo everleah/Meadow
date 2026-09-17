@@ -5,7 +5,9 @@ Pins the write path of `_import_references`: a batch of edges goes to
 import — `plan/detail/demodaten-generator.md` §4.3), plain aggregation edges as
 `references`, `depends_on` as `reparents` (the composition invariant allows
 exactly one parent edge, and a new object is attached to the universal root on
-create). The endpoint answers per entry, so one bad edge never fails the rest.
+create). An object that has **no** composition edge cannot be moved, so a rejected
+`depends_on` move is re-applied as the initial attach. The endpoint answers per
+entry, so one bad edge never fails the rest.
 """
 
 from __future__ import annotations
@@ -34,10 +36,16 @@ def core_like_response(
     *,
     existing_targets: set[str] | None = None,
     failing_targets: set[str] | None = None,
+    unattached_sources: set[str] | None = None,
 ) -> httpx.Response:
-    """Answers a batch request like the core does (one result per entry)."""
+    """Answers a batch request like the core does (one result per entry).
+
+    `unattached_sources` are the objects without a composition edge: their
+    `depends_on` move is rejected, their initial attach succeeds.
+    """
     existing_targets = existing_targets or set()
     failing_targets = failing_targets or set()
+    unattached_sources = unattached_sources or set()
     results: list[dict[str, Any]] = []
     counts = {"created": 0, "existing": 0, "reparented": 0, "failed": 0}
     for index, item in enumerate(payload.get("references") or []):
@@ -60,6 +68,19 @@ def core_like_response(
             entry["error"] = error
         results.append(entry)
     for index, item in enumerate(payload.get("reparents") or []):
+        if str(item.get("source")) in unattached_sources:
+            counts["failed"] += 1
+            results.append(
+                {
+                    "kind": "reparent",
+                    "index": index,
+                    "source": item.get("source"),
+                    "target": item.get("parent"),
+                    "action": "failed",
+                    "error": "object has no composition parent",
+                }
+            )
+            continue
         counts["reparented"] += 1
         results.append(
             {
@@ -78,6 +99,7 @@ def handler(
     *,
     existing_targets: set[str] | None = None,
     failing_targets: set[str] | None = None,
+    unattached_sources: set[str] | None = None,
     status: int | None = None,
     error: str = "boom",
     by_source: dict[str, str] | None = None,
@@ -99,6 +121,7 @@ def handler(
                 batch_body(request),
                 existing_targets=existing_targets,
                 failing_targets=failing_targets,
+                unattached_sources=unattached_sources,
             )
         return httpx.Response(200, json={"ok": True})
 
@@ -321,3 +344,58 @@ async def test_missing_reference_type_is_reported(reference_type: str | None) ->
     assert results[0]["status"] == "failed"
     assert "missing `type`" in results[0]["error"]
     assert requests == []
+
+
+async def test_an_edgeless_object_is_attached_instead_of_moved() -> None:
+    """A `depends_on` entry for an object without a composition edge is an attach.
+
+    Found live 2026-09-17: 65 demo variants had no composition edge at all (their
+    edge had been removed, the object itself is live). The core rejects the move
+    with "object has no composition parent" — correct for a move, wrong for a MEF
+    document, which states the desired parent. Because every later import sent the
+    same move, the objects stayed parent-less forever: invisible in the structure
+    tree and counted as top-level nodes. The entry is re-applied as the initial
+    attach (the `references` side of the endpoint) instead.
+    """
+    results, requests = await run(
+        [{"in": "child", "out": "parent", "type": "depends_on"}],
+        unattached_sources={"object:child"},
+    )
+    assert [result["status"] for result in results] == ["created"]
+    batches = batch_requests(requests)
+    assert len(batches) == 2, "the rejected move is retried as an attach"
+    assert batch_body(batches[0]) == {
+        "references": [],
+        "reparents": [{"source": "object:child", "parent": "object:parent"}],
+    }
+    assert batch_body(batches[1]) == {
+        "references": [
+            {
+                "source": "object:child",
+                "target": "object:parent",
+                "definition_id": "rel_depends_on",
+                "attributes": {},
+            }
+        ],
+        "reparents": [],
+    }
+
+
+async def test_only_the_edgeless_entries_go_into_the_attach_request() -> None:
+    """Entries whose move succeeded stay untouched, and a rejected attach stays failed."""
+    results, requests = await run(
+        [
+            {"in": "parent", "out": "other", "type": "depends_on"},
+            {"in": "child", "out": "parent", "type": "depends_on"},
+        ],
+        unattached_sources={"object:parent"},
+        failing_targets={"object:other"},
+    )
+    assert [result["status"] for result in results] == ["failed", "reparented"]
+    assert results[0]["error"] == "edge rejected"
+    batches = batch_requests(requests)
+    assert [item["source"] for item in batch_body(batches[0])["reparents"]] == [
+        "object:parent",
+        "object:child",
+    ]
+    assert [item["source"] for item in batch_body(batches[1])["references"]] == ["object:parent"]

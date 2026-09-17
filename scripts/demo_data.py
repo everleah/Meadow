@@ -429,6 +429,35 @@ def dedupe_references(references: list[Reference]) -> list[Reference]:
     return unique
 
 
+def required_group_features(catalog: dict[str, Any]) -> dict[str, list[str]]:
+    """Mandatory class features per assembly group, ancestor groups included.
+
+    A **variant** has to carry them itself: the catalog declares these attributes
+    `inheritable: false`, so a variant that leaves them to its product can never
+    become complete (found 2026-09-17 — 2 376 variants were permanently incomplete
+    because only the product got e.g. `charging_power_kw`).
+    """
+    own: dict[str, list[str]] = {}
+    for entry in catalog.get("class_features", []):
+        own[entry["group"]] = [
+            feature["attribute"] for feature in entry["features"] if feature.get("required")
+        ]
+    parents = {group["code"]: group.get("parent") for group in catalog.get("part_groups", [])}
+    resolved: dict[str, list[str]] = {}
+    for group in own:
+        names: list[str] = []
+        current: str | None = group
+        seen: set[str] = set()
+        while current and current not in seen:
+            seen.add(current)
+            for name in own.get(current, []):
+                if name not in names:
+                    names.append(name)
+            current = parents.get(current)
+        resolved[group] = names
+    return resolved
+
+
 def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int = 42) -> Dataset:
     """Generates the deterministic dataset for a profile and seed."""
     if profile not in PROFILES:
@@ -437,6 +466,8 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
     rng = random.Random(seed)
     nodes: list[Node] = []
     references: list[Reference] = []
+    #: Mandatory class features of the assembly group a product/variant belongs to.
+    required_features = required_group_features(catalog)
 
     # --- taxonomies ------------------------------------------------------- #
     for category in catalog["categories"]:
@@ -710,6 +741,11 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
         nodes.append(product)
         products.append(product)
         products_by_family.setdefault(family["code"], []).append(product)
+        # Composition parent = the product's **assembly group**, not the universal
+        # root: the structure tree then reads root → group → product → variant
+        # instead of listing all 2 000 products as root children (the group
+        # membership itself stays a categorisation edge).
+        references.append(Reference(product.key, f"demo-group-{family['group']}", "depends_on"))
 
         # variants share the parent's material/quality/warranty and add their own numbers
         variant_total = int(settings["variant_ratio"])
@@ -733,6 +769,17 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
                 )
             if family["positions"]:
                 variant_attributes["part_position"] = rng.choice(family["positions"])
+            # The group's mandatory features belong on the variant itself (they are
+            # not inheritable): copy what the product carries, with the same jitter
+            # the other numbers get. A feature the product itself omits stays
+            # omitted — those gaps are intentional in the demo data.
+            for feature in required_features.get(family["group"], []):
+                if feature in variant_attributes or feature not in attributes:
+                    continue
+                value = attributes[feature]
+                variant_attributes[feature] = (
+                    round(value * rng.uniform(0.95, 1.05), 3) if isinstance(value, float) else value
+                )
             variant = Node(
                 key=f"demo-variant-{variant_sku}",
                 type="variant",
@@ -780,6 +827,10 @@ def generate_dataset(catalog: dict[str, Any], profile: str = "demo", seed: int =
                 {"oem_kind": node.attributes["number_kind"]},
             )
         )
+        # The number is master data of the family's assembly group — hanging it on
+        # the universal root mixed 1 000 lookup records into the top level of the
+        # structure tree (found 2026-09-17).
+        references.append(Reference(node.key, f"demo-group-{product.family_group}", "depends_on"))
 
     # --- relations between products -------------------------------------- #
     for family_entry in families:

@@ -4856,6 +4856,14 @@
       "packaging": "pallet",
       "warranty": 36,
       "hazardous": false,
+      "voltage_v": [
+        400,
+        400
+      ],
+      "nominal_current_a": [
+        16,
+        32
+      ],
       "charging_power_kw": [
         11.0,
         22.0
@@ -4941,6 +4949,10 @@
       "packaging": "carton",
       "warranty": 12,
       "hazardous": false,
+      "voltage_v": [
+        12,
+        24
+      ],
       "nominal_current_a": [
         80,
         400

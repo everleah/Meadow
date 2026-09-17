@@ -1184,12 +1184,20 @@ pub async fn list_object_references(
 }
 
 /// Deletes a reference (aggregation) by its record id.
+///
+/// The composition edge is **not** removable here: it is the object's parent
+/// link, and deleting it leaves the object without a parent — invisible in the
+/// structure tree and unreachable for the delete cascade, which is exactly the
+/// state 81 demo variants were found in on 2026-09-17 (their edges had been
+/// removed without any trace, because an edge delete by id writes neither an
+/// audit entry nor an event). A parent link is replaced by re-parenting
+/// (`PATCH /objects/{id}/parent`) or removed together with the object.
 #[utoipa::path(
     delete,
     path = "/references/{id}",
     responses(
         (status = 204, description = "Deleted"),
-        (status = 400, description = "Invalid id", body = Value),
+        (status = 400, description = "Invalid id or composition edge", body = Value),
         (status = 404, description = "Reference not found", body = Value)
     )
 )]
@@ -1207,8 +1215,13 @@ pub async fn delete_reference(
             "id `{id}` does not reference table `reference`"
         )));
     }
-    if fetch_record(&state.db, "reference", key).await?.is_none() {
+    let Some(edge) = fetch_record(&state.db, "reference", key).await? else {
         return Err(ApiError::not_found(format!("reference `{id}` not found")));
+    };
+    if is_composition_edge_value(&edge) {
+        return Err(ApiError::bad_request(
+            "the composition edge is changed by re-parenting and removed with the object",
+        ));
     }
     let sql = "DELETE type::record('reference', $key);";
     state
@@ -1220,6 +1233,14 @@ pub async fn delete_reference(
         .check()?;
     state.cache.invalidate_stats();
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether a loaded `reference` record is the composition edge (`rel_depends_on`).
+fn is_composition_edge_value(edge: &Value) -> bool {
+    edge.get("definition_id")
+        .and_then(Value::as_str)
+        .map(|definition| definition.trim_matches('`') == COMPOSITION_DEFINITION)
+        .unwrap_or(false)
 }
 
 /// Query parameters for `GET /objects/{id}/children`.
@@ -3019,6 +3040,24 @@ fn check_edge_role(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_composition_edge_is_protected_from_a_delete_by_id() {
+        // The composition edge is the parent link: it is re-parented or removed
+        // with the object, never detached (a parent-less object is invisible in
+        // the structure tree and unreachable for the delete cascade — 81 demo
+        // variants were found in that state on 2026-09-17).
+        assert!(is_composition_edge_value(&json!({
+            "definition_id": "rel_depends_on"
+        })));
+        assert!(is_composition_edge_value(&json!({
+            "definition_id": "`rel_depends_on`"
+        })));
+        assert!(!is_composition_edge_value(&json!({
+            "definition_id": "rel_category_member"
+        })));
+        assert!(!is_composition_edge_value(&json!({ "type": "depends_on" })));
+    }
 
     #[test]
     fn batch_role_check_mirrors_the_single_endpoint() {

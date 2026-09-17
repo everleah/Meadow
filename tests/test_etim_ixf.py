@@ -256,17 +256,27 @@ def test_manifest_names_the_group_section(ixf_file: Path) -> None:
     assert model_doc["sections"].count("classification_standards") == 1
 
 
-def test_feature_rows_are_required_and_ordered(ixf_file: Path) -> None:
+def test_feature_rows_are_optional_by_default_and_ordered(ixf_file: Path) -> None:
+    # The IXF export carries no mandatory flag, so imported features are optional;
+    # `required: true` for all of them made every classified object look incomplete
+    # (76 625 of 76 655 rows were mandatory in the installed bundle).
     selection = converter.read_ixf(ixf_file)
     document = converter.build_features_document(selection)
     entries = document["sections"]["category_attributes"]
     assert [entry["class"] for entry in entries] == ["EC000001", "EC000002"]
     assert entries[0]["class_key"] == "code"
     assert entries[0]["features"] == [
-        {"attribute": "EF000001", "required": True, "position": 1},
-        {"attribute": "EF000003", "required": True, "position": 2},
-        {"attribute": "EF000004", "required": True, "position": 3},
+        {"attribute": "EF000001", "required": False, "position": 1},
+        {"attribute": "EF000003", "required": False, "position": 2},
+        {"attribute": "EF000004", "required": False, "position": 3},
     ]
+
+
+def test_feature_rows_can_be_imported_as_mandatory(ixf_file: Path) -> None:
+    selection = converter.read_ixf(ixf_file)
+    document = converter.build_features_document(selection, features_required=True)
+    features = document["sections"]["category_attributes"][0]["features"]
+    assert [feature["required"] for feature in features] == [True, True, True]
 
 
 def test_classes_document_uses_the_english_description(ixf_file: Path) -> None:

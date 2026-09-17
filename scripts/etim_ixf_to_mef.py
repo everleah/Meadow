@@ -508,14 +508,29 @@ def build_classes_document(selection: Selection, *, node_type: str) -> dict:
     }
 
 
-def build_features_document(selection: Selection, *, class_key: str = "code") -> dict:
-    """Builds the MCF document with the `category_attributes` section."""
+def build_features_document(
+    selection: Selection, *, class_key: str = "code", features_required: bool = False
+) -> dict:
+    """Builds the MCF document with the `category_attributes` section.
+
+    Imported features are **optional** by default. The IXF export carries no
+    mandatory flag — `Class > Feature` has only `FeatureCode`, `UnitCode`,
+    `OrderNumber` and `Values` (checked against ETIM 10.0-ALL-SECTORS, 2026-09-17;
+    the words "Mandatory"/"Optional" appear only inside descriptions) — so
+    `required: true` for every feature meant that any object assigned to a class
+    was scored against the class's complete feature list: with the installed
+    bundle **76 625 of 76 655** `category_attribute` rows were mandatory and the
+    dashboard reported every classified product as incomplete (~11 %). Users mark
+    the features their organisation actually needs through
+    `PATCH /categories/{id}/attributes/{attribute}`; `--features-required`
+    restores the old all-mandatory import.
+    """
     entries = []
     for entry in selection.classes:
         features = [
             {
                 "attribute": class_feature.code,
-                "required": True,
+                "required": features_required,
                 "position": class_feature.position,
             }
             for class_feature in entry.features
@@ -609,6 +624,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--with-units", action="store_true", help="set units where the symbol matches"
     )
+    parser.add_argument(
+        "--features-required",
+        action="store_true",
+        help="mark every class feature as mandatory (default: optional — the IXF carries no "
+        "mandatory flag, and all-mandatory scored every classified object as incomplete)",
+    )
     parser.add_argument("--bundle-name", default="etim-10.0", help="name of the standard bundle")
     args = parser.parse_args(argv[1:])
 
@@ -631,7 +652,7 @@ def main(argv: list[str]) -> int:
         with_units=args.with_units,
     )
     classes = build_classes_document(selection, node_type=args.node_type)
-    features = build_features_document(selection)
+    features = build_features_document(selection, features_required=args.features_required)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for name, document in (
