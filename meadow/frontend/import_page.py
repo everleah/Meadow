@@ -91,7 +91,10 @@ async def import_page() -> None:
             return []
 
     object_types = await _safe(client.list_object_types(token))
-    definitions = await _safe(client.list_attribute_definitions(token, limit=1000))
+    # The **whole** vocabulary: a mapping target may be an own attribute or a
+    # standard feature (a supplier file often fills the standard's fields), and the
+    # capped paged list would hide every own attribute behind 1000 `EF…` rows.
+    definitions = await _safe(client.list_attribute_vocabulary(token))
     languages = await _safe(client.list_languages(token))
     data_languages = [str(lang.get("code")) for lang in languages] or ["de"]
     attribute_names = [str(d.get("name")) for d in definitions if d.get("name")]

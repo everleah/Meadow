@@ -157,3 +157,59 @@ def taxonomy_options(object_types: list[dict], locale: str) -> dict[str, str]:
         name = str(entry["name"])
         options[name] = resolve_value(entry.get("label"), locale) or name
     return options or {PRIMARY_CATEGORY_TYPE: PRIMARY_CATEGORY_TYPE}
+
+
+def own_attribute_names(definitions: list[dict]) -> list[str]:
+    """Names of the **own** attribute definitions, sorted.
+
+    Own means: not the vocabulary of an installed classification standard
+    (`reference_data`). Every place that lets a user *choose* an attribute for a
+    new purpose — grid columns, relation attributes, class features, connector
+    mapping — takes its names from here, so the 17 377 standard features of a full
+    ETIM import neither hide the own attributes nor flood the picker
+    (`meadow/frontend/reference_data.py`). Places that read or map **data** pass
+    the vocabulary unfiltered instead: a stored value never disappears.
+    """
+    return sorted(
+        {
+            str(entry.get("name"))
+            for entry in definitions
+            if isinstance(entry, dict) and entry.get("name") and not entry.get("reference_data")
+        }
+    )
+
+
+def text_attribute_options(definitions: list[dict], declared: object = ()) -> dict[str, str]:
+    """Select options `name -> name` for a type's `key_attributes`/`label_attribute`.
+
+    A key or label holds one plain value, so only own, single-language `text`
+    attributes are eligible. Names a type already declares are kept in the list even
+    when no definition matches them (`name` is the conventional label attribute and
+    is not an attribute definition at all, see `meadow/frontend/import_page.py`), so
+    opening and saving a type never silently drops its current key or label.
+    """
+    options = {
+        str(entry.get("name")): str(entry.get("name"))
+        for entry in definitions
+        if isinstance(entry, dict)
+        and entry.get("name")
+        and str(entry.get("type")) == "text"
+        and not entry.get("multilingual")
+        and not entry.get("reference_data")
+    }
+    for name in declared if isinstance(declared, list | tuple | set) else ():
+        if name:
+            options.setdefault(str(name), str(name))
+    return options
+
+
+def declared_key_names(object_types: list[dict]) -> list[str]:
+    """Every attribute name the object types declare as key or label attribute."""
+    names: set[str] = set()
+    for entry in object_types:
+        if not isinstance(entry, dict):
+            continue
+        names.update(str(name) for name in (entry.get("key_attributes") or []) if name)
+        if entry.get("label_attribute"):
+            names.add(str(entry["label_attribute"]))
+    return sorted(names)

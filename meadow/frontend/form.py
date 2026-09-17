@@ -187,7 +187,12 @@ async def product_form(object_id: str) -> None:
             resolved = await client.get_object(
                 token, object_id, locale=locale, resolve_inheritance=True
             )
-            definitions = await client.list_attribute_definitions(token)
+            # **Every** definition in one request. The paged list endpoint is capped
+            # at 1000 rows and sorted by id, so with an imported standard installed
+            # (17 377 `EF…` features) a freshly created own attribute never reached
+            # the form — it was maintainable in the grid (which loads the same
+            # vocabulary), but its field did not exist here.
+            definitions = await client.list_attribute_vocabulary(token)
             groups = await client.list_attribute_groups(token)
             languages = await client.list_languages(token)
             relation_definitions = await client.list_relation_definitions(token)

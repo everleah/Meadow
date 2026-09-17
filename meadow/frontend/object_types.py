@@ -21,6 +21,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.display import declared_key_names, text_attribute_options
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
@@ -99,17 +100,16 @@ async def object_types_page() -> None:
     except Exception:  # noqa: BLE001 - degrade to the UI language only
         languages = []
 
-    # Eligible attributes for `key_attributes`/`label_attribute` (text, not
-    # multilingual). Attribute definitions may be unavailable; degrade gracefully.
+    # Eligible attributes for `key_attributes`/`label_attribute` (own, text, not
+    # multilingual). The **whole** vocabulary, not the capped paged list — with a
+    # standard installed its first page holds nothing but `EF…` features, so a newly
+    # created own text attribute could not be selected. Attribute definitions may be
+    # unavailable; degrade gracefully.
     try:
-        definitions = await client.list_attribute_definitions(token, limit=1000)
+        definitions = await client.list_attribute_vocabulary(token)
     except Exception:  # noqa: BLE001
         definitions = []
-    text_attrs = {
-        str(d.get("name")): str(d.get("name"))
-        for d in definitions
-        if str(d.get("type")) == "text" and not bool(d.get("multilingual")) and d.get("name")
-    }
+    text_attrs = text_attribute_options(definitions, declared_key_names(types))
 
     # Registered classification standards (ETIM, ECLASS…): they explain which
     # vocabulary is reference data and which object type holds the class nodes.
@@ -375,16 +375,10 @@ async def object_types_page() -> None:
             with contextlib.suppress(Exception):
                 types = await client.list_object_types(token, limit=1000)
             try:
-                definitions = await client.list_attribute_definitions(token, limit=1000)
+                definitions = await client.list_attribute_vocabulary(token)
             except Exception:  # noqa: BLE001
                 definitions = []
-            text_attrs = {
-                str(d.get("name")): str(d.get("name"))
-                for d in definitions
-                if str(d.get("type")) == "text"
-                and not bool(d.get("multilingual"))
-                and d.get("name")
-            }
+            text_attrs = text_attribute_options(definitions, declared_key_names(types))
             key_select.set_options({n: n for n in sorted(text_attrs)})
             label_attr_select.set_options({n: n for n in sorted(text_attrs)})
             grid.run_grid_method("setGridOption", "rowData", _rows())

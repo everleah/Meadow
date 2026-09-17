@@ -299,7 +299,16 @@ class CoreClient:
         limit: int = 1000,
         start: int = 0,
     ) -> list[dict]:
-        """Lists attribute definitions (used to offer grid columns)."""
+        """Lists one page of attribute definitions (``GET /attribute-definitions``).
+
+        **Capped and codepoint-ordered:** the page is limited to ``limit`` rows and
+        sorted by id, so with an imported standard installed (17 377 ``EF…``
+        features) the first page holds nothing but standard vocabulary and a
+        late-sorted own attribute is unreachable. No page uses this any more — UI
+        pages that need the definitions load ``list_attribute_vocabulary``, which
+        answers with **every** definition in one request. Kept for callers that
+        really want a page (e.g. an id-sorted inspection).
+        """
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/attribute-definitions",
@@ -310,12 +319,17 @@ class CoreClient:
             return response.json()
 
     async def list_attribute_vocabulary(self, token: str) -> list[dict]:
-        """Returns the slim vocabulary of **all** attribute definitions.
+        """Returns the vocabulary of **all** attribute definitions.
 
-        One request instead of 18 pages of `list_attribute_definitions`: the
-        export wizard offers every definition (ETIM 10.0 carries 17 379) and the
-        core serves the projection from its metadata cache
-        (`GET /attribute-definitions/vocabulary`).
+        One request instead of 18 pages of `list_attribute_definitions`: the export
+        wizard's field selection, the catalog page, the object grid's column picker
+        and the product form all need every definition (ETIM 10.0 carries 17 377 of
+        them, 17 463 in total here), and the core serves the projection from its
+        metadata cache (`GET /attribute-definitions/vocabulary`). The projection
+        carries label, data type, group ids, applicability, the reference-data flag,
+        `is_key`/`inheritable`/`computed`/`required_types`, `enum_set_id` and
+        `constraints` — everything a field renderer needs, minus the descriptions,
+        default values, standard codes and inline option lists.
         """
         async with _api_client() as client:
             response = await client.get(
@@ -328,10 +342,10 @@ class CoreClient:
     async def get_attribute_definition(self, token: str, definition_id: str) -> dict:
         """Loads one attribute definition in full (``GET /attribute-definitions/{id}``).
 
-        The catalog page lists the **slim** vocabulary (all definitions in one
-        request); the editor dialog needs the complete record — units, standard
-        bindings, computed fields, description — so it loads it on open instead of
-        saving a truncated payload back.
+        The catalog page and the product form list the vocabulary (all definitions
+        in one request); the editor dialog needs the complete record — units,
+        standard bindings, descriptions — so it loads it on open instead of saving a
+        truncated payload back.
         """
         async with _api_client() as client:
             response = await client.get(

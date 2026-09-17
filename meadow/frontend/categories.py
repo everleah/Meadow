@@ -101,9 +101,12 @@ async def categories_page() -> None:
         # `all` feeds the node-id lookup (labels of every taxonomy), `key` is the
         # taxonomy currently edited (the tree shows one taxonomy at a time).
         nodes: dict = {"all": taxonomy_types, "key": taxonomy_types[0]}
-        # Attribute definitions: candidates for the class features (Stage B).
+        # Attribute definitions: candidates for the class features (Stage B). The
+        # whole vocabulary in one request — a class may demand an own attribute *or*
+        # a feature of the installed standard, and the capped paged list offered
+        # nothing but the standard's first 1000 `EF…` rows.
         try:
-            attribute_definitions = await client.list_attribute_definitions(token, limit=1000)
+            attribute_definitions = await client.list_attribute_vocabulary(token)
         except Exception:  # noqa: BLE001 - the feature picker stays empty
             attribute_definitions = []
 
@@ -643,7 +646,11 @@ async def categories_page() -> None:
                                 available,
                                 label=t("categories.features_add"),
                             )
-                            .props("outline dense")
+                            # A standard's vocabulary alone is 17 377 names: the list
+                            # is only usable with the type-to-filter switch. Quasar
+                            # keeps the *selected* option as the value (free text
+                            # needs `new_value_mode`), so nothing unintended is added.
+                            .props("outline dense use-input input-debounce=200")
                             .classes("grow")
                             .set_enabled(bool(available))
                         )

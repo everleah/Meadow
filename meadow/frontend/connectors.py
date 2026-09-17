@@ -158,7 +158,10 @@ async def connectors_page() -> None:
     except Exception:  # noqa: BLE001 - the picker then only offers entered values
         pass
     try:
-        definitions = await client.list_attribute_definitions(token, limit=1000)
+        # The whole vocabulary (one request): a connector writes into own attributes
+        # and into the fields of an installed standard alike, and the capped paged
+        # list would offer nothing but the first 1000 `EF…` features.
+        definitions = await client.list_attribute_vocabulary(token)
         option_sources["attribute_names"] = [
             str(item.get("name")) for item in definitions if item.get("name")
         ]

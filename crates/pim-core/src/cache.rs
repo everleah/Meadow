@@ -134,16 +134,20 @@ impl MetaCache {
         Ok(bindings)
     }
 
-    /// Slim projection of **all** attribute definitions as a **serialized JSON
-    /// body**, cached.
+    /// Projection of **all** attribute definitions as a **serialized JSON body**,
+    /// cached.
     ///
-    /// Two consumers: the export wizard offers an attribute selection over every
-    /// definition (`/export`), and the catalog page (`/attribute-definitions`)
-    /// lists them all — its paged list endpoint is capped at 1000 rows, and with a
-    /// classification standard installed those are the standard's features, so own
-    /// attributes were unreachable. The projection carries only what such a list or
-    /// selection needs (`VOCABULARY_FIELDS`): 318 KB per 1000 rows and ~6 MB for the
-    /// whole vocabulary in one query.
+    /// Consumers: the export wizard's field selection (`/export`), the catalog
+    /// page (`/attribute-definitions`), the object grid's column picker
+    /// (`/products`) and the product form (`/products/{id}`) — the last one needs
+    /// **every** definition of the object's type, because `GET
+    /// /attribute-definitions` is capped at 1000 rows and with a classification
+    /// standard installed those are the standard's features, so a freshly created
+    /// own attribute was unreachable in the form. The projection carries what such
+    /// a list, selection or field renderer needs (`VOCABULARY_FIELDS`):
+    /// 318 KB per 1000 rows, 6.49 MB without and 7.41 MB with the three fields the
+    /// form renders additionally (`computed`, `enum_set_id`, `constraints`), one
+    /// query either way.
     ///
     /// The body is cached **serialized** because this payload is megabytes:
     /// cloning 17 379 documents out of a cache and re-serialising them per
@@ -444,12 +448,23 @@ async fn load_url_attributes(db: &Db) -> Result<Vec<UrlAttribute>, ApiError> {
         .collect())
 }
 
-/// Fields of the slim attribute catalog projection: everything an attribute
-/// *selection* needs (label, data type, group membership, whether it applies to
-/// an object type, whether it is reference data) plus the three flags the
-/// catalog grid shows (`is_key`, `inheritable`, `required_types`) — and nothing
-/// else: `SELECT *` returned 640 KB per 1000 rows, this projection 318 KB.
-const VOCABULARY_FIELDS: [&str; 11] = [
+/// Fields of the attribute catalog projection: everything an attribute
+/// *selection* or a **form field renderer** needs (label, data type, group
+/// membership, whether it applies to an object type, whether it is reference
+/// data, which enum set supplies its options, the constraint values the UI shows)
+/// plus the flags that drive the markers (`is_key`, `inheritable`, `computed`,
+/// `required_types`) — and nothing else: `SELECT *` returned 640 KB per 1000 rows,
+/// this projection 318 KB.
+///
+/// `constraints` holds only `min`, `max` and `target_types` in this system: enum
+/// options live in `enum_set` (`enum_set_id`, and the core rejects an `enum`
+/// attribute without one), and a standard import never writes constraints at all —
+/// measured 2026-09-17 on the dev DB (17 463 definitions): 5 rows carry a
+/// constraint, 0 rows carry the legacy inline `enum_values`, no reference-data row
+/// carries one. It is projected anyway (+0.32 MB) because it is the only way the
+/// form gets the reference-target and numeric bounds of an attribute without a
+/// second read per definition; the *option list* stays out of the vocabulary.
+const VOCABULARY_FIELDS: [&str; 14] = [
     "id",
     "name",
     "label",
@@ -461,6 +476,9 @@ const VOCABULARY_FIELDS: [&str; 11] = [
     "is_key",
     "inheritable",
     "required_types",
+    "computed",
+    "enum_set_id",
+    "constraints",
 ];
 
 /// The vocabulary query: an explicit projection (never `SELECT *`), name order.
@@ -515,9 +533,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vocabulary_query_projects_only_the_slim_fields() {
+    fn vocabulary_query_projects_only_the_fields_the_ui_needs() {
         let sql = vocabulary_sql();
-        // `SELECT *` on 17 379 definitions shipped the whole document per row.
+        // `SELECT *` on 17 463 definitions shipped the whole document per row.
         assert!(!sql.contains('*'), "the vocabulary must never select *");
         assert!(sql.contains("FROM attribute_definition"));
         assert!(sql.contains("ORDER BY name"));
@@ -527,10 +545,13 @@ mod tests {
                 "projection is missing `{field}`: {sql}"
             );
         }
-        // The data-heavy fields are deliberately absent.
+        // The data-heavy fields are deliberately absent: a description, a default
+        // value, the standard codes and — most importantly — the legacy inline
+        // option list, which would multiply the body by the number of options per
+        // attribute.
         for omitted in [
             "description",
-            "constraints",
+            "enum_values",
             "default_value",
             "standard_codes",
         ] {

@@ -27,6 +27,7 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.display import own_attribute_names
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang, multilingual_value_editor
@@ -121,7 +122,11 @@ async def relation_definitions_page() -> None:
     except Exception:  # noqa: BLE001
         object_types = []
     try:
-        definitions = await client.list_attribute_definitions(token, limit=1000)
+        # The **whole** vocabulary, not the capped paged list: with a standard
+        # installed its first page holds nothing but `EF…` features, so a newly
+        # created own attribute could not be picked as an edge attribute. Own
+        # attributes only — an edge carries the catalogue's own values.
+        definitions = await client.list_attribute_vocabulary(token)
     except Exception:  # noqa: BLE001
         definitions = []
 
@@ -130,7 +135,7 @@ async def relation_definitions_page() -> None:
         for d in object_types
         if d.get("name") and str(d.get("name")) != "saved_search"
     }
-    attr_options = {str(d.get("name")): str(d.get("name")) for d in definitions if d.get("name")}
+    attr_options = {name: name for name in own_attribute_names(definitions)}
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("relation_definitions.title")).classes("text-h4")
@@ -410,7 +415,7 @@ async def relation_definitions_page() -> None:
             except Exception:  # noqa: BLE001
                 object_types = []
             try:
-                definitions = await client.list_attribute_definitions(token, limit=1000)
+                definitions = await client.list_attribute_vocabulary(token)
             except Exception:  # noqa: BLE001
                 definitions = []
             type_options = {
@@ -418,9 +423,7 @@ async def relation_definitions_page() -> None:
                 for d in object_types
                 if d.get("name") and str(d.get("name")) != "saved_search"
             }
-            attr_options = {
-                str(d.get("name")): str(d.get("name")) for d in definitions if d.get("name")
-            }
+            attr_options = {name: name for name in own_attribute_names(definitions)}
             source_select.set_options({n: n for n in sorted(type_options)})
             target_select.set_options({n: n for n in sorted(type_options)})
             attr_select.set_options({n: n for n in sorted(attr_options)})

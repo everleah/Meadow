@@ -141,7 +141,9 @@ async def export_page(request: Request) -> None:
                 return await client.list_attribute_groups(token)
             if coro_type == "attribute_definitions":
                 return await load_attribute_definitions(client, token)
-            return await client.list_attribute_definitions(token, limit=1000)
+            # Unknown reference data: an empty list, never the capped paged list
+            # (which would silently offer the first 1000 standard features).
+            return []
         except Exception:  # noqa: BLE001 - degrade so the wizard still opens
             return []
 
