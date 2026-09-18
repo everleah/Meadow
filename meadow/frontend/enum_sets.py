@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -40,13 +41,13 @@ async def enum_sets_page() -> None:
 
     try:
         sets = await client.list_enum_sets(token)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("enum_set.load_failed")).classes("text-subtitle1 text-negative")
         return
 
     try:
         languages = await client.list_languages(token)
-    except Exception:  # noqa: BLE001 - degrade to the UI language only
+    except CoreError, httpx.HTTPError:  # degrade to the UI language only
         languages = []
 
     filters: dict[str, str] = {"name": ""}
@@ -187,7 +188,7 @@ async def enum_sets_page() -> None:
             nonlocal sets
             try:
                 sets = await client.list_enum_sets(token)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 

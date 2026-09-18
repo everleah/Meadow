@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -41,13 +42,13 @@ async def units_page() -> None:
 
     try:
         units = await client.list_units(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("units.load_failed")).classes("text-subtitle1 text-negative")
         return
 
     try:
         languages = await client.list_languages(token)
-    except Exception:  # noqa: BLE001 - degrade to the UI language only
+    except CoreError, httpx.HTTPError:  # degrade to the UI language only
         languages = []
 
     dimensions = sorted({str(u.get("dimension") or "") for u in units if u.get("dimension")})
@@ -228,7 +229,7 @@ async def units_page() -> None:
             nonlocal units
             try:
                 units = await client.list_units(token, limit=1000)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 

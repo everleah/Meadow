@@ -474,15 +474,18 @@ Die Prüfung ergab vier Kategorien mit klarer Entscheidung:
 (einzeilige sind tolerant); bei 13 identischen Blöcken in `api.py` ist eine
 Einzel-Ersetzung deshalb nicht möglich.
 
-**Stand:** 234 → **165** Ausweichungen (grid 33 → 3, form 23 → 0,
-attribute_definitions 16 → 2, api 15 → 13). Die 13 Blöcke in `api.py` sind
-`self._error_detail(response)` in ausgeschriebener Form – die Entdopplung ist der nächste
-Schritt (identischer Text ⇒ zeilenweise statt per Einzel-Ersetzung).
+**Stand:** 234 → **141** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
+`attribute_definitions.py` 16 → 2, `api.py` 15 → 13, `object_types.py` 6 → 1, `users.py`
+6 → 1, `logs.py` 4 → 0, `object_picker.py` 4 → 0, `enum_sets.py` 3 → 0, `units.py` 3 → 0.
+Die verbliebenen sind die AG-Grid-Bridges (Kategorie 2), in `api.py` die 13 identischen
+Blöcke (ausgeschriebene Form von `self._error_detail(response)`).
 
-**Nächste Schritte:** die verbleibenden Seiten nach Kategorie 1 (`connectors.py` 12,
+**Nächste Schritte:** die restlichen Seiten nach Kategorie 1 (`connectors.py` 12,
 `categories.py` 11, `rules.py` 9, `saved_searches.py` 9, `relation_definitions.py` 7,
-`export_page.py` 6, `object_types.py` 6, `users.py` 6 …), danach die Worker-Stellen
-(Kategorie 3) sichten.
+`export_page.py` 6, `views.py`/`channels.py`/`export_profiles.py`/`import_page.py` je 3,
+`config_page.py`/`languages.py`/`settings.py` je 2, `layout.py`/`auth.py`/`password.py` je 1 …),
+die 13 `api.py`-Blöcke entdoppeln (identischer Text ⇒ zeilenweise statt per
+Einzel-Ersetzung) und die Worker-Stellen (Kategorie 3) sichten.
 
 ## 5. Workflow
 

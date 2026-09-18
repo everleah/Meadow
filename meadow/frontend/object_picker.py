@@ -23,9 +23,10 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
+import httpx
 from nicegui import ui
 
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.display import (
     completeness_badge,
     resolve_value,
@@ -247,7 +248,7 @@ async def open_structure_picker(
                     return
                 try:
                     found = await searcher(query)
-                except Exception:  # noqa: BLE001 - degrade to no hits
+                except CoreError, httpx.HTTPError:  # degrade to no hits
                     return
                 for hit in found:
                     with hits:
@@ -318,7 +319,7 @@ async def open_structure_picker(
                     await load_flat(next_page=False)
                 else:
                     loaded_nodes[:] = await load(root_id)
-            except Exception:  # noqa: BLE001 - degrade to an empty tree
+            except CoreError, httpx.HTTPError:  # degrade to an empty tree
                 # Never silently: a picker that cannot load its tree is a broken
                 # dialog, and swallowing the reason makes it undiagnosable.
                 log.exception("picker %r: could not load the structure tree", title)
@@ -519,7 +520,7 @@ async def open_object_picker(
     excluded = {str(entry) for entry in exclude_ids if entry}
     try:
         object_types = await client.list_object_types(token, limit=1000)
-    except Exception:  # noqa: BLE001 - degrade to "no taxonomy"
+    except CoreError, httpx.HTTPError:  # degrade to "no taxonomy"
         object_types = []
     taxonomy_types = taxonomy_type_names(object_types)
     # The taxonomy trees a target set may point at: one entry = that tree, several =
@@ -532,7 +533,7 @@ async def open_object_picker(
     if allowed_types and not choices:
         try:
             graph = await client.fetch_composition_types(token)
-        except Exception:  # noqa: BLE001 - degrade to the composition tree
+        except CoreError, httpx.HTTPError:  # degrade to the composition tree
             log.exception("picker %r: could not load the composition type graph", title)
     reachable = composition_reachable(allowed_types, graph, taxonomy_types)
     mode = picker_tree_mode(allowed_types, taxonomy_types, reachable=reachable)

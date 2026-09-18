@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -91,13 +92,13 @@ async def object_types_page() -> None:
 
     try:
         types = await client.list_object_types(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("object_types.load_failed")).classes("text-subtitle1 text-negative")
         return
 
     try:
         languages = await client.list_languages(token)
-    except Exception:  # noqa: BLE001 - degrade to the UI language only
+    except CoreError, httpx.HTTPError:  # degrade to the UI language only
         languages = []
 
     # Eligible attributes for `key_attributes`/`label_attribute` (own, text, not
@@ -107,7 +108,7 @@ async def object_types_page() -> None:
     # unavailable; degrade gracefully.
     try:
         definitions = await client.list_attribute_vocabulary(token)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no attribute names
         definitions = []
     text_attrs = text_attribute_options(definitions, declared_key_names(types))
 
@@ -116,7 +117,7 @@ async def object_types_page() -> None:
     # A missing endpoint (older core) degrades to an empty list.
     try:
         standards = await client.list_classification_standards(token, counts=True)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no standards
         standards = []
     standards_by_type = {
         str(row.get("node_type")): row
@@ -377,7 +378,7 @@ async def object_types_page() -> None:
                 types = await client.list_object_types(token, limit=1000)
             try:
                 definitions = await client.list_attribute_vocabulary(token)
-            except Exception:  # noqa: BLE001
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 definitions = []
             text_attrs = text_attribute_options(definitions, declared_key_names(types))
             key_select.set_options({n: n for n in sorted(text_attrs)})
@@ -387,7 +388,7 @@ async def object_types_page() -> None:
         async def get_selected() -> dict | None:
             try:
                 rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 return None
             return rows[0] if rows else None
 

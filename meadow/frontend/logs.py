@@ -10,10 +10,11 @@ from __future__ import annotations
 import json as _json
 from datetime import datetime
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
@@ -42,14 +43,14 @@ def _fmt_dt(value: str | None) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
 def _json_pretty(value: object) -> str:
     try:
         return _json.dumps(value, indent=2, ensure_ascii=False)
-    except Exception:  # noqa: BLE001 - fall back to the raw string
+    except TypeError, ValueError:  # fall back to the raw string
         return str(value)
 
 
@@ -150,7 +151,7 @@ async def logs_page() -> None:
 
         try:
             logs = await client.list_system_logs(token, limit=200)
-        except Exception:  # noqa: BLE001 - show an empty table on failure
+        except CoreError, httpx.HTTPError:  # show an empty table on failure
             logs = []
 
         async def reload() -> None:
@@ -166,7 +167,7 @@ async def logs_page() -> None:
                     to_dt=to_input.value or None,
                     q=q_input.value or None,
                 )
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 

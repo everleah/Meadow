@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json as _json
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -60,12 +61,12 @@ async def users_page() -> None:
 
     try:
         users = await client.list_users(token, limit=500)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("users.load_failed")).classes("text-subtitle1 text-negative")
         return
     try:
         groups = await client.list_groups(token, limit=500)
-    except Exception:  # noqa: BLE001 - degrade to no groups
+    except CoreError, httpx.HTTPError:  # degrade to no groups
         groups = []
 
     with ui.column().classes("w-full p-6"):
@@ -253,7 +254,7 @@ async def users_page() -> None:
             nonlocal users
             try:
                 users = await client.list_users(token, limit=500)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             users_grid.run_grid_method("setGridOption", "rowData", _user_rows())
 
@@ -325,7 +326,7 @@ async def users_page() -> None:
         async def impersonate_selected() -> None:
             try:
                 selected = await users_grid.get_selected_rows()
-            except Exception:  # noqa: BLE001 - degrade to no selection
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 selected = []
             if not selected:
                 ui.notify(t("users.no_selection"), color="warning")
@@ -477,7 +478,7 @@ async def users_page() -> None:
                     return {}
                 try:
                     value = _json.loads(text)
-                except Exception as exc:  # noqa: BLE001 - show a friendly warning
+                except ValueError as exc:  # a body that is not JSON shows a warning
                     ui.notify(f"{label}: {exc}", color="warning")
                     return None
                 return value if isinstance(value, dict) else {}
@@ -486,7 +487,7 @@ async def users_page() -> None:
                 nonlocal groups
                 try:
                     groups = await client.list_groups(token, limit=500)
-                except Exception:  # noqa: BLE001 - keep the cached list on failure
+                except CoreError, httpx.HTTPError:  # keep the cached list on failure
                     return
                 groups_grid.run_grid_method("setGridOption", "rowData", _group_rows())
 
