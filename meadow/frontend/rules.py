@@ -17,6 +17,7 @@ from __future__ import annotations
 import json as _json
 from datetime import datetime
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -68,7 +69,7 @@ def _fmt_dt(value: str | None) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -95,7 +96,7 @@ def _json_pretty(value: object) -> str:
     """Pretty-prints a JSON value for the results panel."""
     try:
         return _json.dumps(value, indent=2, ensure_ascii=False)
-    except Exception:  # noqa: BLE001 - fall back to the raw string
+    except TypeError, ValueError:  # fall back to the raw string
         return str(value)
 
 
@@ -116,13 +117,13 @@ async def rules_page() -> None:
 
     try:
         rules = await client.list_rules(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("rules.load_failed")).classes("text-subtitle1 text-negative")
         return
 
     try:
         object_types = await client.list_object_types(token, limit=1000)
-    except Exception:  # noqa: BLE001 - degrade to default types
+    except CoreError, httpx.HTTPError:  # degrade to default types
         object_types = []
     type_names = sorted({str(ot.get("name")) for ot in object_types if ot.get("name")})
 
@@ -339,14 +340,14 @@ async def rules_page() -> None:
             nonlocal rules
             try:
                 rules = await client.list_rules(token, limit=1000)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 
         async def get_selected() -> dict | None:
             try:
                 rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001 - degrade to no selection
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 rows = []
             if not rows:
                 return None
@@ -504,7 +505,7 @@ async def rules_page() -> None:
             object_type = (type_input.value or "").strip() or None
             try:
                 rows = await client.list_objects(token, object_type=object_type, limit=200)
-            except Exception:  # noqa: BLE001 - degrade to no options
+            except CoreError, httpx.HTTPError:  # degrade to no options
                 rows = []
             object_select.set_options({str(r.get("id")): _obj_label(r) for r in rows})
 
@@ -568,7 +569,7 @@ async def rules_page() -> None:
                         return
                     try:
                         parsed = _json.loads(payload_text)
-                    except Exception as exc:  # noqa: BLE001 - friendly warning
+                    except ValueError as exc:  # a payload that is not JSON shows a warning
                         ui.notify(f"{t('rules.lab_invalid_payload')}: {exc}", color="warning")
                         results.clear()
                         return
@@ -589,7 +590,7 @@ async def rules_page() -> None:
                 object_type = (type_input.value or "").strip() or None
                 try:
                     rows = await client.list_objects(token, object_type=object_type, limit=200)
-                except Exception:  # noqa: BLE001 - degrade to no labels
+                except CoreError, httpx.HTTPError:  # degrade to no labels
                     rows = []
                 by_id = {str(r.get("id")): r for r in rows}
                 objects_to_run = chosen[:1] if mode == "object" else chosen

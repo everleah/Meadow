@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -111,16 +112,16 @@ async def relation_definitions_page() -> None:
 
     try:
         defs = await client.list_relation_definitions(token)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("relation_definitions.load_failed")).classes("text-subtitle1 text-negative")
         return
     try:
         languages = await client.list_languages(token)
-    except Exception:  # noqa: BLE001 - degrade to the UI language only
+    except CoreError, httpx.HTTPError:  # degrade to the UI language only
         languages = []
     try:
         object_types = await client.list_object_types(token, limit=1000)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no object types
         object_types = []
     try:
         # The **whole** vocabulary, not the capped paged list: with a standard
@@ -128,7 +129,7 @@ async def relation_definitions_page() -> None:
         # created own attribute could not be picked as an edge attribute. Own
         # attributes only — an edge carries the catalogue's own values.
         definitions = await client.list_attribute_vocabulary(token)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no edge attributes
         definitions = []
 
     type_options = {
@@ -414,11 +415,11 @@ async def relation_definitions_page() -> None:
                 defs = await client.list_relation_definitions(token)
             try:
                 object_types = await client.list_object_types(token, limit=1000)
-            except Exception:  # noqa: BLE001
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 object_types = []
             try:
                 definitions = await client.list_attribute_vocabulary(token)
-            except Exception:  # noqa: BLE001
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 definitions = []
             type_options = {
                 str(d.get("name")): str(d.get("name"))

@@ -482,19 +482,22 @@ wirft `CoreError` – der Degradationspfad war also mit einem Fehler getestet, d
 nie erzeugt. Der Stub wirft jetzt `CoreError` und sagt das im Docstring. Zweite Bestätigung
 der Lehre „ein Test-Double macht die schmale Schnittstelle sichtbar“ (§4.9).
 
-**Stand:** 234 → **111** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
+**Stand:** 234 → **90** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
 `attribute_definitions.py` 16 → 2, `api.py` 15 → 13, `connectors.py` 12 → 1,
-`categories.py` 11 → 0, `export_page.py` 6 → 0, `object_types.py` 6 → 1, `users.py` 6 → 1,
-`logs.py` und `object_picker.py` je 4 → 0, `channels.py`/`enum_sets.py`/`units.py` je 3 → 0.
-Die verbliebenen sind die AG-Grid-Bridges (Kategorie 2) und in `api.py` die 13 identischen
-Blöcke.
+`categories.py` 11 → 0, `saved_searches.py` 9 → 2, `rules.py` 9 → 1,
+`relation_definitions.py` 7 → 1, `export_page.py` 6 → 0, `object_types.py` 6 → 1,
+`users.py` 6 → 1, `logs.py` und `object_picker.py` je 4 → 0,
+`channels.py`/`enum_sets.py`/`units.py` je 3 → 0. Die verbliebenen sind die AG-Grid-Bridges
+(Kategorie 2) und in `api.py` die 13 identischen Blöcke.
 
-**Nächste Schritte:** die restlichen Seiten nach Kategorie 1 (`rules.py` 9,
-`saved_searches.py` 9, `relation_definitions.py` 7, `webhooks.py` 5, `views.py`/
-`export_profiles.py`/`import_page.py` je 3, `config_page.py`/`languages.py`/`settings.py`
-je 2, `layout.py`/`auth.py`/`password.py` je 1), die 13 `api.py`-Blöcke entdoppeln
-(identischer Text ⇒ zeilenweise statt per Einzel-Ersetzung) und die Worker-Stellen
-(Kategorie 3) sichten.
+**Nächste Schritte:** der **Worker** (30 Stellen: `jobs.py` 16, `imports.py` 5, `bulk.py` 4,
+`rules_service.py`/`exports.py` je 3, `connector_test.py` 2, `log_sender.py`/
+`business_rules.py` je 1) – dort bleibt die meiste Breite bewusst (Kategorie 3), zu sichten
+sind die Stellen, die nur einen Kern-Aufruf umschließen; danach die kleinen Seiten
+(`webhooks.py` 5, `import_page.py`/`views.py`/`export_profiles.py` je 3, `config_page.py`/
+`languages.py`/`settings.py` je 2, `layout.py`/`auth.py`/`password.py`/`lazy_tree.py` je 1)
+und die 13 `api.py`-Blöcke entdoppeln (identischer Text ⇒ zeilenweise statt per
+Einzel-Ersetzung).
 
 ## 5. Workflow
 
@@ -591,10 +594,9 @@ so, was er behauptet.
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
    geprüft, nicht als Grenze geführt (§4.7).
-2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 111** Stellen
-   sind umgesetzt. Offen: `rules.py`/`saved_searches.py`/`relation_definitions.py` und die
-   kleinen Seiten (Kategorie „Kern-Aufruf“), die 13 identischen Blöcke in `api.py`; die
-   Worker-Stellen bleiben bewusst breit.
+2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 90** Stellen
+   sind umgesetzt. Offen: der Worker (30, überwiegend bewusst breit), die 13 identischen
+   Blöcke in `api.py` und die kleinen Seiten nach Kategorie „Kern-Aufruf“.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
    und Tests aufbauen, dann Seitenabschnitte überführen.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash

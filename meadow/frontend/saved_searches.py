@@ -25,6 +25,7 @@ import json as _json
 from datetime import datetime
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth, search_form
@@ -54,7 +55,7 @@ def _fmt_dt(value: str | None) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -93,11 +94,11 @@ async def saved_searches_page() -> None:
 
     try:
         searches = await client.list_saved_searches(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         searches = []
     try:
         collections = await client.list_collections(token, limit=1000)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no collections
         collections = []
 
     with ui.column().classes("w-full p-6"):
@@ -122,7 +123,7 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
 
     try:
         catalog = await client.list_search_fields(token)
-    except Exception:  # noqa: BLE001 - the JSON tab still works without a catalog
+    except CoreError, httpx.HTTPError:  # the JSON tab still works without a catalog
         catalog = {}
 
     def _matches(s: dict) -> bool:
@@ -379,7 +380,7 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
         nonlocal searches
         try:
             searches = await client.list_saved_searches(token, limit=1000)
-        except Exception:  # noqa: BLE001 - keep the cached list on failure
+        except CoreError, httpx.HTTPError:  # keep the cached list on failure
             return
         grid.run_grid_method("setGridOption", "rowData", _rows())
 
@@ -470,7 +471,7 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
     # Keep an up-to-date saved-search list for the create dialog.
     try:
         searches = await client.list_saved_searches(token, limit=1000)
-    except Exception:  # noqa: BLE001
+    except CoreError, httpx.HTTPError:  # degrade to no pre-selection
         searches = []
 
     filters: dict[str, str] = {"name": ""}
@@ -646,7 +647,7 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
         nonlocal collections
         try:
             collections = await client.list_collections(token, limit=1000)
-        except Exception:  # noqa: BLE001 - keep the cached list on failure
+        except CoreError, httpx.HTTPError:  # keep the cached list on failure
             return
         grid.run_grid_method("setGridOption", "rowData", _rows())
 
