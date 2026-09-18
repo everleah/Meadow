@@ -587,7 +587,7 @@ async def _structured_export(
             **counters,
         }
     else:
-        columns = _build_columns(fields, locales, multilingual)  # type: ignore
+        columns = _build_columns(fields, locales, multilingual)
         rows = _build_rows(objects, columns, locales, fallback, multilingual)
         if format_ == "xlsx":
             data = _serialize_xlsx(columns, rows, _url_columns(columns, flags.urls))

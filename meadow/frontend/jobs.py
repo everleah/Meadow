@@ -99,6 +99,10 @@ async def jobs_page() -> None:
     client = CoreClient(CORE_URL)
     token = app.storage.user.get("token", "")
 
+    # Definition being edited: shared between the render helper and the save handler
+    # (a button attribute would be invisible to the reader and the type checker).
+    editing_id: str | None = None
+
     try:
         defs = await client.list_job_definitions(token, limit=500)
     except Exception:  # noqa: BLE001 - show a friendly message on failure
@@ -230,7 +234,7 @@ async def jobs_page() -> None:
                             "flat"
                         )
 
-                def _parse_parameters() -> dict:
+                def _parse_parameters() -> dict | None:
                     text = parameters_area.value or ""
                     if not text.strip():
                         return {}
@@ -238,7 +242,7 @@ async def jobs_page() -> None:
                         value = _json.loads(text)
                     except Exception as exc:  # noqa: BLE001 - show a friendly warning
                         ui.notify(f"{t('jobs.invalid_json')}: {exc}", color="warning")
-                        return None  # type: ignore[return-value]
+                        return None
                     return value if isinstance(value, dict) else {}
 
                 def _fill_def(definition: dict | None) -> None:
@@ -262,12 +266,12 @@ async def jobs_page() -> None:
                     )
 
                 def open_editor(definition: dict | None) -> None:
+                    nonlocal editing_id
                     _fill_def(definition)
-                    save_def.editing_id = definition.get("id") if definition else None  # type: ignore[attr-defined]
+                    editing_id = definition.get("id") if definition else None
                     def_dialog.open()
 
                 async def save_def() -> None:
-                    editing_id = getattr(save_def, "editing_id", None)
                     name = (name_input.value or "").strip()
                     if not name:
                         ui.notify(t("jobs.name_required"), color="warning")

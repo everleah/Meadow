@@ -702,12 +702,13 @@ def language_cells(
     language columns (`name` → `_name`, every other attribute → `attr_<name>`).
     """
     attributes = object_.get("attributes") or {}
+    prefixes = language_prefixes or {}
     cells: dict = {}
-    for name in sorted(language_prefixes or {}):
+    for name in sorted(prefixes):
         value = attributes.get(name)
         for language in languages or []:
             resolver = (enum_resolvers or {}).get(language, {}).get(name)
-            field = language_field(language_prefixes[name], language)  # type: ignore
+            field = language_field(prefixes[name], language)
             cells[field] = _language_value(value, language, resolver)
     return cells
 
@@ -729,14 +730,15 @@ def export_fields(
     columns denote the same attribute. Falls back to the base fields.
     """
     fields: list[str] = []
+    mapping = language_fields or {}
     for column in column_defs:
         field = str(column.get("field") or "")
         if field not in visible_fields:
             continue
         if field in _EXPORT_BASE_FIELDS:
             fields.append(_EXPORT_BASE_FIELDS[field])
-        elif (language_fields or {}).get(field):
-            fields.append(language_fields[field])  # type: ignore
+        elif mapping.get(field):
+            fields.append(mapping[field])
         elif field.startswith("attr_"):
             fields.append(field[len("attr_") :])
     return list(dict.fromkeys(fields)) or ["id", "type", "status"]

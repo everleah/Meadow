@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, zwei Reparaturpasses gefahren (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -239,6 +239,53 @@ in dem jede der vier Warnungen im Log erscheint (`caplog`).
 `scripts/check.ps1` komplett grün – cargo fmt, clippy `-D warnings`, 173 Cargo-Tests,
 ruff check + format, **563** pytest (die zwei neuen Tests inklusive).
 
+### 4.5 Dritter Pass: Typ-Ausweichungen (2026-09-18)
+
+Der Deep-Dive nennt als häufigste Befundart `lint_escape` (91 über die fünf größten
+Module) – und das ist ein echter Fund, kein Stilrauschen: **33 `# type: ignore` und
+231 `# noqa: BLE001` in `meadow/`**. Der wichtigere Teil davon ist eine Lücke in der
+Verifikation: `mypy` steht in der Dev-Gruppe, hat aber **keine Konfiguration und kein
+Gate** – die Type-Ignores prüft also niemand, weder Ruff noch Pytest noch die CI.
+
+Alle 33 gesichtet, drei Kategorien:
+
+| Kategorie | Anzahl | Ursache | Vorgehen |
+| --- | --- | --- | --- |
+| veraltet oder überflüssig | 3 | die Annotation erlaubt den Wert längst (`dict \| None`) | entfernen |
+| Optional-Guard, den der Prüfer nicht durchblickt | 2 | `(x or {}).get(...)` bzw. `x[key]` nach `for k in sorted(x or {})` | einmal lokal binden (`mapping = x or {}`) |
+| NiceGUI-Typing (Handler-Signaturen, `attr-defined`) | 28 | `on_click=lambda …`, Zustand als Attribut am Button-Objekt | benannte Handler mit korrekter Signatur; Zustand als `nonlocal`-Variable |
+
+**In diesem Pass behoben (8 Ignores, verhaltensneutral und typgeprüft):**
+
+- `connectors.py`, `exports.py`: zwei überflüssige Ausweichungen entfernt.
+- `jobs.py`: `_parse_parameters` deklariert jetzt `dict | None` – der Aufrufer prüft
+  bereits auf `None`.
+- `grid.py`: zwei Optional-Guards lokal gebunden (`prefixes`, `mapping`).
+- `rules.py` und `jobs.py`: „welcher Datensatz wird bearbeitet“ hing als Attribut am
+  Button-Objekt (`save_rule.editing_id`, gelesen per `getattr`) – jetzt eine
+  `nonlocal`-Variable, wie `users.py` es schon macht.
+
+**Nachweis:** `ruff check`/`ruff format` sauber, **563** pytest, und der Typprüfer
+meldet für die geänderten Dateien **keine** Fehler – die entfernten Ignores waren
+also tatsächlich überflüssig. Stand: **33 → 25** Type-Ignores.
+
+**Nächste Inkremente (bewusst nicht in diesem Pass):**
+
+- die verbleibenden 25 Type-Ignores (`grid.py` 9, `categories.py` 5,
+  `attribute_definitions.py` 4, `search_form.py` 3, `users.py` 2, `object_types.py` 1,
+  `layout.py` 1);
+- die 231 `# noqa: BLE001`: hier ist die Richtung **verengen statt unterdrücken** –
+  die Aufrufer können auf `CoreError` (HTTP-Antwort) plus `httpx.HTTPError`
+  (Transport) verengt werden. Das ändert aber das Verhalten in Randfällen: ein
+  Programmierfehler im `try` würde dann sichtbar statt still degradiert. Deshalb
+  Entscheidung pro Stelle, nicht in einem Rutsch;
+- **die eigentliche Strukturarbeit:** `products_page` in `grid.py` hat **2323
+  Logikzeilen und Komplexität 445** (`inherited_cells` 14, `attribute_column_specs`
+  12). Das ist kein Nebeneffekt, sondern ein eigener, mehrstufiger Umbau: erst reine
+  Helfer herausziehen und mit Tests belegen (Muster `load_option_sources`, §4.4c),
+  dann Abschnitte der Seite in Funktionen mit explizitem Zustand überführen – Seite
+  für Seite, jeweils mit den Frontend-Tests als Netz.
+
 ## 5. Workflow
 
 Der Workflow wird bewusst gestartet und repariert nie von selbst:
@@ -313,25 +360,32 @@ so, was er behauptet.
 | 5 | Ein Reparaturpass erzeugt einen nachvollziehbaren Diff und lässt die Gates laufen | umgesetzt (§4.2; der volle `cargo test`-Lauf braucht den gestoppten Dev-Kern) |
 | 6 | Die Dokumentation nennt Befunde Qualitätssignale und behauptet keine KI-Erkennung | umgesetzt (dieses Dokument) |
 
-## 9. Offene Punkte
+## 9. Stand und offene Punkte
 
-- Erster Reparaturpass: **erledigt** (§4.2) – die sechs verschluckten Fehler sind
-  jetzt im Log sichtbar. Offen bleibt die Frage, ob eine Degradierung zusätzlich in
-  der Oberfläche erscheinen soll (heute bewusst nur im Log, um den Alltag nicht zu
-  fluten).
-- Die 16 `SLOP009`-Befunde (Platzhalterwerte in Rust-Inline-Tests und im Seed): **erledigt**
-  (§4.4) – aufgelöst durch reservierte `.invalid`-Namen, die Baseline ist damit
-  abgeschafft und der Scan scharf.
-- Nach dem ersten Linux-Lauf: Rauschpegel der Stilgruppen für `docs/user/` prüfen.
-- `ai-slop-detector` bleibt bis zur Auswertung in der Dev-Gruppe; danach entscheiden,
-  ob es dort bleibt oder optional lokal installiert wird.
-- SARIF-Ausgabe ist möglich, wird aber erst mit einem registrierten Forgejo-Runner
-  angebunden (siehe Root-`AGENTS.md`, Abschnitt Verification).
-- Struktur-Pass **nach** dem Artefakt-Pass: `form.py`, `grid.py` und `categories.py`
-  sind die Score-Spitzen und gleichzeitig die größten Frontend-Module – ein
-  Aufteilungskandidat, aber nur mit den Frontend-Tests als Netz und nicht als
-  Nebeneffekt einer Artefakt-Reparatur.
-- Abhängigkeits-Entscheidung (aus §4.3): `fastapi`, `starlette`, `engineio` und
-  `botocore` werden direkt importiert, sind aber nur transitiv vorhanden. Optionen:
-  explizit deklarieren (`uv add …`) oder bewusst so lassen. Kein Deslop-Fund, sondern
-  eine Paketierungs-Entscheidung des Teams.
+**Entschieden:**
+
+- `--check-imports` (`SLOP010`) bleibt aus (§4.3).
+- Es gibt **keine Baseline**; jeder Befund der Stufe A scheitert (§4.4).
+- `ai-slop-detector` bleibt in der Dev-Gruppe: `--fix-plan` nutzt es, `uv` pinnt es,
+  zur Laufzeit ist es nicht installiert.
+- Die vier transitiv vorhandenen Pakete (`fastapi`, `starlette`, `engineio`,
+  `botocore`) bleiben undeklariert (§4.3): NiceGUI baut auf FastAPI auf, und ein
+  Rahmenwechsel würde unsere Seitenhandler so oder so brechen – eine Deklaration
+  schützt nicht, sie erzeugt nur zusätzliche Versionsbindung.
+- Degradierungen bleiben **nur im Log** sichtbar, ohne UI-Hinweis (§4.2), damit der
+  Alltag nicht geflutet wird.
+
+**Offen (empfohlene Reihenfolge):**
+
+1. **Typ-Prüfung als Gate:** `mypy` ist deklariert, aber nicht konfiguriert und nicht
+   in `scripts/check.*`. Ohne das bleiben die 25 Type-Ignores unüberprüft (§4.5).
+   Vorschlag: mit `meadow/frontend` beginnen und Modul für Modul vorgehen.
+2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
+   Randfällen ändert sich dabei bewusst.
+3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
+   und Tests aufbauen, dann Seitenabschnitte überführen.
+4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
+   unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
+   folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.
+5. **SARIF an Forgejo Code Scanning** – erst mit registriertem Runner
+   (siehe Root-`AGENTS.md`, Abschnitt Verification).

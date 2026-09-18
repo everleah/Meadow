@@ -109,7 +109,7 @@ def _parse_parameters(text: str | None) -> dict | None:
         parsed = _json.loads(value)
     except Exception as exc:  # noqa: BLE001 - show a friendly warning
         ui.notify(f"{t('connectors.invalid_json')}: {exc}", color="warning")
-        return None  # type: ignore[return-value]
+        return None
     return parsed if isinstance(parsed, dict) else {}
 
 

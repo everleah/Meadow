@@ -108,6 +108,12 @@ async def rules_page() -> None:
     client = CoreClient(CORE_URL)
     token = app.storage.user.get("token", "")
 
+    # Editor and lab state shared between the render helpers and their handlers. An
+    # attribute on the button object would be invisible to the reader - and to the
+    # type checker.
+    editing_id: str | None = None
+    lab_rule: dict | None = None
+
     try:
         rules = await client.list_rules(token, limit=1000)
     except Exception:  # noqa: BLE001 - show a friendly message on failure
@@ -268,9 +274,10 @@ async def rules_page() -> None:
                 ui.button(t("rules.save"), icon="save", on_click=lambda: save_rule()).props("flat")
 
         def _fill_editor(rule: dict | None) -> None:
+            nonlocal editing_id
             editing = rule is not None
             editor_title.set_text(t("rules.edit") if editing else t("rules.new"))
-            save_rule.editing_id = rule.get("id") if rule else None  # type: ignore[attr-defined]
+            editing_id = rule.get("id") if rule else None
             name_input.set_value(str(rule.get("name") or "") if editing else "")
             current_type = str(rule.get("type") or "validation") if editing else "validation"
             type_select.set_value(current_type)
@@ -293,7 +300,6 @@ async def rules_page() -> None:
             editor_dialog.open()
 
         async def save_rule() -> None:
-            editing_id = getattr(save_rule, "editing_id", None)
             name = (name_input.value or "").strip()
             if not name:
                 ui.notify(t("rules.name_required"), color="warning")
@@ -522,7 +528,8 @@ async def rules_page() -> None:
             )
 
         def _edit_lab_state(rule: dict) -> None:
-            lab_dialog.editing_rule = rule  # type: ignore[attr-defined]
+            nonlocal lab_rule
+            lab_rule = rule
             lab_title.set_text(f"{t('rules.lab_title')} — {str(rule.get('name') or '')}")
             type_input.set_value("")
             object_select.set_options({})
@@ -540,7 +547,7 @@ async def rules_page() -> None:
             lab_dialog.open()
 
         async def run_lab() -> None:
-            rule = getattr(lab_dialog, "editing_rule", None)
+            rule = lab_rule
             if not rule:
                 ui.notify(t("rules.no_selection"), color="warning")
                 return
