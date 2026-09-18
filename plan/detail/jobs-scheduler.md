@@ -72,6 +72,14 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - **`DELETE /jobs/{id}`** (admin, neu): löscht die Definition **und** entfernt alle zugehörigen `job_run`-Einträge (Kaskade), damit keine verwaisten Läufe zurückbleiben. Antwort `204`. Wird auditiert (`job_definition_deleted`).
 - **`DELETE /jobs/runs/{run_id}`** (admin, neu): löscht einen einzelnen `job_run` (z. B. Altlasten/DLQ), Antwort `204`, auditiert (`job_run_deleted`).
 
+## Laufergebnis: `result` und seine Kurzfassung `result_summary` (umgesetzt 2026-09-18)
+
+- **`result` ist der vollständige Report** eines Laufs, geschrieben per `PATCH /jobs/runs/{run_id}` (Worker über `x-api-key`). Er gehört in die **Detailansicht**: `GET /jobs/runs?ids=<id>&limit=1` holt genau einen Lauf samt Report.
+- **`result_summary` schreibt der Kern mit:** die Top-Level-Felder des `result`, die einzeln **≤ 2 KB** sind (`format`, `exported`, `columns`, ein kleiner `report`). Sie steckt in **jeder** Lauf-Antwort — auch bei `include_result=false` — und ist das, was eine **Liste** zeigt: „was hat der Lauf getan?“, ohne die Nutzlast. Die Größenregel ist bewusst generisch (Größe, nicht Feldname und nicht Job-Typ), damit kein Job-Typ einen eigenen Leser braucht.
+- **Warum:** `result` ist zugleich Ablage. Ein Export legt sein ganzes Dokument hinein, ein Import seinen Report je Objekt. `GET /jobs/runs?limit=100` **mit** Results antwortete mit **20 MB**, und die nächste Anfrage riss die SurrealDB-Verbindung ab (`500 Connection reset`; gemessen 2026-09-18: `limit=20` = 20 MB, `limit=50` scheiterte) — danach antworteten auch andere Endpunkte (`/languages`, `/system/logs`) mit 500, bis die Verbindung sich erholte. Daraus die Regel: **Listen und Polling fragen `include_result=false`**, Report und Download holen einen einzelnen Lauf.
+- **Einmalige Lücke:** Läufe von *vor* dieser Änderung haben keine Kurzfassung — sie wurde nicht rückwirkend berechnet, weil das genau die Nutzlasten laden müsste, die der Anlass der Änderung sind. Die Liste füllt sich mit den nächsten Läufen.
+- **Offener Rest (nicht geändert):** Ein Export legt Report und Dokument in **demselben** `result` ab; wer den Report sehen will (Export-/Importseite nach dem Lauf), holt damit auch das Dokument. Sauber wäre eine Trennung von Report und Artefakt (eigenes Feld/Objekt-Store, das nur der Download liest) — eigener Schritt, siehe [datenexport-import-ui.md](datenexport-import-ui.md).
+
 ## Python-Worker-Jobkonsument (implementiert, Schritt 3)
 
 - `python -m meadow.worker` startet neben dem Rule-Service einen **JetStream-Pull-Konsumenten** (`jobs.*`, Stream `JOBS`, Durable `job-worker`; `meadow/worker/jobs.py`).

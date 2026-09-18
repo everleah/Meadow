@@ -47,10 +47,16 @@ def export_source(ids: Sequence[str]) -> dict[str, Any]:
 
 
 async def wait_for_export(client: CoreClient, token: str, run_id: str) -> dict[str, Any]:
-    """Polls an export job run until it reaches a terminal state."""
+    """Polls an export job run until it reaches a terminal state.
+
+    `include_result=False`: polling only asks for the status, and the `result` of an
+    export carries its **whole document** (megabytes) — the core answers with
+    `result_summary` instead, so a poll stays a poll (see `recent_exports` in
+    `export_page.py` for the size that made a listing reset the DB connection).
+    """
     for _ in range(POLL_ATTEMPTS):
         try:
-            runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+            runs = await client.list_job_runs(token, ids=[run_id], limit=1, include_result=False)
         except CoreError, httpx.HTTPError:  # keep polling on a transient error
             runs = []
         if runs:
@@ -172,7 +178,7 @@ class ExportDialog:
         except (CoreError, httpx.HTTPError) as exc:  # surface a friendly message
             ui.notify(t("grid.export_failed").format(err=exc), color="negative")
             return
-        exported = (run.get("result") or {}).get("exported", len(ids))
+        exported = (run.get("result_summary") or {}).get("exported", len(ids))
         if self.dialog is not None:
             self.dialog.close()
         save_download(data, filename, fmt)

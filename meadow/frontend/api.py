@@ -1209,10 +1209,14 @@ class CoreClient:
         """Lists job runs (newest first) for the dashboard / polling.
 
         `include_result=False` keeps the `result` payload out of the answer: a bulk
-        import stores its full report there (tens of thousands of entries), so a
-        listing of several runs pulls megabytes and the database resets the
-        connection (`500 Connection reset`). List views pass `False` and fetch a
-        single run when a detail dialog needs the report.
+        import stores its full report there (tens of thousands of entries), an export
+        its whole document (megabytes), so a listing of several runs pulls megabytes
+        and the database resets the connection (`500 Connection reset`). List views
+        pass `False` and fetch a single run when a detail dialog needs the report.
+
+        `result_summary` is in the answer either way: the core stores the top-level
+        fields of the result up to 2 KB (`format`, `exported`, `columns`, …), which is
+        what a list shows about a run — see `export_page.recent_exports`.
         """
         params: dict[str, str] = {"limit": str(limit)}
         if ids:

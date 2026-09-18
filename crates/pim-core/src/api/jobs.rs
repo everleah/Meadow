@@ -102,6 +102,11 @@ pub struct ListJobRuns {
     /// polling an import: `GET /jobs/runs?limit=50` → `500 Connection reset`, which
     /// killed the import script while its worker kept working). Polling should pass
     /// `include_result=false` and fetch a single report afterwards.
+    ///
+    /// **`result_summary` is always in the answer** (a few bytes): the scalar
+    /// top-level fields of `result`, so a listing can still say what a run did
+    /// (`format`, `exported`, `connector`) without the payload. See
+    /// [`result_summary`].
     #[serde(default = "default_true")]
     pub include_result: bool,
 }
@@ -132,6 +137,53 @@ fn default_true() -> bool {
 /// post-fetch strip would still pull the megabytes through the connection.
 fn run_projection(include_result: bool) -> &'static str {
     if include_result { "*" } else { "* OMIT result" }
+}
+
+/// The larger a single field of a `result` may be to still enter `result_summary`.
+///
+/// 2 KB is a **hard** bound, not a target: the summary sits in every run row and is
+/// read by every listing, so it has to stay small by construction. It is comfortably
+/// above what a report's *description* needs (`columns` of an export, `format`,
+/// counters, a small `report`) and far below any payload.
+const SUMMARY_FIELD_LIMIT: usize = 2048;
+
+/// The top-level fields of a run's `result` that fit in [`SUMMARY_FIELD_LIMIT`],
+/// stored as `result_summary`.
+///
+/// A `result` is a **report**, and the part a listing cares about is one line
+/// (`format: "bmecat"`, `exported: 120`, `connector: "json_export"`) while the
+/// payload next to it is huge: an export stores its whole document there, an import
+/// its per-object report. A list read (`GET /jobs/runs?limit=100`) must not transfer
+/// that — asking for the newest 100 runs *with* results answered with **20 MB** and
+/// the next step **reset the SurrealDB connection** (`500 Connection reset`,
+/// measured 2026-09-18: `include_result=true&limit=50` failed, `limit=20` delivered
+/// 20 MB); the export page did exactly that.
+///
+/// The rule is deliberately generic: **size, not type and not job type**. Scalars
+/// pass without measuring, containers are measured once while the result is written;
+/// nothing nested is dropped selectively, so no job type needs its own reader and a
+/// new field is covered the moment it is small. `result` itself stays the complete
+/// report — the single-run read (`ids=<id>&limit=1`) is what sees it, which is what
+/// a report dialog and the download path do.
+fn result_summary(result: &Value) -> Value {
+    let Some(entries) = result.as_object() else {
+        return Value::Null;
+    };
+    let mut summary = Map::new();
+    for (key, value) in entries {
+        let small = match value {
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => true,
+            _ => serde_json::to_string(value).is_ok_and(|text| text.len() <= SUMMARY_FIELD_LIMIT),
+        };
+        if small {
+            summary.insert(key.clone(), value.clone());
+        }
+    }
+    if summary.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(summary)
+    }
 }
 
 /// Splits a `table:key` path segment and verifies the expected table.
@@ -670,6 +722,10 @@ pub async fn update_job_run(
         changes.insert("worker_id".to_owned(), Value::String(worker_id));
     }
     if let Some(result) = body.result {
+        // The summary is written **with** the result, from the result: whoever stores
+        // a report stores its one-line essence, and no reader has to derive it from a
+        // payload it must not transfer (see [`result_summary`]).
+        changes.insert("result_summary".to_owned(), result_summary(&result));
         changes.insert("result".to_owned(), result);
     }
     if let Some(error) = body.error {
@@ -681,7 +737,7 @@ pub async fn update_job_run(
         "running" => {
             // Fresh attempt: clear any stale error/result from a previous attempt.
             extra.push_str(
-                "UPDATE $r SET started_at = (IF started_at IS NONE THEN time::now() ELSE started_at END), error = NONE, result = NONE;",
+                "UPDATE $r SET started_at = (IF started_at IS NONE THEN time::now() ELSE started_at END), error = NONE, result = NONE, result_summary = NONE;",
             );
         }
         "success" => {
@@ -691,7 +747,9 @@ pub async fn update_job_run(
             extra.push_str("UPDATE $r SET finished_at = time::now();");
         }
         "retry" => {
-            extra.push_str("UPDATE $r SET attempt = attempt + 1, error = NONE, result = NONE;");
+            extra.push_str(
+                "UPDATE $r SET attempt = attempt + 1, error = NONE, result = NONE, result_summary = NONE;",
+            );
         }
         _ => {}
     }
@@ -928,4 +986,83 @@ pub async fn run_job(
         &claims.sub,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A payload of the size an export really stores (hundreds of objects).
+    fn big_document() -> Value {
+        json!({
+            "objects": (0..400)
+                .map(|index| json!({"id": format!("product:{index}"), "name": "Brake disc"}))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn result_summary_keeps_the_description_and_drops_a_large_payload() {
+        let result = json!({
+            "format": "bmecat",
+            "exported": 120,
+            "resolved_inheritance": true,
+            "columns": ["sku", "name"],
+            "document": big_document(),
+        });
+
+        assert_eq!(
+            result_summary(&result),
+            json!({
+                "format": "bmecat",
+                "exported": 120,
+                "resolved_inheritance": true,
+                "columns": ["sku", "name"],
+            })
+        );
+    }
+
+    #[test]
+    fn result_summary_decides_by_size_not_by_name() {
+        // A *small* document is tiny enough to keep, a *large* report is dropped: the
+        // rule is the size of the field, not the field's name and not the job type.
+        let big = json!({
+            "unpriced": (0..400).map(|index| format!("product:{index}")).collect::<Vec<_>>(),
+        });
+        let small = json!({"unpriced": ["product:1"]});
+
+        assert_eq!(
+            result_summary(&json!({"format": "bmecat", "report": big})),
+            json!({"format": "bmecat"})
+        );
+        assert_eq!(
+            result_summary(&json!({"format": "bmecat", "report": small})),
+            json!({"format": "bmecat", "report": small})
+        );
+        assert_eq!(
+            result_summary(&json!({"document": {"objects": []}})),
+            json!({"document": {"objects": []}})
+        );
+    }
+
+    #[test]
+    fn result_summary_is_null_without_usable_fields() {
+        assert_eq!(
+            result_summary(&json!({"document": big_document()})),
+            Value::Null
+        );
+        assert_eq!(result_summary(&json!({})), Value::Null);
+        assert_eq!(result_summary(&json!("not an object")), Value::Null);
+    }
+
+    #[test]
+    fn result_summary_keeps_zero_and_false() {
+        // `0` and `false` are results, not "nothing" — a summary must not lose them.
+        let result = json!({"exported": 0, "failed": false, "items": []});
+
+        assert_eq!(
+            result_summary(&result),
+            json!({"exported": 0, "failed": false, "items": []})
+        );
+    }
 }

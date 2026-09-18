@@ -481,6 +481,7 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
     "started_at": "2026-08-14T09:00:00Z",
     "finished_at": "2026-08-14T09:04:12Z",
     "result": { "exported_objects": 150 },
+    "result_summary": { "exported_objects": 150 },   // Kurzfassung, vom Kern mitgeschrieben
     "error": null,
     "worker_id": "worker-1"
 }
@@ -488,6 +489,7 @@ Protokolliert jeden Ausführungsversuch (Details in Abschnitt 6).
 
 - Der Triggerwert `event` (Event-getriggerte Jobs) ist **reserviert** für Phase 5+; im MVP sind nur `schedule` und `manual` aktiv (Details [jobs-scheduler.md](jobs-scheduler.md)).
 - `job_definition_id` ist **optional** (`option<string>`): Ad-hoc-Jobs ohne Definition (z. B. `POST /rules/{id}/recompute`) haben kein `job_definition_id`; im JSON wird das Feld weggelassen bzw. als `null` geliefert.
+- **`result_summary`** hält die Top-Level-Felder des `result`, die einzeln ≤ 2 KB sind — `result` ist zugleich Ablage (Export-Dokument, Import-Report je Objekt), und eine Liste darf das nicht übertragen. Der Kern schreibt die Kurzfassung beim Speichern des Results mit und liefert sie in **jeder** Lauf-Antwort (auch bei `include_result=false`); `running`/`retry` löschen beide. Vertrag: [jobs-scheduler.md](jobs-scheduler.md).
 
 ### Tabelle `audit_log`
 

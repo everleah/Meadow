@@ -100,6 +100,34 @@ async def load_attribute_definitions(client: CoreClient, token: str) -> list[dic
     return await client.list_attribute_vocabulary(token)
 
 
+def recent_exports(runs: list[dict]) -> list[dict]:
+    """The rows of the "recent exports" box: export runs, without any payload.
+
+    Reads `result_summary`, **not** `result`: an export stores its whole document in
+    the result (the newest 100 runs with results answered with 20 MB and the next
+    call reset the DB connection, 2026-09-18), and this box only shows a format, a
+    count and a timestamp. A run without a summary (recorded before the core wrote
+    them) is skipped — it cannot be classified as an export without loading the
+    payload this function exists to avoid.
+    """
+    exports: list[dict] = []
+    for run in runs:
+        summary = run.get("result_summary") or {}
+        format_ = str(summary.get("format") or "")
+        if format_ not in FORMATS:
+            continue
+        exports.append(
+            {
+                "id": str(run.get("id") or ""),
+                "format": format_,
+                "exported": int(summary.get("exported") or 0),
+                "created_at": run.get("created_at"),
+                "trigger": str(run.get("trigger") or ""),
+            }
+        )
+    return exports
+
+
 @ui.page("/export", response_timeout=PAGE_TIMEOUT)
 async def export_page(request: Request) -> None:
     """The structured export wizard page."""
@@ -647,9 +675,13 @@ async def export_page(request: Request) -> None:
 
                 data_languages = [str(lang.get("code")) for lang in languages]
                 locale_select = (
+                    # `None` when the language list could not be loaded: a code that is
+                    # not among the options makes `ui.select` raise, turning a failed
+                    # reference load into a **500 page** (hit live 2026-09-18 while the
+                    # core answered `500` for `GET /languages`).
                     ui.select(
                         data_languages,
-                        value=data_languages[0] if data_languages else "de",
+                        value=data_languages[0] if data_languages else None,
                         multiple=True,
                         label=t("export.locale"),
                     )
@@ -706,10 +738,16 @@ async def export_page(request: Request) -> None:
                     .classes("w-28")
                 )
             with ui.row().classes("flex-wrap gap-6 mt-2"):
+                bmecat_language_options = {
+                    code: BMECAT_LANGUAGES.get(code, code) for code in data_languages
+                }
                 bmecat_language = (
                     ui.select(
-                        {code: BMECAT_LANGUAGES.get(code, code) for code in data_languages},
-                        value=(data_languages[0] if data_languages else "en"),
+                        bmecat_language_options,
+                        # The **key** of an option, never a code that may be missing from
+                        # it: an empty option list plus a fallback value raises
+                        # `Invalid value` and the page answers 500 instead of degrading.
+                        value=next(iter(bmecat_language_options), None),
                         label=t("export.bmecat_language"),
                     )
                     .props("filled dense")
@@ -1274,30 +1312,28 @@ async def export_page(request: Request) -> None:
             recent_box.clear()
             recent_ids.clear()
             try:
-                runs = await client.list_job_runs(token, limit=100)
+                # `include_result=False`: the `result` of an export carries its whole
+                # document, and 100 of them do not fit through the connection (the DB
+                # reset it, see `recent_exports`). The summary is all this box shows.
+                runs = await client.list_job_runs(token, limit=100, include_result=False)
             except CoreError, httpx.HTTPError:  # degrade to an empty list
                 runs = []
-            exports = [
-                run for run in runs if str((run.get("result") or {}).get("format") or "") in FORMATS
-            ]
+            exports = recent_exports(runs)
             with recent_box:
                 if not exports:
                     ui.label(t("export.recent_none")).classes("text-caption text-gray-500")
                     return
-                for run in exports[:20]:
-                    result = run.get("result") or {}
-                    fmt = str(result.get("format") or "csv")
-                    run_id = str(run.get("id") or "")
+                for export in exports[:20]:
+                    fmt = export["format"]
+                    run_id = export["id"]
                     recent_ids.append(run_id)
                     with ui.row().classes("items-center gap-3 w-full"):
-                        ui.label(_fmt_dt(run.get("created_at"))).classes("text-caption w-44")
+                        ui.label(_fmt_dt(export["created_at"])).classes("text-caption w-44")
                         ui.badge(fmt.upper()).props("outline")
-                        ui.label(
-                            t("export.recent_count").format(count=result.get("exported", 0))
-                        ).classes("text-caption")
-                        ui.label(str(run.get("trigger") or "")).classes(
-                            "text-caption text-gray-500"
+                        ui.label(t("export.recent_count").format(count=export["exported"])).classes(
+                            "text-caption"
                         )
+                        ui.label(export["trigger"]).classes("text-caption text-gray-500")
                         ui.button(
                             icon="download",
                             on_click=lambda rid=run_id, f=fmt: _download(rid, f),
