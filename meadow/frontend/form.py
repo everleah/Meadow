@@ -30,6 +30,7 @@ from functools import partial
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth, config, edit_queue
@@ -209,11 +210,11 @@ async def product_form(object_id: str) -> None:
             references = await client.list_object_references(token, object_id, locale=locale)
             try:
                 enum_sets = await client.list_enum_sets(token)
-            except Exception:  # noqa: BLE001 - degrade to raw enum codes
+            except CoreError, httpx.HTTPError:  # degrade to raw enum codes
                 enum_sets = []
             try:
                 channels = await client.list_channels(token, active=True)
-            except Exception:  # noqa: BLE001 - no channel section without a catalog
+            except CoreError, httpx.HTTPError:  # no channel section without a catalog
                 channels = []
             try:
                 # Taxonomy node types: the valid targets of a categorisation
@@ -221,7 +222,7 @@ async def product_form(object_id: str) -> None:
                 # carry their labels, so a dimension bound to one taxonomy can name
                 # it in the hint.
                 object_type_rows = await client.list_object_types(token, limit=1000)
-            except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+            except CoreError, httpx.HTTPError:  # degrade to the built-in taxonomy
                 object_type_rows = []
             taxonomy_types = taxonomy_type_names(object_type_rows)
             taxonomy_labels = taxonomy_options(object_type_rows, locale)
@@ -231,9 +232,9 @@ async def product_form(object_id: str) -> None:
                 class_features = await client.list_object_category_attributes(
                     token, object_id, locale=locale
                 )
-            except Exception:  # noqa: BLE001 - no class features without classes
+            except CoreError, httpx.HTTPError:  # no class features without classes
                 class_features = {}
-        except Exception:  # noqa: BLE001 - show a friendly message on failure
+        except CoreError, httpx.HTTPError:  # show a friendly message on failure
             ui.label(t("form.load_failed")).classes("text-subtitle1 text-negative")
             return
 
@@ -253,7 +254,7 @@ async def product_form(object_id: str) -> None:
             has_children = bool(
                 await client.list_object_children(token, object_id, limit=1, scope="composition")
             )
-        except Exception:  # noqa: BLE001 - the action is simply not offered
+        except CoreError, httpx.HTTPError:  # the action is simply not offered
             has_children = False
 
         # Data languages (base languages for the per-attribute language dialog;
@@ -318,7 +319,7 @@ async def product_form(object_id: str) -> None:
                     await client.update_object(
                         token, object_id, attributes={attr_name: None}, locale=locale
                     )
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("form.inherit_failed"), color="negative")
                 return
             ui.navigate.reload()
@@ -507,7 +508,7 @@ async def product_form(object_id: str) -> None:
                         # core's full-text index matches whole tokens only.
                         code_prefix=True,
                     )
-                except Exception:  # noqa: BLE001 - degrade to no hits
+                except CoreError, httpx.HTTPError:  # degrade to no hits
                     return
                 for hit in hits:
                     with results:
@@ -861,7 +862,7 @@ async def product_form(object_id: str) -> None:
                     await client.create_reference(
                         token, object_id, hit["id"], dk, attributes=values or None
                     )
-                except Exception:  # noqa: BLE001 - show a friendly message
+                except CoreError, httpx.HTTPError:  # show a friendly message
                     ui.notify(t("grid.ref_add_failed"), color="negative")
                     return
                 ui.notify(t("form.relation_added"), color="positive")
@@ -884,7 +885,7 @@ async def product_form(object_id: str) -> None:
             async def submit(values: dict) -> None:
                 try:
                     await client.update_reference(token, reference_id, values or {})
-                except Exception:  # noqa: BLE001 - show a friendly message
+                except CoreError, httpx.HTTPError:  # show a friendly message
                     ui.notify(t("grid.ref_edit_failed"), color="negative")
                     return
                 ui.notify(t("form.relation_updated"), color="positive")
@@ -901,7 +902,7 @@ async def product_form(object_id: str) -> None:
             """Deletes an aggregation reference."""
             try:
                 await client.delete_reference(token, reference_id)
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("grid.ref_remove_failed"), color="negative")
                 return
             await reload_relations()
@@ -994,7 +995,7 @@ async def product_form(object_id: str) -> None:
             """Re-parents the object to a new composition parent."""
             try:
                 await client.reparent_object(token, object_id, hit["id"])
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("form.relation_reparent_failed"), color="negative")
                 return
             ui.notify(t("form.relation_reparented"), color="positive")
@@ -1204,7 +1205,7 @@ async def product_form(object_id: str) -> None:
                             "label": label,
                             "type": str(target.get("type", "")),
                         }
-                    except Exception:  # noqa: BLE001 - fall back to the raw id
+                    except CoreError, httpx.HTTPError:  # fall back to the raw id
                         ref_labels[name_] = {"id": val, "label": val, "type": ""}
 
         # --- Relations (graph edges): definitions + the object's references. --
@@ -1246,7 +1247,7 @@ async def product_form(object_id: str) -> None:
                         continue
                     try:
                         obj = await client.get_object(token, cat_id, locale=locale)
-                    except Exception:  # noqa: BLE001 - fall back to the raw id
+                    except CoreError, httpx.HTTPError:  # fall back to the raw id
                         cat_state[cat_id] = {
                             "id": cat_id,
                             "label": cat_id,
@@ -1273,7 +1274,7 @@ async def product_form(object_id: str) -> None:
                         continue
                     try:
                         created = await client.create_reference(token, object_id, cat_id, def_key)
-                    except Exception as exc:  # noqa: BLE001 - show a friendly message
+                    except (CoreError, httpx.HTTPError) as exc:  # show a friendly message
                         ui.notify(str(exc), color="negative")
                         continue
                     if created and created.get("id"):
@@ -1338,7 +1339,7 @@ async def product_form(object_id: str) -> None:
             if reference_id:
                 try:
                     await client.delete_reference(token, reference_id)
-                except Exception as exc:  # noqa: BLE001 - show a friendly message
+                except (CoreError, httpx.HTTPError) as exc:  # show a friendly message
                     ui.notify(str(exc), color="negative")
             render_sections.refresh()
 
@@ -1354,7 +1355,7 @@ async def product_form(object_id: str) -> None:
                     code = str(row.get("channel") or "")
                     if code in release_state:
                         release_state[code] = str(row.get("status") or "")
-            except Exception as error:  # noqa: BLE001 - show the section as not released
+            except (CoreError, httpx.HTTPError) as error:  # show the section as not released
                 # A silent degrade would render a released object as unreleased.
                 log.warning("object %s: channel releases unavailable (%s)", object_id, error)
 
@@ -1364,7 +1365,7 @@ async def product_form(object_id: str) -> None:
                 return
             try:
                 await client.set_object_release(token, object_id, channel=code, status=status)
-            except Exception as exc:  # noqa: BLE001 - e.g. a `workflow_guard` denial
+            except (CoreError, httpx.HTTPError) as exc:  # e.g. a `workflow_guard` denial
                 ui.notify(f"{t('form.release_failed')}: {exc}", color="negative")
             else:
                 release_state[code] = status
@@ -1375,7 +1376,7 @@ async def product_form(object_id: str) -> None:
             """Withdraws the release of one channel."""
             try:
                 await client.withdraw_object_release(token, object_id, code)
-            except Exception as exc:  # noqa: BLE001 - show a friendly message
+            except (CoreError, httpx.HTTPError) as exc:  # show a friendly message
                 ui.notify(f"{t('form.release_failed')}: {exc}", color="negative")
             else:
                 release_state[code] = ""
@@ -1711,7 +1712,7 @@ async def product_form(object_id: str) -> None:
                 all_references = await client.list_object_references(
                     token, object_id, locale=locale
                 )
-            except Exception:  # noqa: BLE001 - degrade to an empty list
+            except CoreError, httpx.HTTPError:  # degrade to an empty list
                 all_references = []
             render_sections.refresh()
 
@@ -1827,7 +1828,7 @@ async def product_form(object_id: str) -> None:
                     for _ in range(120):
                         try:
                             runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-                        except Exception:  # noqa: BLE001 - retry on transient errors
+                        except CoreError, httpx.HTTPError:  # retry on transient errors
                             runs = []
                         if not runs:
                             return None
@@ -1900,7 +1901,7 @@ async def product_form(object_id: str) -> None:
                             object_ids=[object_id],
                             parameters=parameters,
                         )
-                    except Exception:  # noqa: BLE001 - show a friendly message
+                    except CoreError, httpx.HTTPError:  # show a friendly message
                         ui.notify(t("consolidate.failed"), color="negative")
                         return
                     run_id = str(run.get("id") or "")
@@ -1976,7 +1977,7 @@ async def product_form(object_id: str) -> None:
                 except CoreError as error:
                     ui.notify(t("form.save_failed_reason").format(reason=error), color="negative")
                     return  # keep the object open, in particular in a sequence
-                except Exception:  # noqa: BLE001 - show a friendly message
+                except httpx.HTTPError:  # show a friendly message
                     ui.notify(t("form.save_failed"), color="negative")
                     return
             elif not next_object:

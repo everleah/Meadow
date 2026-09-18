@@ -454,6 +454,36 @@ hat die untypisierten Rümpfe also schon mitgeräumt.
 `attribute_definitions.py`, 2 `users.py`, 5 `test_search_form.py`) — alle notwendig, was
 `warn_unused_ignores` in jedem Lauf beweist.
 
+### 4.10 `# noqa: BLE001` verengen: die Entscheidungsregel (2026-09-18)
+
+Die 234 `except Exception`-Stellen sind der letzte große Posten aus §4.5. Ziel ist nicht
+„überall dasselbe“, sondern pro Stelle eine Aussage über die **tatsächliche Fehlerfläche**.
+Die Prüfung ergab vier Kategorien mit klarer Entscheidung:
+
+| Kategorie | Beispiel | Entscheidung |
+| --- | --- | --- |
+| **Kern-Aufruf** (die Mehrheit) | `objects = await client.list_objects(…)` | `except CoreError, httpx.HTTPError:` – das ist die vollständige Fläche (Status ≥ 300 vs. Transport/Decoding). Lokale Nachbearbeitung im `try` heißt bewusst: ein Programmierfehler wird **sichtbar**, statt leer zu degradieren (Root-`AGENTS.md`: „ein neuer Vertrag wird direkt genutzt; fehlt er, ist das ein Fehler und wird sichtbar gemeldet“) |
+| **Browser-Bridge** (AG Grid) | `await grid.get_selected_rows()`, `run_grid_method(…)` | **bleibt breit**, Grund benannt („die AG-Grid-Bridge hat keinen engen Vertrag“): NiceGUI typisiert den JS-Roundtrip nicht, ein engeres `except` wäre geraten |
+| **Absichtliche Isolation** (Worker) | `JobRunner.handle` (jede Handler-Ausnahme ⇒ Job fehlgeschlagen + Retry), Batch-Isolation in `imports.py`, DLQ-Publish | **bleibt breit**: eine Verengung würde den Consumer statt den Job scheitern lassen. Diese Stellen werden nur geprüft, nicht geändert |
+| **JSON-Körper des Kerns** | `response.json().get("error")` in `api.py` | `except ValueError, AttributeError:` (kein JSON vs. JSON ohne Objekt) |
+
+**Werkzeug-Lehren:** `ruff format` schreibt `except (A, B):` in die PEP-758-Form
+`except A, B:` um (Zielversion 3.14) – und `B025` deckte dabei eine echte Doppelung auf: in
+`form.py` stand `CoreError` in zwei Klauseln desselben `try`, dort bleibt nur
+`httpx.HTTPError`. Außerdem brauchen **mehrzeilige Ersetzungen die exakte Einrückung**
+(einzeilige sind tolerant); bei 13 identischen Blöcken in `api.py` ist eine
+Einzel-Ersetzung deshalb nicht möglich.
+
+**Stand:** 234 → **165** Ausweichungen (grid 33 → 3, form 23 → 0,
+attribute_definitions 16 → 2, api 15 → 13). Die 13 Blöcke in `api.py` sind
+`self._error_detail(response)` in ausgeschriebener Form – die Entdopplung ist der nächste
+Schritt (identischer Text ⇒ zeilenweise statt per Einzel-Ersetzung).
+
+**Nächste Schritte:** die verbleibenden Seiten nach Kategorie 1 (`connectors.py` 12,
+`categories.py` 11, `rules.py` 9, `saved_searches.py` 9, `relation_definitions.py` 7,
+`export_page.py` 6, `object_types.py` 6, `users.py` 6 …), danach die Worker-Stellen
+(Kategorie 3) sichten.
+
 ## 5. Workflow
 
 Der Workflow wird bewusst gestartet und repariert nie von selbst:
@@ -549,8 +579,9 @@ so, was er behauptet.
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
    geprüft, nicht als Grenze geführt (§4.7).
-2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
-   Randfällen ändert sich dabei bewusst.
+2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, 234 → 165 Stellen
+   sind umgesetzt. Offen: die restlichen Frontend-Seiten (Kategorie „Kern-Aufruf“) und die
+   13 identischen Blöcke in `api.py`; die Worker-Stellen bleiben bewusst breit.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
    und Tests aufbauen, dann Seitenabschnitte überführen.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash

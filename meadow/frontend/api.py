@@ -68,7 +68,7 @@ async def _watch_session(response: httpx.Response) -> None:
     try:
         await response.aread()
         body = response.text
-    except Exception:  # noqa: BLE001 - a body that cannot be read carries no verdict
+    except httpx.HTTPError, ValueError:  # a body that cannot be read carries no verdict
         return
     if SESSION_EXPIRED_MESSAGE in body and _session_expired_handler is not None:
         _session_expired_handler()
@@ -2545,7 +2545,7 @@ class CoreClient:
         """Extracts the core's ``error`` field (or the response text)."""
         try:
             return response.json().get("error") or response.text
-        except Exception:  # noqa: BLE001 - body may not be JSON
+        except ValueError, AttributeError:  # a body that is not a JSON object has no `error`
             return response.text
 
     async def list_saved_searches(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -51,12 +52,12 @@ async def attribute_definitions_page() -> None:
             # attribute was simply not reachable here. The core serves the
             # projection from its cache; the editor loads the full record on open.
             definitions = await client.list_attribute_vocabulary(token)
-        except Exception:  # noqa: BLE001 - show a friendly message on failure
+        except CoreError, httpx.HTTPError:  # show a friendly message on failure
             ui.label(t("attr_def.load_failed")).classes("text-subtitle1 text-negative")
             return
         try:
             units = await client.list_units(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to no units
+        except CoreError, httpx.HTTPError:  # degrade to no units
             units = []
 
         def _unit_key(u: dict) -> str:
@@ -83,13 +84,13 @@ async def attribute_definitions_page() -> None:
         # Active data languages drive the multilingual label editor (hybrid).
         try:
             languages = await client.list_languages(token)
-        except Exception:  # noqa: BLE001 - degrade to the UI language only
+        except CoreError, httpx.HTTPError:  # degrade to the UI language only
             languages = []
 
         # Reusable enum sets drive the `enum_set_id` selector for `enum` types.
         try:
             enum_sets = await client.list_enum_sets(token)
-        except Exception:  # noqa: BLE001 - degrade to no enum sets
+        except CoreError, httpx.HTTPError:  # degrade to no enum sets
             enum_sets = []
         enum_set_options: dict[str, str] = {
             str(s.get("id")): (
@@ -101,14 +102,14 @@ async def attribute_definitions_page() -> None:
 
         try:
             groups = await client.list_attribute_groups(token)
-        except Exception:  # noqa: BLE001 - degrade to no groups
+        except CoreError, httpx.HTTPError:  # degrade to no groups
             groups = []
         # Object types come from the managed registry (`/object-types`), so the
         # `applicable_types`/`required_types` dropdowns show all known types,
         # not just the types of existing objects.
         try:
             object_type_rows = await client.list_object_types(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to the default types
+        except CoreError, httpx.HTTPError:  # degrade to the default types
             object_type_rows = []
 
         object_types: list[str] = sorted(
@@ -130,7 +131,7 @@ async def attribute_definitions_page() -> None:
         # point nowhere). Computed + active rules come first, they are the usual pick.
         try:
             rules = await client.list_rules(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to an empty picker
+        except CoreError, httpx.HTTPError:  # degrade to an empty picker
             rules = []
         rule_options: dict[str, str] = {
             str(r.get("name")): " · ".join(
@@ -448,7 +449,7 @@ async def attribute_definitions_page() -> None:
                             position=int(group_position.value or 0),
                             applicable_types=list(group_applicable.value or []),
                         )
-                except Exception as exc:  # noqa: BLE001 - show a friendly error
+                except (CoreError, httpx.HTTPError) as exc:  # show a friendly error
                     ui.notify(f"{t('attr_def.save_failed')}: {exc}", color="negative")
                     return
                 group_dialog.close()
@@ -478,7 +479,7 @@ async def attribute_definitions_page() -> None:
                 nonlocal groups, groups_by_id
                 try:
                     groups = await client.list_attribute_groups(token)
-                except Exception:  # noqa: BLE001 - keep the cached list on failure
+                except CoreError, httpx.HTTPError:  # keep the cached list on failure
                     return
                 groups_by_id = {
                     str(g.get("id")): (
@@ -822,7 +823,7 @@ async def attribute_definitions_page() -> None:
                 # Same projection as the initial load: the list endpoint is capped
                 # at 1000 rows and would silently drop late-sorted attributes.
                 definitions = await client.list_attribute_vocabulary(token)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 definitions = state["definitions"]
             state["definitions"] = definitions
             _apply_filters()
@@ -844,7 +845,7 @@ async def attribute_definitions_page() -> None:
                     drop_incompatible=drop,
                 )
                 await client.update_attribute_definition(token, definition["id"], **fields)
-            except Exception as exc:  # noqa: BLE001 - show a friendly error
+            except (CoreError, httpx.HTTPError) as exc:  # show a friendly error
                 ui.notify(f"{t('attr_def.type_change_failed')}: {exc}", color="negative")
                 return
             form_dialog.close()
@@ -870,7 +871,7 @@ async def attribute_definitions_page() -> None:
                 report = await client.change_attribute_type(
                     token, definition["id"], definition_type=target, dry_run=True
                 )
-            except Exception as exc:  # noqa: BLE001 - show a friendly error
+            except (CoreError, httpx.HTTPError) as exc:  # show a friendly error
                 ui.notify(f"{t('attr_def.type_change_failed')}: {exc}", color="negative")
                 return
             incompatible = int(report.get("incompatible") or 0)
@@ -998,7 +999,7 @@ async def attribute_definitions_page() -> None:
                         definition_type=definition_type,
                         **common,
                     )
-            except Exception as exc:  # noqa: BLE001 - show a friendly error
+            except (CoreError, httpx.HTTPError) as exc:  # show a friendly error
                 ui.notify(f"{t('attr_def.save_failed')}: {exc}", color="negative")
                 return
             form_dialog.close()
@@ -1069,7 +1070,7 @@ async def attribute_definitions_page() -> None:
                 # otherwise saving would write a truncated payload back.
                 try:
                     full = await client.get_attribute_definition(token, str(editing_id))
-                except Exception:  # noqa: BLE001 - fall back to the loaded row
+                except CoreError, httpx.HTTPError:  # fall back to the loaded row
                     full = next(
                         (d for d in definitions if d.get("id") == editing_id),
                         definition,

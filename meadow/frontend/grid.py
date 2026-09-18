@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any, TypeGuard
 from urllib.parse import quote
 
+import httpx
 from fastapi import Request
 from nicegui import app, ui
 
@@ -873,7 +874,7 @@ async def _wait_export(client: CoreClient, token: str, run_id: str) -> dict:
     for _ in range(120):
         try:
             runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-        except Exception:  # noqa: BLE001 - keep polling on a transient error
+        except CoreError, httpx.HTTPError:  # keep polling on a transient error
             runs = []
         if runs:
             status = str(runs[0].get("status") or "")
@@ -953,7 +954,7 @@ async def products_page(request: Request) -> None:
         # column and the bulk wizard need it; without channels all three are hidden.
         try:
             channels = await client.list_channels(token, active=True)
-        except Exception:  # noqa: BLE001 - degrades to "no channels configured"
+        except CoreError, httpx.HTTPError:  # degrades to "no channels configured"
             channels = []
         channel_labels = channel_options(channels, locale)
 
@@ -961,14 +962,14 @@ async def products_page(request: Request) -> None:
         # reference picker and the bulk wizard all read from it.
         try:
             relation_definitions: list[dict] = await client.list_relation_definitions(token)
-        except Exception:  # noqa: BLE001 - degrade to "no custom relation types"
+        except CoreError, httpx.HTTPError:  # degrade to "no custom relation types"
             relation_definitions = []
         # Taxonomy node types (the built-in `category` plus custom types flagged
         # `taxonomy: true`): they are the nodes of the category/classification
         # trees and the valid targets of a categorisation.
         try:
             object_types = await client.list_object_types(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+        except CoreError, httpx.HTTPError:  # degrade to the built-in taxonomy
             object_types = []
         taxonomy_types = taxonomy_type_names(object_types)
         # The object types a **new** object may have on this page (system and
@@ -1037,7 +1038,7 @@ async def products_page(request: Request) -> None:
         objects: list[dict] = []
         try:
             objects = await fetch_filtered()
-        except Exception:  # noqa: BLE001 - keep the page usable (filter bar + grid)
+        except CoreError, httpx.HTTPError:  # keep the page usable (filter bar + grid)
             ui.notify(t("grid.load_failed"), color="negative")
         no_objects_label = ui.label(t("grid.no_objects")).classes("text-subtitle1")
         no_objects_label.set_visibility(has_filter() and not objects)
@@ -1051,13 +1052,13 @@ async def products_page(request: Request) -> None:
             # columns buried the column picker. Cache-backed in the core, the same
             # source the catalog page and the export wizard use.
             definitions = await client.list_attribute_vocabulary(token)
-        except Exception:  # noqa: BLE001 - degrade to base columns on failure
+        except CoreError, httpx.HTTPError:  # degrade to base columns on failure
             definitions = []
         # Attribute groups label the column picker (own catalogue plus the
         # standard's feature groups, which the standard's definitions carry).
         try:
             attribute_groups = await client.list_attribute_groups(token)
-        except Exception:  # noqa: BLE001 - degrade to ungrouped sections
+        except CoreError, httpx.HTTPError:  # degrade to ungrouped sections
             attribute_groups = []
         groups_by_id = {str(group.get("id")): group for group in attribute_groups}
 
@@ -1075,7 +1076,7 @@ async def products_page(request: Request) -> None:
                     continue
                 active_languages.append(code)
                 language_labels[code] = resolve_value(lang.get("label"), locale) or code
-        except Exception:  # noqa: BLE001 - degrade to a single-language grid
+        except CoreError, httpx.HTTPError:  # degrade to a single-language grid
             active_languages = []
 
         # The user's column set is resolved **before** the columns are built: a
@@ -1176,7 +1177,7 @@ async def products_page(request: Request) -> None:
         if enum_defs:
             try:
                 enum_sets = await client.list_enum_sets(token)
-            except Exception:  # noqa: BLE001 - degrade to raw codes on failure
+            except CoreError, httpx.HTTPError:  # degrade to raw codes on failure
                 enum_sets = []
             from meadow.frontend.enums import enum_code_label_map
 
@@ -1264,7 +1265,7 @@ async def products_page(request: Request) -> None:
                 token, root_id, limit=100, scope="composition"
             )
             tree_nodes = [tree_node_from_object(child, locale) for child in top_children]
-        except Exception:  # noqa: BLE001 - degrade to a grid without the tree
+        except CoreError, httpx.HTTPError:  # degrade to a grid without the tree
             tree_nodes = []
 
         # `url` attributes: their cells are links (media cells open a preview),
@@ -1341,7 +1342,7 @@ async def products_page(request: Request) -> None:
             """Opens the selected rows one after another in the product form."""
             try:
                 selected_rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001 - degrade to "nothing selected"
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 selected_rows = []
             ids = [oid for oid in (_row_id(row) for row in selected_rows) if oid]
             if not ids:
@@ -1365,7 +1366,7 @@ async def products_page(request: Request) -> None:
             seq = load_seq["value"]
             try:
                 new_objects = await fetch_filtered()
-            except Exception:  # noqa: BLE001 - keep the current rows
+            except CoreError, httpx.HTTPError:  # keep the current rows
                 ui.notify(t("grid.load_failed"), color="negative")
                 return
             if seq != load_seq["value"]:
@@ -1438,7 +1439,7 @@ async def products_page(request: Request) -> None:
                     scope="taxonomy",
                     object_type=taxonomy_state["key"],
                 )
-            except Exception:  # noqa: BLE001 - degrade to a structure-only panel
+            except CoreError, httpx.HTTPError:  # degrade to a structure-only panel
                 return []
             return [tree_node_from_object(child, locale) for child in top_children]
 
@@ -1556,7 +1557,7 @@ async def products_page(request: Request) -> None:
         collections: list[dict] = []
         try:
             collections = await client.list_collections(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to an empty collection list
+        except CoreError, httpx.HTTPError:  # degrade to an empty collection list
             collections = []
 
         def _collection_label(c: dict) -> str:
@@ -1645,7 +1646,7 @@ async def products_page(request: Request) -> None:
                 return
             try:
                 results = await client.batch_update(token, patches)
-            except Exception:  # noqa: BLE001 - show a friendly message on failure
+            except CoreError, httpx.HTTPError:  # show a friendly message on failure
                 ui.notify(t("grid.save_failed"), color="negative")
                 return
             if is_session_expired(results):
@@ -1879,7 +1880,7 @@ async def products_page(request: Request) -> None:
         async def remove_reference(reference_id: str) -> None:
             try:
                 await client.delete_reference(token, reference_id)
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("grid.ref_remove_failed"), color="negative")
             await refresh_references()
 
@@ -1890,7 +1891,7 @@ async def products_page(request: Request) -> None:
                 return
             try:
                 references = await client.list_object_references(token, target, locale=locale)
-            except Exception:  # noqa: BLE001 - degrade to no chips
+            except CoreError, httpx.HTTPError:  # degrade to no chips
                 references = []
             # Resolve relation-type labels for the group headings (all kinds,
             # including the composition `rel_depends_on`).
@@ -1899,7 +1900,7 @@ async def products_page(request: Request) -> None:
                 for definition in await client.list_relation_definitions(token):
                     dk = str(definition["id"]).split(":", 1)[-1]
                     def_labels[dk] = resolve_value(definition.get("label"), locale) or dk
-            except Exception:  # noqa: BLE001 - fall back to raw keys
+            except CoreError, httpx.HTTPError:  # fall back to raw keys
                 def_labels = {}
             # Group the object's references by relation type; the chip shows the
             # "other" object (the one *this* object points to / is pointed by).
@@ -1954,7 +1955,7 @@ async def products_page(request: Request) -> None:
                 await client.create_reference(
                     token, current_ref_object["id"], hit["id"], definition_id
                 )
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("grid.ref_add_failed"), color="negative")
                 return
             ref_search.value = ""
@@ -1977,7 +1978,7 @@ async def products_page(request: Request) -> None:
                     # completeness badge.
                     code_prefix=True,
                 )
-            except Exception:  # noqa: BLE001 - degrade to no hits
+            except CoreError, httpx.HTTPError:  # degrade to no hits
                 return
             own_id = str(current_ref_object["id"])
             for hit in hits:
@@ -2066,7 +2067,7 @@ async def products_page(request: Request) -> None:
         async def handle_selection(event) -> None:
             try:
                 selected_rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001 - degrade if the grid is not ready
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 selected_rows = []
             bulk_selected_ids.clear()
             for row in selected_rows:
@@ -2319,7 +2320,7 @@ async def products_page(request: Request) -> None:
             try:
                 page = int(await grid.run_grid_method("paginationGetCurrentPage") or 0)
                 size = int(await grid.run_grid_method("paginationGetPageSize") or 50)
-            except Exception:  # noqa: BLE001 - fall back to the configured page size
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 page, size = 0, 50
             start = page * size
             end = start + size
@@ -2390,7 +2391,7 @@ async def products_page(request: Request) -> None:
                 return
             try:
                 run = await client.post_bulk(token, op=op, object_ids=ids, parameters=parameters)
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("grid.bulk_start_failed"), color="negative")
                 return
             run_id = str(run.get("id") or "")
@@ -2413,7 +2414,7 @@ async def products_page(request: Request) -> None:
             for _ in range(120):
                 try:
                     runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-                except Exception:  # noqa: BLE001 - retry on transient errors
+                except CoreError, httpx.HTTPError:  # retry on transient errors
                     runs = []
                 if not runs:
                     break
@@ -2563,7 +2564,7 @@ async def products_page(request: Request) -> None:
                 run = await client.post_bulk(
                     token, op="replace_text", object_ids=ids, parameters=parameters
                 )
-            except Exception:  # noqa: BLE001 - show a friendly message
+            except CoreError, httpx.HTTPError:  # show a friendly message
                 ui.notify(t("grid.bulk_start_failed"), color="negative")
                 return
             run_id = str(run.get("id") or "")
@@ -2603,7 +2604,7 @@ async def products_page(request: Request) -> None:
                     code_prefix=True,
                     completeness=False,
                 )
-            except Exception:  # noqa: BLE001 - keep the tree on failure
+            except CoreError, httpx.HTTPError:  # keep the tree on failure
                 ui.notify(t("grid.taxonomy_search_failed"), color="negative")
                 return
             tree_override[:] = taxonomy_tree.search_nodes(hits)
@@ -2621,7 +2622,7 @@ async def products_page(request: Request) -> None:
             """
             try:
                 path = await client.list_object_ancestors(token, node_id)
-            except Exception:  # noqa: BLE001 - keep the hit list on failure
+            except CoreError, httpx.HTTPError:  # keep the hit list on failure
                 ui.notify(t("grid.taxonomy_path_failed"), color="negative")
                 return
             nodes = [tree_node_from_object(node, locale) for node in path]
@@ -2776,7 +2777,7 @@ async def products_page(request: Request) -> None:
                 if col_id:
                     await client.refresh_collection(token, col_id)
                 collections = await client.list_collections(token, limit=1000)
-            except Exception as error:  # noqa: BLE001 - keep current data on failure
+            except (CoreError, httpx.HTTPError) as error:  # keep current data on failure
                 log.warning("collection refresh failed, keeping the shown data (%s)", error)
             if active_view["value"] == "collection" and not col_id:
                 render_tree("collection")
@@ -2838,7 +2839,7 @@ async def products_page(request: Request) -> None:
                     if run.get("status") != "success":
                         raise RuntimeError(run.get("error") or run.get("status") or "failed")
                     data, filename = await client.get_export_file(token, run_id, format=fmt)
-                except Exception as exc:  # noqa: BLE001 - surface a friendly message
+                except (CoreError, httpx.HTTPError) as exc:  # surface a friendly message
                     ui.notify(t("grid.export_failed").format(err=exc), color="negative")
                     return
                 exported = (run.get("result") or {}).get("exported", len(ids))
@@ -3270,7 +3271,7 @@ async def products_page(request: Request) -> None:
                         return t("grid.create_parent_root")
                     try:
                         parent_object = await client.get_object(token, parent, locale=locale)
-                    except Exception:  # noqa: BLE001 - show the raw reference
+                    except CoreError, httpx.HTTPError:  # show the raw reference
                         return str(parent)
                     attributes = parent_object.get("attributes") or {}
                     label = resolve_value(attributes.get("name"), locale)
@@ -3458,12 +3459,12 @@ async def products_page(request: Request) -> None:
                     """Opens the advanced-search dialog (loads catalog + saved searches)."""
                     try:
                         where_state["catalog"] = await client.list_search_fields(token)
-                    except Exception:  # noqa: BLE001 - without a catalog there is no form
+                    except CoreError, httpx.HTTPError:  # without a catalog there is no form
                         ui.notify(t("grid.advanced_failed"), color="negative")
                         return
                     try:
                         saved = await client.list_saved_searches(token, limit=1000)
-                    except Exception:  # noqa: BLE001 - the picker is optional
+                    except CoreError, httpx.HTTPError:  # the picker is optional
                         saved = []
                     where_state["saved"] = saved
                     saved_select.set_options(
@@ -3526,7 +3527,7 @@ async def products_page(request: Request) -> None:
                         await client.create_saved_search(
                             token, name=name, query=current_where_query()
                         )
-                    except Exception as error:  # noqa: BLE001 - report the core message
+                    except (CoreError, httpx.HTTPError) as error:  # report the core message
                         ui.notify(f"{t('grid.advanced_save_failed')}: {error}", color="negative")
                         return
                     save_name_input.value = ""
