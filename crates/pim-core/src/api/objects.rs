@@ -2392,6 +2392,79 @@ pub async fn get_by_source(
     Ok(Json(object))
 }
 
+/// The type-level edges of the composition tree (`GET /objects/composition-types`).
+///
+/// Returns `{root_type, edges: [{parent, child, count}]}`: for every pair of object
+/// types that appears along a `depends_on` edge, how many objects of `child` hang
+/// under an object of `parent` (counted per pair). `root_type` is the type of the
+/// universal root, i.e. the top of the tree.
+///
+/// A consumer needs this to know whether a type is **reachable** in the composition
+/// tree at all: the picker walks the tree from the universal root, and the
+/// composition scope renders the product structure **without** the taxonomy nodes —
+/// so a product, which hangs below a part group (a taxonomy node), can never be
+/// selected there, while a vehicle generation (below model, below make) can
+/// (2026-09-17). One grouped query over the edge table, measured **~190 ms** warm on
+/// the demo instance (12 197 composition edges out of 28 624) — the picker asks for
+/// it on every open, so the payload is cached bound to the data version.
+#[utoipa::path(
+    get,
+    path = "/objects/composition-types",
+    responses(
+        (status = 200, description = "Composition type edges", body = Value),
+        (status = 401, description = "Unauthorized", body = Value)
+    )
+)]
+pub async fn composition_types(
+    AuthUser(_claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let version = state.cache.stats_version();
+    if let Some(cached) = state.cache.cached_composition_types(version).await {
+        return Ok(Json((*cached).clone()));
+    }
+
+    // `in` is the child, `out` the parent of a composition edge; deleted objects
+    // have their edges removed, the filter only guards a half-finished cascade (it
+    // dereferences both ends, which is most of the query's cost).
+    let mut response = state
+        .db
+        .inner()
+        .query(
+            "SELECT out.type AS parent, in.type AS child, count() AS count FROM reference \
+             WHERE definition_id = $definition AND in.deleted_at IS NONE \
+             AND out.deleted_at IS NONE GROUP BY parent, child;",
+        )
+        .bind((
+            "definition",
+            crate::api::references::COMPOSITION_DEFINITION.to_owned(),
+        ))
+        .await?
+        .check()?;
+    let edges: Vec<Value> = response.take(0)?;
+
+    let mut response = state
+        .db
+        .inner()
+        .query("SELECT type FROM object:object_root;")
+        .await?
+        .check()?;
+    let root: Vec<Value> = response.take(0)?;
+    let root_type = root
+        .first()
+        .and_then(|row| row.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    let payload = Arc::new(json!({ "root_type": root_type, "edges": edges }));
+    state
+        .cache
+        .store_composition_types(version, payload.clone())
+        .await;
+    Ok(Json((*payload).clone()))
+}
+
 /// Query parameters for `GET /objects/picker` (reference picker search).
 #[derive(Debug, Deserialize, ToSchema, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -2415,6 +2488,20 @@ pub struct ObjectPickerParams {
     /// combined with another condition via `OR` (see `code_prefix_hits`).
     #[serde(default)]
     pub code_prefix: bool,
+    /// Also match objects whose **label** (`name`, the conventional label of every
+    /// type) starts with the term — the type-ahead behaviour a picker needs:
+    /// `brake clean` finds `Brake cleaner` (2026-09-17).
+    ///
+    /// The full-text index matches whole tokens only, so typing a **partial word**
+    /// found nothing (`attributes @@ 'brake clean'` → 0 hits, `… @@ 'brake cleaner'`
+    /// → 20 on the dev DB) — measured, and until now a documented open gap: the
+    /// reference picker, the grid's filter bar and the search form all searched the
+    /// full text only. Prefix matching cannot use the index (it compares lowercased
+    /// values), so this is an extra scan **per language of [`prefix_languages`]**,
+    /// narrowed by `types`: measured **~250 ms** for a miss (dev core, `LIMIT 20`,
+    /// 16 926 products, idle machine). Callers debounce it.
+    #[serde(default)]
+    pub label_prefix: bool,
     /// Attach each hit's `completeness` for `locale` (default `true`).
     ///
     /// The per-hit computation costs ~0.3 s (measured on the ETIM bundle), so a
@@ -2443,6 +2530,123 @@ fn prefix_upper_bound(prefix: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a language code may be interpolated into a SurrealDB **field path**.
+///
+/// The language is part of `attributes.name.<language>`, which SurrealDB cannot
+/// bind as a parameter. The codes come from the fallback chain (data), so they are
+/// validated instead of trusted: only characters that are safe inside a
+/// backtick-quoted path segment are used, everything else is skipped.
+fn safe_language_code(code: &str) -> bool {
+    !code.is_empty()
+        && code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The languages a prefix scan has to compare, in resolution order.
+///
+/// The **locale itself** comes first: the fallback chain carries only its
+/// *ancestors* and always ends at `root` (measured: `en` → `["root"]`,
+/// `de-AT` → `["de", "root"]`), so taking the chain alone would leave no language to
+/// scan and a type-ahead would stay silent — exactly the defect this path fixes.
+/// `root` stays out of the list: it is the chain's pseudo language and carries no
+/// names on this instance (measured: 0 objects with `attributes.name.root` vs 41 007
+/// with `attributes.name.en`), so scanning it would double the cost of every search
+/// for nothing. Codes that are unsafe as a path segment are skipped as well.
+fn prefix_languages(locale: Option<&str>, chain: &[String]) -> Vec<String> {
+    let mut languages: Vec<String> = Vec::new();
+    for code in locale.into_iter().chain(chain.iter().map(String::as_str)) {
+        if code == "root" || !safe_language_code(code) || languages.iter().any(|seen| seen == code)
+        {
+            continue;
+        }
+        languages.push(code.to_owned());
+    }
+    languages
+}
+
+/// Objects whose **label** starts with a term, per language of the fallback chain.
+///
+/// The counterpart of [`code_prefix_hits`] for names: `attributes @@ $q` matches
+/// whole tokens, so a partial word finds nothing (`'brake clean'` → 0 hits while
+/// `'brake cleaner'` → 20 on the dev DB). The comparison is `string::starts_with`
+/// on the **lowercased** value, which no index can serve — the query is therefore
+/// narrowed by `types` and by the languages of [`prefix_languages`]. A **scalar**
+/// `name` (an OEM number, `"5Q0 936 304 W"`) is matched as well: those objects carry
+/// no per-language value at all, so the per-language clause alone left them
+/// unfindable by a partial word. The cast `<string>` keeps the object-valued names
+/// from failing the comparison (their JSON text cannot start with a typed term).
+/// Like the code path it is a **separate** query merged into the hits, because a
+/// full-text condition must not be combined via `OR`.
+///
+/// The guard `attributes.name.<language> != NONE` is required: `string::starts_with`
+/// fails with a type error on objects that do not carry that language (the same
+/// reason the code path compares instead of casting).
+async fn label_prefix_hits(
+    state: &AppState,
+    query: &str,
+    types: &[String],
+    languages: &[String],
+    limit: i64,
+) -> Result<Vec<Value>, ApiError> {
+    let term = query.to_lowercase();
+    if term.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut hits: Vec<Value> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for language in languages {
+        // The language code is interpolated into the field path (SurrealDB cannot
+        // bind one): only codes that are safe as a path segment are used, and the
+        // segment is backtick-quoted so `de-AT` stays one key instead of becoming a
+        // subtraction.
+        if !safe_language_code(language) {
+            continue;
+        }
+        let field = format!("attributes.name.`{language}`");
+        let mut sql = format!(
+            "SELECT * FROM object WHERE deleted_at IS NONE \
+             AND (({field} != NONE \
+             AND string::starts_with(string::lowercase(<string>{field}), $term)) \
+             OR string::starts_with(string::lowercase(<string>attributes.name), $term))"
+        );
+        if !types.is_empty() {
+            sql.push_str(" AND type IN $types");
+        }
+        // Sorted by the label so the same query yields the same list; the sort costs
+        // nothing measurable next to the scan (median 423 ms sorted vs 596 ms
+        // unsorted over three runs, `LIMIT 20`, dev core — the measurement that
+        // suggested otherwise compared a hit list with a miss list and paid the
+        // per-hit completeness of the hits).
+        sql.push_str(" ORDER BY attributes.name LIMIT $limit");
+        let mut request = state
+            .db
+            .inner()
+            .query(sql)
+            .bind(("term", term.clone()))
+            .bind(("limit", limit));
+        if !types.is_empty() {
+            request = request.bind(("types", types.to_vec()));
+        }
+        let mut response = request.await?.check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        for row in rows {
+            let key = row
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if seen.insert(key) {
+                hits.push(row);
+            }
+        }
+        if hits.len() >= usize::try_from(limit).unwrap_or(usize::MAX) {
+            break;
+        }
+    }
+    Ok(hits)
 }
 
 /// Objects whose `code` attribute starts with a code-style term.
@@ -2513,6 +2717,29 @@ async fn code_prefix_hits(
     Ok(hits)
 }
 
+/// Appends the objects of `extra` that are not in `objects` yet (dedupe by id).
+///
+/// The picker merges up to three queries (full text, code prefix, label prefix);
+/// the id set is small (one `limit` at most), so a linear scan per appended object
+/// is cheaper than building a `HashSet` for every merge. An object without an id
+/// (never returned by these queries) is appended unchanged.
+fn append_unique(objects: &mut Vec<Value>, extra: Vec<Value>) {
+    for object in extra {
+        let key = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty());
+        if let Some(key) = key
+            && objects
+                .iter()
+                .any(|existing| existing.get("id").and_then(Value::as_str) == Some(key))
+        {
+            continue;
+        }
+        objects.push(object);
+    }
+}
+
 /// Searches for objects by label to pick a reference target.
 ///
 /// Returns compact hits (`id`, `type`, `label`, `status`); the label is the
@@ -2521,8 +2748,15 @@ async fn code_prefix_hits(
 /// `completeness` value for that language, so a picker can show whether the
 /// target still misses required attributes (`?completeness=false` skips it — the
 /// tree's search lists many hits and shows no badge). `?code_prefix=true`
-/// additionally matches a partial `code` (`EC0123`). Used by the reference and
-/// relation pickers and by the taxonomy tree's search.
+/// additionally matches a partial `code` (`EC0123`), `?label_prefix=true` a
+/// partial **label word** (`brake clean` → `Brake cleaner`, see
+/// [`label_prefix_hits`]). Used by the reference and relation pickers, the grid's
+/// filter bar, the search form and the taxonomy tree's search.
+///
+/// The merge order is the relevance order: the relevance-ranked full-text hits
+/// come first, then the prefix matches. A prefix scan only runs while the hits do
+/// not fill `limit` — hits appended behind a full `limit` would be truncated away
+/// (and the scan is the expensive part, ~0.25 s worst case).
 #[utoipa::path(
     get,
     path = "/objects/picker",
@@ -2552,12 +2786,18 @@ pub async fn picker(
         })
         .unwrap_or_default();
 
-    // Code hits first: a caller that searches a code wants the exact prefix match
-    // on top of the description matches.
-    let mut objects: Vec<Value> = Vec::new();
-    if params.code_prefix {
-        objects = code_prefix_hits(&state, query, &types, limit).await?;
-    }
+    // The label language chain is needed before the queries: the prefix path walks
+    // the chain's languages (the label of a hit is resolved with the same chain).
+    let locale = params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned);
+    let chain: Option<Arc<Vec<String>>> = match &locale {
+        Some(locale) => Some(state.cache.fallback_chain(&state.db, locale).await?),
+        None => None,
+    };
 
     let mut sql = String::from(
         "SELECT *, search::score(1) AS score FROM object \
@@ -2569,37 +2809,30 @@ pub async fn picker(
     sql.push_str(" ORDER BY score DESC LIMIT $limit");
     let mut request = state.db.inner().query(sql).bind(("q", query.to_owned()));
     if !types.is_empty() {
-        request = request.bind(("types", types));
+        request = request.bind(("types", types.clone()));
     }
     let mut response = request.bind(("limit", limit)).await?.check()?;
     let text_objects: Vec<Value> = response.take(0)?;
-    let mut seen: HashSet<String> = objects
-        .iter()
-        .filter_map(|object| object.get("id").and_then(Value::as_str))
-        .map(str::to_owned)
-        .collect();
-    for object in text_objects {
-        let key = object
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if seen.insert(key) {
-            objects.push(object);
-        }
-    }
-    objects.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    let mut objects: Vec<Value> = Vec::new();
+    append_unique(&mut objects, text_objects);
 
-    let locale = params
-        .locale
-        .as_deref()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_owned);
-    let chain: Option<Arc<Vec<String>>> = match &locale {
-        Some(locale) => Some(state.cache.fallback_chain(&state.db, locale).await?),
-        None => None,
-    };
+    // Prefix matches last (they rank below a real token match) and only while hits
+    // are missing: each is its own query, because a full-text match must not share
+    // an `OR` with another condition (see `code_prefix_hits`).
+    let full = usize::try_from(limit).unwrap_or(usize::MAX);
+    if objects.len() < full && params.code_prefix {
+        let hits = code_prefix_hits(&state, query, &types, limit).await?;
+        append_unique(&mut objects, hits);
+    }
+    if objects.len() < full && params.label_prefix {
+        let languages = prefix_languages(
+            locale.as_deref(),
+            chain.as_deref().map(Vec::as_slice).unwrap_or_default(),
+        );
+        let hits = label_prefix_hits(&state, query, &types, &languages, limit).await?;
+        append_unique(&mut objects, hits);
+    }
+    objects.truncate(full);
 
     let mut hits = Vec::new();
     for object in objects {
@@ -3384,6 +3617,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn prefix_languages_start_with_the_locale_itself() {
+        // The measured chains: the locale is *not* part of them, so it must be
+        // added — otherwise a type-ahead under `en` would scan nothing at all.
+        assert_eq!(
+            prefix_languages(Some("en"), &["root".to_owned()]),
+            vec!["en"]
+        );
+        assert_eq!(
+            prefix_languages(Some("de-AT"), &["de".to_owned(), "root".to_owned()]),
+            vec!["de-AT", "de"]
+        );
+        // No locale → nothing to search for (`label_prefix` without `locale`).
+        assert!(prefix_languages(None, &["root".to_owned()]).is_empty());
+        // Duplicates and unsafe codes are dropped.
+        assert_eq!(
+            prefix_languages(
+                Some("de"),
+                &["de".to_owned(), "de`".to_owned(), "en".to_owned()]
+            ),
+            vec!["de", "en"]
+        );
+    }
+
+    #[test]
+    fn safe_language_code_accepts_only_path_segments() {
+        for code in ["de", "en", "de-AT", "pt_BR", "x1"] {
+            assert!(safe_language_code(code), "{code} must be usable as a path");
+        }
+        // Everything that could change the query is skipped.
+        for code in ["", "de`", "de.at", "de at", "de;DROP", "de'AT"] {
+            assert!(!safe_language_code(code), "{code} must be skipped");
+        }
+    }
+
+    #[test]
+    fn append_unique_keeps_the_first_occurrence_of_an_id() {
+        let first = json!({"id": "object:a", "label": "first"});
+        let duplicate = json!({"id": "object:a", "label": "second"});
+        let other = json!({"id": "object:b"});
+        let mut objects = vec![first.clone()];
+        append_unique(&mut objects, vec![duplicate, other.clone()]);
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0]["label"], "first");
+        assert_eq!(objects[1]["id"], "object:b");
+        // An object without an id is appended once and never deduplicated away.
+        let mut without_id = Vec::new();
+        append_unique(
+            &mut without_id,
+            vec![json!({"label": "x"}), json!({"label": "y"})],
+        );
+        assert_eq!(without_id.len(), 2);
     }
 
     #[test]

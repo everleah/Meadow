@@ -922,6 +922,22 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def fetch_composition_types(self, token: str) -> dict:
+        """The type-level edges of the composition tree (`GET /objects/composition-types`).
+
+        Returns `{"root_type": <type of the universal root>, "edges": [{"parent",
+        "child", "count"}]}`: which object type hangs under which along a composition
+        edge. A picker needs it to know whether a target type is reachable in the
+        composition tree at all (see `object_picker.composition_reachable`).
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/objects/composition-types",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def get_object_tree(self, token: str) -> list[dict]:
         """Returns the composition tree (``{id, children}``) from the Universal-Root."""
         async with _api_client() as client:
@@ -992,6 +1008,7 @@ class CoreClient:
         locale: str | None = None,
         limit: int = 20,
         code_prefix: bool = False,
+        label_prefix: bool = True,
         completeness: bool = True,
     ) -> list[dict]:
         """Searches objects by label for the reference picker.
@@ -1005,6 +1022,12 @@ class CoreClient:
         (``EC0123`` → every class ``EC0123…``): the core's full-text index only
         matches whole tokens, so a partial code finds nothing otherwise. Used by
         the taxonomy tree's search.
+
+        ``label_prefix`` (default on) additionally matches a **partial label word**
+        (``brake clean`` → *Brake cleaner*): without it a type-ahead that has not
+        typed the word to its end returns nothing at all (2026-09-17). The core
+        scans the languages of the fallback chain for it, so the typing caller
+        debounces the field (measured ~75 ms with a limit, ~0.25 s worst case).
         """
         params: dict[str, str] = {"q": q, "limit": str(limit)}
         if types:
@@ -1013,6 +1036,8 @@ class CoreClient:
             params["locale"] = locale
         if code_prefix:
             params["code_prefix"] = "true"
+        if label_prefix:
+            params["label_prefix"] = "true"
         if not completeness:
             params["completeness"] = "false"
         async with _api_client() as client:

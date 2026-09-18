@@ -103,8 +103,10 @@ def test_a_picker_walks_one_tree_even_for_a_generic_dimension() -> None:
     ]
 
 
-def test_a_picker_without_a_taxonomy_target_keeps_the_composition() -> None:
-    # Products and structure objects are no taxonomy nodes: composition scope.
+def test_a_picker_without_a_taxonomy_target_leaves_the_taxonomies_alone() -> None:
+    # Products and structure objects are no taxonomy nodes: no taxonomy tree may be
+    # offered for them. Which panel such a picker shows is decided by
+    # `picker_tree_mode` (flat object list — see `tests/test_picker_tree.py`).
     assert taxonomy_choices({"product", "variant"}, TAXONOMIES) == []
     assert taxonomy_choices(None, TAXONOMIES) == []
     assert taxonomy_choices(set(), TAXONOMIES) == []

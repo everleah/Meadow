@@ -57,6 +57,12 @@ pub struct MetaCache {
     stats_locks: std::sync::Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// Bumped by every write that can change the aggregation.
     stats_version: AtomicU64,
+    /// `GET /objects/composition-types` payload, bound to `stats_version`.
+    ///
+    /// The picker asks for it every time it opens and the grouped query dereferences
+    /// both ends of every composition edge (~190 ms warm, 12 197 edges), which is the
+    /// whole cost of the answer.
+    composition_types: RwLock<Option<(u64, Arc<Value>)>>,
 }
 
 /// A `url` attribute: its name and whether it holds one value per language.
@@ -274,6 +280,29 @@ impl MetaCache {
             .write()
             .await
             .insert(key.to_owned(), (version, payload));
+    }
+
+    /// The cached composition type graph (`GET /objects/composition-types`), if it
+    /// matches the current data version.
+    ///
+    /// Bound to [`Self::stats_version`] like the dashboard aggregation: a reference
+    /// write (the only thing that can change the composition hierarchy) bumps it, so
+    /// a picker never reads a graph that misses an edge it just created.
+    pub async fn cached_composition_types(&self, version: u64) -> Option<Arc<Value>> {
+        self.composition_types
+            .read()
+            .await
+            .as_ref()
+            .filter(|(stored, _)| *stored == version)
+            .map(|(_, payload)| payload.clone())
+    }
+
+    /// Stores the composition type graph for `version`.
+    ///
+    /// Without a single-flight lock: the query is one small aggregation, so a
+    /// concurrent miss recomputes it instead of queueing (measured ~190 ms warm).
+    pub async fn store_composition_types(&self, version: u64, payload: Arc<Value>) {
+        *self.composition_types.write().await = Some((version, payload));
     }
 
     /// Invalidates cached fallback chains after language-tree changes.

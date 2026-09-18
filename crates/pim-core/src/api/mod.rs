@@ -94,6 +94,7 @@ use utoipa::OpenApi;
         objects::get_object,
         objects::list_objects,
         objects::object_stats,
+        objects::composition_types,
         objects::update_object,
         objects::delete_object,
         objects::update_computed,

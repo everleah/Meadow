@@ -78,6 +78,13 @@ ones are marked accordingly.
 - **Relations** — connects the object with other objects (accessories or
   alternative items, for example). Which relation types are allowed depends on
   the object types involved.
+- **Picking a target** — the plus sign in the header row of a relation type opens
+  the selection. In the *Search* field a **word beginning** is enough ("brake
+  clean" finds "Brake cleaner"). The second tab shows **Structure** — the
+  hierarchy, e.g. make → model → generation — or **List**: a page-by-page list of
+  all allowed objects when the target type does not appear in the hierarchy (for
+  example products, which hang below an assembly group). Types that are not
+  allowed appear greyed out.
 - **Channels** — releases the object for an output channel. The channel state is
   independent of the global status: an object may be globally released and still
   not published for a channel. When a rule demands a specific order, Meadow

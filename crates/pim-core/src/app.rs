@@ -65,6 +65,10 @@ pub fn router(state: AppState) -> Router {
         .route("/objects/by-key", get(api::keys::get_by_key))
         .route("/objects/by-source", get(api::objects::get_by_source))
         .route("/objects/stats", get(api::objects::object_stats))
+        .route(
+            "/objects/composition-types",
+            get(api::objects::composition_types),
+        )
         .route("/objects/picker", get(api::objects::picker))
         .route(
             "/objects/batch-update",

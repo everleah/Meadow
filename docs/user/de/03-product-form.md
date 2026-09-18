@@ -80,6 +80,13 @@ Vollständigkeit; fehlende sind entsprechend markiert.
 - **Relationen** — verbindet das Objekt mit anderen Objekten (z. B.
   Zubehör oder Alternativartikel). Welche Relationstypen erlaubt sind, hängt von
   den beteiligten Objekttypen ab.
+- **Ziel wählen** — das Pluszeichen in der Kopfzeile eines Relationstyps öffnet die
+  Auswahl. Im Feld *Suche* genügt ein **Wortanfang** („Bremsenr“ findet
+  „Bremsenreiniger“). Der zweite Reiter zeigt **Struktur** — die Hierarchie, etwa
+  Marke → Modell → Generation — oder **Liste**: eine seitenweise nachladende Liste
+  aller erlaubten Objekte, wenn der Zieltyp in der Hierarchie nicht vorkommt (etwa
+  Produkte, die unter einer Baugruppe hängen). Nicht erlaubte Zieltypen sind
+  ausgegraut.
 - **Kanäle** — gibt das Objekt für einen Ausgabekanal frei. Der Kanalstatus ist
   vom globalen Status unabhängig: Ein Objekt kann global freigegeben, aber für
   einen Kanal noch nicht veröffentlicht sein. Verlangt eine Regel eine

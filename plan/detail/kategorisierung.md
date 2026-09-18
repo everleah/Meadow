@@ -173,7 +173,7 @@ Unbekanntes `scope` ⇒ `400` (nie still ignorieren). Damit ist „Taxonomieknot
 - `/products` **Strukturbaum**: `scope=composition` — Produkte/Struktur ohne Taxonomieknoten.
 - `/products` **Kategorie-Ansicht**: neuer **Taxonomie-Umschalter** (Knotentyp) neben Wurzel- und Dimensionsauswahl; Wurzeln und Kinder kommen mit `scope=taxonomy&type=<Taxonomie>`. Eine Taxonomie, die größer als eine Seite ist, wird **geblättert** (siehe unten) statt still gekürzt.
 - `/categories`: lädt die Wurzeln der gewählten Taxonomie über denselben Filter (vorher: erste 100 Root-Kinder, gemischt über alle Taxonomien).
-- **Objekt-Picker**: leitet den Scope aus den erlaubten Zieltypen ab — sind **alle** Zieltypen Taxonomien, wird der Taxonomiebaum gezeigt, sonst die Komposition (vorher: alle Root-Kinder, also Produkte *und* Klassen in jedem Picker).
+- **Objekt-Picker**: leitet den Scope aus den erlaubten Zieltypen ab — sind **alle** Zieltypen Taxonomien, wird der Taxonomiebaum gezeigt, sonst die Komposition (vorher: alle Root-Kinder, also Produkte *und* Klassen in jedem Picker). Seit 2026-09-17 entscheidet zusätzlich die **Erreichbarkeit** im Baum: ein eingeschränkter, nicht-taxonomischer Zielsatz, den der Kompositionsbaum gar nicht erreicht, wird **flach und geblättert** gelistet (siehe „Objekt-Picker: erreichbare Ziele …“).
 - Baumknoten-Label: fällt auf `code` zurück, wenn kein `name` existiert — eine Liste aus 5640 Klassen ist sonst nicht lesbar (`EC000012` statt „etim_class“).
 
 ## Taxonomiebaum: Paging und Server-Suche (2026-09-14)
@@ -200,11 +200,38 @@ Unbekanntes `scope` ⇒ `400` (nie still ignorieren). Damit ist „Taxonomieknot
 | Parameter | Bedeutung |
 | --- | --- |
 | `code_prefix=true` | zusätzlich **Teil-Codes**: `EC0123` findet alle Klassen `EC0123…` (Präfix-Range, in Kleinschreibung zusätzlich großgeschrieben, damit die Suche wie der Volltext case-insensitiv ist) |
+| `label_prefix=true` | zusätzlich **Teil-Wörter im Label**: `Bremsenr` findet `Bremsenreiniger` (seit 2026-09-17; siehe „Objekt-Picker: erreichbare Ziele …“) |
 | `completeness=false` | keinen Vollständigkeits-Wert je Treffer berechnen (Pflicht für Aufrufer mit vielen Treffern) |
 
-Die Suche tippt **jeder** Aufrufer selbst an: der Referenz-Picker und die Filterleiste des Grids (`SEARCH_LIMIT` = 100, `debounce` 400 ms) nutzen weiter nur den Volltext — ein Teil-Code findet dort also nichts. Das ist eine **offene Lücke** (dieselben zwei Parameter würden sie schließen), kein Versehen.
+**Nachtrag 2026-09-17:** Die offene Lücke ist geschlossen — `label_prefix` ist im Frontend-Wrapper (`api.py::picker_search`) **an** (Opt-out pro Aufrufer), und alle tippenden Felder sind entprellt.
 
 **Weitere offene Punkte:** die Trefferliste ist flach (keine Hierarchie; ein „im Baum aufklappen“ bräuchte einen Ancestors-Endpunkt), und der Filter wirkt auf die Ansicht, in der er getippt wurde (Umschalten Struktur ↔ Kategorie rendert den Baum ungefiltert, der Suchtext bleibt im Feld stehen).
+
+## Objekt-Picker: erreichbare Ziele und Teilwort-Suche (2026-09-17)
+
+**Problem (gemeldet).** „Bei normalen Aggregationen … Alternative to und Accessory for scheint nicht korrekt zu sein“ — bei `fits_vehicle` (Ziel `vehicle_generation`) funktionierte der Picker, bei den Aggregationen auf `product` nicht. Zwei **unabhängige** Ursachen, beide gemessen:
+
+1. **Der Kompositionsbaum erreicht die Ziele nicht.** Der Picker zeigte für jeden nicht-taxonomischen Zielsatz den Kompositionsbaum. Gemessene Kompositionskanten (Dev-Daten): `vehicle_make → root` 22, `vehicle_model → vehicle_make` 93, `vehicle_generation → vehicle_model` 166 — aber `product → part_group` 2 000, `oem_number → part_group` 1 000, `part_group → root` nur 12. Die erste Baumebene sind **22 Fahrzeugmarken**; ein Produkt hängt unter einer Baugruppe, und `scope=composition` blendet Taxonomieknoten (damit den ganzen Baugruppen-Zweig) aus. Ergebnis: **jede** Zeile war eine ergraute Marke, nichts auswählbar.
+2. **Der Volltext-Index trifft nur ganze Token.** `attributes @@ 'brake clean'` → **0** Treffer, `… @@ 'brake cleaner'` → 20 (16 926 Produkte). Ein halb getipptes Wort fand also nie etwas — genau die im Abschnitt oben als offene Lücke notierte Stelle.
+
+**Entscheidung — Teil 1: der Picker folgt der Erreichbarkeit.** Die Frage „ist dieser Zieltyp im Kompositionsbaum überhaupt erreichbar?“ beantwortet der Kern mit **`GET /objects/composition-types`**: `{root_type, edges: [{parent, child, count}]}`, die Typkanten der Komposition (eine gruppierte Abfrage, gemessen **~190 ms warm** bei 12 197 Kompositionskanten von 28 624 — deshalb versionsgebunden im `MetaCache` gecacht, `stats_version`). Reine Frontend-Regel (`object_picker.picker_tree_mode`, `composition_reachable`):
+
+| Zieltypen | Panel |
+| --- | --- |
+| alle Taxonomietypen | Taxonomiebaum (wie bisher, Umschalter bei generischer Dimension) |
+| nicht-taxonomisch, aber erreichbar (`vehicle_generation`: Marke → Modell → Generation) | **Kompositionsbaum** (unverändert) |
+| nicht-taxonomisch und **nicht** erreichbar (`product`, `variant`, `oem_number`: der Weg führt über einen ausgeblendeten Taxonomieknoten) | **flache, geblätterte Liste** der erlaubten Objekte (`taxonomy_tree.PAGE_SIZE` = 200, „Weitere Objekte laden …“, Umschalter nur bei mehreren erlaubten Typen) |
+| unbeschränkt (`target_types` leer) | Kompositionsbaum |
+
+Ein Typ gilt nur als erreichbar, wenn **jeder** erlaubte Typ eine Elternkette zur Universal-Wurzel hat und **kein** Sprung über einen ausgeblendeten (Taxonomie-)Knoten führt. Kennt das Frontend den Graphen nicht (Abfrage fehlgeschlagen), bleibt es beim Baum — der Status quo statt eines stillen Panelwechsels.
+
+**Entscheidung — Teil 2: `?label_prefix=true` schließt die Suchlücke.** Der Kern scannt je Sprache der Arbeitskette **und** die skalaren `name`-Werte (`string::starts_with(string::lowercase(<string>…), $term)`); Treffer ranken **hinter** den nach `score` sortierten Volltext-Treffern und werden nur gesucht, solange die Trefferliste noch nicht voll ist. Gemessen (Dev, 16 926 Produkte): kein Treffer **~180–250 ms**, eine Trefferliste kostet mehr allein wegen des `completeness`-Badges (20 Treffer ≈ 1 s, unverändert gegenüber dem Volltext-Pfad). Deshalb `debounce=400` am Suchfeld. Skalare Namen (OEM-Nummern wie `5Q0 936 304 W`) sind mit abgedeckt — sonst blieben sie per Teilwort unfindbar (`5Q0 9` → 0 Treffer ohne, 1 Treffer mit dem Zusatz).
+
+**Nicht** erweitert: der Scan läuft über die **Arbeitssprache** und ihre Kette, nicht über alle Sprachen — der Treffer zeigt sein Label in der Arbeitssprache, und ein Treffer, dessen deutsches Label der Eingabe widerspricht, wäre verwirrender als kein Treffer. Der Volltext-Pfad trifft weiterhin Werte **jeder** Sprache.
+
+**Verifikation (live, Playwright, 2026-09-17):** „Alternative zu“/„Zubehör fuer“ → Tab **Liste**, 201 Zeilen (200 Produkte + „Weitere Objekte laden“), **alle** auswählbar, Suche `Bremsenr` → Treffer; „OEM-Referenz“ → Liste mit 200 OEM-Nummern, Suche `5Q0 9` → Treffer; „Passt zu Fahrzeug“ → Tab **Struktur**, Marke aufklappen (Toyota → Corolla) ⇒ `Toyota Corolla E170 (2013–2019)` auswählbar, Suche `Golf` → Treffer. Zusätzlich: Taxonomie-Picker (`verify_dimension_picker`, `verify_dimension_coupling`) und alle Seiten (`verify_pages`) ohne Fehler.
+
+**Umsetzung:** Kern `api/objects.rs` (`composition_types` + `label_prefix_hits`/`prefix_languages`/`safe_language_code`/`append_unique`, 5 Unit-Tests), `cache.rs` (versionsgebundener Graph-Cache); Frontend `object_picker.py` (`picker_tree_mode`, `composition_reachable`, `object_type_options`, Flat-Modus in `open_structure_picker` über den `paged`-Loader, `switcher_label`), `api.py` (`picker_search(label_prefix=True)` als Default, `fetch_composition_types`), Locales (`form.picker_list_tab`, `form.picker_more`, `form.picker_empty`, `form.picker_list_hint`, `form.picker_object_type`), Tests in `tests/test_picker_tree.py`.
 
 **Umsetzung:** `meadow/frontend/taxonomy_tree.py` (rein, 12 Tests in `tests/test_taxonomy_tree.py`), Einbindung in `grid.py` (Kategorie-Ansicht von `/products`) und `categories.py` (`/categories`); Kern: `api/objects.rs` (`picker` mit `code_prefix`/`completeness`, `code_prefix_hits`, `prefix_upper_bound` — 2 Unit-Tests) und `language.rs::resolve_object_label` (Name → `code` → Objekttyp).
 
