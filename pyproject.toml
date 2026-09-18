@@ -56,6 +56,7 @@ files = [
     "meadow/urls.py",
     "meadow/mef.py",
     "scripts",
+    "tests",
     # Frontend modules, added one by one as they became clean (2026-09-18). The
     # remaining ones are the widget-heavy pages; they follow the same way.
     "meadow/frontend/__main__.py",
@@ -108,6 +109,9 @@ files = [
     "meadow/frontend/users.py",
     "meadow/frontend/views.py",
 ]
+# `tests/fixtures/` holds intentionally broken samples for the Deslop scan
+# (`artifacts.py` has a syntax error on purpose) - they must stay unchecked.
+exclude = "^tests/fixtures"
 python_version = "3.14"
 show_error_codes = true
 # mypy analyses imported modules too; without this, adding one clean file would
@@ -115,6 +119,9 @@ show_error_codes = true
 # grow. Only the files listed above are reported - a module that is not listed
 # yet stays unchecked instead of blocking the gate.
 follow_imports = "silent"
+# Check the bodies of functions without annotations too - measured at zero cost on
+# the current scope (2026-09-18), so the sharpening is on from the start.
+check_untyped_defs = true
 # An `# type: ignore` that no longer suppresses anything is a lie in the code -
 # this is the check that keeps the escapes honest.
 warn_unused_ignores = true

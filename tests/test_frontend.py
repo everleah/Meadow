@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from typing import Any
 
 import httpx
 
@@ -376,7 +377,7 @@ def test_next_object_id_advances_and_stops_at_the_end() -> None:
 
 
 def test_attribute_columns_add_editor_props_for_editable_types() -> None:
-    definitions = [
+    definitions: list[dict[str, Any]] = [
         {"name": "title", "type": "text"},
         {"name": "price", "type": "number"},
         {"name": "flag", "type": "boolean"},
@@ -581,7 +582,7 @@ def test_inherited_cells_maps_attribute_fields_to_the_source() -> None:
 
 
 def test_inherited_cells_without_sources_is_empty() -> None:
-    empty = {INHERITED_FIELD: {}, INTERRUPTED_FIELD: {}}
+    empty: dict[str, Any] = {INHERITED_FIELD: {}, INTERRUPTED_FIELD: {}}
     assert inherited_cells({"id": "object:1", "attributes": {}}, "en") == empty
     # A malformed marker block must not break the rows.
     assert inherited_cells({"inherited": "nope"}, "en") == empty

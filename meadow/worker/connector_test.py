@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from meadow.worker.connectors import CONNECTOR_TYPE_WEBHOOK, _webhook_config_from_row
-from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.jobs import JobMessage, ReportingJobHandler
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 EXCERPT_LIMIT = 300
 
 
-def build_connector_test_handler(*, client: httpx.AsyncClient | None = None) -> JobHandler:
+def build_connector_test_handler(*, client: httpx.AsyncClient | None = None) -> ReportingJobHandler:
     """Builds the `connector_test` job handler."""
 
     async def run(active: httpx.AsyncClient, message: JobMessage) -> dict[str, Any]:

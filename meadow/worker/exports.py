@@ -28,7 +28,7 @@ from openpyxl.styles import Font
 from meadow.urls import is_valid_url
 from meadow.worker import bmecat
 from meadow.worker.http import loopback_host
-from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.jobs import JobMessage, ReportingJobHandler
 from meadow.worker.mail import SmtpConfig, send_with_attachment
 from meadow.worker.storage import S3Config, archive_export
 
@@ -1081,7 +1081,7 @@ def build_export_handler(
     *,
     api_key: str | None = None,
     client: httpx.AsyncClient | None = None,
-) -> JobHandler:
+) -> ReportingJobHandler:
     """Builds the `outbound_export` (json_export) job handler.
 
     `client` may be injected for tests; otherwise a short-lived client is

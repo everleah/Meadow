@@ -8,6 +8,8 @@ section and bulk operation, composition/collection stay system-owned
 
 from __future__ import annotations
 
+from typing import Any
+
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     PRIMARY_CATEGORY_TYPE,
@@ -134,7 +136,7 @@ def test_allows_source_checks_the_source_types() -> None:
 
 
 def test_usable_definitions_filter_by_the_source_type() -> None:
-    definitions = [
+    definitions: list[dict[str, Any]] = [
         _DEFINITIONS[0],
         {"id": "relation_definition:rel_only_category", "source_types": ["category"]},
     ]

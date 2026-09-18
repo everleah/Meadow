@@ -228,6 +228,7 @@ async def test_handle_message_buffers_when_coalescing() -> None:
     assert delivered == []
     assert msg.acked is False
     assert msg.nakked is False
+    assert coalesced.buffer is not None
     entries = await coalesced.buffer.drain()
     assert len(entries) == 1
 

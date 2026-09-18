@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 import nats
@@ -61,6 +61,11 @@ class JobMessage(BaseModel):
 #: A handler receives the parsed message and returns an optional `result`
 #: object that is stored in `job_run.result` on success.
 JobHandler = Callable[[JobMessage], Awaitable[dict[str, Any] | None]]
+
+#: A handler that **always** produces a report. `JobHandler` allows `None` because a
+#: handler may have nothing to report; a caller that reads the report (the bulk
+#: tests) can ask for this narrower contract instead of guarding every access.
+ReportingJobHandler = Callable[[JobMessage], Awaitable[dict[str, Any]]]
 
 #: Publishes a dead-letter payload (plain dict) to the DLQ stream.
 DeadLetterPublisher = Callable[[dict[str, Any]], Awaitable[None]]
@@ -200,8 +205,18 @@ class JobRunner:
         await msg.nak(delay=self._nak_delay)
 
 
+class MessageRunner(Protocol):
+    """The single call `process_messages` needs from a runner.
+
+    `JobRunner` satisfies it, and a test can pass a minimal fake without a core
+    client - the protocol keeps the dependency visible instead of widening to `Any`.
+    """
+
+    async def handle(self, msg: Any) -> None: ...
+
+
 async def process_messages(
-    runner: JobRunner,
+    runner: MessageRunner,
     sem: asyncio.Semaphore,
     msgs: list[Any],
 ) -> None:
@@ -305,6 +320,7 @@ __all__ = [
     "JobMessage",
     "JobHandler",
     "JobRunner",
+    "ReportingJobHandler",
     "ensure_dlq_stream",
     "process_messages",
     "serve_jobs",

@@ -40,7 +40,7 @@ import httpx
 from meadow.rules import Context, execute_rule
 from meadow.worker.business_rules import evaluation_lock
 from meadow.worker.http import loopback_host
-from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.jobs import JobMessage, ReportingJobHandler
 
 logger = logging.getLogger(__name__)
 
@@ -723,7 +723,7 @@ def build_import_handler(
     *,
     api_key: str | None = None,
     client: httpx.AsyncClient | None = None,
-) -> JobHandler:
+) -> ReportingJobHandler:
     """Builds the `inbound_import` job handler.
 
     `client` may be injected for tests; otherwise a short-lived client is

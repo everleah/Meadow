@@ -14,7 +14,7 @@ from meadow.worker.bulk import (
 )
 from meadow.worker.jobs import JobMessage
 
-_DEFINITIONS = [
+_DEFINITIONS: list[dict[str, Any]] = [
     {"name": "title", "type": "text", "multilingual": True},
     {"name": "supplier", "type": "text"},
     {"name": "homepage", "type": "url"},

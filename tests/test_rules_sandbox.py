@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from meadow.rules import (
@@ -54,12 +56,12 @@ def test_a_script_is_compiled_once_and_reused() -> None:
     calls = 0
     original = sandbox.compile_rule
 
-    def counting_compile(*args: object, **kwargs: object) -> object:
+    def counting_compile(*args: Any, **kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
         return original(*args, **kwargs)
 
-    sandbox.compile_rule = counting_compile  # type: ignore[assignment]
+    sandbox.compile_rule = counting_compile
     try:
         source = 'def run(obj, ctx, result):\n    result.computed["checked"] = True\n'
         obj = {"id": "object:1", "type": "product", "attributes": {}}
@@ -76,7 +78,7 @@ def test_a_script_is_compiled_once_and_reused() -> None:
             with pytest.raises(RuleCompileError):
                 execute_rule("def run(:", obj, _ctx())
     finally:
-        sandbox.compile_rule = original  # type: ignore[assignment]
+        sandbox.compile_rule = original
         sandbox._compiled.cache_clear()
 
 

@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from meadow.worker.http import loopback_host
-from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.jobs import JobMessage, ReportingJobHandler
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def build_collection_refresh_handler(
     *,
     api_key: str | None = None,
     client: httpx.AsyncClient | None = None,
-) -> JobHandler:
+) -> ReportingJobHandler:
     """Builds the `collection_refresh` job handler."""
     core_url = loopback_host(core_url)
     headers = {"x-api-key": api_key} if api_key else {}

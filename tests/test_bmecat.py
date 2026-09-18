@@ -9,6 +9,7 @@ and `FVALUE_DETAILS` for a missing value. `plan/detail/bmecat-export.md` §11.3.
 from __future__ import annotations
 
 import importlib.util
+from typing import Any
 
 import httpx
 import pytest
@@ -31,7 +32,7 @@ PROFILE = {
 
 
 def _product(pid: str = "A-1", **overrides: object) -> dict:
-    product = {
+    product: dict[str, Any] = {
         "id": f"object:{pid}",
         "type": "product",
         "pid": pid,

@@ -506,7 +506,7 @@ def test_i18n_keys_of_the_schema_exist() -> None:
 
 
 class _OptionClient:
-    """Stand-in for `CoreClient` covering the four option sources of the form."""
+    """A client stub with the four option sources of the form (`OptionSourceClient`)."""
 
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
@@ -532,7 +532,9 @@ class _OptionClient:
             {"code": None, "active": True},
         ]
 
-    async def list_channels(self, token: str, active: bool = True) -> list[dict]:
+    async def list_channels(
+        self, token: str, *, active: bool | None = None, limit: int = 1000
+    ) -> list[dict]:
         self._check()
         return [{"code": "webshop"}, {"code": ""}]
 

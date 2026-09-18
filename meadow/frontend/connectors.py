@@ -27,7 +27,7 @@ import copy
 import json as _json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from nicegui import app, ui
 
@@ -113,7 +113,25 @@ def _parse_parameters(text: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
-async def load_option_sources(client: CoreClient, token: str) -> dict[str, list[str]]:
+class OptionSourceClient(Protocol):
+    """The client surface `load_option_sources` reads.
+
+    A test stub implements exactly these calls; the protocol keeps the dependency
+    visible and checked instead of widening the parameter to `Any`.
+    """
+
+    async def list_object_types(self, token: str, *, limit: int = 1000) -> list[dict]: ...
+
+    async def list_attribute_vocabulary(self, token: str) -> list[dict]: ...
+
+    async def list_languages(self, token: str) -> list[dict]: ...
+
+    async def list_channels(
+        self, token: str, *, active: bool | None = None, limit: int = 1000
+    ) -> list[dict]: ...
+
+
+async def load_option_sources(client: OptionSourceClient, token: str) -> dict[str, list[str]]:
     """Loads the dynamic option sources of the parameter form.
 
     Each source is optional: a failing request degrades the form to the values the

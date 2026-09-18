@@ -15,6 +15,8 @@ See `meadow/AGENTS.md` (grid columns) and `tests/test_frontend.py`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from meadow.frontend.grid import (
     attribute_field,
     language_field,
@@ -28,7 +30,7 @@ def _definition(name: str, *, reference: bool = False, multilingual: bool = Fals
 
 
 def test_present_names_need_a_real_value() -> None:
-    objects = [
+    objects: list[dict[str, Any]] = [
         {"attributes": {"brand": "ACME", "color": "", "title": {"de": "Hallo"}}},
         {"attributes": {"brand": "Other", "weight": 0, "empty_map": {}, "flag": False}},
     ]

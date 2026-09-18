@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from meadow.worker.http import loopback_host
-from meadow.worker.jobs import JobHandler, JobMessage
+from meadow.worker.jobs import JobMessage, ReportingJobHandler
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def build_config_import_handler(
     *,
     api_key: str | None = None,
     client: httpx.AsyncClient | None = None,
-) -> JobHandler:
+) -> ReportingJobHandler:
     """Builds the `config_import` job handler.
 
     `client` may be injected for tests; otherwise a short-lived client is

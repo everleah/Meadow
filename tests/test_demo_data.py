@@ -30,8 +30,8 @@ KNOWN_STATUSES = {"draft", "in_review", "approved", "published", "archived"}
 def _load_script(name: str):
     """Loads a script module by file name (the scripts are not a package)."""
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    assert spec is not None and spec.loader is not None, f"cannot load {name}.py"
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     # Registered first so dataclasses can resolve the module of the classes.
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

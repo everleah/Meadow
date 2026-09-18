@@ -48,6 +48,7 @@ requires_stopslop = pytest.mark.skipif(STOPSLOP is None, reason="stopslop is not
 
 def _scan(*arguments: str) -> tuple[list[dict], int]:
     """Run the pinned scan from the repository root and return findings + exit code."""
+    assert STOPSLOP is not None, "stopslop is not installed"
     result = subprocess.run(
         [STOPSLOP, *arguments],
         cwd=ROOT,

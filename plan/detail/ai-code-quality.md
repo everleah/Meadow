@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 3 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 84 Dateien – **Frontend und `scripts/` vollständig** (§4.6–§4.8). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 4 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 131 Dateien – **`meadow` inkl. Frontend, `tests/` und `scripts/` vollständig, mit `check_untyped_defs`** (§4.6–§4.9). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -407,9 +407,52 @@ Die 217 Frontend-Fehler aus §4.6/§4.7 sind auf **0** gefallen, `scripts/` hatt
 **Nebenbefund zur Sprache:** `except TypeError, ValueError:` ohne Klammern sieht wie ein
 Python-2-Fehler aus, ist aber seit **Python 3.14 (PEP 758)** gültig.
 
-**Nächste Stufen:** (a) `tests/` (gemessen: 121 Fehler in 20 Dateien; `tests/fixtures/`
-bleibt ausgenommen, `artifacts.py` ist absichtlich kaputt); (b) danach
-`check-untyped-defs = true` als Schärfung.
+**Nächste Stufen:** keine mehr — der Scope ist vollständig. Eine neue NiceGUI- oder
+Kern-API wird ab jetzt mitgeprüft; ein neuer `# type: ignore` fällt im Gate auf.
+
+### 4.9 Typ-Prüfung, Stufe 4: `tests/` und die Schärfung (2026-09-18)
+
+Jetzt ist der **gesamte Python-Baum** im Gate: **131 Dateien** (84 aus §4.6–§4.8 +
+47 Testdateien). `tests/fixtures/` bleibt über `exclude = "^tests/fixtures"` ausgenommen —
+dort liegt der absichtlich kaputte Deslop-Sample.
+
+**Der Hebel war wieder eine Wurzelannotation, diesmal eine systematische.** Von den 121
+Fehlern in 20 Testdateien waren rund **86 dieselbe Meldung**:
+`Value of type "dict[str, Any] | None" is not indexable`. Ursache: **alle sieben
+Job-Handler-Builder** (`bulk`, `business_rules`, `collections`, `config_import`,
+`connector_test`, `exports`, `imports`) deklarierten `-> JobHandler`, und `JobHandler`
+erlaubt `None` („ein Handler darf nichts zu berichten haben"). Ihre innere Funktion war
+aber durchweg schon `async def handle(...) -> dict[str, Any]` annotiert. Ein neuer Alias
+`ReportingJobHandler` (`jobs.py`) hält den engeren Vertrag fest, die sieben Builder wurden
+darauf umgestellt. **Lehre: wenn dieselbe Meldung 86-mal auftaucht, ist nicht der Test
+falsch, sondern die Signatur** — ~86 lokale Guards in Tests wären die falsche Reparatur
+gewesen.
+
+**Zwei Protokolle statt eines `Any`-Loches:** Ein Test-Double macht sichtbar, wie schmal
+eine Abhängigkeit wirklich ist. `load_option_sources` liest vier Client-Aufrufe →
+`OptionSourceClient` (`connectors.py`); `process_messages` ruft nur `handle` →
+`MessageRunner` (`jobs.py`). Der Stub wird damit **geprüft**: fehlt künftig eine Methode,
+scheitert das Gate statt die Erwartung.
+
+**Die Kleinteile:** Test-Literale brauchten Annotationen (`_DEFINITIONS`, `definitions`,
+`objects`, `empty`, `product`) — aus heterogenen Dict-Literalen leitet mypy `object` ab;
+ein Monkeypatch-Zähler braucht `*args: Any` statt `*args: object` (sonst ist der Aufruf der
+echten Funktion nicht typisierbar), und dadurch fielen **zwei** `# type: ignore` in
+`test_rules_sandbox.py`; `assert spec is not None` / `assert buffer is not None` /
+`assert STOPSLOP is not None` lösen verschleppte Optionals ab; die `ast.NodeVisitor`-
+Überschreibungen brauchen `ast.FunctionDef | ast.AsyncFunctionDef` (bzw. `With | AsyncWith`),
+weil TypShed dem Slot den Async-Typ gibt; ein Test-Stub musste die echte
+`list_channels`-Signatur spiegeln (`active: bool | None = None`), damit er das Protokoll
+erfüllt.
+
+**Die Schärfung kostete nichts:** `check_untyped_defs = true` meldete über alle 131 Dateien
+**0** Fehler (vorher gemessen) und ist jetzt in der Konfiguration — der modulweise Aufbau
+hat die untypisierten Rümpfe also schon mitgeräumt.
+
+**Stand:** `Success: no issues found in 131 source files`, 563 pytest,
+`scripts/deslop.ps1 all` = 0 Befunde. Im Scope liegen **11 `# type: ignore`** (4
+`attribute_definitions.py`, 2 `users.py`, 5 `test_search_form.py`) — alle notwendig, was
+`warn_unused_ignores` in jedem Lauf beweist.
 
 ## 5. Workflow
 
@@ -502,11 +545,10 @@ so, was er behauptet.
 
 **Offen (empfohlene Reihenfolge):**
 
-1. **Typ-Prüfung als Gate:** Stufen 1–3 stehen (§4.6–§4.8) – **84 Dateien** sind grün
-   (`meadow/frontend` vollständig und `scripts/`) und laufen in `scripts/check.*`.
-   **Entschieden:** NiceGUIs Element-Typing wird geprüft, nicht als Grenze geführt
-   (§4.7). Offen: `tests/` (121 Fehler in 20 Dateien) und danach
-   `check-untyped-defs = true`.
+1. **Typ-Prüfung als Gate:** **abgeschlossen** (§4.6–§4.9) — **131 Dateien** (`meadow`
+   vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
+   und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
+   geprüft, nicht als Grenze geführt (§4.7).
 2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
    Randfällen ändert sich dabei bewusst.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen

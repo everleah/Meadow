@@ -51,7 +51,7 @@ class _ElementBinder(ast.NodeVisitor):
     def __init__(self) -> None:
         self.bindings: list[tuple[str, int]] = []
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         return  # a nested scope, not the page body
 
     visit_AsyncFunctionDef = visit_FunctionDef
@@ -70,7 +70,7 @@ class _ElementBinder(ast.NodeVisitor):
             _bound_names(node.target, node.lineno, self.bindings)
         self.generic_visit(node)
 
-    def visit_With(self, node: ast.With) -> None:
+    def visit_With(self, node: ast.With | ast.AsyncWith) -> None:
         for item in node.items:
             if item.optional_vars is not None and _is_element_call(item.context_expr):
                 _bound_names(item.optional_vars, node.lineno, self.bindings)
