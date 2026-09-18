@@ -10,11 +10,8 @@ per-language column for every multilingual attribute (Sprach-Spalten).
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import re
-import tempfile
 from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import quote
@@ -27,7 +24,6 @@ from meadow.frontend import config, edit_queue, grid_query, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.bulk_edit import (
-    APPROVAL_STATUS,
     ids_from_rows,
     page_ids,
     row_id,
@@ -53,6 +49,7 @@ from meadow.frontend.display import (
     taxonomy_options,
     taxonomy_type_names,
 )
+from meadow.frontend.export_dialog import ExportDialog
 from meadow.frontend.filters import filter_select
 from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
@@ -68,6 +65,7 @@ from meadow.frontend.relation_roles import (
     category_dimension_bindings,
     definition_key,
 )
+from meadow.frontend.replace_dialog import ReplaceDialog
 from meadow.frontend.tree_panel import TreePanel, TreeState
 from meadow.frontend.url_values import media_kind, open_media_dialog
 from meadow.frontend.view_switch import ViewSwitch
@@ -775,38 +773,6 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     if "memberCount" in object_:
         node["count"] = object_.get("memberCount")
     return node
-
-
-async def _wait_export(client: CoreClient, token: str, run_id: str) -> dict:
-    """Polls an export job run until it reaches a terminal state."""
-    for _ in range(120):
-        try:
-            runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-        except CoreError, httpx.HTTPError:  # keep polling on a transient error
-            runs = []
-        if runs:
-            status = str(runs[0].get("status") or "")
-            if status in ("success", "failed", "retry"):
-                return runs[0]
-        await asyncio.sleep(1)
-    return {"status": "failed", "error": "timeout"}
-
-
-#: Mime type per export format, used for the browser download.
-_EXPORT_MIME = {
-    "csv": "text/csv",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "json": "application/json",
-}
-
-
-def _save_download(data: bytes, filename: str, format_: str) -> None:
-    """Serves export bytes via a temp file (NiceGUI str/bytes src is unreliable)."""
-    with tempfile.NamedTemporaryFile("wb", suffix="." + format_, delete=False) as handle:
-        handle.write(data)
-        tmp_path = handle.name
-    ui.download(tmp_path, filename, _EXPORT_MIME.get(format_, "application/octet-stream"))
-    asyncio.get_running_loop().call_later(60, os.remove, tmp_path)
 
 
 @ui.page("/products", response_timeout=PAGE_TIMEOUT)
@@ -1574,7 +1540,6 @@ async def products_page(request: Request) -> None:
 
         # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
         bulk_selected_ids: set[str] = set()
-        replace_scope: ui.select | None = None
 
         async def handle_selection(event) -> None:
             try:
@@ -1587,8 +1552,7 @@ async def products_page(request: Request) -> None:
                 if oid:
                     bulk_selected_ids.add(oid)
             bulk_wizard.set_selection(bulk_selected_ids)
-            if replace_scope is not None:
-                replace_scope.set_value("selected" if bulk_selected_ids else "filtered")
+            replace_dialog.set_selection(bool(bulk_selected_ids))
 
         # Target selection for the bulk wizard: the own attributes only — an
         # imported standard's vocabulary is not a maintenance target
@@ -1642,82 +1606,22 @@ async def products_page(request: Request) -> None:
         # Replaces a literal text in the string-valued attributes (`text`, `url`)
         # of the selection. It runs as the `replace_text` bulk operation (same
         # scope/progress/report machinery as the wizard) so large selections are
-        # processed in the worker instead of blocking the page.
-        replace_attr_options: dict[str, str] = {
-            "": t("grid.replace_all_attributes"),
-            "name": t("grid.name"),
-            **replace_target_options(definitions, locale),
-        }
-
-        replace_dialog = ui.dialog()
-        with replace_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
-            ui.label(t("grid.replace_title")).classes("text-h6")
-            ui.label(t("grid.replace_hint")).classes("text-caption text-gray-600")
-            ui.label(t("grid.bulk_selection")).classes("text-caption text-gray-600")
-            replace_scope = (
-                ui.select(
-                    {
-                        "filtered": t("grid.bulk_scope_filtered").format(count=len(all_rows)),
-                        "page": t("grid.bulk_scope_page"),
-                        "selected": t("grid.bulk_scope_selected"),
-                    },
-                    value="selected" if bulk_selected_ids else "filtered",
-                )
-                .props("filled dense")
-                .classes("w-full")
-            )
-            replace_attribute = (
-                ui.select(replace_attr_options, value="", label=t("grid.bulk_attribute"))
-                .props("filled dense")
-                .classes("w-full")
-            )
-            replace_search = (
-                ui.input(label=t("grid.replace_search")).props("filled dense").classes("w-full")
-            )
-            replace_with = (
-                ui.input(label=t("grid.replace_with")).props("filled dense").classes("w-full")
-            )
-            replace_case = ui.switch(t("grid.replace_case_sensitive"))
-            replace_approval = ui.switch(t("grid.bulk_send_for_approval")).tooltip(
-                f"{t('grid.approval_status')}: {APPROVAL_STATUS}"
-            )
-            with ui.row().classes("w-full justify-end mt-2 gap-2"):
-                ui.button(t("grid.close"), on_click=replace_dialog.close).props("flat")
-                ui.button(
-                    t("grid.replace_start"),
-                    icon="find_replace",
-                    on_click=lambda: start_replace(),
-                ).props("flat")
-
-        async def start_replace() -> None:
-            search = replace_search.value or ""
-            if not search:
-                ui.notify(t("grid.replace_search_required"), color="warning")
-                return
-            ids = await _scope_ids(str(replace_scope.value or "filtered"))
-            if not ids:
-                ui.notify(t("grid.bulk_no_objects"), color="warning")
-                return
-            parameters = {
-                "search": search,
-                "replace": replace_with.value or "",
-                "attribute": str(replace_attribute.value or ""),
-                "case_sensitive": bool(replace_case.value),
-            }
-            if replace_approval.value:
-                parameters["send_for_approval"] = True
-            try:
-                run = await client.post_bulk(
-                    token, op="replace_text", object_ids=ids, parameters=parameters
-                )
-            except CoreError, httpx.HTTPError:  # show a friendly message
-                ui.notify(t("grid.bulk_start_failed"), color="negative")
-                return
-            run_id = str(run.get("id") or "")
-            replace_dialog.close()
-            ui.notify(t("grid.bulk_started"), color="positive")
-            if run_id:
-                await bulk_wizard.poll(run_id)
+        # processed in the worker instead of blocking the page. The dialog lives in
+        # `meadow/frontend/replace_dialog.py`.
+        replace_dialog = ReplaceDialog(
+            client=client,
+            token=token,
+            attr_options={
+                "": t("grid.replace_all_attributes"),
+                "name": t("grid.name"),
+                **replace_target_options(definitions, locale),
+            },
+            scope_ids=_scope_ids,
+            count=lambda: len(all_rows),
+            initial_scope="selected" if bulk_selected_ids else "filtered",
+            on_started=bulk_wizard.poll,
+        )
+        replace_dialog.build()
 
         current_tree: dict = {"tree": None, "nodes": []}
         # Tracks the active left-panel view so the action button (collapse vs.
@@ -1840,67 +1744,27 @@ async def products_page(request: Request) -> None:
             """Maps the currently visible grid columns to export field names."""
             return export_fields(column_defs, visible_fields, language_fields)
 
-        export_dialog = ui.dialog()
-        with export_dialog, ui.card().classes("w-[32rem] max-w-[92vw]"):
-            ui.label(t("grid.export_title")).classes("text-h6")
-            ui.label(t("grid.export_hint")).classes("text-caption text-gray-600")
-            export_scope = (
-                ui.select(
-                    {
-                        "filtered": t("grid.export_scope_filtered").format(count=len(all_rows)),
-                        "selected": t("grid.export_scope_selected"),
-                    },
-                    value="selected" if bulk_selected_ids else "filtered",
-                )
-                .props("filled dense")
-                .classes("w-full")
-            )
-            export_format = (
-                ui.select(
-                    {"csv": "CSV", "xlsx": "XLSX", "json": "JSON"},
-                    value="csv",
-                    label=t("grid.export_format"),
-                )
-                .props("filled dense")
-                .classes("w-full")
-            )
+        async def _selected_ids() -> list[str]:
+            """The ids of the rows the user selected in the grid."""
+            try:
+                selected: list = await grid.get_selected_rows()
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
+                return []
+            return ids_from_rows(selected)
 
-            async def _do_export() -> None:
-                if export_scope.value == "selected":
-                    selected: list = await grid.get_selected_rows()
-                    ids = ids_from_rows(selected)
-                else:
-                    ids = ids_from_rows(all_rows)
-                if not ids:
-                    ui.notify(t("grid.export_no_objects"), color="warning")
-                    return
-                fmt = str(export_format.value or "csv")
-                try:
-                    queued = await client.create_export(
-                        token,
-                        source={"kind": "selection", "object_ids": ids},
-                        fields=_export_fields(),
-                        format=fmt,
-                        locales=[locale],
-                    )
-                    run_id = str(queued.get("job_run_id") or "")
-                    if not run_id:
-                        raise RuntimeError(t("grid.export_failed").format(err="no job id"))
-                    run = await _wait_export(client, token, run_id)
-                    if run.get("status") != "success":
-                        raise RuntimeError(run.get("error") or run.get("status") or "failed")
-                    data, filename = await client.get_export_file(token, run_id, format=fmt)
-                except (CoreError, httpx.HTTPError) as exc:  # surface a friendly message
-                    ui.notify(t("grid.export_failed").format(err=exc), color="negative")
-                    return
-                exported = (run.get("result") or {}).get("exported", len(ids))
-                export_dialog.close()
-                _save_download(data, filename, fmt)
-                ui.notify(t("grid.export_ok").format(count=exported), color="positive")
-
-            with ui.row().classes("w-full justify-end mt-2 gap-2"):
-                ui.button(t("grid.close"), on_click=export_dialog.close).props("flat")
-                ui.button(t("grid.export"), icon="download", on_click=_do_export).props("flat")
+        # The dialog lives in `meadow/frontend/export_dialog.py`; it resolves both scopes
+        # to ids on the page, so the core never re-evaluates a filter.
+        export_dialog = ExportDialog(
+            client=client,
+            token=token,
+            locale=locale,
+            fields=_export_fields,
+            filtered_ids=lambda: ids_from_rows(all_rows),
+            selected_ids=_selected_ids,
+            count=lambda: len(all_rows),
+            has_selection=bool(bulk_selected_ids),
+        )
+        export_dialog.build()
 
         with ui.splitter(value=25, limits=(0, 60)).classes(
             "w-full h-[calc(100vh-210px)]"
@@ -2283,23 +2147,27 @@ async def products_page(request: Request) -> None:
                 where_chip.set_visibility(False)
                 update_where_chip()
 
-                grid = ui.aggrid(
-                    {
-                        "columnDefs": column_defs,
-                        "rowData": all_rows,
-                        "rowSelection": {"mode": "multiRow"},
-                        "pagination": True,
-                        "paginationPageSize": 50,
-                        # Header tooltips via the native browser tooltip (`title`):
-                        # AG Grid's own tooltip component does not show up here.
-                        "enableBrowserTooltips": True,
-                    },
-                    html_columns=[
-                        i
-                        for i, column in enumerate(column_defs)
-                        if column["field"] in ("_status", "_completeness", "_releases")
-                    ],
-                ).classes("w-full grow")
+                grid = (
+                    ui.aggrid(
+                        {
+                            "columnDefs": column_defs,
+                            "rowData": all_rows,
+                            "rowSelection": {"mode": "multiRow"},
+                            "pagination": True,
+                            "paginationPageSize": 50,
+                            # Header tooltips via the native browser tooltip (`title`):
+                            # AG Grid's own tooltip component does not show up here.
+                            "enableBrowserTooltips": True,
+                        },
+                        html_columns=[
+                            i
+                            for i, column in enumerate(column_defs)
+                            if column["field"] in ("_status", "_completeness", "_releases")
+                        ],
+                    )
+                    .classes("w-full grow")
+                    .mark("objects-grid")
+                )
                 grid.on("cellValueChanged", mark_changed, ["data", "colId"])
                 grid.on("cellClicked", handle_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])

@@ -192,17 +192,16 @@ class CreateObjectDialog:
                         lambda e, k=label_attribute: self._state.__setitem__(k, str(e.value or ""))
                     )
                 )
-            for key_name in [
-                str(item)
-                for item in (self._by_name.get(type_name) or {}).get("key_attributes") or []
-            ]:
-                definition = self.definitions.get(key_name) or {}
-                label = resolve_value(definition.get("label"), self.locale) or key_name
-                self._key_inputs[key_name] = (
-                    ui.input(label if label == key_name else f"{label} ({key_name})")
+            declared_keys = (self._by_name.get(type_name) or {}).get("key_attributes")
+            for key_name in declared_keys if isinstance(declared_keys, list) else []:
+                key = str(key_name)
+                definition = self.definitions.get(key) or {}
+                label = resolve_value(definition.get("label"), self.locale) or key
+                self._key_inputs[key] = (
+                    ui.input(label if label == key else f"{label} ({key})")
                     .props("filled dense")
                     .classes("w-full")
-                    .mark(f"create-key-{key_name}")
+                    .mark(f"create-key-{key}")
                 )
             if self._key_inputs:
                 ui.label(t("grid.create_key_hint")).classes("text-caption text-gray-500")

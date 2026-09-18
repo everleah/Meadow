@@ -53,11 +53,11 @@ def is_multilingual_map(value: object) -> TypeGuard[dict[str, Any]]:
 
 
 def storable_cell_value(
-    definition: dict,
+    definition: Mapping[str, Any],
     cell_value: object,
     original: object,
     locale: str,
-    labels: dict[str, str] | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> object:
     """Turns an edited cell value back into a storable attribute value.
 

@@ -32,5 +32,18 @@
         "cargo run": true,
         "uv": true,
         "&": true
-    }
+    },
+    "cSpell.ignoreWords": [
+        "aggrid",
+        "atype",
+        "coro",
+        "defn",
+        "middot"
+    ],
+    "cSpell.words": [
+        "categorisation",
+        "ETIM",
+        "normalised",
+        "recognisable"
+    ]
 }

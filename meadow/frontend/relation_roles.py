@@ -16,7 +16,7 @@ knowing individual built-in keys.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from meadow.frontend.i18n import t
 
@@ -41,13 +41,13 @@ PRIMARY_CATEGORY_TYPE = "category"
 CUSTOM_ROLES = (ROLE_LINK, ROLE_CATEGORY)
 
 
-def definition_key(record: dict) -> str:
+def definition_key(record: Mapping[str, object]) -> str:
     """Bare record key of a relation type (``relation_definition:rel_x`` → ``rel_x``)."""
     raw = str(record.get("id") or "").strip()
     return raw.split(":", 1)[-1] if raw else str(record.get("name") or "")
 
 
-def role_of(definition: dict) -> str:
+def role_of(definition: Mapping[str, object]) -> str:
     """Usage of a relation type (`link` when the record carries none)."""
     return str(definition.get("role") or "").strip() or DEFAULT_ROLE
 
@@ -74,7 +74,7 @@ def custom_role_options() -> dict[str, str]:
 
 
 def effective_target_types(
-    definition: dict | None, taxonomy_types: Iterable[str] | None = None
+    definition: Mapping[str, object] | None, taxonomy_types: Iterable[str] | None = None
 ) -> list[str] | None:
     """Object types a relation type accepts on the target side.
 
@@ -84,7 +84,8 @@ def effective_target_types(
     built-in `category` type is assumed. `collection` stays fixed. `None` means
     every object type may be the target — the picker then greys nothing out.
     """
-    explicit = [str(name) for name in ((definition or {}).get("target_types") or []) if name]
+    declared = (definition or {}).get("target_types")
+    explicit = [str(name) for name in declared if name] if isinstance(declared, list) else []
     if explicit:
         return explicit
     role = role_of(definition or {})
@@ -156,18 +157,21 @@ def category_dimension_bindings(
     return bindings
 
 
-def allows_source(definition: dict | None, object_type: str) -> bool:
+def allows_source(definition: Mapping[str, object] | None, object_type: str) -> bool:
     """True when `object_type` may be the **source** of the relation.
 
     An empty `source_types` list allows every type; the picker only renders an
     add action for a relation type the core would accept (it rejects the rest
     with 400).
     """
-    source_types = [str(name) for name in ((definition or {}).get("source_types") or []) if name]
+    declared = (definition or {}).get("source_types")
+    source_types = [str(name) for name in declared if name] if isinstance(declared, list) else []
     return not source_types or object_type in source_types
 
 
-def usable_definitions(definitions: Iterable[dict], object_type: str) -> list[dict]:
+def usable_definitions(
+    definitions: Iterable[Mapping[str, object]], object_type: str
+) -> list[Mapping[str, object]]:
     """Relation types whose source side accepts `object_type`."""
     return [d for d in definitions if allows_source(d, object_type)]
 

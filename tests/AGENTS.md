@@ -40,11 +40,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `bool(user.find(...).elements)` is no wait at all — use `await user.should_see(marker=…)`
   when the wait is about visibility, and `_wait_until` for recorded state such as core
   calls), and `user.notify` is how a test pins the message a handler shows
-  (`notify.contains(...)`/`notify.messages`). **What the net cannot reach:** anything that
-  a *client-side* event opens — the reference dialog starts from a click on the `_refs`
-  cell of the AG Grid, which the simulation cannot fire. Such a feature is covered through
-  its pure functions (the module's own tests), and the gap is named in
-  `plan/detail/ai-code-quality.md` §4.11 instead of being papered over.
+  (`notify.contains(...)`/`notify.messages`). **Client-rendered widgets are reachable through
+  their event:** the AG Grid draws its cells in the browser, so a test cannot *click* one —
+  but the click arrives in Python as an event, and `find(marker="objects-grid").trigger(
+  "cellClicked", {"data": {...}, "colId": "_refs"})` fires exactly that (marker on the grid
+  element, payload as the handler's `e.args`). That is how the reference dialog is tested.
 
 ## Verification
 

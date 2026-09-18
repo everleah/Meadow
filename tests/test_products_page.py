@@ -394,6 +394,31 @@ async def test_filter_bar_reset_returns_to_the_empty_grid(products_user: User) -
     assert search.value == ""
 
 
+async def test_reference_dialog_opens_from_the_refs_cell(products_user: User) -> None:
+    """The `_refs` cell is the dialog's only entry; the click travels through the grid.
+
+    The AG Grid is client-rendered, so a test cannot click a cell — but the click arrives
+    in Python as an event, and that event is what this test fires.
+    """
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    await products_user.open("/products?type=product")
+
+    products_user.find(marker="objects-grid").trigger(
+        "cellClicked",
+        {"data": {"_id": "product:1", "_type": "product"}, "colId": "_refs"},
+    )
+    await _wait_until(
+        lambda: any(name == "list_object_references" for name, _, _ in FakeCore.calls),
+        str([name for name, _, _ in FakeCore.calls]),
+    )
+
+    references = [args for name, args, _ in FakeCore.calls if name == "list_object_references"]
+    assert [args[1] for args in references] == ["product:1"]
+    await products_user.should_see(t("grid.references", locale=EN))
+    await products_user.should_see(t("grid.ref_empty", locale=EN))
+
+
 async def test_structure_view_renders_the_tree(products_user: User) -> None:
     """The structure view draws the lazy tree of the loaded root nodes."""
     _stub_objects(*OBJECTS)

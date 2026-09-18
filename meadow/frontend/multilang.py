@@ -8,6 +8,9 @@ editing and replaces the former hard-coded ``Label (DE)`` / ``Label (EN)`` pairs
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 from nicegui import ui
 
 from meadow.frontend.grid import resolve_value
@@ -19,14 +22,14 @@ def base_lang(locale: str) -> str:
     return locale.split("-")[0]
 
 
-def active_data_languages(languages: list[dict]) -> list[dict]:
+def active_data_languages(languages: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """Returns the active, non-root data languages from ``GET /languages``."""
     return [
         lang for lang in languages if str(lang.get("code")) != "root" and lang.get("active", True)
     ]
 
 
-def _lang_list(languages: list[dict], locale: str) -> list[dict]:
+def _lang_list(languages: Sequence[Mapping[str, Any]], locale: str) -> list[Mapping[str, Any]]:
     """Active data languages, guaranteed to include the main edit language."""
     main = base_lang(locale)
     langs = active_data_languages(languages)
@@ -39,7 +42,7 @@ def multilingual_value_editor(
     *,
     field_label: str,
     locale: str,
-    languages: list[dict],
+    languages: Sequence[Mapping[str, Any]],
     value: dict | None,
     store: dict,
     key: str,

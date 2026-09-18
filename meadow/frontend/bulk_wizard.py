@@ -57,12 +57,12 @@ class BulkConfigArea:
         client: CoreClient,
         token: str,
         locale: str,
-        attribute_options: Mapping[str, str],
-        relation_options: Mapping[str, str],
+        attribute_options: dict[str, str],
+        relation_options: dict[str, str],
         relation_definitions: Mapping[str, Mapping[str, object]],
-        category_options: Mapping[str, str],
+        category_options: dict[str, str],
         taxonomy_types: Sequence[str] | None,
-        channel_labels: Mapping[str, str],
+        channel_labels: dict[str, str],
     ) -> None:
         self.client = client
         self.token = token
@@ -248,17 +248,17 @@ class WizardCatalogs:
     #: The rows of the current grid view (count of the "filtered" scope).
     rows: Sequence[object]
     #: Own attributes offered as targets (name → label).
-    attributes: Mapping[str, str]
+    attributes: dict[str, str]
     #: Relation types with a dedicated bulk operation (key → label).
-    relation_options: Mapping[str, str]
+    relation_options: dict[str, str]
     #: The definition per relation option key.
     relation_definitions: Mapping[str, Mapping[str, object]]
     #: Categorisations offered for the category operations (key → label).
-    category_options: Mapping[str, str]
+    category_options: dict[str, str]
     #: Node types the category picker may target (`None` = any).
     taxonomy_types: Sequence[str] | None
     #: Channels offered for release/withdraw (key → label).
-    channel_labels: Mapping[str, str]
+    channel_labels: dict[str, str]
 
 
 class BulkWizard:

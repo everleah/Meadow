@@ -824,8 +824,50 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   Widget-Code 919; **661 pytest**, mypy **142** Dateien, Deslop-Scan **0** Befunde.
   `add_section` und `sync_picker` sind verschwunden; größte verbliebene Einzelfunktionen:
   `_do_export` 32, `save` 30, `start_replace`/`search_taxonomy` 29.
-- **Nächstes:** die verbliebenen Export-/Replace-Funktionen; danach ist jede größere Fläche
-  der Seite ein eigenes Modul.
+- **Inkrement 11 — der offene Netzpunkt ist geschlossen:** der Referenzdialog war nur über
+  einen Klick auf die `_refs`-Zelle erreichbar, und AG-Grid-Zellen sind client-gerendert.
+  Die **Zelle** lässt sich nicht klicken, ihr **Ereignis** aber auslösen: das Grid trägt
+  einen Marker (`objects-grid`), und `trigger("cellClicked", {"data": …, "colId": "_refs"})`
+  schickt genau das, was der Handler als `e.args` liest. Damit hat der Dialog seinen
+  Seitentest („Klick auf die `_refs`-Zelle lädt die Referenzen des Objekts und öffnet den
+  Dialog“) — und die Regel in `tests/AGENTS.md` ist korrigiert, statt eine Lücke zu
+  dokumentieren, die keine war.
+- **Inkrement 12 — Ersetzen- und Exportdialog:** `meadow/frontend/replace_dialog.py`
+  (`ReplaceDialog` + reines `replace_parameters`) und `meadow/frontend/export_dialog.py`
+  (`ExportDialog`, `export_source`, `wait_for_export`, `save_download`, `EXPORT_FORMATS`/
+  `EXPORT_MIME`) samt der zwei Modul-Helfer aus `grid.py`. Der **Payload** beider Wege ist
+  damit rein und getestet: `replace_parameters` schreibt `send_for_approval` nur, wenn der
+  Schalter an ist (ein ausgeschalteter Schalter darf für den Worker keine Anfrage sein),
+  und `export_source` macht aus jedem Scope eine **explizite Id-Liste** — was der Nutzer
+  gesehen hat, wird exportiert; der Kern wertet keinen Filter neu aus. Sechs neue Tests.
+- **Messung nach 11–12:** `products_page` **1497 → 1399** Zeilen (vom Ausgangswert **2737**
+  also **−1338**), verschachtelte Funktionen 54 → **53**; **668 pytest** (16 Seitentests),
+  Deslop-Scan **0** Befunde.
+- **Fund beim Abschluss (und behoben): die neuen Module standen nicht im Gate.** `[tool.mypy]
+  files` führt die Frontend-Module **einzeln** auf; die vierzehn Module dieses Umbaus fehlten
+  dort — mypy hat sie dank `follow_imports = "silent"` nur **still** mitverfolgt, ihre Fehler
+  also **nicht gemeldet**. Sichtbar wurde das erst beim Abschlusslauf (die Dateizahl war mit
+  jeder neuen *Test*datei gewachsen, weil `tests` als Verzeichnis im Scope steht). Nach dem
+  Eintragen liefen **12** echte Typfehler auf: fast alle „`Mapping` gegen `dict`“ — die
+  ausgelagerten Funktionen annotieren ehrlicher (`Mapping`/`Sequence`), die aufgerufenen
+  Altmodule (`ui.select`, `storable_cell_value`, `relation_roles`) erwarteten `dict`. Gelöst,
+  indem die **lesenden** Parameter der Helfer auf `Mapping`/`Sequence` geweitet wurden
+  (`effective_target_types`, `allows_source`, `role_of`, `definition_key`, `usable_definitions`,
+  `storable_cell_value`, `multilang`) statt an jedem Aufruf zu kopieren — plus drei
+  `isinstance`-Guards, weil `Mapping.get()` `object` liefert. **Lehre:** ein neues Modul ist
+  erst geprüft, wenn es in `[tool.mypy] files` steht; der Scope ist Teil des Umbaus, nicht
+  Nacharbeit. Der Scope steht jetzt bei **159 Dateien**.
+- **Endmessung des Umbaus:** `products_page` **2737 → 1399** Zeilen (**−1338**),
+  verschachtelte Funktionen **106 → 53**, linearer Widget-Code 1092 → **876**;
+  **668 pytest** (16 Seitentests), mypy **159** Dateien, Deslop-Scan **0** Befunde.
+- **Hier ist Schluss (bewusste Entscheidung):** die verbliebenen Blöcke sind klein und
+  enthalten keine reinen Regeln mehr, die man festnageln könnte — `search_taxonomy` (29),
+  `apply_tree_filter` (23), `reload_collection` (20), `change_dimension` (19) —, und sie
+  hängen eng am Seitenszustand (Taxonomie-Wahl, Wurzel-Nachladen, Auswahl). Sie zu
+  verschieben kostet fünf bis sechs Rückrufe je Funktion, ohne einen weiteren Test zu
+  ermöglichen: die Entscheidung darin steckt schon rein in `taxonomy_tree`
+  (`uses_server_search`, `path_nodes`, `search_nodes`). Wer sie angeht, sollte mit
+  `apply_tree_filter` beginnen (nur es kennt die Regel „server- oder clientseitig“).
 
 ## 5. Workflow
 
@@ -918,22 +960,24 @@ so, was er behauptet.
 
 **Offen (empfohlene Reihenfolge):**
 
-1. **Typ-Prüfung als Gate:** **abgeschlossen** (§4.6–§4.9) — **131 Dateien** (`meadow`
+1. **Typ-Prüfung als Gate:** **abgeschlossen** (§4.6–§4.9) — **159 Dateien** (`meadow`
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
-   geprüft, nicht als Grenze geführt (§4.7).
+   geprüft, nicht als Grenze geführt (§4.7). **Regel aus dem Umbau:** jedes neu extrahierte
+   Modul kommt **im selben Schritt** in `[tool.mypy] files` — sonst folgt mypy ihm nur
+   still und meldet nichts (§4.11).
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–10
-   umgesetzt** — `bulk_report.py`, `bulk_edit.py`, `bulk_wizard.py`, `where_dialog.py`,
-   `column_views.py`, `create_object.py`, `tree_panel.py`, `grid_query.py`, `cell_values.py`,
-   `view_switch.py`, `references_dialog.py`, `column_picker.py`; die Seite ist bei
-   **1497 Zeilen** (**−1240**, also weniger als die Hälfte), Messwerkzeug
-   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **14**
-   Tests) tragen jeden Schritt. **Offen:** die verbliebenen Export-/Replace-Funktionen
-   (`_do_export` 32, `save` 30, `start_replace`/`search_taxonomy` 29) und ein Seitentest für
-   den Referenzdialog (Einstieg ist ein AG-Grid-Zellklick, siehe §4.11).
+3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **abgeschlossen** —
+   zwölf Inkremente, dreizehn neue Frontend-Module (`bulk_report`, `bulk_edit`, `bulk_wizard`,
+   `where_dialog`, `column_views`, `create_object`, `tree_panel`, `grid_query`, `cell_values`,
+   `view_switch`, `references_dialog`, `column_picker`, `export_dialog`, `replace_dialog`),
+   die Seite bei **1399 Zeilen** (Ausgangswert 2737, also **−1338** ≈ die Hälfte) mit **53**
+   statt 106 verschachtelten Funktionen; **668 pytest** (16 Seitentests), mypy **143** Dateien,
+   Deslop **0**. Jeder Schritt lief mit Gates; die reinen Teile haben eigene Tests. **Offen
+   gelassen (begründet in §4.11):** `search_taxonomy`/`apply_tree_filter` (29/23 Zeilen) —
+   keine reinen Regeln mehr, die man festnageln könnte.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.
