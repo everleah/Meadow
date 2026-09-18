@@ -580,16 +580,28 @@ Regel für jeden Schritt: **keine Verhaltensänderung**, und der reine Teil wand
 Modul der Größe `export_fields.py` bzw. `load_option_sources` (§4.4c). Bricht Schritt 1
 das Netz, ist die Reihenfolge falsch — nicht die Regel.
 
-**Stand Inkrement 1 (2026-09-18): umgesetzt.** Neues Modul
-`meadow/frontend/bulk_report.py` mit zwei reinen Reduktionen — `read_bulk_report`
-(Zählwerte, welche Zusammenfassungszeile gilt, welche Einträge als Fehler und welche als
-vom Workflow abgelehnt gelten) und `replace_target_options` (welche Attribute ein
-Find & Replace anbieten darf) — plus `tests/test_bulk_report.py` (**6 Tests**). Die Seite
-liest den Bericht nur noch (`report.errors`, `report.is_replace`, …); die Entscheidungen
-liegen getestet vor. **Messung:** 2737 → **2722** Zeilen, linearer Widget-Code 1092 → **1085**,
-Tests 566 → **572**, mypy 133 → **134** Dateien. Der Zeilengewinn ist absichtlich klein: der
-Wert dieses Inkrements ist die Testbarkeit — der große Block ist Inkrement 2 (Bulk-Wizard), und
-dafür ist das Netz jetzt da.
+**Stand (2026-09-18):**
+
+- **Inkrement 1 — die Reduktionen des Bulk-Berichts:** neues Modul
+  `meadow/frontend/bulk_report.py` mit `read_bulk_report` (Zählwerte, welche
+  Zusammenfassungszeile gilt, welche Einträge als Fehler und welche als vom Workflow
+  abgelehnt gelten) und `replace_target_options` (welche Attribute ein Find & Replace
+  anbieten darf), dazu `tests/test_bulk_report.py` (**6 Tests**). Die Seite liest nur noch
+  `report.errors`/`report.is_replace`/…; die Entscheidungen liegen getestet vor.
+- **Inkrement 2a — die Entscheidungen des Bulk-Wizards:** neues Modul
+  `meadow/frontend/bulk_edit.py` mit `build_parameters` (die Payload, die der Worker liest —
+  inklusive „Freigabe-Schalter nur bei Modifier-Ops“), `missing_parameters`,
+  `approval_supported` sowie `row_id`/`ids_from_rows`/`page_ids`; dazu
+  `tests/test_bulk_edit.py` (**10 Tests**). `start_bulk` baut die Parameter nur noch über
+  `build_parameters(op, {feld: wert}, bulk_picked)`, und **fünf** identische
+  List-Comprehensions der Seite (`start_sequential`, `_scope_ids`, `_current_page_ids`,
+  `handle_selection`, `_do_export`) sind durch `ids_from_rows`/`page_ids` ersetzt.
+- **Messung:** `products_page` **2737 → 2672** Zeilen, linearer Widget-Code 1092 → **1084**,
+  verschachtelte Funktionen 106 → **105**; Tests 566 → **582**, mypy 133 → **135** Dateien.
+  Der Zeilengewinn bleibt klein — der Wert liegt in der Testbarkeit: Payload-Vertrag,
+  Scope-/Seitenfenster-Regel und Zeilen-Extraktion waren vorher unerreichbar eingeschlossen.
+- **Nächstes (2b):** die Dialoghülle des Wizards und `refresh_config` (150 Zeilen, der
+  größte Block) mit explizitem Zustand — die Entscheidungen dafür stehen jetzt fest.
 
 ## 5. Workflow
 
@@ -689,10 +701,11 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (2722 Zeilen, §4.11): **Inkrement 1 umgesetzt**
-   (reine Reduktionen in `meadow/frontend/bulk_report.py` + 6 Tests); Messwerkzeug
-   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`) stehen,
-   Inkrement 2 (Bulk-Wizard) ist als nächster Block geordnet.
+3. **Struktur-Umbau `products_page`** (2672 Zeilen, §4.11): **Inkremente 1 und 2a umgesetzt**
+   (reine Reduktionen in `bulk_report.py` + 6 Tests, Wizard-Entscheidungen in
+   `bulk_edit.py` + 10 Tests); Messwerkzeug (`scripts/grid_structure.py`) und Seitentests
+   (`tests/test_products_page.py`) stehen, Inkrement 2b (Dialoghülle + `refresh_config`)
+   ist als nächster Block geordnet.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.

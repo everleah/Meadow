@@ -27,6 +27,14 @@ from nicegui import app, ui
 from meadow.frontend import config, edit_queue, search_form, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
+from meadow.frontend.bulk_edit import (
+    approval_supported,
+    build_parameters,
+    ids_from_rows,
+    missing_parameters,
+    page_ids,
+    row_id,
+)
 from meadow.frontend.bulk_report import read_bulk_report, replace_target_options
 from meadow.frontend.display import (
     DEFAULT_RELEASE_STATUS,
@@ -87,17 +95,6 @@ PENDING_WARN_POLLS = 10
 # Review status of the workflow state machine (plan/detail/workflow-freigaben.md);
 # the default target of the `send_for_approval` bulk operation.
 APPROVAL_STATUS = "in_review"
-# Operations that change data and therefore offer the "send for approval
-# afterwards" switch (`change_status`, `send_for_approval` and `delete` do not).
-_APPROVAL_MODIFIER_OPS = (
-    "set_attribute",
-    "clear_attribute",
-    "add_category",
-    "remove_category",
-    "add_relation",
-    "remove_relation",
-    "change_parent",
-)
 # Relation types with a dedicated bulk operation are hidden in the generic
 # relation selection: composition (`change_parent`) and every categorisation
 # (`add_category`/`remove_category`). Their usages (`role`) decide this, so
@@ -1345,7 +1342,7 @@ async def products_page(request: Request) -> None:
                 selected_rows = await grid.get_selected_rows()
             except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 selected_rows = []
-            ids = [oid for oid in (_row_id(row) for row in selected_rows) if oid]
+            ids = ids_from_rows(selected_rows)
             if not ids:
                 ui.notify(t("seq.no_selection"), color="warning")
                 return
@@ -2054,17 +2051,6 @@ async def products_page(request: Request) -> None:
         replace_scope: ui.select | None = None
         bulk_dialog: ui.dialog | None = None
 
-        def _row_id(row: object) -> str | None:
-            """Extract the object id from a selected row (data dict or row node)."""
-            if not isinstance(row, dict):
-                return None
-            oid = row.get("_id")
-            if not oid:
-                data = row.get("data")
-                if isinstance(data, dict):
-                    oid = data.get("_id")
-            return str(oid) if oid else None
-
         async def handle_selection(event) -> None:
             try:
                 selected_rows = await grid.get_selected_rows()
@@ -2072,7 +2058,7 @@ async def products_page(request: Request) -> None:
                 selected_rows = []
             bulk_selected_ids.clear()
             for row in selected_rows:
-                oid = _row_id(row)
+                oid = row_id(row)
                 if oid:
                     bulk_selected_ids.add(oid)
             if bulk_selected_label is not None:
@@ -2311,7 +2297,7 @@ async def products_page(request: Request) -> None:
                         )
                         bulk_fields["release_status"] = status_select
                     ui.label(t("grid.bulk_channel_hint")).classes("text-caption text-gray-400")
-                if op in _APPROVAL_MODIFIER_OPS:
+                if approval_supported(op):
                     bulk_fields["send_for_approval"] = ui.switch(
                         t("grid.bulk_send_for_approval")
                     ).tooltip(f"{t('grid.approval_status')}: {APPROVAL_STATUS}")
@@ -2323,9 +2309,7 @@ async def products_page(request: Request) -> None:
                 size = int(await grid.run_grid_method("paginationGetPageSize") or 50)
             except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 page, size = 0, 50
-            start = page * size
-            end = start + size
-            return [oid for oid in (_row_id(r) for r in all_rows[start:end]) if oid]
+            return page_ids(all_rows, page, size)
 
         async def _scope_ids(scope: str) -> list[str]:
             """Resolves a selection scope (`filtered`/`page`/`selected`) to ids."""
@@ -2335,7 +2319,7 @@ async def products_page(request: Request) -> None:
                 return await _current_page_ids()
             else:
                 rows = all_rows
-            return [oid for oid in (_row_id(row) for row in rows) if oid]
+            return ids_from_rows(rows)
 
         async def start_bulk() -> None:
             op = bulk_op.value
@@ -2346,47 +2330,10 @@ async def products_page(request: Request) -> None:
             if not ids:
                 ui.notify(t("grid.bulk_no_objects"), color="warning")
                 return
-            parameters: dict = {}
-            if op in ("set_attribute", "clear_attribute"):
-                attribute = bulk_fields.get("attribute")
-                parameters["attribute"] = attribute.value if attribute else None
-                if op == "set_attribute":
-                    value = bulk_fields.get("value")
-                    parameters["value"] = value.value if value else None
-            elif op == "change_status":
-                status = bulk_fields.get("status")
-                parameters["status"] = status.value if status else None
-            elif op == "send_for_approval":
-                target = bulk_fields.get("approval_status")
-                parameters["approval_status"] = target.value if target else None
-            elif op in ("add_category", "remove_category"):
-                category = bulk_picked.get("category")
-                parameters["category"] = category.get("id") if category else None
-                category_type = bulk_fields.get("category_definition")
-                if category_type is not None and category_type.value:
-                    parameters["definition_id"] = str(category_type.value)
-            elif op == "change_parent":
-                parent = bulk_picked.get("parent")
-                parameters["parent"] = parent.get("id") if parent else None
-            elif op in ("add_relation", "remove_relation"):
-                relation = bulk_fields.get("relation")
-                parameters["definition_id"] = relation.value if relation else None
-                picked_target = bulk_picked.get("relation_target")
-                parameters["target"] = picked_target.get("id") if picked_target else None
-            elif op in ("release_for_channel", "withdraw_from_channel"):
-                channel = bulk_fields.get("channel")
-                parameters["channel"] = channel.value if channel else None
-                if op == "release_for_channel":
-                    status_select = bulk_fields.get("release_status")
-                    if status_select is not None and status_select.value:
-                        parameters["release_status"] = str(status_select.value)
-
-            if op in _APPROVAL_MODIFIER_OPS:
-                approval = bulk_fields.get("send_for_approval")
-                if approval is not None and approval.value:
-                    parameters["send_for_approval"] = True
-
-            missing = [k for k, v in parameters.items() if not v]
+            parameters = build_parameters(
+                op, {key: field.value for key, field in bulk_fields.items()}, bulk_picked
+            )
+            missing = missing_parameters(parameters)
             if missing:
                 ui.notify(t("grid.bulk_config_incomplete"), color="warning")
                 return
@@ -2803,9 +2750,9 @@ async def products_page(request: Request) -> None:
             async def _do_export() -> None:
                 if export_scope.value == "selected":
                     selected: list = await grid.get_selected_rows()
-                    ids = [oid for oid in (_row_id(row) for row in selected) if oid]
+                    ids = ids_from_rows(selected)
                 else:
-                    ids = [oid for oid in (_row_id(row) for row in all_rows) if oid]
+                    ids = ids_from_rows(all_rows)
                 if not ids:
                     ui.notify(t("grid.export_no_objects"), color="warning")
                     return
