@@ -523,6 +523,31 @@ def render_parameter_form(
     return form
 
 
+def _reader_for(widget: ui.input | ui.select | ui.number | ui.switch) -> Callable[[], Any]:
+    """A reader that returns the widget's current value.
+
+    A bound helper instead of `lambda w=widget: w.value`: a lambda with a default
+    argument cannot be typed (mypy: "Cannot infer type of lambda"), and the widget
+    of one field has to be captured for later.
+    """
+    return lambda: widget.value
+
+
+def _setter_for(
+    widget: ui.input | ui.select | ui.number | ui.switch, *, as_bool: bool = False
+) -> Callable[[Any], None]:
+    """A setter for one widget (`as_bool` for switch/checkbox fields)."""
+
+    def setter(value: Any) -> None:
+        # `set_value` returns the widget for chaining, so the value is discarded.
+        # The parameter is typed per widget (`str` for inputs, `float` for numbers),
+        # which a union cannot satisfy - the caller picks the matching branch.
+        coerced: Any = bool(value) if as_bool else value
+        widget.set_value(coerced)
+
+    return setter
+
+
 def _render_field(
     form: ParameterForm,
     field: dict,
@@ -538,12 +563,12 @@ def _render_field(
     label = t(str(field.get("label_key") or key))
     if field.get("required"):
         label = f"{label} *"
-    widget: ui.element | None = None
+    widget: ui.input | ui.select | ui.number | ui.switch | None = None
     with host:
         if str(field.get("widget")) == "switch":
             widget = ui.switch(label, value=bool(format_value(field, value)))
-            form._readers[key] = lambda w=widget: w.value
-            form._setters[key] = lambda new, w=widget: w.set_value(bool(new))
+            form._readers[key] = _reader_for(widget)
+            form._setters[key] = _setter_for(widget, as_bool=True)
         elif str(field.get("widget")) == "number":
             widget = ui.number(
                 label,
@@ -551,8 +576,8 @@ def _render_field(
                 min=field.get("minimum"),
                 max=field.get("maximum"),
             ).props("filled dense")
-            form._readers[key] = lambda w=widget: w.value
-            form._setters[key] = lambda new, w=widget: w.set_value(new)
+            form._readers[key] = _reader_for(widget)
+            form._setters[key] = _setter_for(widget)
         elif str(field.get("widget")) in ("select", "multiselect"):
             multiple = str(field.get("widget")) == "multiselect"
             current = format_value(field, value)
@@ -569,8 +594,8 @@ def _render_field(
                 # free tag input: the user types the values themselves.
                 new_value_mode="add-unique" if multiple and not options else None,
             ).props("filled dense")
-            form._readers[key] = lambda w=widget: w.value
-            form._setters[key] = lambda new, w=widget: w.set_value(new)
+            form._readers[key] = _reader_for(widget)
+            form._setters[key] = _setter_for(widget)
         elif str(field.get("widget")) == "key_value":
             ui.label(label).classes("text-caption text-gray-500")
             editor = KeyValueEditor(format_value(field, value), secret=bool(field.get("secret")))
@@ -586,8 +611,8 @@ def _render_field(
                     password=bool(field.get("secret")),
                 )
             ).props("filled dense")
-            form._readers[key] = lambda w=widget: w.value
-            form._setters[key] = lambda new, w=widget: w.set_value(new)
+            form._readers[key] = _reader_for(widget)
+            form._setters[key] = _setter_for(widget)
         if field.get("help_key"):
             ui.label(t(str(field["help_key"]))).classes("text-caption text-gray-500")
     if on_change is not None and widget is not None:

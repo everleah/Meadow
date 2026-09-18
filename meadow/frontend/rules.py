@@ -276,6 +276,7 @@ async def rules_page() -> None:
         def _fill_editor(rule: dict | None) -> None:
             nonlocal editing_id
             editing = rule is not None
+            rule = rule or {}  # the reads below only run while editing
             editor_title.set_text(t("rules.edit") if editing else t("rules.new"))
             editing_id = rule.get("id") if rule else None
             name_input.set_value(str(rule.get("name") or "") if editing else "")
@@ -592,7 +593,7 @@ async def rules_page() -> None:
                     rows = []
                 by_id = {str(r.get("id")): r for r in rows}
                 objects_to_run = chosen[:1] if mode == "object" else chosen
-                outcome = await client.test_batch_rule(token, rule_id, objects_to_run)
+                batch_outcome = await client.test_batch_rule(token, rule_id, objects_to_run)
                 await render_outcomes(
                     [
                         (
@@ -600,7 +601,7 @@ async def rules_page() -> None:
                             by_id.get(str(o.get("object_id")), {}),
                             o.get("outcome"),
                         )
-                        for o in outcome
+                        for o in batch_outcome
                     ]
                 )
             except CoreError as error:

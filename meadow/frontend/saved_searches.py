@@ -262,6 +262,7 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
 
     def _fill_editor(search: dict | None) -> None:
         editing = search is not None
+        search = search or {}  # the reads below only run while editing
         editor_title.set_text(t("saved_searches.edit") if editing else t("saved_searches.new"))
         editor_state["editing_id"] = search.get("id") if editing else None
         name_input.set_value(_name_of(search) if editing else "")
@@ -592,6 +593,7 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
 
     def _fill_editor(collection: dict | None) -> None:
         editing = collection is not None
+        collection = collection or {}  # the reads below only run while editing
         editor_title.set_text(
             t("saved_searches.edit_collection") if editing else t("saved_searches.new_collection")
         )

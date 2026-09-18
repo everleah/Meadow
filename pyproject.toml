@@ -55,9 +55,61 @@ files = [
     "meadow/tabular.py",
     "meadow/urls.py",
     "meadow/mef.py",
+    # Frontend modules, added one by one as they became clean (2026-09-18). The
+    # remaining ones are the widget-heavy pages; they follow the same way.
+    "meadow/frontend/__main__.py",
+    "meadow/frontend/api.py",
+    "meadow/frontend/attribute_form.py",
+    "meadow/frontend/auth.py",
+    "meadow/frontend/categories.py",
+    "meadow/frontend/channels.py",
+    "meadow/frontend/config.py",
+    "meadow/frontend/config_page.py",
+    "meadow/frontend/connectors.py",
+    "meadow/frontend/connector_form.py",
+    "meadow/frontend/display.py",
+    "meadow/frontend/edit_queue.py",
+    "meadow/frontend/enum_sets.py",
+    "meadow/frontend/enums.py",
+    "meadow/frontend/export_fields.py",
+    "meadow/frontend/export_page.py",
+    "meadow/frontend/export_profiles.py",
+    "meadow/frontend/filters.py",
+    "meadow/frontend/groups.py",
+    "meadow/frontend/help_content.py",
+    "meadow/frontend/help_page.py",
+    "meadow/frontend/i18n.py",
+    "meadow/frontend/import_page.py",
+    "meadow/frontend/jobs.py",
+    "meadow/frontend/languages.py",
+    "meadow/frontend/layout.py",
+    "meadow/frontend/lazy_tree.py",
+    "meadow/frontend/logs.py",
+    "meadow/frontend/multilang.py",
+    "meadow/frontend/object_picker.py",
+    "meadow/frontend/object_types.py",
+    "meadow/frontend/password.py",
+    "meadow/frontend/range_values.py",
+    "meadow/frontend/reference_data.py",
+    "meadow/frontend/relation_definitions.py",
+    "meadow/frontend/relation_roles.py",
+    "meadow/frontend/rules.py",
+    "meadow/frontend/saved_searches.py",
+    "meadow/frontend/search_form.py",
+    "meadow/frontend/taxonomy_tree.py",
+    "meadow/frontend/theme.py",
+    "meadow/frontend/units.py",
+    "meadow/frontend/url_values.py",
+    "meadow/frontend/users.py",
+    "meadow/frontend/views.py",
 ]
 python_version = "3.14"
 show_error_codes = true
+# mypy analyses imported modules too; without this, adding one clean file would
+# report the errors of every unclean module it imports, and the scope could never
+# grow. Only the files listed above are reported - a module that is not listed
+# yet stays unchecked instead of blocking the gate.
+follow_imports = "silent"
 # An `# type: ignore` that no longer suppresses anything is a lie in the code -
 # this is the check that keeps the escapes honest.
 warn_unused_ignores = true
@@ -66,9 +118,8 @@ warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 # Libraries without a `py.typed` marker or stubs: their internals are out of our
-# hands, so only our own use of them is checked. `markdown.*` joins when the
-# frontend scope does (§4.6), otherwise `warn_unused_configs` reports it here.
-module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*"]
+# hands, so only our own use of them is checked.
+module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*", "markdown.*", "engineio.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

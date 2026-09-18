@@ -26,7 +26,7 @@ Pure (no NiceGUI, no core calls), so the rules are unit-testable.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 
 def is_reference(definition: Mapping[str, object] | None) -> bool:
@@ -85,6 +85,6 @@ def visible_in_picker(
     return include_reference or not is_reference(definition)
 
 
-def reference_names(definitions: list[Mapping[str, object]]) -> list[str]:
+def reference_names(definitions: Iterable[Mapping[str, object]]) -> list[str]:
     """The names of the reference-data definitions (for a count/hint line)."""
     return [str(item.get("name")) for item in definitions if is_reference(item)]

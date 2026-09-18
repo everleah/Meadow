@@ -166,6 +166,7 @@ async def export_profiles_page() -> None:
 
         def _fill_editor(profile: dict | None) -> None:
             editing = profile is not None
+            profile = profile or {}  # the reads below only run while editing
             editor_title.set_text(
                 t("export_profiles.edit") if editing else t("export_profiles.new")
             )

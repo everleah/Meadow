@@ -15,6 +15,8 @@ See `plan/detail/workflow-freigaben.md`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -106,7 +108,7 @@ async def channels_page() -> None:
                 code_input = (
                     ui.input(t("channels.field_code")).props("filled dense").classes("w-full")
                 )
-                channel_label_store: dict[str, object] = {"label": {}}
+                channel_label_store: dict[str, Any] = {"label": {}}
                 channel_label_field = multilingual_value_editor(
                     field_label=t("channels.col_label"),
                     locale=locale,
@@ -139,6 +141,7 @@ async def channels_page() -> None:
 
         def _fill_editor(channel: dict | None) -> None:
             editing = channel is not None
+            channel = channel or {}  # the reads below only run while editing
             editor_title.set_text(t("channels.edit") if editing else t("channels.new"))
             state["editing_id"] = channel.get("id") if editing else None
             delete_btn.visible = editing

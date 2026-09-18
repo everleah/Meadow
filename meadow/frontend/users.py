@@ -448,6 +448,7 @@ async def users_page() -> None:
 
             def _fill_group_form(group: dict | None) -> None:
                 editing = group is not None
+                group = group or {}  # the reads below only run while editing
                 group_title.set_text(t("groups.edit") if editing else t("groups.new"))
                 group_delete_btn.visible = editing
                 name_input.set_value(str(group.get("name") or "") if editing else "")

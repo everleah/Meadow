@@ -15,6 +15,25 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 
 
+def _as_list(value: object) -> list[object]:
+    """Reads a JSON value as a list; anything else counts as empty.
+
+    The definitions arrive as JSON from the core, so a list field may be missing or
+    hold anything - a non-list means "no entries" instead of a failed export.
+    """
+    return list(value) if isinstance(value, list) else []
+
+
+def _as_int(value: object) -> int:
+    """Reads a JSON scalar as an int (a `position` arrives as int or numeric string)."""
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value))
+    except ValueError:
+        return 0
+
+
 def attribute_names(definitions: Iterable[Mapping[str, object]]) -> list[str]:
     """The distinct attribute definition names in the order they arrive.
 
@@ -48,7 +67,9 @@ def group_members(
         name = str(definition.get("name") or "")
         if not name:
             continue
-        group_ids = [str(group_id) for group_id in (definition.get("group_ids") or []) if group_id]
+        group_ids = [
+            str(group_id) for group_id in _as_list(definition.get("group_ids")) if group_id
+        ]
         if not group_ids:
             ungrouped.append(name)
             continue
@@ -70,7 +91,7 @@ def applicable(definition: Mapping[str, object] | None, object_type: str | None)
     """
     if not object_type or definition is None:
         return True
-    allowed = [str(entry) for entry in (definition.get("applicable_types") or []) if entry]
+    allowed = [str(entry) for entry in _as_list(definition.get("applicable_types")) if entry]
     return not allowed or object_type in allowed
 
 
@@ -92,7 +113,7 @@ def group_order(
     return sorted(
         grouped,
         key=lambda group_id: (
-            int(groups_by_id.get(group_id, {}).get("position") or 0),
+            _as_int(groups_by_id.get(group_id, {}).get("position")),
             title(group_id),
         ),
     )

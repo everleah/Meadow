@@ -7,6 +7,8 @@ nodes, plus toggling `active` (data maintenance) and `is_ui` (UI language).
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -42,14 +44,14 @@ async def languages_page() -> None:
             return
 
         selected: dict = {"code": None, "lang": None}
-        edit_state: dict[str, object] = {
+        edit_state: dict[str, Any] = {
             "code": None,
             "label": {},
             "active": True,
             "is_ui": False,
             "parent": "",
         }
-        name_input_ref: dict[str, ui.element | None] = {"el": None}
+        name_input_ref: dict[str, ui.input | None] = {"el": None}
         # Active data languages (not root) for the multilingual label editor.
         name_langs = [
             lang for lang in langs if str(lang.get("code")) != "root" and lang.get("active", True)

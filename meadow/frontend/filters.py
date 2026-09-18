@@ -18,7 +18,7 @@ needs a NiceGUI slot).
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from nicegui import ui
 
@@ -43,7 +43,7 @@ def normalised(value: object, *, multiple: bool = False) -> str | list[str]:
 def filter_select(
     options: Mapping[str, str] | Sequence[str],
     *,
-    on_change: Callable[[object], None],
+    on_change: Callable[[object], object | Awaitable[object]],
     label: str = "",
     value: str | None = None,
     multiple: bool = False,
@@ -57,7 +57,12 @@ def filter_select(
     entry may keep it in `options` — the ✕ is added either way. `label` is
     optional: the grid's channel filter explains itself with a tooltip only.
     """
-    select = ui.select(options, label=label or None, value=value, multiple=multiple)
+    # `ui.select` takes a concrete `list`/`dict`, so a `Mapping`/`Sequence` from a
+    # caller is normalised here.
+    choices: list[str] | dict[str, str] = (
+        dict(options) if isinstance(options, Mapping) else list(options)
+    )
+    select = ui.select(choices, label=label or None, value=value, multiple=multiple)
     select.props("filled dense clearable").classes(classes)
 
     async def changed(event) -> None:

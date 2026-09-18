@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from typing import Any
 
 from nicegui import ui
 
@@ -46,14 +47,24 @@ TREE_TAXONOMY = "taxonomy"
 TREE_OBJECTS = "objects"
 TREE_COMPOSITION = "composition"
 
-#: Receives the picked hit (single mode) or the list of hits (multi mode).
-PickHandler = Callable[[dict], object | Awaitable[object]]
+#: Receives the picked hit (single mode) or the list of hits (multi mode). The
+#: payload shape depends on the mode, so the parameter stays untyped.
+PickHandler = Callable[[Any], object | Awaitable[object]]
 #: Async loader returning the child nodes of a node id.
 ChildrenLoader = Callable[[str], Awaitable[list[dict]]]
 #: Async search returning the hits for a query.
 SearchFn = Callable[[str], Awaitable[list[dict]]]
 #: Renders one search hit (button); the second argument is the dialog's pick handler.
 HitRenderer = Callable[[dict, Callable[[dict], object]], None]
+
+
+async def _no_page(_offset: int) -> list[dict]:
+    """`paged` stand-in for the hierarchy mode, where no flat loader is given.
+
+    `load_flat` only runs when `paged` was passed, but a nested function cannot see
+    that narrowing - a concrete callable keeps the type honest without an assert.
+    """
+    return []
 
 
 def render_picker_hit(hit: dict, on_pick: Callable[[dict], object], locale: str) -> None:
@@ -138,6 +149,8 @@ async def open_structure_picker(
     # A flat target list is a list, not a hierarchy — the panel's wording follows
     # what the second tab actually shows.
     flat = paged is not None
+    # Bound once: the nested loaders below cannot see the `is not None` narrowing.
+    page_loader: Callable[[int], Awaitable[list[dict]]] = paged or _no_page
     default_hint = t("form.picker_list_hint") if flat else t("form.tree_picker_hint")
 
     with ui.dialog() as dialog, ui.card().classes("w-[36rem] max-w-[92vw]"):
@@ -222,7 +235,10 @@ async def open_structure_picker(
                             "flat dense size=sm"
                         ).tooltip(t("grid.ref_remove"))
 
-        if search_input is not None and hits is not None:
+        if search is not None and search_input is not None and hits is not None:
+            # Bound before the nested handler: the `is not None` narrowing does not
+            # survive into a nested function, and NiceGUI calls it later.
+            searcher = search
 
             async def do_search(value: str) -> None:
                 query = (value or "").strip()
@@ -230,7 +246,7 @@ async def open_structure_picker(
                 if not query:
                     return
                 try:
-                    found = await search(query)
+                    found = await searcher(query)
                 except Exception:  # noqa: BLE001 - degrade to no hits
                     return
                 for hit in found:
@@ -284,7 +300,7 @@ async def open_structure_picker(
         async def load_flat(next_page: bool) -> None:
             """Loads the first or the next page of the flat target list."""
             offset = 0 if not flat_nodes or not next_page else len(flat_nodes)
-            page = await paged(offset)
+            page = await page_loader(offset)
             flat_nodes[:] = page if not next_page else append_page(flat_nodes, page)
             remember(page)
             flat_more["value"] = has_more(len(flat_nodes))
@@ -324,7 +340,9 @@ async def open_structure_picker(
                 return  # greyed out (not an allowed target)
             await choose(hit)
 
-        if taxonomy_select is not None:
+        # Both are set together by the caller, so the state is read only when the
+        # switcher exists - the guard also hands the type checker the tuple.
+        if taxonomy_select is not None and taxonomy is not None:
             taxonomy_state = taxonomy[1]
 
             async def on_taxonomy_change(event) -> None:

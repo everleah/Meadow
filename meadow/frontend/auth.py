@@ -102,45 +102,47 @@ def login(
         "background-color:#1e293b;"
     )
 
-    async def try_login() -> None:
-        if not username.value or not password.value:
-            ui.notify(t("login.missing_credentials"), color="negative")
-            return
-        client = CoreClient(config.CORE_URL)
-        try:
-            login_response = await client.login(username.value, password.value)
-            me = await client.me(login_response.token)
-        except httpx.HTTPStatusError:
-            ui.notify(t("login.invalid_credentials"), color="negative")
-            return
-        except httpx.HTTPError:
-            ui.notify(t("login.core_unreachable"), color="negative")
-            return
-        app.storage.user.update(
-            token=login_response.token,
-            sub=me.sub,
-            username=me.username,
-            roles=me.roles,
-            must_change_password=me.must_change_password,
-            password_changed_at=me.password_changed_at,
-            impersonator=None,
-            authenticated=True,
-        )
-        ui.navigate.to(redirect_to)
-
     with ui.card().classes("absolute-center items-stretch w-96"):
         ui.image(MEADOW_LOGO).classes("w-32 self-center mb-2")
         ui.label(t("login.sign_in")).classes("text-subtitle1 self-center")
         if expired:
             ui.label(t("login.session_expired")).classes("text-caption text-warning self-center")
-        username = (
-            ui.input(t("login.username"))
-            .props("autofocus")
-            .on("keydown.enter", lambda: password.run_method("focus"))
-        )
-        password = ui.input(t("login.password"), password=True, password_toggle_button=True).on(
-            "keydown.enter", try_login
-        )
+        username = ui.input(t("login.username")).props("autofocus")
+        password = ui.input(t("login.password"), password=True, password_toggle_button=True)
+
+        # Defined *after* the two fields on purpose: a nested function closes over the
+        # declared type of what it reads, and with the fields bound later the type
+        # checker cannot name their type at all.
+        async def try_login() -> None:
+            if not username.value or not password.value:
+                ui.notify(t("login.missing_credentials"), color="negative")
+                return
+            client = CoreClient(config.CORE_URL)
+            try:
+                login_response = await client.login(username.value, password.value)
+                me = await client.me(login_response.token)
+            except httpx.HTTPStatusError:
+                ui.notify(t("login.invalid_credentials"), color="negative")
+                return
+            except httpx.HTTPError:
+                ui.notify(t("login.core_unreachable"), color="negative")
+                return
+            app.storage.user.update(
+                token=login_response.token,
+                sub=me.sub,
+                username=me.username,
+                roles=me.roles,
+                must_change_password=me.must_change_password,
+                password_changed_at=me.password_changed_at,
+                impersonator=None,
+                authenticated=True,
+            )
+            ui.navigate.to(redirect_to)
+
+        # Both handlers are attached only now: `username`'s focuses the password
+        # field, so it cannot be built before that field exists.
+        username.on("keydown.enter", lambda: password.run_method("focus"))
+        password.on("keydown.enter", try_login)
         ui.button(t("login.log_in"), on_click=try_login).classes("bg-primary text-white")
 
     return None

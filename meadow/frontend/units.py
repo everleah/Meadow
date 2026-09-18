@@ -9,6 +9,8 @@ linear factor/offset (``canonical = value * factor + offset``). Seeded
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -164,7 +166,7 @@ async def units_page() -> None:
                         .props("filled dense")
                         .classes("grow")
                     )
-                unit_label_store: dict[str, object] = {"label": {}}
+                unit_label_store: dict[str, Any] = {"label": {}}
                 unit_label_field = multilingual_value_editor(
                     field_label=t("units.col_label"),
                     locale=locale,
@@ -197,6 +199,7 @@ async def units_page() -> None:
 
         def _fill_editor(unit: dict | None) -> None:
             editing = unit is not None
+            unit = unit or {}  # the reads below only run while editing
             editor_title.set_text(t("units.edit") if editing else t("units.new"))
             state["editing_id"] = unit.get("id") if editing else None
             state["readonly"] = bool(unit.get("readonly")) if editing else False

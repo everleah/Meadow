@@ -9,6 +9,8 @@ ordered, reusable list of options. An ``enum`` attribute references a set by
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -125,7 +127,7 @@ async def enum_sets_page() -> None:
                         .props("filled dense")
                         .classes("w-32")
                     )
-                set_label_store: dict[str, object] = {"label": {}}
+                set_label_store: dict[str, Any] = {"label": {}}
                 set_label_field = multilingual_value_editor(
                     field_label=t("enum_set.col_label"),
                     locale=locale,
@@ -137,7 +139,7 @@ async def enum_sets_page() -> None:
                 ui.button(
                     t("enum_set.manage_options"),
                     icon="list",
-                    on_click=lambda: open_options(current_set()),
+                    on_click=lambda: _open_current_options(),
                 ).props("flat dense")
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 delete_btn = ui.button(
@@ -155,8 +157,16 @@ async def enum_sets_page() -> None:
                 return None
             return next((s for s in sets if str(s.get("id")) == str(editing_id)), None)
 
+        def _open_current_options() -> None:
+            """Opens the option editor of the set being edited."""
+            options = current_set()
+            if options is None:
+                return  # the button only exists while a set is being edited
+            open_options(options)
+
         def _fill_editor(s: dict | None) -> None:
             editing = s is not None
+            s = s or {}  # the reads below only run while editing
             set_title.set_text(t("enum_set.edit") if editing else t("enum_set.new"))
             set_state["editing_id"] = s.get("id") if editing else None
             delete_btn.visible = editing

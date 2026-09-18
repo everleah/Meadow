@@ -19,6 +19,9 @@ The page has **two independent axes**:
 
 from __future__ import annotations
 
+from functools import partial
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import config, taxonomy_tree
@@ -175,13 +178,13 @@ async def categories_page() -> None:
         if not any(str(lang.get("code")) == locale for lang in name_langs):
             name_langs = [{"code": locale, "label": {locale: locale}}] + name_langs
 
-        edit_state: dict[str, object] = {
+        edit_state: dict[str, Any] = {
             "id": None,
             "name": {},
             "status": "draft",
             "parent": None,
         }
-        name_input_ref: dict[str, ui.element | None] = {"el": None}
+        name_input_ref: dict[str, ui.input | None] = {"el": None}
 
         name_dialog = ui.dialog()
         with name_dialog, ui.card().classes("w-[34rem] max-w-[90vw]"):
@@ -307,6 +310,15 @@ async def categories_page() -> None:
                             count=len(tree_override), query=tree_query["value"]
                         )
                     ).classes("text-caption text-orange-600")
+
+                async def pick_hit(hit: dict, _: object) -> None:
+                    """Picks one search hit; the second argument is NiceGUI's click event."""
+                    await select_category(str(hit["id"]))
+
+                async def reveal_hit(hit: dict, _: object) -> None:
+                    """Shows one hit in the tree; the second argument is the click event."""
+                    await show_in_tree(str(hit["id"]))
+
                 if hit_list:
                     with ui.column().classes("w-full gap-0"):
                         for hit in tree_override:
@@ -317,13 +329,13 @@ async def categories_page() -> None:
                             ):
                                 ui.button(
                                     str(hit["label"]),
-                                    on_click=lambda n=hit: select_category(str(n["id"])),  # type: ignore
+                                    on_click=partial(pick_hit, hit),
                                 ).props("flat dense no-caps align=left").classes(
                                     "grow justify-start text-left"
                                 )
                                 ui.button(
                                     icon="account_tree",
-                                    on_click=lambda n=hit: show_in_tree(str(n["id"])),  # type: ignore
+                                    on_click=partial(reveal_hit, hit),
                                 ).props("flat dense").tooltip(t("grid.taxonomy_in_tree"))
                 else:
                     tree = LazyTree(
@@ -917,7 +929,7 @@ async def categories_page() -> None:
                     ui.button(icon="help_outline").props("flat dense shrink-0").tooltip(
                         t("categories.taxonomy_hint")
                     )
-                    taxonomy_select.on_value_change(lambda e: change_taxonomy(e.value))  # type: ignore
+                    taxonomy_select.on_value_change(lambda e: change_taxonomy(e.value))
                 with ui.row().classes("items-center gap-2 w-full p-2").style("flex-wrap: nowrap"):
                     ui.button(icon="add", on_click=lambda: open_create(None)).props(
                         "flat dense"
@@ -938,7 +950,7 @@ async def categories_page() -> None:
                         selected_tree["id"] = None if value in (None, "all") else value
                         render_tree()
 
-                    tree_select.on_value_change(lambda e: on_tree_select(e.value))  # type: ignore
+                    tree_select.on_value_change(lambda e: on_tree_select(e.value))
                 with ui.row().classes("items-center gap-2 w-full px-2").style("flex-wrap: nowrap"):
                     dimension_select = (
                         ui.select(
@@ -952,7 +964,7 @@ async def categories_page() -> None:
                     ui.button(icon="help_outline").props("flat dense shrink-0").tooltip(
                         t("categories.dimension_hint")
                     )
-                    dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
+                    dimension_select.on_value_change(lambda e: change_dimension(e.value))
                 # A dimension may be bound to one taxonomy: reflect that in the
                 # switcher (disabled + hint) as soon as it exists.
                 apply_dimension_taxonomy(dimension["key"])

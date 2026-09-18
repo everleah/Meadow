@@ -1792,8 +1792,8 @@ async def products_page(request: Request) -> None:
             views_container.clear()
             for name in views:
                 with views_container, ui.row().classes("items-center gap-1 w-full"):
-                    ui.button(name, on_click=lambda n=name: load_view(n)).props("flat dense")  # type: ignore
-                    ui.button(icon="delete", on_click=lambda n=name: delete_view(n)).props(  # type: ignore
+                    ui.button(name, on_click=lambda n=name: load_view(n)).props("flat dense")
+                    ui.button(icon="delete", on_click=lambda n=name: delete_view(n)).props(
                         "flat dense color=negative"
                     )
 
@@ -1939,7 +1939,7 @@ async def products_page(request: Request) -> None:
                             if chip["removable"]:
                                 ui.button(
                                     icon="close",
-                                    on_click=lambda rid=chip["id"]: remove_reference(rid),  # type: ignore
+                                    on_click=lambda rid=chip["id"]: remove_reference(rid),
                                 ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
 
         async def add_reference(hit: dict) -> None:
@@ -2040,7 +2040,7 @@ async def products_page(request: Request) -> None:
             if data and data.get("_id"):
                 ui.navigate.to(f"/products/{quote(str(data['_id']), safe='')}")
 
-        ref_search.on_value_change(lambda e: search_references(e.value))  # type: ignore
+        ref_search.on_value_change(lambda e: search_references(e.value))
 
         # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
         bulk_selected_ids: set[str] = set()
@@ -2727,13 +2727,13 @@ async def products_page(request: Request) -> None:
                             ):
                                 ui.button(
                                     str(hit["label"]),
-                                    on_click=lambda n=hit: select_category(str(n["id"])),  # type: ignore
+                                    on_click=lambda n=hit: select_category(str(n["id"])),
                                 ).props("flat dense no-caps align=left").classes(
                                     "grow justify-start text-left"
                                 )
                                 ui.button(
                                     icon="account_tree",
-                                    on_click=lambda n=hit: show_in_tree(str(n["id"])),  # type: ignore
+                                    on_click=lambda n=hit: show_in_tree(str(n["id"])),
                                 ).props("flat dense").tooltip(t("grid.taxonomy_in_tree"))
                 else:
                     tree = LazyTree(
@@ -2907,9 +2907,7 @@ async def products_page(request: Request) -> None:
                     taxonomy_help = info_button("categories.taxonomy_hint", "product-grid")
                     taxonomy_select.set_visibility(False)
                     taxonomy_help.set_visibility(False)
-                    taxonomy_select.on_value_change(
-                        lambda e: change_taxonomy(str(e.value or ""))  # type: ignore
-                    )
+                    taxonomy_select.on_value_change(lambda e: change_taxonomy(str(e.value or "")))
                     tree_select = (
                         ui.select(
                             {
@@ -2937,7 +2935,7 @@ async def products_page(request: Request) -> None:
                         .classes("shrink-0")
                     )
                     dimension_help = info_button("grid.category_dimension_hint", "product-grid")
-                    dimension_select.on_value_change(lambda e: change_dimension(e.value))  # type: ignore
+                    dimension_select.on_value_change(lambda e: change_dimension(e.value))
                     # A dimension chosen via `?definition_id=` may be bound to a
                     # taxonomy: apply it to the switcher once the switcher exists.
                     apply_dimension_taxonomy(dimension["key"])
@@ -3083,7 +3081,7 @@ async def products_page(request: Request) -> None:
                         counter = ui.label().classes("text-caption text-gray-500")
                         language_counters[prefix] = counter
                         ui.button(icon="translate").props("flat round dense").on_click(
-                            lambda p=prefix, title_=title: open_language_dialog(p, title_)  # type: ignore
+                            lambda p=prefix, title_=title: open_language_dialog(p, title_)
                         ).tooltip(t("grid.columns_languages_hint"))
 
                     def add_section(

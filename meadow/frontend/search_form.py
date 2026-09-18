@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Callable, Iterable
+from functools import partial
 from typing import Any
 
 from nicegui import ui
@@ -499,7 +500,7 @@ def state_from_query(query: dict | None, catalog: dict | None) -> dict:
     """Turns a stored query into editable form state (never drops parts)."""
     query = query if isinstance(query, dict) else {}
     where = query.get("where")
-    state = {
+    state: dict[str, Any] = {
         "where": copy.deepcopy(where) if isinstance(where, dict) else new_group(),
         "fulltext": str((query.get("fulltext") or {}).get("query") or ""),
         "references": [],
@@ -1021,13 +1022,13 @@ class _GroupEditor:
                             self.form,
                             child,
                             depth=self.depth + 1,
-                            on_remove=lambda child=child: self._remove(child),
+                            on_remove=partial(self._remove, child),
                         )
                     else:
                         _ConditionRow(
                             self.form,
                             child,
-                            on_remove=lambda child=child: self._remove(child),
+                            on_remove=partial(self._remove, child),
                         )
 
     def read(self) -> dict:
@@ -1287,7 +1288,7 @@ class _ReferenceSection:
                     )
                     ui.button(
                         icon="account_tree",
-                        on_click=lambda row=row: self._pick(row),  # type: ignore
+                        on_click=lambda row=row: self._pick(row),
                     ).props("flat dense").tooltip(t("search_form.reference_pick"))
                     ui.select(
                         {
@@ -1298,7 +1299,7 @@ class _ReferenceSection:
                         label=t("search_form.reference_direction"),
                         on_change=lambda event, row=row: self._set_direction(row, str(event.value)),
                     ).props("dense filled").classes("w-56")
-                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(  # type: ignore
+                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(
                         "flat dense color=negative"
                     )
 
@@ -1313,7 +1314,7 @@ class _ReferenceSection:
     async def _pick(self, row: dict) -> None:
         if self.form._client is None or not self.form._token:
             return
-        relation = next(
+        relation: dict = next(
             (
                 entry
                 for entry in (self.form.catalog or {}).get("references") or []
@@ -1392,7 +1393,7 @@ class _SortSection:
                             row, str(event.value or "asc")
                         ),
                     ).props("dense filled").classes("w-40")
-                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(  # type: ignore
+                    ui.button(icon="delete", on_click=lambda row=row: self.remove(row)).props(
                         "flat dense color=negative"
                     )
 

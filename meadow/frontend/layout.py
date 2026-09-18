@@ -78,6 +78,16 @@ async def _active_ui_languages() -> list[str]:
 
 async def build_shell(*, active: str) -> None:
     """Builds the page shell (header + drawer) for an authenticated page."""
+    # The drawer is created before the header on purpose: the header's menu button
+    # toggles it, so it has to exist (and be typed) by the time the header is built.
+    drawer = (
+        ui.left_drawer(value=True, top_corner=True, bottom_corner=True)
+        .props("bordered")
+        .style(
+            "background: linear-gradient(180deg, "
+            f"{NAV_GRADIENT_TOP} 0%, {NAV_GRADIENT_BOTTOM} 100%);"
+        )
+    )
     impersonator = app.storage.user.get("impersonator")
     if impersonator:
         with ui.row().classes("w-full items-center gap-3 px-4 py-2 bg-warning text-white"):
@@ -102,14 +112,7 @@ async def build_shell(*, active: str) -> None:
             ).tooltip(t("password.change"))
             ui.button(icon="logout", on_click=logout).props("flat round color=white")
 
-    with (
-        ui.left_drawer(value=True, top_corner=True, bottom_corner=True)
-        .props("bordered")
-        .style(
-            "background: linear-gradient(180deg, "
-            f"{NAV_GRADIENT_TOP} 0%, {NAV_GRADIENT_BOTTOM} 100%);"
-        ) as drawer
-    ):
+    with drawer:
         ui.label(t("nav.title")).classes("text-subtitle1 px-4 pt-4 text-white")
         for key, path, admin_only in NAV_ITEMS:
             if admin_only and not is_admin():
@@ -117,7 +120,7 @@ async def build_shell(*, active: str) -> None:
             classes = "items-center w-full px-4 py-2 cursor-pointer text-white"
             if path == active:
                 classes += " bg-primary"
-            with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):  # type: ignore
+            with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):
                 ui.label(t(key))
         ui.separator().props("color=white")
         ui_langs = await _active_ui_languages()

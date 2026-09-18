@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate gestartet (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für die Nicht-UI-Module (§4.6). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 2 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 72 Dateien (§4.6/§4.7). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -324,10 +324,70 @@ werden. Im aktuellen Gate-Scope gibt es derzeit keine.
 **Nachweis:** `scripts/check.ps1 python` grün – `Success: no issues found in 27
 source files`, ruff check/format sauber, 563 pytest, jeweils Exit 0.
 
-**Nächste Stufen:** (a) `meadow/frontend` Modul für Modul, mit der offenen Frage, ob
-NiceGUIs Element-Typing im UI-Layer überhaupt geprüft werden soll oder als
-dokumentierte Grenze gilt; (b) danach `tests/` und `scripts/`; (c)
-`check-untyped-defs = true` als Schärfung.
+**Nächste Stufen:** §4.7 (Frontend modulweise) und danach `tests/`, `scripts/`,
+`check-untyped-defs = true`.
+
+### 4.7 Typ-Prüfung, Stufe 2: Frontend modulweise (2026-09-18)
+
+Stufe 1 deckte die Nicht-UI-Module ab; Stufe 2 holt das Frontend dazu. Der Scope
+steht weiterhin in `[tool.mypy] files` und umfasst jetzt **72 Dateien** (27 Nicht-UI
++ 45 Frontend, grün, `Success: no issues found in 72 source files`). Offen sind nur
+noch die vier schwersten Seiten (`attribute_definitions.py` 30, `grid.py` 26,
+`settings.py` 17, `form.py` 11).
+
+**Eine Einstellung war dafür entscheidend:** `follow_imports = "silent"`. mypy
+analysiert importierte Module mit – ohne den Schalter hätte jede neu aufgenommene
+saubere Datei die Fehler aller Module gemeldet, die sie importiert, und der Scope
+hätte nie wachsen können. So werden nur die gelisteten Dateien gemeldet: ein noch
+nicht aufgenommenes Modul bleibt ungeprüft, statt das Gate zu blockieren.
+
+**Zwei Funde mit großem Hebel** – beide vom selben Typ, einer zu schwachen Signatur
+einer geteilten Hilfsfunktion:
+
+| Stelle | Wirkung |
+| --- | --- |
+| `_api_client`: `AsyncIterator[…]` statt `httpx.AsyncClient` | 134 Folgefehler weg |
+| `multilingual_value_editor`: `ui.input` statt `ui.element` | Fehler weg **und** 6 Ignores wurden überflüssig |
+
+**19 der 25 `# type: ignore` waren überflüssig** – bewiesen durch
+`warn_unused_ignores`, und entfernt. Der Zähler steht damit bei **33 → 6**; die
+sechs verbliebenen sind der Button-Zustand in `attribute_definitions.py` (4) und
+`users.py` (2), den erst ein Umbau auf `nonlocal`-Variablen (Muster aus §4.5)
+auflöst.
+
+**Wichtig: die beiden Prüfer widersprechen sich.** Zwei der entfernten Ignores
+brauchte mypy nicht, **Pylance aber schon**: Bei `lambda n=hit: …` (dem
+Default-Argument-Trick gegen spätes Binden) typisiert Pylance den Parameter nach
+der erwarteten Handler-Signatur, sodass `n["id"]` scheitert. Ersetzt durch
+`partial(pick_hit, hit)` mit typisierten Helfern – und dabei fiel auf, dass die
+Helfer **`async` sein müssen**: `select_category`/`show_in_tree` sind Coroutinen,
+der Lambda-Trick gab sie zurück (NiceGUI awaited sie), mein erster Entwurf rief sie
+ohne `await` auf und hätte sie nie ausgeführt. **Pylance fand das, mypy nicht** –
+beim Entfernen einer Ausweichung lohnt deshalb der Blick in beide Prüfer.
+
+**Die wiederkehrenden Muster im UI-Layer** – sie machen den Großteil der 217
+Frontend-Fehler aus, und jede Zeile war ein echter Typfehler, keine Ausweichung:
+
+| Muster | Häufig | Reparatur |
+| --- | --- | --- |
+| `_fill_editor(record: dict \| None)` prüft `editing = record is not None` und liest dann `record.get(…)` | ~46 | direkt nach dem Flag `record = record or {}` binden – mypy verbindet ein einfaches `bool` nicht mit der Verengung |
+| Zustandsmaps als `dict[str, object]` (JSON-artig) | 12 | `dict[str, Any]` (die Werte sind heterogen, das ist der Vertrag) |
+| Element-Variablen und -Container als `ui.element` deklariert | 21 | konkret typisieren (`ui.input`, `ui.checkbox`, `ui.select`) oder als Union der Wert-Widgets; `ui.element` ist der Basistyp **ohne** `value`/`set_value` |
+| `lambda w=widget: …` (Default-Argument bindet das Widget) | 8 | Helfer + `partial`; ein Lambda mit Default-Argument lässt sich nicht typisieren („Cannot infer type of lambda“) |
+| dieselbe Variable für zwei Widget-Typen (`Number` → `Select`) oder zwei Ergebnisformen (`dict` → `list`) | 4 | getrennte Namen, oder die Variable vor der Kette deklarieren |
+| `list[Mapping[str, object]]` als Parameter, `list[dict]` beim Aufruf | 1 | `Iterable[Mapping[str, object]]`: `list` ist invariant und `dict` ist kein `Mapping` – mit `Iterable` prüft mypy nur die Elementbeziehung |
+| verengte Optionals in verschachtelten Funktionen (NiceGUI ruft sie später auf) | 4 | vor dem `def` lokal binden oder im selben `if` auf die Quelle prüfen (`if taxonomy_select is not None and taxonomy is not None`) |
+| Reihenfolge: eine verschachtelte Funktion liest Widgets, die erst später entstehen | 2 | erst die Widgets bauen, dann die Funktion definieren, dann die Handler anhängen |
+
+Zwei NiceGUI-Eigenschaften halfen dabei: `set_value` gibt das Widget zurück
+(Kettenaufruf), ein Setter muss den Wert also verwerfen, um `Callable[[Any], None]`
+zu erfüllen; und `ui.input` & Co. sind über NiceGUIs Lazy-Registry **Klassen**, in
+Annotationen also verwendbar. **Damit ist die in §4.6 offene Frage entschieden:
+NiceGUIs Element-Typing wird geprüft**, und die Reparatur ist die konkrete
+Typisierung unserer eigenen Element-Variablen statt einer dokumentierten Grenze.
+
+**Nächste Stufen:** (a) die vier verbleibenden Frontend-Seiten (§9.1); (b) danach
+`tests/` und `scripts/`; (c) `check-untyped-defs = true` als Schärfung.
 
 ## 5. Workflow
 
@@ -420,9 +480,11 @@ so, was er behauptet.
 
 **Offen (empfohlene Reihenfolge):**
 
-1. **Typ-Prüfung als Gate:** Stufe 1 steht (§4.6) – die Nicht-UI-Module (27 Dateien)
-   sind grün und laufen in `scripts/check.*`. Offen: `meadow/frontend` Modul für Modul
-   in den Scope holen und entscheiden, wie weit NiceGUIs Element-Typing geprüft wird.
+1. **Typ-Prüfung als Gate:** Stufen 1 und 2 stehen (§4.6/§4.7) – 72 Dateien sind grün
+   und laufen in `scripts/check.*`. **Entschieden:** NiceGUIs Element-Typing wird
+   geprüft, nicht als Grenze geführt (§4.7). Offen: die vier schwersten Seiten
+   (`attribute_definitions.py` 30, `grid.py` 26, `settings.py` 17, `form.py` 11),
+   danach `tests/` und `scripts/`, dann `check-untyped-defs = true`.
 2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
    Randfällen ändert sich dabei bewusst.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen

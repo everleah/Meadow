@@ -56,7 +56,11 @@ async def _read_upload(event) -> tuple[str, bytes]:
         data = await content if asyncio.iscoroutine(content) else content
     if isinstance(data, str):
         data = data.encode("utf-8")
-    return str(name), bytes(data or b"")
+    if not isinstance(data, (bytes, bytearray)):
+        # The old code called `bytes(data)` here, which raised a bare TypeError for
+        # an unexpected payload; name the problem instead of hiding it.
+        raise TypeError(f"uploaded file {name!r} carries {type(data).__name__}, not bytes")
+    return str(name), bytes(data)
 
 
 async def _wait_run(client: CoreClient, token: str, run_id: str) -> dict:

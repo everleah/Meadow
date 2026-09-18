@@ -461,6 +461,7 @@ async def connectors_page() -> None:
 
         def _fill_editor(connector: dict | None) -> None:
             editing = connector is not None
+            connector = connector or {}  # the reads below only run while editing
             editor_title.set_text(t("connectors.edit") if editing else t("connectors.new"))
             editor_state["id"] = str(connector.get("id")) if editing else None
             name_input.set_value(str(connector.get("name") or "") if editing else "")

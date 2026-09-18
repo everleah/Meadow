@@ -247,6 +247,7 @@ async def jobs_page() -> None:
 
                 def _fill_def(definition: dict | None) -> None:
                     editing = definition is not None
+                    definition = definition or {}  # the reads below only run while editing
                     def_title.set_text(t("jobs.edit") if editing else t("jobs.new"))
                     name_input.set_value(str(definition.get("name") or "") if editing else "")
                     type_select.set_value(
@@ -580,7 +581,10 @@ async def jobs_page() -> None:
                     confirm.open()
 
                 async def _open_run_detail(event) -> None:
-                    await show_run_detail(_run_for((event.args or {}).get("data")))
+                    run = _run_for((event.args or {}).get("data"))
+                    if run is None:
+                        return  # the row was reloaded away between click and event
+                    await show_run_detail(run)
 
                 runs_grid.on("cellDoubleClicked", _open_run_detail, ["data"])
 

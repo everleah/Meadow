@@ -306,6 +306,7 @@ async def object_types_page() -> None:
 
         def _fill_editor(record: dict | None) -> None:
             editing = record is not None
+            record = record or {}  # the reads below only run while editing
             _state["editing"] = editing
             _state["name"] = record.get("name") if editing else None
             editor_title.set_text(t("object_types.edit") if editing else t("object_types.new"))
@@ -313,7 +314,7 @@ async def object_types_page() -> None:
             name_input.disable() if editing else name_input.enable()
             label = (record.get("label") if editing else {}) or {}
             type_label_store["label"] = dict(label)
-            type_label_field.set_value(str(type_label_store["label"].get(base_lang(locale)) or ""))  # type: ignore
+            type_label_field.set_value(str(type_label_store["label"].get(base_lang(locale)) or ""))
             description_area.set_value(str(record.get("description") or "") if editing else "")
             key_select.set_value(list(record.get("key_attributes") or []) if editing else [])
             label_attr_select.set_value(str(record.get("label_attribute")) if editing else None)

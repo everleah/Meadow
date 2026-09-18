@@ -1357,7 +1357,7 @@ async def export_page(request: Request) -> None:
                 if not cron:
                     ui.notify(t("export.schedule_cron_required"), type="warning")
                     return
-                parameters = {
+                parameters: dict = {
                     "source": _source_payload(kind, detail_value),
                     "fields": fields,
                     "format": _format(),

@@ -67,7 +67,7 @@ async def logs_page() -> None:
         ui.label(t("logs.subtitle")).classes("text-subtitle1")
 
         # Filter state (read by _rows on reload).
-        filters: dict[str, object] = {"service": "", "category": "", "level": ""}
+        filters: dict[str, str] = {"service": "", "category": "", "level": ""}
         logs: list[dict] = []
 
         def _context_links(context: object) -> list[tuple[str, str]]:

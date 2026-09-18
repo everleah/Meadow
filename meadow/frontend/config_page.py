@@ -84,7 +84,7 @@ async def config_page() -> None:
         with ui.card().classes("w-full mt-4"):
             ui.label(t("config.export_section")).classes("text-subtitle1")
             ui.label(t("config.export_hint")).classes("text-caption text-gray-500")
-            checks: dict[str, ui.element] = {}
+            checks: dict[str, ui.checkbox] = {}
             with ui.row().classes("flex-wrap gap-4 mt-2"):
                 for section in SECTIONS:
                     checks[section] = ui.checkbox(section, value=True).props("dense")

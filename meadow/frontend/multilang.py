@@ -44,7 +44,7 @@ def multilingual_value_editor(
     store: dict,
     key: str,
     in_row: bool = True,
-) -> ui.element:
+) -> ui.input:
     """Renders a main-language input + language-icon button (hybrid editor).
 
     The value is a ``{lang: value}`` map stored in ``store[key]``. The inline
@@ -56,7 +56,7 @@ def multilingual_value_editor(
     main_lang = base_lang(locale)
     langs = _lang_list(languages, locale)
     store[key] = dict(value or {}) if isinstance(value, dict) else {}
-    main_input: ui.element
+    main_input: ui.input
 
     def on_main(e) -> None:
         store[key][main_lang] = str(e.value) or ""

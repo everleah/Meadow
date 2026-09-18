@@ -21,6 +21,7 @@ may fix the target type (``category`` ⇒ ``category`` objects).
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 from nicegui import app, ui
 
@@ -238,7 +239,7 @@ async def relation_definitions_page() -> None:
                     .props("filled dense")
                     .classes("w-full")
                 )
-                rel_label_store: dict[str, object] = {"label": {}}
+                rel_label_store: dict[str, Any] = {"label": {}}
                 rel_label_field = multilingual_value_editor(
                     field_label=t("relation_definitions.col_label"),
                     locale=locale,
@@ -331,6 +332,7 @@ async def relation_definitions_page() -> None:
 
         def _fill_editor(record: dict | None) -> None:
             editing = record is not None
+            record = record or {}  # the reads below only run while editing
             _state["editing"] = editing
             _state["system"] = bool(record.get("system")) if editing else False
             _state["key"] = definition_key(record) if editing else None
