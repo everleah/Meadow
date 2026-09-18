@@ -40,7 +40,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `bool(user.find(...).elements)` is no wait at all — use `await user.should_see(marker=…)`
   when the wait is about visibility, and `_wait_until` for recorded state such as core
   calls), and `user.notify` is how a test pins the message a handler shows
-  (`notify.contains(...)`/`notify.messages`).
+  (`notify.contains(...)`/`notify.messages`). **What the net cannot reach:** anything that
+  a *client-side* event opens — the reference dialog starts from a click on the `_refs`
+  cell of the AG Grid, which the simulation cannot fire. Such a feature is covered through
+  its pure functions (the module's own tests), and the gap is named in
+  `plan/detail/ai-code-quality.md` §4.11 instead of being papered over.
 
 ## Verification
 

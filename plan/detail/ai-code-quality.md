@@ -759,7 +759,50 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
 - **Messung nach 5:** `products_page` **1969 → 1917** Zeilen (vom Ausgangswert **2737**
   also **−820**), verschachtelte Funktionen 72 → **71**; **617 pytest** (15 davon rein für
   den Filterzustand), mypy **139** Dateien, Deslop-Scan **0** Befunde.
-- **Nächstes:** `set_view` (25 Zeilen, schaltet ~10 Panels) und danach die größten
+- **Inkrement 6 — Zellwerte und Speicher-Patch:** `meadow/frontend/cell_values.py` sammelt,
+  was das Grid zwischen Anzeige und Speicher übersetzt: `as_number`/`as_bool`/
+  `is_multilingual_map`, `storable_cell_value`, `build_patch` und das neue `staged_patches`
+  (aus `save`, 45 Zeilen). Damit ist der **Vertrag der Zellbearbeitung** an einer Stelle
+  greifbar: eine Enum-Zelle trägt das Label, gespeichert wird der Code; ein mehrsprachiges
+  Attribut behält seine anderen Sprachen (der Edit mischt sich in den Arbeitssprachen-
+  Schlüssel, eine geleerte Zelle entfernt ihn); eine Zelle, die auf ihren geladenen Wert
+  **zurückgesetzt** wurde, wird gar nicht gesendet (der Kern mischt Attribute, also müssen
+  „unberührt“ und „zurückgesetzt“ gleich aussehen); und eine Zeile ohne Gegenstück
+  (gelöscht oder weggefiltert) wird übersprungen, statt ins falsche Objekt zu schreiben.
+  Sieben reine Tests decken genau diese Fälle ab.
+- **Aufräumen nebenbei:** die Zell-Tests lagen verstreut in `tests/test_frontend.py`;
+  `build_patch`/`storable_cell_value` sind mit ihrer Extraktion nach
+  `tests/test_cell_values.py` gewandert (der reichere Test ersetzt die zwei alten),
+  die Seiten-Tests bleiben im Sammelmodul.
+- **Inkrement 7 — die Ansichtsschaltung:** `meadow/frontend/view_switch.py` hält die
+  Sichtbarkeitsregeln der linken Spalte (`panel_visibility`, rein) und `ViewSwitch`, der
+  sie auf die registrierten Widgets anwendet (Buttons hervorheben, Panels ein-/ausblenden).
+  Die Seite registriert die Widgets nach dem Bau mit `bind(...)` und liest die zwei
+  Tatsachen, die die Regeln brauchen, **lazy** (`has_tree`, `has_create`) — der Baum und die
+  anlegbaren Typen entstehen später als die Handler. `set_view` schrumpft von 25 auf 7
+  Zeilen, ein `nonlocal` und die `style_view_button`-Hilfe sind weg.
+- **Inkrement 8 — der Referenzdialog:** der ganze Dialog (Liste, Hinzufügen über Picker-Suche
+  oder Struktur-Picker, Entfernen) ist `meadow/frontend/references_dialog.py` geworden
+  (`ReferencesDialog` mit `build`/`open`/`refresh`/`search`/`add`/`remove`), zusammen mit
+  dem reinen Kern `reference_chip`/`reference_groups`/`relation_options`. Damit ist die
+  Entscheidung „welches Objekt zeigt der Chip, was ist entfernbar, in welcher Reihenfolge
+  stehen die Gruppen“ testbar (6 Tests): die Komposition steht vorne und ist **nicht**
+  entfernbar, ein Chip beschreibt immer das **andere** Ende der gerichteten Referenz, und
+  die kurze Record-Key-Form (`rel_category_member`) bleibt das, was der Kern erwartet.
+- **Fund, bewusst nicht gefixt:** der `_refs`-Zähler einer Zeile wird nach dem Hinzufügen
+  oder Entfernen einer Referenz **nicht** neu geladen (das Verhalten war vorher genauso).
+  Das gehört zu einer Verhaltensänderung mit eigenem Test, nicht in einen reinen Umzug.
+- **Kein Seitentest für den Referenzdialog — und warum:** sein einziger Einstieg ist der
+  Klick auf die `_refs`-Zelle, und der läuft über die AG-Grid-Brücke (client-gerendert),
+  die die User-Simulation nicht auslösen kann. Das Netz steht hier deshalb auf der reinen
+  Seite (`reference_groups`), nicht auf der Verdrahtung; als offener Punkt notiert.
+- **Messung nach 6–8:** `products_page` **1917 → 1735** Zeilen (vom Ausgangswert **2737**
+  also **−1002**), verschachtelte Funktionen 71 → **63**; **649 pytest**, mypy **142**
+  Dateien, Deslop-Scan **0** Befunde. Größte verbliebene Einzelfunktionen: `fetch_filtered`
+  53, `add_section` 36, `_do_export` 32, `save` 30.
+- **Nächstes:** `fetch_filtered` (53 Zeilen, der Kern-Aufrufpfad der Filter — als reine
+  Anfrage baubar), `add_section` und `sync_picker` (Spaltenauswahl), danach die Feinarbeit.
+- **Nächstes (alt):** `set_view` (25 Zeilen, schaltet ~10 Panels) und danach die größten
   verbliebenen Einzelfunktionen (`refresh_references` 61 samt `search_references`/
   `open_references`, `save` 51, `fetch_filtered` 53).
 
@@ -861,16 +904,17 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–4,
-   3b/3a und 5 umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` +
-   10 Tests), Wizard (`bulk_wizard.py` + 16 reine und 2 Seitentests), Bedingungsdialog
-   (`where_dialog.py`), Spaltenansichten (`column_views.py`), Anlegen-Dialog
-   (`create_object.py` + 4 reine und 2 Seitentests), Navigationsbaum (`tree_panel.py`,
-   Zustand als eingefrorene `TreeState`-Momentaufnahme), Filterzustand + URL
-   (`grid_query.py` + 15 Tests); die Seite ist bei **1917 Zeilen** (**−820**), Messwerkzeug
-   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **14**
-   Tests) tragen jeden Schritt. **Offen:** `set_view`, danach die größten Einzelfunktionen
-   (`refresh_references` 61, `fetch_filtered` 53, `save` 51).
+3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–8
+   umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` + 10 Tests),
+   Wizard (`bulk_wizard.py`), Bedingungsdialog (`where_dialog.py`), Spaltenansichten
+   (`column_views.py`), Anlegen-Dialog (`create_object.py`), Navigationsbaum
+   (`tree_panel.py`), Filterzustand + URL (`grid_query.py` + 15 Tests), Zellwerte und
+   Speicher-Patch (`cell_values.py` + 7 Tests), Ansichtsschaltung (`view_switch.py` +
+   5 Tests), Referenzdialog (`references_dialog.py` + 6 Tests); die Seite ist bei
+   **1735 Zeilen** (**−1002**), Messwerkzeug (`scripts/grid_structure.py`) und Seitentests
+   (`tests/test_products_page.py`, **14** Tests) tragen jeden Schritt. **Offen:**
+   `fetch_filtered` (53), `add_section` (36), `sync_picker` (29) und ein Seitentest für den
+   Referenzdialog (Einstieg ist ein AG-Grid-Zellklick, siehe §4.11).
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.

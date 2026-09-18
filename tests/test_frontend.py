@@ -17,7 +17,6 @@ from meadow.frontend.grid import (
     MAX_CONTENT_CHARS,
     attribute_column_specs,
     attribute_columns,
-    build_patch,
     collect_subtree,
     completeness_badge,
     content_widths,
@@ -35,7 +34,6 @@ from meadow.frontend.grid import (
     restore_columns,
     row_data,
     status_badge,
-    storable_cell_value,
     with_header_tooltips,
 )
 from meadow.frontend.i18n import best_locale, t
@@ -183,21 +181,6 @@ def test_row_data_with_completeness() -> None:
     )
     assert "50%" in row["_completeness"]
     assert "bg-orange" in row["_completeness"]
-
-
-def test_build_patch_multilingual() -> None:
-    original = {"attributes": {"name": {"en": "Widget", "de": "Bauteil"}}}
-    patch = build_patch("object:1", "Neues Teil", original, "de")
-    assert patch == {
-        "id": "object:1",
-        "attributes": {"name": {"en": "Widget", "de": "Neues Teil"}},
-    }
-
-
-def test_build_patch_scalar() -> None:
-    original = {"attributes": {"name": "Widget"}}
-    patch = build_patch("object:1", "Gadget", original, "de")
-    assert patch == {"id": "object:1", "attributes": {"name": "Gadget"}}
 
 
 def test_is_session_expired_detects_expired_token() -> None:
@@ -433,27 +416,6 @@ def test_editable_cells_skips_unset_working_language_values() -> None:
         "attr_title": "Maus",
         "attr_price": None,
     }
-
-
-def test_storable_cell_value_restores_codes_and_merges_languages() -> None:
-    enum = {"name": "color", "type": "enum"}
-    text = {"name": "title", "type": "text"}
-    number = {"name": "price", "type": "number"}
-    boolean = {"name": "flag", "type": "boolean"}
-    assert storable_cell_value(enum, "Rot", "red", "de", {"red": "Rot"}) == "red"
-    assert storable_cell_value(enum, "Neu", "red", "de", {"red": "Rot"}) == "Neu"
-    assert storable_cell_value(number, "12,5", "1", "de") == 12.5
-    assert storable_cell_value(number, "12", "1", "de") == 12
-    assert storable_cell_value(boolean, "true", None, "de") is True
-    assert storable_cell_value(text, "", "x", "de") is None
-    assert storable_cell_value(text, "Mouse", "Maus", "en") == "Mouse"
-    # Multilingual: only the working language changes, the others are preserved.
-    assert storable_cell_value(text, "Mouse", {"de": "Maus"}, "en") == {
-        "de": "Maus",
-        "en": "Mouse",
-    }
-    assert storable_cell_value(text, "Neu", {"de": "Maus"}, "de") == {"de": "Neu"}
-    assert storable_cell_value(text, "", {"de": "Maus"}, "de") == {}
 
 
 def test_export_fields_maps_and_deduplicates_language_columns() -> None:

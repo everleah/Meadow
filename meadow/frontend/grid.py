@@ -16,7 +16,7 @@ import os
 import re
 import tempfile
 from collections.abc import Iterable, Mapping
-from typing import Any, TypeGuard
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -34,6 +34,12 @@ from meadow.frontend.bulk_edit import (
 )
 from meadow.frontend.bulk_report import replace_target_options
 from meadow.frontend.bulk_wizard import BulkWizard, WizardCatalogs
+from meadow.frontend.cell_values import (
+    as_bool,
+    as_number,
+    is_multilingual_map,
+    staged_patches,
+)
 from meadow.frontend.column_views import ColumnViews
 from meadow.frontend.create_object import CreateObjectDialog
 from meadow.frontend.display import (
@@ -51,20 +57,20 @@ from meadow.frontend.filters import filter_select
 from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
-from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
+from meadow.frontend.object_picker import OBJECT_ROOT_ID
 from meadow.frontend.range_values import format_range
 from meadow.frontend.reference_data import has_value, visible_in_picker
+from meadow.frontend.references_dialog import ReferencesDialog
 from meadow.frontend.relation_roles import (
     PRIMARY_CATEGORY_DEF,
     association_definitions,
     category_definitions,
     category_dimension_bindings,
     definition_key,
-    effective_target_types,
-    usable_definitions,
 )
 from meadow.frontend.tree_panel import TreePanel, TreeState
 from meadow.frontend.url_values import media_kind, open_media_dialog
+from meadow.frontend.view_switch import ViewSwitch
 from meadow.frontend.where_dialog import WhereDialog
 
 log = logging.getLogger(__name__)
@@ -473,36 +479,6 @@ def is_editable_definition(definition: dict) -> bool:
     )
 
 
-def _as_number(value: object) -> object:
-    """Parses a cell value to int/float (keeps the value on failure)."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int | float):
-        return value
-    text = str(value).strip().replace(",", ".")
-    if not text:
-        return None
-    try:
-        number = float(text)
-    except ValueError:
-        return value
-    return int(number) if number.is_integer() and "." not in text else number
-
-
-def _as_bool(value: object) -> object:
-    """Parses a cell value to a boolean (None stays None)."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("true", "1", "on", "yes")
-
-
-def _is_multilingual_map(value: object) -> TypeGuard[dict[str, Any]]:
-    """Whether a value is a `{language: value}` map (rather than quantified)."""
-    return isinstance(value, dict) and "unit" not in value
-
-
 def editable_cell_value(
     definition: dict, raw: object, locale: str, labels: dict[str, str] | None = None
 ) -> object:
@@ -513,15 +489,15 @@ def editable_cell_value(
     restored on save by `storable_cell_value`).
     """
     atype = str(definition.get("type") or "text")
-    value = raw.get(locale) if _is_multilingual_map(raw) else raw
+    value = raw.get(locale) if is_multilingual_map(raw) else raw
     if value is None:
         return None
     if atype == "number":
-        return _as_number(value)
+        return as_number(value)
     if atype == "range":
         return format_range(value) or None
     if atype == "boolean":
-        return _as_bool(value)
+        return as_bool(value)
     text = str(value)
     if atype == "enum" and labels:
         return labels.get(text, text)
@@ -544,47 +520,12 @@ def editable_cells(
     cells: dict = {}
     for name, definition in (editable or {}).items():
         raw = attributes.get(name)
-        if _is_multilingual_map(raw) and raw.get(locale) is None:
+        if is_multilingual_map(raw) and raw.get(locale) is None:
             continue
         cells[attribute_field(name)] = editable_cell_value(
             definition, raw, locale, (enum_labels or {}).get(name)
         )
     return cells
-
-
-def storable_cell_value(
-    definition: dict,
-    cell_value: object,
-    original: object,
-    locale: str,
-    labels: dict[str, str] | None = None,
-) -> object:
-    """Turns an edited cell value back into a storable attribute value.
-
-    Enum cells hold a localized label -> the stored code is restored. A
-    multilingual attribute keeps its other languages: the new value is merged
-    into the working-language key of the original map.
-    """
-    atype = str(definition.get("type") or "text")
-    if atype == "enum":
-        text = "" if cell_value is None else str(cell_value)
-        new_value: object = next(
-            (code for code, label in (labels or {}).items() if label == text), text or None
-        )
-    elif atype == "number":
-        new_value = _as_number(cell_value)
-    elif atype == "boolean":
-        new_value = _as_bool(cell_value)
-    else:
-        new_value = None if cell_value in (None, "") else str(cell_value)
-    if _is_multilingual_map(original):
-        merged = dict(original)
-        if new_value is None:
-            merged.pop(locale, None)
-        else:
-            merged[locale] = new_value
-        return merged
-    return new_value
 
 
 def _editor_props(definition: dict, labels: dict[str, str] | None) -> dict:
@@ -834,23 +775,6 @@ def tree_node_from_object(object_: dict, locale: str) -> dict:
     if "memberCount" in object_:
         node["count"] = object_.get("memberCount")
     return node
-
-
-def build_patch(object_id: str, client_name: object, original: dict, locale: str) -> dict:
-    """Builds a batch-update item for an edited name value.
-
-    Preserves other locales when the attribute is multilingual; otherwise the
-    scalar name is replaced.
-    """
-    original_name = (original.get("attributes") or {}).get("name")
-    new_name: object
-    if isinstance(original_name, dict):
-        merged = dict(original_name)
-        merged[locale] = client_name
-        new_name = merged
-    else:
-        new_name = client_name
-    return {"id": object_id, "attributes": {"name": new_name}}
 
 
 async def _wait_export(client: CoreClient, token: str, run_id: str) -> dict:
@@ -1527,36 +1451,15 @@ async def products_page(request: Request) -> None:
             rows_by_id = {
                 str(row.get("_id")): row for row in client_rows if row.get("_id") is not None
             }
-            patches = []
-            for oid, fields in staged_cells.items():
-                original = original_by_id.get(oid)
-                row = rows_by_id.get(oid)
-                if original is None or row is None:
-                    continue
-                loaded = loaded_rows_by_id.get(oid, {})
-                attributes: dict = {}
-                if "_name" in fields and row.get("_name") != loaded.get("_name"):
-                    patch = build_patch(oid, row.get("_name"), original, locale)
-                    attributes.update(patch["attributes"])
-                raw_attributes = original.get("attributes") or {}
-                for field in sorted(fields):
-                    if not str(field).startswith("attr_"):
-                        continue  # `_name` is handled above
-                    name = str(field)[len("attr_") :]
-                    definition = editable_defs.get(name)
-                    if definition is None:
-                        continue  # read-only (language) column
-                    if row.get(field) == loaded.get(field):
-                        continue  # staged but reverted
-                    attributes[name] = storable_cell_value(
-                        definition,
-                        row.get(field),
-                        raw_attributes.get(name),
-                        locale,
-                        enum_resolvers.get(name),
-                    )
-                if attributes:
-                    patches.append({"id": oid, "attributes": attributes})
+            patches = staged_patches(
+                staged=staged_cells,
+                originals=original_by_id,
+                live_rows=rows_by_id,
+                loaded_rows=loaded_rows_by_id,
+                definitions=editable_defs,
+                locale=locale,
+                enum_resolvers=enum_resolvers,
+            )
             if not patches:
                 ui.notify(t("grid.no_changes"))
                 return
@@ -1698,7 +1601,8 @@ async def products_page(request: Request) -> None:
         column_views.build()
 
         # Reference picker (modal): display + add/remove an object's references.
-        relation_options: dict[str, str] = {}
+        # The dialog lives in `meadow/frontend/references_dialog.py`; the page supplies
+        # the aggregation relation types by record key (the wizard needs them too).
         relation_def_by_key: dict[str, dict] = {}
         for definition in relation_definitions:
             if str(definition.get("kind")) != "aggregation":
@@ -1707,9 +1611,7 @@ async def products_page(request: Request) -> None:
             # record key (e.g. `rel_category_member`, from the record id
             # `relation_definition:rel_category_member`), not the full id or
             # the display `name` (which differs, e.g. `category_member`).
-            def_key = definition_key(definition)
-            relation_def_by_key[def_key] = definition
-            relation_options[def_key] = resolve_value(definition.get("label"), locale) or def_key
+            relation_def_by_key[definition_key(definition)] = definition
 
         # The bulk wizard assigns relations generically; types with a dedicated
         # operation (composition parent, categorisation) are hidden there to
@@ -1726,175 +1628,13 @@ async def products_page(request: Request) -> None:
             for definition in category_definitions(relation_definitions)
         }
 
-        current_ref_object: dict = {"id": None, "type": ""}
-
-        def ref_target_types() -> list[str] | None:
-            """Target types of the relation type currently chosen in the dialog."""
-            definition = relation_def_by_key.get(str(ref_definition.value or ""))
-            return effective_target_types(definition)
-
-        ref_dialog = ui.dialog()
-        with ref_dialog, ui.card().classes("w-[640px]"):
-            ui.label(t("grid.references")).classes("text-h6")
-            ref_object_label = ui.label().classes("text-caption text-gray-500")
-            ref_chips = ui.column()
-            with ui.row().classes("items-center gap-2 w-full"):
-                ref_definition = (
-                    ui.select(relation_options, value=None, label=t("grid.relation_type"))
-                    .props("outline dense")
-                    .classes("grow")
-                )
-            ref_search = ui.input(t("grid.reference_search")).props("outline dense").classes("grow")
-            ui.button(
-                icon="account_tree",
-                on_click=lambda: open_object_picker(
-                    client=client,
-                    token=token,
-                    locale=locale,
-                    title=t("form.pick_target"),
-                    on_pick=add_reference,
-                    target_types=ref_target_types(),
-                    exclude_ids=[str(current_ref_object["id"] or "")],
-                ),
-            ).props("outline dense").tooltip(t("form.pick_in_structure"))
-            ref_hits = ui.column()
-            with ui.row().classes("w-full justify-end"):
-                ui.button(t("grid.close"), on_click=ref_dialog.close).props("flat dense")
-
-        async def remove_reference(reference_id: str) -> None:
-            try:
-                await client.delete_reference(token, reference_id)
-            except CoreError, httpx.HTTPError:  # show a friendly message
-                ui.notify(t("grid.ref_remove_failed"), color="negative")
-            await refresh_references()
-
-        async def refresh_references() -> None:
-            ref_chips.clear()
-            target = current_ref_object["id"]
-            if not target:
-                return
-            try:
-                references = await client.list_object_references(token, target, locale=locale)
-            except CoreError, httpx.HTTPError:  # degrade to no chips
-                references = []
-            # Resolve relation-type labels for the group headings (all kinds,
-            # including the composition `rel_depends_on`).
-            def_labels: dict[str, str] = {}
-            try:
-                for definition in await client.list_relation_definitions(token):
-                    dk = str(definition["id"]).split(":", 1)[-1]
-                    def_labels[dk] = resolve_value(definition.get("label"), locale) or dk
-            except CoreError, httpx.HTTPError:  # fall back to raw keys
-                def_labels = {}
-            # Group the object's references by relation type; the chip shows the
-            # "other" object (the one *this* object points to / is pointed by).
-            groups: dict[str, list[dict]] = {}
-            for reference in references:
-                dk = str(reference.get("definition_id") or "")
-                other = (
-                    reference.get("in_object")
-                    if reference.get("out") == target
-                    else reference.get("out_object")
-                ) or {}
-                groups.setdefault(dk, []).append(
-                    {
-                        "id": reference.get("id"),
-                        "label": other.get("label") or "",
-                        "type": other.get("type") or "",
-                        "definition_id": dk,
-                        "removable": dk != "rel_depends_on",
-                    }
-                )
-            if not groups:
-                with ref_chips, ui.column().classes("w-full"):
-                    ui.label(t("grid.ref_empty")).classes("text-caption text-gray-500")
-                return
-
-            # Order groups: composition first, then aggregations by their label.
-            def group_sort_key(dk: str) -> tuple:
-                rank = 0 if dk == "rel_depends_on" else 1
-                return (rank, def_labels.get(dk, dk).lower())
-
-            for dk in sorted(groups, key=group_sort_key):
-                label = def_labels.get(dk, dk)
-                with ref_chips, ui.column().classes("w-full gap-1"):
-                    ui.label(label).classes("text-caption font-medium text-gray-500")
-                    for chip in sorted(groups[dk], key=lambda c: (c["label"].lower(), c["type"])):
-                        with ui.row().classes("items-center gap-2 w-full"):
-                            ui.label(f"{chip['label']} · {chip['type']}").classes(
-                                "bg-neutral px-2 py-0.5 rounded text-xs"
-                            )
-                            if chip["removable"]:
-                                ui.button(
-                                    icon="close",
-                                    on_click=lambda rid=chip["id"]: remove_reference(rid),
-                                ).props("flat dense size=sm").tooltip(t("grid.ref_remove"))
-
-        async def add_reference(hit: dict) -> None:
-            definition_id = ref_definition.value
-            if not definition_id:
-                ui.notify(t("grid.ref_relation_required"), color="warning")
-                return
-            try:
-                await client.create_reference(
-                    token, current_ref_object["id"], hit["id"], definition_id
-                )
-            except CoreError, httpx.HTTPError:  # show a friendly message
-                ui.notify(t("grid.ref_add_failed"), color="negative")
-                return
-            ref_search.value = ""
-            ref_hits.clear()
-            await refresh_references()
-
-        async def search_references(value: str) -> None:
-            q = (value or "").strip()
-            ref_hits.clear()
-            if not q or not current_ref_object["id"]:
-                return
-            try:
-                hits = await client.picker_search(
-                    token,
-                    q,
-                    types=ref_target_types(),
-                    locale=locale,
-                    limit=20,
-                    # A partial `code` must find the target too; the hits keep the
-                    # completeness badge.
-                    code_prefix=True,
-                )
-            except CoreError, httpx.HTTPError:  # degrade to no hits
-                return
-            own_id = str(current_ref_object["id"])
-            for hit in hits:
-                if str(hit.get("id")) == own_id:
-                    continue
-                with ref_hits:
-                    render_picker_hit(hit, add_reference, locale)
-
-        async def open_references(object_id: str, object_type: str = "") -> None:
-            """Opens the reference dialog for one row: only usable types are offered."""
-            current_ref_object["id"] = object_id
-            current_ref_object["type"] = object_type
-            ref_object_label.set_text(object_id)
-            # Relation types whose `source_types` do not accept this object would
-            # be rejected by the core (400), so they are not offered at all.
-            usable = usable_definitions(
-                [relation_def_by_key[key] for key in relation_options], object_type
-            )
-            if usable:
-                options = {
-                    definition_key(definition): relation_options[definition_key(definition)]
-                    for definition in usable
-                }
-                ref_definition.set_options(options)
-                ref_definition.value = next(iter(options))
-            else:
-                ref_definition.set_options(relation_options)
-                ref_definition.value = None
-            ref_search.value = ""
-            ref_hits.clear()
-            await refresh_references()
-            ref_dialog.open()
+        references_dialog = ReferencesDialog(
+            client=client,
+            token=token,
+            locale=locale,
+            relation_definitions=relation_def_by_key,
+        )
+        references_dialog.build()
 
         async def handle_cell_clicked(e) -> None:
             """Cell clicks with a side effect.
@@ -1909,7 +1649,7 @@ async def products_page(request: Request) -> None:
             data = args.get("data") or {}
             if col_id == "_refs":
                 if data and data.get("_id"):
-                    await open_references(data["_id"], str(data.get("_type") or ""))
+                    await references_dialog.open(data["_id"], str(data.get("_type") or ""))
                 return
             if (data.get(MEDIA_FIELD) or {}).get(col_id):
                 open_media_dialog(data.get(col_id))
@@ -1927,8 +1667,6 @@ async def products_page(request: Request) -> None:
             data = args.get("data")
             if data and data.get("_id"):
                 ui.navigate.to(f"/products/{quote(str(data['_id']), safe='')}")
-
-        ref_search.on_value_change(lambda e: search_references(e.value))
 
         # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
         bulk_selected_ids: set[str] = set()
@@ -2266,32 +2004,11 @@ async def products_page(request: Request) -> None:
             # Left: resizable tree card (structure or categories via toggle).
             with splitter.before, ui.card().classes("w-full h-full p-0"):  # noqa: SIM117 - layout nesting
                 # Line 1: view selector as icon buttons (active highlighted).
-                def style_view_button(btn: ui.button, active: bool) -> None:
-                    if active:
-                        btn.props("color=primary text-white", remove="flat")
-                    else:
-                        btn.props("flat", remove="color text-white")
+                view_switch = ViewSwitch()
 
                 def set_view(view: str) -> None:
-                    nonlocal active_view
                     active_view["value"] = view
-                    style_view_button(structure_btn, view == "structure")
-                    style_view_button(category_btn, view == "category")
-                    style_view_button(collection_btn, view == "collection")
-                    # Only built when the catalog carries taxonomies.
-                    if taxonomy_select is not None:
-                        taxonomy_select.set_visibility(view == "category")
-                    taxonomy_help.set_visibility(view == "category")
-                    tree_select.set_visibility(view == "category")
-                    dimension_select.set_visibility(view == "category")
-                    dimension_help.set_visibility(view == "category")
-                    collapse_btn.set_visibility(
-                        view != "collection" and bool(tree_nodes or category_roots)
-                    )
-                    reload_btn.set_visibility(view == "collection")
-                    # A new object hangs in the composition tree, so the action
-                    # belongs to the structure view (categories have their own page).
-                    create_btn.set_visibility(view == "structure" and bool(create_types))
+                    view_switch.apply(view)
                     if view != "collection" and active["collection"]:
                         active["collection"] = None
                         active_collection["id"] = None
@@ -2413,6 +2130,31 @@ async def products_page(request: Request) -> None:
                         select_category=select_category,
                         show_in_tree=show_in_tree,
                     )
+                # The panel controls belong to specific views (`view_switch.py`): the
+                # taxonomy/dimension switcher and the tree filter to the category view,
+                # collapse to any tree, reload to the flat collection list, create to the
+                # structure. The switch reads the two facts it needs lazily.
+                panel_widgets: dict[str, ui.element] = {
+                    "taxonomy_help": taxonomy_help,
+                    "tree_select": tree_select,
+                    "dimension_select": dimension_select,
+                    "dimension_help": dimension_help,
+                    "collapse": collapse_btn,
+                    "reload": reload_btn,
+                    "create": create_btn,
+                }
+                if taxonomy_select is not None:
+                    panel_widgets["taxonomy_select"] = taxonomy_select
+                view_switch.bind(
+                    buttons={
+                        "structure": structure_btn,
+                        "category": category_btn,
+                        "collection": collection_btn,
+                    },
+                    widgets=panel_widgets,
+                    has_tree=lambda: bool(tree_nodes or category_roots),
+                    has_create=lambda: bool(create_types),
+                )
                 set_view("structure")
 
                 async def on_filter_change(event) -> None:
