@@ -800,11 +800,32 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   also **−1002**), verschachtelte Funktionen 71 → **63**; **649 pytest**, mypy **142**
   Dateien, Deslop-Scan **0** Befunde. Größte verbliebene Einzelfunktionen: `fetch_filtered`
   53, `add_section` 36, `_do_export` 32, `save` 30.
-- **Nächstes:** `fetch_filtered` (53 Zeilen, der Kern-Aufrufpfad der Filter — als reine
-  Anfrage baubar), `add_section` und `sync_picker` (Spaltenauswahl), danach die Feinarbeit.
-- **Nächstes (alt):** `set_view` (25 Zeilen, schaltet ~10 Panels) und danach die größten
-  verbliebenen Einzelfunktionen (`refresh_references` 61 samt `search_references`/
-  `open_references`, `save` 51, `fetch_filtered` 53).
+- **Inkrement 9 — die Kern-Anfragen des Filters:** `fetch_filtered` (53 Zeilen) baut seine
+  Argumente nicht mehr selbst: `grid_query` bekam `list_arguments` (die Filter, wie sie
+  stehen), `list_limit` (1000 gefiltert, 100 ohne), `search_arguments` (die Treffer-Ids als
+  volle Zeilen) und `search_types`. Damit sind zwei Regeln **festgeschrieben** statt nur
+  kommentiert: `definition_id` geht **nur** mit dem `category`/`uncategorized`-Filter an
+  den Kern (sonst würde er validiert und ignoriert), und die Schalter werden zu echten
+  Booleschen (`missing_required`, `uncategorized`, `releases`). Sieben weitere reine Tests
+  (jetzt 21 in `tests/test_grid_query.py`); `fetch_filtered` ist auf 19 Zeilen.
+- **Inkrement 10 — der Spaltenwähler:** Zustand, Sync und Dialog sind
+  `meadow/frontend/column_picker.py` geworden (`ColumnPicker` mit
+  `sync`/`set_visibility`/`toggle_field`/`toggle_group`/`on_field_change`/`build`,
+  `PickerCatalogs` als die Eingaben der Seite). `visible_fields` bleibt die eine Wahrheit —
+  die Seite hält dasselbe Set-Objekt zum Lesen (Export, Ansichten), geschrieben wird es nur
+  im Wähler. Die zwei Regeln, die der Sync braucht, sind rein und getestet:
+  `group_checked` (eine Gruppe ist nur ganz an) und `language_columns_state` (Zähler
+  `on/total`). Bewegte Zeilen: die sieben Zustandsfunktionen, `add_section`, die
+  Spaltenkästen, die Sprachdialoge und der Dialogaufbau (~250 Zeilen). Kein neuer
+  Seitentest nötig: die vorhandenen Seitentests booten die Seite **mit** dem Dialog, ein
+  Fehler im Aufbau fällt dort sofort auf; die reinen Regeln haben eigene Tests.
+- **Messung nach 9–10:** `products_page` **1735 → 1497** Zeilen (vom Ausgangswert **2737**
+  also **−1240**, weniger als die Hälfte), verschachtelte Funktionen 63 → **54**, linearer
+  Widget-Code 919; **661 pytest**, mypy **142** Dateien, Deslop-Scan **0** Befunde.
+  `add_section` und `sync_picker` sind verschwunden; größte verbliebene Einzelfunktionen:
+  `_do_export` 32, `save` 30, `start_replace`/`search_taxonomy` 29.
+- **Nächstes:** die verbliebenen Export-/Replace-Funktionen; danach ist jede größere Fläche
+  der Seite ein eigenes Modul.
 
 ## 5. Workflow
 
@@ -904,17 +925,15 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–8
-   umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` + 10 Tests),
-   Wizard (`bulk_wizard.py`), Bedingungsdialog (`where_dialog.py`), Spaltenansichten
-   (`column_views.py`), Anlegen-Dialog (`create_object.py`), Navigationsbaum
-   (`tree_panel.py`), Filterzustand + URL (`grid_query.py` + 15 Tests), Zellwerte und
-   Speicher-Patch (`cell_values.py` + 7 Tests), Ansichtsschaltung (`view_switch.py` +
-   5 Tests), Referenzdialog (`references_dialog.py` + 6 Tests); die Seite ist bei
-   **1735 Zeilen** (**−1002**), Messwerkzeug (`scripts/grid_structure.py`) und Seitentests
-   (`tests/test_products_page.py`, **14** Tests) tragen jeden Schritt. **Offen:**
-   `fetch_filtered` (53), `add_section` (36), `sync_picker` (29) und ein Seitentest für den
-   Referenzdialog (Einstieg ist ein AG-Grid-Zellklick, siehe §4.11).
+3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–10
+   umgesetzt** — `bulk_report.py`, `bulk_edit.py`, `bulk_wizard.py`, `where_dialog.py`,
+   `column_views.py`, `create_object.py`, `tree_panel.py`, `grid_query.py`, `cell_values.py`,
+   `view_switch.py`, `references_dialog.py`, `column_picker.py`; die Seite ist bei
+   **1497 Zeilen** (**−1240**, also weniger als die Hälfte), Messwerkzeug
+   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **14**
+   Tests) tragen jeden Schritt. **Offen:** die verbliebenen Export-/Replace-Funktionen
+   (`_do_export` 32, `save` 30, `start_replace`/`search_taxonomy` 29) und ein Seitentest für
+   den Referenzdialog (Einstieg ist ein AG-Grid-Zellklick, siehe §4.11).
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.

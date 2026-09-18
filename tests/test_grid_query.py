@@ -7,12 +7,18 @@ from urllib.parse import parse_qs
 import pytest
 
 from meadow.frontend.grid_query import (
+    FILTERED_LIMIT,
     FLAG_KEYS,
+    PLAIN_LIMIT,
     PRIMARY_CATEGORY_DEF,
     filters_query,
     has_filter,
+    list_arguments,
+    list_limit,
     products_url,
     read_filters,
+    search_arguments,
+    search_types,
 )
 
 
@@ -100,3 +106,75 @@ def test_the_primary_dimension_is_not_written_into_the_url() -> None:
         filters_query({"category": "category:1", "definition_id": PRIMARY_CATEGORY_DEF})
         == "category=category%3A1"
     )
+
+
+def test_a_filtered_list_asks_for_more_rows_than_a_plain_one() -> None:
+    """The limit follows the filters (a bare visit would load a small teaser)."""
+    assert list_limit({}) == PLAIN_LIMIT
+    assert list_limit({"type": "product"}) == FILTERED_LIMIT
+
+
+def test_the_list_arguments_carry_every_filter() -> None:
+    """What the core gets: the filters as they stand, inheritance resolved."""
+    filters = read_filters({"type": "product", "ancestor": "product:1", "released_for": "shop"})
+
+    arguments = list_arguments(filters, has_channels=True, locale="de")
+
+    assert arguments["object_type"] == "product"
+    assert arguments["ancestor"] == "product:1"
+    assert arguments["released_for"] == "shop"
+    assert arguments["releases"] is True, "the release badges need the releases"
+    assert arguments["locale"] == "de"
+    assert arguments["resolve_inheritance"] is True
+    assert arguments["limit"] == FILTERED_LIMIT
+
+
+def test_the_dimension_is_only_sent_with_the_category_filter() -> None:
+    """Without its categorisation the core would validate the dimension and ignore it."""
+    dimension = {"definition_id": "rel:1"}
+
+    assert list_arguments(dimension, has_channels=False, locale="de")["definition_id"] is None
+    assert (
+        list_arguments({**dimension, "category": "category:1"}, has_channels=False, locale="de")[
+            "definition_id"
+        ]
+        == "rel:1"
+    )
+    assert (
+        list_arguments({**dimension, "uncategorized": True}, has_channels=False, locale="de")[
+            "definition_id"
+        ]
+        == "rel:1"
+    )
+
+
+def test_the_switches_become_booleans_for_the_core() -> None:
+    """The core expects real flags: `missing_required` and `uncategorized`."""
+    arguments = list_arguments(
+        read_filters({"incomplete": "1", "uncategorized": "1"}), has_channels=False, locale="de"
+    )
+
+    assert arguments["missing_required"] is True
+    assert arguments["uncategorized"] is True
+    assert list_arguments({}, has_channels=False, locale="de")["missing_required"] is False
+
+
+def test_the_search_arguments_load_the_hits_by_id() -> None:
+    """The search path reloads full rows for the hit ids, badge included there."""
+    arguments = search_arguments(
+        read_filters({"q": "Brake", "incomplete": "1", "where": "{}"}),
+        ids=["product:1", "product:2"],
+        limit=200,
+        locale="de",
+    )
+
+    assert arguments["ids"] == ["product:1", "product:2"]
+    assert arguments["missing_required"] is True
+    assert arguments["where"] == "{}"
+    assert arguments["limit"] == 200
+
+
+def test_the_search_looks_in_the_chosen_type_only() -> None:
+    """A type filter narrows the search; without one every type is searched."""
+    assert search_types({"type": "product"}) == ["product"]
+    assert search_types({}) is None
