@@ -23,6 +23,14 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   (`plan/detail/ai-code-quality.md`). The directory is excluded from Ruff and from the
   repository's own scan; `test_deslop.py` scans a copy from a neutral path, because the
   scan rules skip paths that look like test code.
+- **Page tests** (`test_products_page.py`, the net for the `products_page` refactor,
+  `plan/detail/ai-code-quality.md` §4.11) boot the real frontend app through NiceGUI's
+  user simulation (`user_simulation(main_file=…)`, plugin registered in the root
+  `conftest.py` for a session-temp storage path). Three rules: the fixture must drop
+  `meadow.frontend*` from `sys.modules` *before* the boot (otherwise the cached
+  `@ui.page` decorators never run and every page answers `404`), the core client and
+  the auth middleware are replaced (that is the point of a page test), and modules of
+  the frontend are imported inside the fixture, never at module level.
 
 ## Verification
 

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 4 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 131 Dateien – **`meadow` inkl. Frontend, `tests/` und `scripts/` vollständig, mit `check_untyped_defs`** (§4.6–§4.9). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 4 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 131 Dateien – **`meadow` inkl. Frontend, `tests/` und `scripts/` vollständig, mit `check_untyped_defs`** (§4.6–§4.9). Der Scan meldet **null** Befunde; der Struktur-Umbau der Produktseite ist mit einem AST-Messwerkzeug und Seitentests begonnen (§4.11).
 
 ## 1. Ziel und Abgrenzung
 
@@ -520,6 +520,66 @@ fing breit ab, obwohl httpx mit `errors="replace"` dekodiert (gemessen:
 `b"\xff\x00\xfe\x01"` ⇒ Ersatzzeichen statt Ausnahme) – der Guard ist entfernt,
 `response.text` kann dort nicht werfen.
 
+### 4.11 Struktur-Umbau `products_page`: das Netz zuerst (2026-09-18)
+
+§4.5 hat den größten Einzelposten benannt: die Produktseite ist **eine** Funktion.
+Der Umbau beginnt deshalb nicht mit dem Verschieben von Code, sondern mit einer
+wiederholbaren **Messung** und dem **Netz**, das jeden Schritt prüfbar macht.
+
+**Messung** (`scripts/grid_structure.py`, AST statt Bauchgefühl):
+
+| Größe | Wert |
+| --- | --- |
+| `products_page` (`meadow/frontend/grid.py`) | Zeilen 905–3641 = **2737** |
+| verschachtelte Funktionen | **106** (99 äußerste) |
+| Zeilen darin | 1645 |
+| linearer Widget-Code | **1092** |
+| größte Funktionen | `refresh_config` 157, `render_tree` 102, `start_bulk` 63, `refresh_references` 61, `fetch_filtered` 53, `save` 51, `_show_bulk_report` 50 |
+
+Der Zustand ist erstaunlich selten `nonlocal` (**7** Deklarationen): geteilt wird über
+Dicts und Widgets. Genau das macht das Verschieben riskant — die Abhängigkeiten sind
+unsichtbar, und genau deshalb kann der Umbau nur mit einem Verhaltensnetz beginnen.
+
+**Das Netz: Seitentests über NiceGUIs User-Simulation** (`tests/test_products_page.py`,
+3 Tests, je ~0,4 s). Sie booten die **echte** App aus `meadow/frontend/__main__.py` —
+Seitenregistrierung, Shell und Middleware inklusive — und ersetzen genau zwei Dinge:
+den Kern-Client (`FakeCore`, der jeden Aufruf aufzeichnet) und die Auth-Middleware
+(der Login hat eigene Tests). Damit prüfen sie **Seitenverhalten** statt Helfer:
+Ein ungefilterter Aufruf lädt keine Objekte (und zeigt den Hinweis), `?type=…&incomplete=1`
+kommt als `object_type`/`missing_required` mit `limit=1000` im Kern-Aufruf an, und ein
+leerer Filtertreffer meldet sich als solcher statt den Hinweis zu zeigen.
+
+**Drei Fallen, die dabei Zeit gekostet haben:**
+
+1. `AuthMiddleware.dispatch` wird als *gebundene* Methode aufgerufen — ein Patch muss
+   `(self, request, call_next)` annehmen (`TypeError: takes 2 positional arguments`).
+2. Statt des `user`-Fixtures nutzt der Test `user_simulation(main_file=…)` direkt,
+   weil die Modul-Eviction **vor** dem Boot gesteuert werden muss (Punkt 3).
+3. **Der wichtige Fund:** NiceGUI entfernt Seitenmodule nur dann aus `sys.modules`
+   (Teardown, für Module registrierter Routen), wenn die Route auch registriert wurde.
+   Hat ein *anderes* Testmodul `meadow.frontend.grid` schon beim Einsammeln importiert,
+   läuft `__main__.py` beim Boot ins Leere: die `@ui.page`-Dekoratoren sind gecacht,
+   die frische App bekommt keine Routen, und jeder `open()` antwortet `404`. Deshalb
+   wirft das Fixture `meadow.frontend*` selbst aus `sys.modules`, bevor die Simulation
+   startet.
+
+**Reihenfolge der Inkremente** (je: verschieben, `check.ps1 python`, Seitentests,
+`grid_structure.py` erneut):
+
+1. **Dialoge mit eigener Zustandsfläche** — `_show_bulk_report` (50 Zeilen) und der
+   Ersetzen-Dialog lesen fast nur Auswahl und Bericht und schreiben nichts in den
+   Seitenzustand.
+2. **Der Bulk-Wizard** (`_current_page_ids`, `_scope_ids`, `start_bulk`, `poll_bulk`,
+   `_show_bulk_report`, `refresh_config` 157) — der größte Einzelgewinn; sein Zustand
+   gehört in einen eigenen Typ.
+3. **Baum/Panel** (`render_tree` 102, `load_category_*`) und **Filterleiste**
+   (`set_view`, `on_filter_change`, `where_*`).
+4. **Erstellen-Dialog** (`render_create_fields`, `save_new_object`).
+
+Regel für jeden Schritt: **keine Verhaltensänderung**, und der reine Teil wandert in ein
+Modul der Größe `export_fields.py` bzw. `load_option_sources` (§4.4c). Bricht Schritt 1
+das Netz, ist die Reihenfolge falsch — nicht die Regel.
+
 ## 5. Workflow
 
 Der Workflow wird bewusst gestartet und repariert nie von selbst:
@@ -618,8 +678,9 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
-   und Tests aufbauen, dann Seitenabschnitte überführen.
+3. **Struktur-Umbau `products_page`** (2737 Zeilen, §4.11): **begonnen** – Messwerkzeug
+   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`) stehen,
+   die Inkremente 1–4 sind dort geordnet.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.
