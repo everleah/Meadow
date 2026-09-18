@@ -1014,15 +1014,12 @@ pub async fn batch_upsert_objects(
     for item in &body.objects {
         let object_type = item.object_type.trim().to_owned();
         if object_type.is_empty() {
-            results.push(failed_result(prepared.len(), "entry without `type`"));
+            results.push(failed_at(prepared.len(), "entry without `type`"));
             prepared.push(None);
             continue;
         }
         let Value::Object(attributes) = &item.attributes else {
-            results.push(failed_result(
-                prepared.len(),
-                "`attributes` must be an object",
-            ));
+            results.push(failed_at(prepared.len(), "`attributes` must be an object"));
             prepared.push(None);
             continue;
         };
@@ -1710,10 +1707,6 @@ fn pending_result(index: usize) -> BatchUpsertItemResult {
 }
 
 /// Result of an entry that failed before the write.
-fn failed_result(index: usize, error: &str) -> BatchUpsertItemResult {
-    failed_at(index, error)
-}
-
 fn failed_at(index: usize, error: &str) -> BatchUpsertItemResult {
     BatchUpsertItemResult {
         index,

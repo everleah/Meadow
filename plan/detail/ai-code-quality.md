@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt (2026-09-18): gepinnte Konfiguration `stopslop.toml`, Baseline, `scripts/deslop.ps1`/`deslop.sh`, Fixtures und `tests/test_deslop.py`. Offen ist der erste Reparaturpass am Bestand.
+- **Stand:** Stufe 1 umgesetzt und erster Reparaturpass gefahren (2026-09-18): Konfiguration `stopslop.toml`, Baseline (16 akzeptierte Befunde), `scripts/deslop.ps1`/`deslop.sh`, Fixtures und `tests/test_deslop.py`; sechs verschluckte Fehler und ein Weiterschleifer behoben (§4.2).
 
 ## 1. Ziel und Abgrenzung
 
@@ -126,14 +126,12 @@ Zwei Ergebnisse prägen die Konfiguration:
    und die Stilgruppen (`verbosity`, `format`, `rhetoric`, `sourcing`) gelten nicht
    für Markdown. Die Artefakt-Gruppe bleibt überall an – sie ist das, was die
    bestehenden Linter nicht sehen.
-2. **Die verbleibenden Tier-A-Befunde sind bewertet und akzeptiert.** Die 16
-   `SLOP009`-Befunde in Rust sind `example.com`-Werte in Inline-Unit-Tests und im
-   Seed (`admin@example.com`); die 6 `SLOP006`-Befunde sind bewusst abgefangene
-   UI-Degradierungen, die im Code schon mit `# noqa: BLE001 - …` begründet sind
-   (ein nicht erreichbarer Picker bietet weniger Optionen an, statt die Seite
-   scheitern zu lassen). Zusammen **23 Befunde** stehen in
-   `.stopslop-baseline.json`; der Bestand ist damit grün, und nur ein **neuer**
-   Befund der Stufe A lässt den Lauf scheitern.
+2. **Die verbleibenden Tier-A-Befunde sind bewertet und akzeptiert.** Zu Beginn waren
+   es zwei Gruppen: 16 × `SLOP009` (`example.com`-Werte in Rust-Inline-Tests und im
+   Seed `admin@example.com`) und 6 × `SLOP006` (bewusst abgefangene Degradierungen
+   in `meadow/frontend/`). Die sechs `SLOP006`-Stellen wurden im ersten
+   Reparaturpass behoben (§4.2), deshalb steht die Baseline jetzt bei **16
+   Befunden** – und nur ein **neuer** Befund der Stufe A lässt den Lauf scheitern.
 
 ### 4.1 Python-Deep-Dive am Bestand (2026-09-18)
 
@@ -150,6 +148,41 @@ Das deckt sich mit der Modulgröße: Die drei größten Frontend-Dateien sind gl
 die Score-Spitzen. Das ist ein Hinweis auf einen Struktur-Pass, keine Fehlerliste –
 `SUSPICIOUS` heißt „ansehen“, nicht „kaputt“. `tests/` ist beim Werkzeug standardmäßig
 ausgenommen, Scratch-Dateien unter `.tmp/` werden bewusst nicht gescannt.
+
+### 4.2 Erster Reparaturpass (2026-09-18)
+
+Kategorie „Artefakte, Placeholder und verschluckte Fehler“ zuerst, wie im Workflow
+festgelegt. Die sechs Stellen waren bewusst abgefangen (`pass`), damit die
+Oberfläche bei einem unglücklich erreichbaren Kern nicht scheitert – nur eben
+**unsichtbar**. Der Pass macht sie nach dem bestehenden Hausmuster aus
+`meadow/frontend/object_picker.py` diagnostizierbar, ohne das Verhalten zu ändern
+(additiv: `log = logging.getLogger(__name__)` plus eine Warnung, kein geänderter
+Kontrollfluss):
+
+| Datei | Stelle | Meldung |
+| --- | --- | --- |
+| `meadow/frontend/connectors.py` | 4 × Optionen der Konnektor-Formularfelder (Objekttypen, Attributnamen, Sprachen, Kanäle) | `log.warning("connector form: … unavailable")` |
+| `meadow/frontend/form.py` | Kanalfreigaben des Objekts | `log.warning("object %s: channel releases unavailable")` |
+| `meadow/frontend/grid.py` | Collection-Refresh der Sammlungsansicht | `log.warning("collection refresh failed, keeping the shown data")` |
+
+Der Fund in `form.py` ist der wichtigste: Eine nicht geladene Kanalfreigabe wurde
+stillschweigend als „nicht freigegeben“ dargestellt – eine **falsche** Anzeige, nicht
+nur eine fehlende. Sie bleibt jetzt im Log erklärbar.
+
+Zusätzlich behoben: der Strukturbefund `SLOP039` – `failed_result` war nur ein
+Weiterschleifer auf `failed_at`, zwei Namen für dieselbe Funktion, während
+`failed_at` bereits elf Aufrufer hatte.
+
+**Ergebnis:** `stopslop` meldet über den Quellbaum keine `SLOP006`- und keine
+`SLOP039`-Stelle mehr (23 → 17 Befunde, davon 16 baselined). Akzeptierter Bestand
+sind damit nur noch die 16 `SLOP009`-Einträge.
+
+**Nachweis:** `ruff check`, `ruff format --check`, `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test -p pim-core --lib`
+(173 Tests), `pytest` (561 Tests), `stopslop .` = `exit 0`. Der **volle**
+`cargo test`-Lauf (und damit `scripts/check.ps1`) braucht den gestoppten Dev-Kern,
+weil Windows ein laufendes `pim-core.exe` beim Relink sperrt – hier lief die
+Variante `--lib`, die kein Binary linkt.
 
 ## 5. Workflow
 
@@ -183,7 +216,7 @@ bis er behoben oder mit Begründung aufgenommen wird.
 | Datei | Zweck |
 | --- | --- |
 | `stopslop.toml` | gepinnte Regelauswahl: `SLOP018` aus, Stilgruppen nur für Markdown aus, Artefakt- und Strukturregeln an, Excludes, Baseline |
-| `.stopslop-baseline.json` | 23 bewertete und akzeptierte Befunde (Details in §4) |
+| `.stopslop-baseline.json` | 16 bewertete und akzeptierte Befunde (Details in §4) |
 | `scripts/deslop.ps1`, `scripts/deslop.sh` | manueller Einstieg: `all\|changed\|staged`, `--strict` (Baseline ignorieren), `--fix-plan` (Python-Deep-Dive über `meadow` und `scripts`), Berichte unter `.tmp/deslop/` |
 | `tests/fixtures/deslop/artifacts.py`, `artifacts.rs` | absichtlich fehlerhafte Beispiele; außerhalb des Repo-Scans und für Ruff ausgeschlossen |
 | `tests/test_deslop.py` | Konfigurations-Invarianten und Nachweis, dass die Regeln feuern; werkzeuggestützte Tests überspringen sich ohne installiertes `stopslop` |
@@ -221,17 +254,18 @@ so, was er behauptet.
 | 2 | Python- und Rust-Quelltext inklusive Kommentaren und Strings wird erfasst, generierte Pfade sind ausgeschlossen | umgesetzt (`stopslop.toml`) |
 | 3 | Ein absichtlich eingefügter Artefakt der Stufe A wird reproduzierbar gefunden | umgesetzt (`tests/test_deslop.py`: 8 Python- und 5 Rust-Regeln) |
 | 4 | Bestehende Befunde sind baselined, neue bleiben sichtbar | umgesetzt (23 Einträge, Selbstschrumpfung beim Beheben) |
-| 5 | Ein Reparaturpass erzeugt einen nachvollziehbaren Diff und lässt die Gates laufen | offen – der erste Pass am Bestand steht aus |
+| 5 | Ein Reparaturpass erzeugt einen nachvollziehbaren Diff und lässt die Gates laufen | umgesetzt (§4.2; der volle `cargo test`-Lauf braucht den gestoppten Dev-Kern) |
 | 6 | Die Dokumentation nennt Befunde Qualitätssignale und behauptet keine KI-Erkennung | umgesetzt (dieses Dokument) |
 
 ## 9. Offene Punkte
 
-- Erster Reparaturpass: die 6 `SLOP006`-Stellen in `meadow/frontend/` sind bewusst
-  abgefangen. Zu entscheiden ist, ob die Fehlerbehandlung sichtbar gemacht wird
-  (Log statt stillem Schweigen) oder eine begründete Unterdrückung bleibt.
+- Erster Reparaturpass: **erledigt** (§4.2) – die sechs verschluckten Fehler sind
+  jetzt im Log sichtbar. Offen bleibt die Frage, ob eine Degradierung zusätzlich in
+  der Oberfläche erscheinen soll (heute bewusst nur im Log, um den Alltag nicht zu
+  fluten).
 - Die 16 `SLOP009`-Befunde stammen aus Inline-Tests und dem Seed: entweder `example.com`
-  als Testkonstante dokumentieren oder eigene Testwerte nutzen, damit der Scan ohne
-  Baseline auskommt.
+  als Testkonstante dokumentieren oder eigene Testwerte nutzen, damit der Scan ganz
+  ohne Baseline auskommt.
 - Nach dem ersten Linux-Lauf: Rauschpegel der Stilgruppen für `docs/user/` prüfen.
 - `ai-slop-detector` bleibt bis zur Auswertung in der Dev-Gruppe; danach entscheiden,
   ob es dort bleibt oder optional lokal installiert wird.

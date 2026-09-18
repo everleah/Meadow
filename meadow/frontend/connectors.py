@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json as _json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -48,6 +49,8 @@ from meadow.frontend.connector_form import (
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
+
+log = logging.getLogger(__name__)
 
 #: Connector types used only when the schema endpoint is unreachable (the schema
 #: from `GET /connector-types` is the source of truth for types and labels).
@@ -155,8 +158,8 @@ async def connectors_page() -> None:
         option_sources["object_types"] = [
             str(item.get("name")) for item in object_types if item.get("name")
         ]
-    except Exception:  # noqa: BLE001 - the picker then only offers entered values
-        pass
+    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+        log.warning("connector form: object types unavailable (%s)", error)
     try:
         # The whole vocabulary (one request): a connector writes into own attributes
         # and into the fields of an installed standard alike, and the capped paged
@@ -165,8 +168,8 @@ async def connectors_page() -> None:
         option_sources["attribute_names"] = [
             str(item.get("name")) for item in definitions if item.get("name")
         ]
-    except Exception:  # noqa: BLE001 - the picker then only offers entered values
-        pass
+    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+        log.warning("connector form: attribute names unavailable (%s)", error)
     try:
         languages = await client.list_languages(token)
         option_sources["languages"] = [
@@ -174,15 +177,15 @@ async def connectors_page() -> None:
             for item in languages
             if item.get("active") and item.get("code") not in (None, "root")
         ]
-    except Exception:  # noqa: BLE001 - the picker then only offers entered values
-        pass
+    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+        log.warning("connector form: languages unavailable (%s)", error)
     try:
         channels = await client.list_channels(token, active=True)
         option_sources["channels"] = [
             str(item.get("code")) for item in channels if item.get("code")
         ]
-    except Exception:  # noqa: BLE001 - the picker then only offers entered values
-        pass
+    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+        log.warning("connector form: channels unavailable (%s)", error)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("connectors.title")).classes("text-h4")

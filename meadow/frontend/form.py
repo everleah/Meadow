@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from functools import partial
 from urllib.parse import quote
 
@@ -59,6 +60,8 @@ from meadow.frontend.relation_roles import (
     role_of,
 )
 from meadow.frontend.url_values import is_valid_url, open_url
+
+log = logging.getLogger(__name__)
 
 #: Workflow statuses offered in the status selector. The core validates the
 #: actual transition via the workflow guard.
@@ -1337,8 +1340,9 @@ async def product_form(object_id: str) -> None:
                     code = str(row.get("channel") or "")
                     if code in release_state:
                         release_state[code] = str(row.get("status") or "")
-            except Exception:  # noqa: BLE001 - show the section as not released
-                pass
+            except Exception as error:  # noqa: BLE001 - show the section as not released
+                # A silent degrade would render a released object as unreleased.
+                log.warning("object %s: channel releases unavailable (%s)", object_id, error)
 
         async def set_release(code: str, status: str) -> None:
             """Releases the object for a channel (or changes the channel state)."""

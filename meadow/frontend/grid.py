@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import re
 import tempfile
@@ -55,6 +56,8 @@ from meadow.frontend.relation_roles import (
     usable_definitions,
 )
 from meadow.frontend.url_values import media_kind, open_media_dialog
+
+log = logging.getLogger(__name__)
 
 # Maximum hits the grid search pulls per query (picker + row load); the search
 # is server-side, so the result set stays bounded regardless of dataset size.
@@ -2764,8 +2767,8 @@ async def products_page(request: Request) -> None:
                 if col_id:
                     await client.refresh_collection(token, col_id)
                 collections = await client.list_collections(token, limit=1000)
-            except Exception:  # noqa: BLE001 - keep current data on failure
-                pass
+            except Exception as error:  # noqa: BLE001 - keep current data on failure
+                log.warning("collection refresh failed, keeping the shown data (%s)", error)
             if active_view["value"] == "collection" and not col_id:
                 render_tree("collection")
             if col_id:
