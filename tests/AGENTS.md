@@ -31,6 +31,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `@ui.page` decorators never run and every page answers `404`), the core client and
   the auth middleware are replaced (that is the point of a page test), and modules of
   the frontend are imported inside the fixture, never at module level.
+- Widgets a page test has to *find* carry a marker (`ui.button(...).mark("bulk-start")`,
+  NiceGUI 3.x; the old `marker()` name is gone). Two rules learned the hard way: a click on
+  an **async** handler only schedules it (wait for the effect, e.g. with a small
+  `_wait_until(...)` helper), and `UserInteraction` types into inputs but cannot operate a
+  select (set `.value` inside the client context instead — that is what `type()` does).
 
 ## Verification
 

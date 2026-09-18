@@ -17,12 +17,14 @@ Two things are deliberately replaced:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from nicegui import ui
 from nicegui.testing import User, user_simulation
 
 from meadow.frontend.i18n import t
@@ -50,7 +52,10 @@ class FakeCore:
 
         async def call(*args: Any, **kwargs: Any) -> Any:
             FakeCore.calls.append((name, kwargs))
-            return FakeCore.data.get(name, [])
+            if name in FakeCore.data:
+                return FakeCore.data[name]
+            # Like the real client: listers answer lists, everything else a record.
+            return [] if name.startswith("list_") else {}
 
         return call
 
@@ -121,3 +126,88 @@ async def test_products_page_reports_an_empty_filter_result(products_user: User)
 
     await products_user.should_see(t("grid.no_objects", locale=EN))
     await products_user.should_not_see(t("grid.select_tree_node", locale=EN))
+
+
+#: Objects the stubbed core answers a grid load with (core shape: `id`/`type`/`attributes`).
+OBJECTS = [
+    {
+        "id": "product:1",
+        "type": "product",
+        "status": "draft",
+        "attributes": {"name": "Brake disc"},
+    },
+    {
+        "id": "product:2",
+        "type": "product",
+        "status": "draft",
+        "attributes": {"name": "Brake pad"},
+    },
+]
+
+
+def _stub_objects(*objects: dict) -> None:
+    """Answers the next grid load with these objects."""
+    FakeCore.data["list_objects"] = [dict(object_) for object_ in objects]
+
+
+def _pick(user: User, marker: str, value: str) -> None:
+    """Chooses an option the way a user does, so the change handlers run.
+
+    NiceGUI's interaction helper types into inputs but has no equivalent for selects,
+    so this sets the value inside the client context — exactly what `type()` does.
+    """
+    assert user.client is not None
+    element = next(iter(user.find(marker=marker).elements))
+    assert isinstance(element, (ui.input, ui.select))
+    with user.client:
+        element.value = value
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    """Waits for an async handler of the page (a click only *schedules* it)."""
+    for _ in range(50):
+        if condition():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("the expected effect did not happen")
+
+
+async def test_bulk_wizard_posts_the_chosen_operation(products_user: User) -> None:
+    """The wizard's contract: operation, scope ids and parameters reach the core."""
+    _stub_objects(*OBJECTS)
+    await products_user.open("/products?type=product")
+
+    products_user.find(marker="bulk-open").click()
+    await products_user.should_see(t("grid.bulk_title", locale=EN))
+    _pick(products_user, "bulk-op", "change_status")
+    await products_user.should_see(marker="bulk-field-status")
+    _pick(products_user, "bulk-field-status", "published")
+    products_user.find(marker="bulk-start").click()
+    await _wait_until(lambda: any(name == "post_bulk" for name, _ in FakeCore.calls))
+
+    assert [kwargs for name, kwargs in FakeCore.calls if name == "post_bulk"] == [
+        {
+            "op": "change_status",
+            "object_ids": ["product:1", "product:2"],
+            "parameters": {"status": "published"},
+        }
+    ]
+
+
+async def test_bulk_wizard_refuses_an_incomplete_configuration(products_user: User) -> None:
+    """An operation without a target must not be posted at all."""
+    _stub_objects(*OBJECTS)
+    await products_user.open("/products?type=product")
+
+    products_user.find(marker="bulk-open").click()
+    _pick(products_user, "bulk-op", "set_attribute")
+    await products_user.should_see(marker="bulk-field-attribute")
+    products_user.find(marker="bulk-start").click()
+    await _wait_until(
+        lambda: products_user.notify.contains(t("grid.bulk_config_incomplete", locale=EN))
+    )
+
+    assert [name for name, _ in FakeCore.calls if name == "post_bulk"] == []
+    assert products_user.notify.contains(t("grid.bulk_config_incomplete", locale=EN)), (
+        products_user.notify.messages
+    )

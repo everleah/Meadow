@@ -596,12 +596,24 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   `build_parameters(op, {feld: wert}, bulk_picked)`, und **fünf** identische
   List-Comprehensions der Seite (`start_sequential`, `_scope_ids`, `_current_page_ids`,
   `handle_selection`, `_do_export`) sind durch `ids_from_rows`/`page_ids` ersetzt.
+- **Das Netz reicht jetzt bis in den Wizard:** `tests/test_products_page.py` bedient den
+  Dialog wie ein Benutzer (Widgets tragen Marker, `mark(...)` in NiceGUI 3.x) und prüft die
+  Wirkung statt der Struktur: `?type=product` → Dialog öffnen → Operation + Status wählen →
+  Start ⇒ `post_bulk(op="change_status", object_ids=["product:1", "product:2"],
+  parameters={"status": "published"})`; eine unvollständige Konfiguration postet **nichts**
+  und meldet `grid.bulk_config_incomplete`. **Zwei Erkenntnisse für alle weiteren Seitentests:**
+  NiceGUIs `UserInteraction` tippt in Eingabefelder, bedient aber keine Selects (der Test
+  setzt `.value` im Client-Kontext — genau das, was `type()` tut), und ein Klick auf einen
+  **async**-Handler *plant* ihn nur: der Test wartet mit `_wait_until(...)` auf die Wirkung.
+  Kosten der Marker: +5 Zeilen in der Seite (2672 → 2677) — das Netz wächst also in der Seite,
+  bevor sie schrumpft.
 - **Messung:** `products_page` **2737 → 2672** Zeilen, linearer Widget-Code 1092 → **1084**,
   verschachtelte Funktionen 106 → **105**; Tests 566 → **582**, mypy 133 → **135** Dateien.
   Der Zeilengewinn bleibt klein — der Wert liegt in der Testbarkeit: Payload-Vertrag,
   Scope-/Seitenfenster-Regel und Zeilen-Extraktion waren vorher unerreichbar eingeschlossen.
 - **Nächstes (2b):** die Dialoghülle des Wizards und `refresh_config` (150 Zeilen, der
-  größte Block) mit explizitem Zustand — die Entscheidungen dafür stehen jetzt fest.
+  größte Block) mit explizitem Zustand — die Entscheidungen dafür **und das Netz** liegen
+  jetzt vor.
 
 ## 5. Workflow
 

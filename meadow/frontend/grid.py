@@ -2104,6 +2104,7 @@ async def products_page(request: Request) -> None:
                     value="selected" if bulk_selected_ids else "filtered",
                 )
                 .props("filled dense")
+                .mark("bulk-scope")
                 .classes("w-full")
             )
             bulk_selected_label = ui.label("").classes("text-caption")
@@ -2133,6 +2134,7 @@ async def products_page(request: Request) -> None:
                     on_change=_on_bulk_op_change,
                 )
                 .props("filled dense")
+                .mark("bulk-op")
                 .classes("w-full")
             )
             ui.label(t("grid.bulk_areas_hint")).classes("text-caption text-gray-400")
@@ -2142,7 +2144,7 @@ async def products_page(request: Request) -> None:
                 ui.button(t("grid.close"), on_click=bulk_dialog.close).props("flat")
                 ui.button(
                     t("grid.bulk_start"), icon="play_arrow", on_click=lambda: start_bulk()
-                ).props("flat")
+                ).props("flat").mark("bulk-start")
 
         async def refresh_config(_event=None) -> None:  # noqa: ARG001 - handler arg unused
             config_area.clear()
@@ -2153,6 +2155,7 @@ async def products_page(request: Request) -> None:
                     select = (
                         ui.select(bulk_attr_options, label=t("grid.bulk_attribute"))
                         .props("filled dense")
+                        .mark("bulk-field-attribute")
                         .classes("w-full")
                     )
                     bulk_fields["attribute"] = select
@@ -2160,6 +2163,7 @@ async def products_page(request: Request) -> None:
                         value = (
                             ui.input(label=t("grid.bulk_value"))
                             .props("filled dense")
+                            .mark("bulk-field-value")
                             .classes("w-full")
                         )
                         bulk_fields["value"] = value
@@ -2169,6 +2173,7 @@ async def products_page(request: Request) -> None:
                             bulk_status_options, value=None, label=t("grid.bulk_status_label")
                         )
                         .props("filled dense")
+                        .mark("bulk-field-status")
                         .classes("w-full")
                     )
                     bulk_fields["status"] = select
@@ -2929,8 +2934,8 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="bookmarks", on_click=views_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.views"))
-                    ui.button(icon="fact_check", on_click=bulk_dialog.open).props(
-                        "outline"
+                    ui.button(icon="fact_check", on_click=bulk_dialog.open).props("outline").mark(
+                        "bulk-open"
                     ).tooltip(t("grid.bulk_actions"))
                     ui.button(icon="find_replace", on_click=replace_dialog.open).props(
                         "outline"
