@@ -860,6 +860,61 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
 - **Endmessung des Umbaus:** `products_page` **2737 → 1399** Zeilen (**−1338**),
   verschachtelte Funktionen **106 → 53**, linearer Widget-Code 1092 → **876**;
   **668 pytest** (16 Seitentests), mypy **159** Dateien, Deslop-Scan **0** Befunde.
+- **Nachtrag 2026-09-18 — Layout-Regression aus Inkrement 3b/3a (gefunden im Browser, behoben):**
+  beim Einsetzen des Baum-Panels landete `host = ui.column(...)` **innerhalb** der
+  Filterzeile (`with ui.row(...)`) statt im Kartenrumpf — der Baum wurde damit ein Kind
+  der Zeile und stand **neben** dem Filterfeld statt darunter (der Nutzer sah es genau so).
+  Behoben durch Zurückholen auf die Kartenebene; das Handbuchbild `product-grid.png` ist neu
+  erzeugt (`uv run python scripts/docs_screenshots.py --only product-grid`). **Lehre:** die
+  Seitentests prüfen **Verhalten**, nicht **Layout** — die Seite baute im Harness einwandfrei,
+  die falsche Verschachtelung war dort unsichtbar. Verschiebungen von Widget-Konstruktionen
+  gehören deshalb einmal in den Browser (oder in ein Bild), sonst fällt so etwas erst dem
+  Nutzer auf.
+- **Nachtrag 2026-09-18 — Worker meldete eine Konfigurationslage im Intervall als Traceback:**
+  `serve_webhooks_dynamic` protokollierte alle 30 s denselben `logger.exception`; bei einem
+  abgelehnten Maschinen-Key (401/403) ist das eine **Konfiguration**, kein Absturz. Jetzt
+  beschreibt das reine `load_failure_message` die Ursache in einer Zeile (mit dem Hinweis auf
+  `LOG_INGEST_API_KEY`), und der Supervisor meldet sie **einmal pro Ursache** — bei Wechsel
+  und bei Erholung erneut. Drei Tests in `tests/test_webhooks.py`.
+- **Die Import-Seite war nicht das Problem — die Navigation war es (2026-09-18):** „die Seite
+  lässt sich nicht öffnen, nur ein connection lost“ war die Beschreibung von **zwei** Dingen.
+  `/import` selbst baut im Harness und in der laufenden Instanz einwandfrei (Firefox 153 und
+  Chromium, auch über den Drawer-Klick). Der zweite Teil war echt: der **Klick** auf einen
+  Drawer-Eintrag lief als Ereignis über den **WebSocket** (`ui.navigate.to` → Server →
+  `window.open(url, "_self")`), und in einem Tab mit totem Socket — ein von Zen/Firefox
+  **schlafen gelegter** Tab, ein neu gestarteter Dev-Server — **verpuffte er stumm**: nichts
+  passierte, und Sekunden später flackerte der von NiceGUI selbst ausgelöste Reload herbei
+  (`implicit handshake failed`, nachdem der Socket-Endpunkt die unbekannte Client-Id mit
+  **401** abgewiesen hatte) — der Reload zeigt dieselbe URL, also „ich bleibe auf der zuvor
+  geöffneten Seite“. **Messung im echten Firefox** (Sonde gegen die laufende Instanz): nach
+  `window.socket.disconnect()` (`connected === false`, Popup „Connection lost“ sichtbar)
+  ist der Klick auf einen Eintrag mit `ui.navigate.to` wirkungslos. **Behoben, indem die
+  Navigation den Socket gar nicht mehr braucht:** die Drawer-Einträge sind jetzt **echte
+  Anker** (`ui.element("a").props(f'href="{path}"')`, Marker `nav-link`) — die Navigation
+  macht der Browser selbst, dafür gibt es keinen Rückkanal und nichts, was ausfallen kann.
+  Dieselbe Sonde landet mit **toter wie mit lebender** Verbindung auf `/import` („Datenimport“)
+  und `/export`; das Handbuchbild `product-grid.png` ist nach dem Neuerzeugen **byte-identisch**
+  (der Anker sieht aus wie die Zeile). Der neue Seitentest
+  `test_shell_drawer_entries_are_plain_links` hält den `href`-Vertrag fest. **Zwei Lehren:**
+  (1) eine Navigation über einen Klick-Handler hängt an der Verbindung — für *Navigation*
+  ist ein Link die robustere Bauform, für alles andere bleibt das Ereignis richtig;
+  (2) NiceGUIs eigener Reload (`connect_error` → `"Implicit handshake failed"` →
+  `window.location.reload()`) deckt den Fall bereits ab — ein **zweiter** Reload-Handler auf
+  denselben Fehler (auf `connect_error` mit Status 401/403) war zwischenzeitlich eingebaut und
+  wieder entfernt: er hätte nur einen zweiten Auslöser für dasselbe Signal geschaffen, dafür
+  aber das Risiko einer Reload-Schleife. Geblieben ist `RECONNECT_TIMEOUT` (60 s statt 3 s,
+  `PIM_FRONTEND_RECONNECT_S`, an `ui.run(reconnect_timeout=…)`), damit ein **kurzer**
+  Netzaussetzer den Client nicht verliert und die Seite wiederverbindet statt sie neu zu laden;
+  ein **Server-Neustart** ist davon unberührt (ein neuer Prozess kennt keine Clients — dort ist
+  NiceGUIs Reload die Lösung). **Messung nach dem Fix:** **673 pytest**, mypy **159** Dateien,
+  Deslop-Scan **0** Befunde.
+- **Nachtrag 2026-09-18 — Kategorie-Bereich in eigener Zeile:** in der Kategorie-Ansicht
+  standen drei Auswahllisten und zwei Hilfe-Knöpfe in **derselben** Zeile wie die
+  Ansichtsschaltflächen (im Browser als „wild" gesehen). Sie liegen jetzt in einer eigenen
+  Zeile mit `flex-wrap` (statt `nowrap`), und die Zeile hängt als `category_row` in
+  `CATEGORY_WIDGETS` — der `ViewSwitch` blendet sie als Ganzes aus, statt eine leere Lücke
+  zu lassen. Ein Seitentest pinnt das (unsichtbar in der Struktur, sichtbar in der Kategorie,
+  unsichtbar zurück).
 - **Hier ist Schluss (bewusste Entscheidung):** die verbliebenen Blöcke sind klein und
   enthalten keine reinen Regeln mehr, die man festnageln könnte — `search_taxonomy` (29),
   `apply_tree_filter` (23), `reload_collection` (20), `change_dimension` (19) —, und sie

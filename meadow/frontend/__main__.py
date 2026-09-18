@@ -50,12 +50,16 @@ def main() -> None:
     register_static()
     auth.register()
     views.register_pages()
+    # `reconnect_timeout`: NiceGUI deletes a client 3 s after its socket dropped, so
+    # every open tab would be orphaned by a hiccup and force-reloaded by the browser
+    # ("implicit handshake failed"). A longer window lets the tab reconnect instead.
     ui.run(
         host=config.HOST,
         port=config.PORT,
         title="Meadow PIM",
         favicon=str(STATIC_DIR / "logos" / "favicon.ico"),
         storage_secret=config.STORAGE_SECRET,
+        reconnect_timeout=config.RECONNECT_TIMEOUT,
         reload=False,
     )
 

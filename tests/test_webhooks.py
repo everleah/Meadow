@@ -17,6 +17,7 @@ from meadow.worker.webhooks import (
     _deliver_coalesced,
     _DeliveryTracker,
     _handle_message,
+    load_failure_message,
     matches_filter,
 )
 
@@ -51,6 +52,40 @@ def event(**overrides: Any) -> dict[str, Any]:
 
 def test_matches_all_by_default() -> None:
     assert matches_filter(event(), config()) is True
+
+
+def test_a_rejected_credential_names_the_value_that_has_to_match() -> None:
+    """A standing configuration problem is explained, not dumped as a traceback."""
+    request = httpx.Request("GET", "http://127.0.0.1:8080/connectors")
+    error = httpx.HTTPStatusError(
+        "401", request=request, response=httpx.Response(401, request=request)
+    )
+
+    message = load_failure_message(error)
+
+    assert "401" in message
+    assert "LOG_INGEST_API_KEY" in message
+    assert "keeping the current config" in message
+
+
+def test_other_http_failures_report_the_status() -> None:
+    """A server error is a different story than a rejected key."""
+    request = httpx.Request("GET", "http://127.0.0.1:8080/connectors")
+    error = httpx.HTTPStatusError(
+        "500", request=request, response=httpx.Response(500, request=request)
+    )
+
+    assert load_failure_message(error) == (
+        "core answered HTTP 500 while loading webhook connectors"
+    )
+
+
+def test_transport_errors_keep_their_type_and_message() -> None:
+    """A broken connection is not a credential problem and says what happened."""
+    message = load_failure_message(httpx.ConnectError("connection refused"))
+
+    assert message.startswith("ConnectError: ")
+    assert "connection refused" in message
 
 
 def test_filter_event_types() -> None:

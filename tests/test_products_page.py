@@ -109,6 +109,22 @@ async def test_products_page_without_filter_only_loads_the_catalogs(
     assert {"list_channels", "list_object_types", "list_relation_definitions"} <= called
 
 
+async def test_shell_drawer_entries_are_plain_links(products_user: User) -> None:
+    """The drawer navigates with real anchors, not through the websocket.
+
+    `ui.navigate.to` only sends `window.open(…)` **after** the click reached the server,
+    so in a tab whose socket is gone (suspended Zen/Firefox tab, restarted dev server)
+    a click silently does nothing and the app looks broken. An `<a href>` navigates in
+    the browser itself; verified in Firefox with `window.socket.disconnect()` (live and
+    dead socket both land on the target page).
+    """
+    await products_user.open("/products")
+
+    links = products_user.find(marker="nav-link").elements
+    hrefs = {element.props.get("href") for element in links}
+    assert {"/", "/products", "/export", "/import", "/help"} <= hrefs
+
+
 async def test_products_page_url_filters_reach_the_core(products_user: User) -> None:
     """`?type=…&incomplete=1` is the bookmarkable shortcut the dashboard links to."""
     await products_user.open("/products?type=product&incomplete=1")
@@ -392,6 +408,25 @@ async def test_filter_bar_reset_returns_to_the_empty_grid(products_user: User) -
     search = next(iter(products_user.find(marker="filter-search").elements))
     assert isinstance(search, ui.input)
     assert search.value == ""
+
+
+async def test_the_category_controls_belong_to_the_category_view(products_user: User) -> None:
+    """Taxonomy/tree/dimension switchers appear with that view — and leave with it.
+
+    They sit in a row of their own (three selectors plus help buttons in one line was
+    unreadable); the row hides as a whole, so the structure view leaves no empty gap.
+    """
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    await products_user.open("/products")
+
+    await products_user.should_not_see(marker="taxonomy-select")
+
+    products_user.find(marker="view-category").click()
+    await products_user.should_see(marker="taxonomy-select")
+
+    products_user.find(marker="view-structure").click()
+    await products_user.should_not_see(marker="taxonomy-select")
 
 
 async def test_reference_dialog_opens_from_the_refs_cell(products_user: User) -> None:

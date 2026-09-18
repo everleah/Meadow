@@ -1803,6 +1803,15 @@ async def products_page(request: Request) -> None:
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
                     collection_btn.on_click(lambda: set_view("collection"))
+                # Line 2: the category controls. They get a **row of their own**: next
+                # to the view buttons three selectors (taxonomy, tree, dimension) plus
+                # their help buttons were one dense line — and the row hides as a whole
+                # outside the category view, so no empty gap is left behind.
+                with (
+                    ui.row()
+                    .classes("items-center gap-2 w-full")
+                    .style("flex-wrap: wrap") as category_row
+                ):
                     # The taxonomy (node type) shown in the category view: one at a
                     # time. Without the selector every taxonomy root — categories
                     # *and* the thousands of classification classes — would share
@@ -1815,6 +1824,7 @@ async def products_page(request: Request) -> None:
                         )
                         .props("outline dense")
                         .classes("shrink-0")
+                        .mark("taxonomy-select")
                     )
                     # The node type behind the tree is a concept, not a field: the
                     # explanation lives in the handbook (one place, not per screen).
@@ -1832,6 +1842,7 @@ async def products_page(request: Request) -> None:
                         )
                         .props("outline dense")
                         .classes("grow")
+                        .mark("tree-select")
                     )
 
                     def on_tree_select(value: str) -> None:
@@ -1847,13 +1858,14 @@ async def products_page(request: Request) -> None:
                         )
                         .props("outline dense")
                         .classes("shrink-0")
+                        .mark("dimension-select")
                     )
                     dimension_help = info_button("grid.category_dimension_hint", "product-grid")
                     dimension_select.on_value_change(lambda e: change_dimension(e.value))
                     # A dimension chosen via `?definition_id=` may be bound to a
                     # taxonomy: apply it to the switcher once the switcher exists.
                     apply_dimension_taxonomy(dimension["key"])
-                # Line 2: filter + action button (collapse for structure/category,
+                # Line 3: filter + action button (collapse for structure/category,
                 # collection reload for the flat Collections view).
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
@@ -1873,36 +1885,35 @@ async def products_page(request: Request) -> None:
                         .props("flat dense shrink-0")
                         .tooltip(t("grid.collection_reload"))
                     )
-                    host = (
-                        ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
-                    )
-                    tree_panel = TreePanel(
-                        host=host,
-                        locale=locale,
-                        state=lambda: TreeState(
-                            collections=collections,
-                            category_roots=category_roots,
-                            roots_have_more=bool(roots_has_more),
-                            uncategorized=uncategorized_node,
-                            selected_id=selected_tree["id"],
-                            structure_nodes=tree_nodes,
-                            hits=tree_override,
-                            hits_query=str(tree_query["value"]),
-                            path=tree_path,
-                        ),
-                        load_children=load_children,
-                        load_category_children=load_category_children,
-                        on_tree_select=handle_tree_select,
-                        on_category_select=handle_category_select,
-                        on_collection_select=handle_collection_select,
-                        select_category=select_category,
-                        show_in_tree=show_in_tree,
-                    )
+                host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
+                tree_panel = TreePanel(
+                    host=host,
+                    locale=locale,
+                    state=lambda: TreeState(
+                        collections=collections,
+                        category_roots=category_roots,
+                        roots_have_more=bool(roots_has_more),
+                        uncategorized=uncategorized_node,
+                        selected_id=selected_tree["id"],
+                        structure_nodes=tree_nodes,
+                        hits=tree_override,
+                        hits_query=str(tree_query["value"]),
+                        path=tree_path,
+                    ),
+                    load_children=load_children,
+                    load_category_children=load_category_children,
+                    on_tree_select=handle_tree_select,
+                    on_category_select=handle_category_select,
+                    on_collection_select=handle_collection_select,
+                    select_category=select_category,
+                    show_in_tree=show_in_tree,
+                )
                 # The panel controls belong to specific views (`view_switch.py`): the
                 # taxonomy/dimension switcher and the tree filter to the category view,
                 # collapse to any tree, reload to the flat collection list, create to the
                 # structure. The switch reads the two facts it needs lazily.
                 panel_widgets: dict[str, ui.element] = {
+                    "category_row": category_row,
                     "taxonomy_help": taxonomy_help,
                     "tree_select": tree_select,
                     "dimension_select": dimension_select,

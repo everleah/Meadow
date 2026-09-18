@@ -118,10 +118,21 @@ async def build_shell(*, active: str) -> None:
         for key, path, admin_only in NAV_ITEMS:
             if admin_only and not is_admin():
                 continue
-            classes = "items-center w-full px-4 py-2 cursor-pointer text-white"
+            classes = "px-4 py-2 text-white"
             if path == active:
                 classes += " bg-primary"
-            with ui.row().classes(classes).on("click", lambda p=path: ui.navigate.to(p)):
+            # A real anchor, not a click handler. `ui.navigate.to` travels through the
+            # websocket (the browser opens the URL only after the server told it to),
+            # so a click in a tab whose socket is gone (suspended/stale tab, restarted
+            # server) silently does nothing — and a click handler looks broken while a
+            # plain link keeps working. Native link = native navigation, no socket.
+            with (
+                ui.element("a")
+                .props(f'href="{path}"')
+                .classes(classes)
+                .style("display: block; width: 100%; text-decoration: none;")
+                .mark("nav-link")
+            ):
                 ui.label(t(key))
         ui.separator().props("color=white")
         ui_langs = await _active_ui_languages()

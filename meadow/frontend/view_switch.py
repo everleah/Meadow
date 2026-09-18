@@ -18,6 +18,7 @@ from nicegui import ui
 
 #: Widgets that only the **category** view shows (they steer that tree and nothing else).
 CATEGORY_WIDGETS = (
+    "category_row",
     "taxonomy_select",
     "taxonomy_help",
     "tree_select",

@@ -495,6 +495,25 @@ def _config_signature(configs: list[WebhookConfig]) -> tuple[str, ...]:
     )
 
 
+def load_failure_message(error: BaseException) -> str:
+    """The one-line cause of a connector reload failure.
+
+    A rejected credential is a **configuration** problem, not a crash: naming it once
+    (with the value that has to match on both sides) is more useful than the same
+    traceback every reload interval. Everything else is reported with its type and
+    message; the caller decides whether it repeats.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in (401, 403):
+            return (
+                f"core rejected the worker credentials (HTTP {status}); keeping the current "
+                "config — the core and the worker need the same LOG_INGEST_API_KEY"
+            )
+        return f"core answered HTTP {status} while loading webhook connectors"
+    return f"{type(error).__name__}: {error}"
+
+
 async def serve_webhooks_dynamic(
     nats_url: str,
     load_configs: Callable[[], Awaitable[list[WebhookConfig]]],
@@ -514,16 +533,30 @@ async def serve_webhooks_dynamic(
     (added, removed, or reconfigured), the consumer task is restarted with the
     new configuration, so no worker restart is required. The shared durable
     JetStream consumer guarantees at-least-once delivery across restarts.
+
+    A failing reload is reported **once per cause** (and once again when it changes or
+    recovers): a reload interval of 30 s would otherwise flood the log with the same
+    message, and a standing configuration problem is not news every half minute.
     """
     task: asyncio.Task | None = None
     current_sig: tuple[str, ...] = ()
+    last_problem = ""
     try:
         while True:
             try:
                 new_configs = await load_configs()
-            except Exception:  # noqa: BLE001 - the loader is injected; keep the current config
-                logger.exception("failed to load webhook connectors; keeping current config")
+            except Exception as error:  # noqa: BLE001 - the loader is injected; keep the current config
+                problem = load_failure_message(error)
+                if problem != last_problem:
+                    last_problem = problem
+                    if isinstance(error, httpx.HTTPStatusError):
+                        logger.error("%s", problem)
+                    else:
+                        logger.exception("failed to load webhook connectors: %s", problem)
             else:
+                if last_problem:
+                    logger.info("webhook connector reload works again (was: %s)", last_problem)
+                    last_problem = ""
                 new_sig = _config_signature(new_configs)
                 if new_sig != current_sig:
                     logger.info(
