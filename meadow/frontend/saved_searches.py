@@ -387,7 +387,7 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
     async def get_selected() -> dict | None:
         try:
             rows = await grid.get_selected_rows()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
             return None
         return rows[0] if rows else None
 
@@ -654,7 +654,7 @@ async def _build_collection_panel(client: CoreClient, token: str, collections: l
     async def get_selected() -> dict | None:
         try:
             rows = await grid.get_selected_rows()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
             return None
         return rows[0] if rows else None
 

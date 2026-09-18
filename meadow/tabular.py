@@ -61,7 +61,7 @@ def _sniff_delimiter(sample: str) -> str:
     """Best-effort delimiter detection (comma/semicolon/tab/pipe)."""
     try:
         return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-    except Exception:  # noqa: BLE001 - default to comma
+    except csv.Error:  # default to comma
         return ","
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json as _json
 from datetime import datetime
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -58,7 +59,7 @@ def _fmt_dt(value: str | None) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -70,7 +71,7 @@ def _duration(started: str | None, finished: str | None) -> str:
         start = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
         end = datetime.fromisoformat(str(finished).replace("Z", "+00:00"))
         return f"{(end - start).total_seconds():.1f}s"
-    except Exception:  # noqa: BLE001 - ignore malformed timestamps
+    except ValueError:  # ignore malformed timestamps
         return ""
 
 
@@ -78,7 +79,7 @@ def _json_pretty(value: object) -> str:
     """Pretty-prints a JSON value for the detail dialog."""
     try:
         return _json.dumps(value, indent=2, ensure_ascii=False)
-    except Exception:  # noqa: BLE001 - fall back to the raw string
+    except TypeError, ValueError:  # fall back to the raw string
         return str(value)
 
 
@@ -105,12 +106,12 @@ async def jobs_page() -> None:
 
     try:
         defs = await client.list_job_definitions(token, limit=500)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("jobs.load_failed")).classes("text-subtitle1 text-negative")
         return
     try:
         runs = await client.list_job_runs(token, limit=100, include_result=False)
-    except Exception:  # noqa: BLE001 - degrade to no runs
+    except CoreError, httpx.HTTPError:  # degrade to no runs
         runs = []
 
     with ui.column().classes("w-full p-6"):
@@ -240,7 +241,7 @@ async def jobs_page() -> None:
                         return {}
                     try:
                         value = _json.loads(text)
-                    except Exception as exc:  # noqa: BLE001 - show a friendly warning
+                    except ValueError as exc:  # show a friendly warning
                         ui.notify(f"{t('jobs.invalid_json')}: {exc}", color="warning")
                         return None
                     return value if isinstance(value, dict) else {}
@@ -301,7 +302,7 @@ async def jobs_page() -> None:
                                 parameters=params,
                                 enabled=enabled,
                             )
-                    except Exception as exc:  # noqa: BLE001 - show a friendly error
+                    except (CoreError, httpx.HTTPError) as exc:  # show a friendly error
                         ui.notify(f"{t('jobs.save_failed')}: {exc}", color="negative")
                         return
                     def_dialog.close()
@@ -312,7 +313,7 @@ async def jobs_page() -> None:
                     nonlocal defs
                     try:
                         defs = await client.list_job_definitions(token, limit=500)
-                    except Exception:  # noqa: BLE001 - keep the cached list on failure
+                    except CoreError, httpx.HTTPError:  # keep the cached list on failure
                         return
                     def_grid.run_grid_method("setGridOption", "rowData", _def_rows())
 
@@ -339,7 +340,7 @@ async def jobs_page() -> None:
                 async def run_selected() -> None:
                     try:
                         selected = await def_grid.get_selected_rows()
-                    except Exception:  # noqa: BLE001 - degrade to no selection
+                    except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                         selected = []
                     if not selected:
                         ui.notify(t("jobs.no_selection"), color="warning")
@@ -355,7 +356,7 @@ async def jobs_page() -> None:
                     """Deletes the selected job definition (with confirmation)."""
                     try:
                         selected = await def_grid.get_selected_rows()
-                    except Exception:  # noqa: BLE001 - degrade to no selection
+                    except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                         selected = []
                     if not selected:
                         ui.notify(t("jobs.no_selection"), color="warning")
@@ -509,7 +510,7 @@ async def jobs_page() -> None:
                                 fetched = await client.list_job_runs(token, ids=[run_id], limit=1)
                                 if fetched:
                                     detail = fetched[0]
-                            except Exception:  # noqa: BLE001 - fall back to the listing row
+                            except CoreError, httpx.HTTPError:  # fall back to the listing row
                                 detail = run
                         detail_title.set_text(t("jobs.detail_title"))
                         status = str(detail.get("status_raw") or detail.get("status") or "")
@@ -536,7 +537,7 @@ async def jobs_page() -> None:
                     nonlocal runs
                     try:
                         runs = await client.list_job_runs(token, limit=100, include_result=False)
-                    except Exception:  # noqa: BLE001 - keep the cached list on failure
+                    except CoreError, httpx.HTTPError:  # keep the cached list on failure
                         return
                     runs_grid.run_grid_method("setGridOption", "rowData", _run_rows())
 
@@ -550,7 +551,7 @@ async def jobs_page() -> None:
                     """Deletes the selected job run (with confirmation)."""
                     try:
                         selected = await runs_grid.get_selected_rows()
-                    except Exception:  # noqa: BLE001 - degrade to no selection
+                    except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                         selected = []
                     if not selected:
                         ui.notify(t("jobs.no_selection_run"), color="warning")

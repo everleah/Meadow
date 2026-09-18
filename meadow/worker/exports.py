@@ -488,7 +488,7 @@ async def _maybe_email(
         await send_with_attachment(
             config, recipients, subject, body, filename, content, content_type
         )
-    except Exception as exc:  # noqa: BLE001 - best-effort notification
+    except Exception as exc:  # noqa: BLE001 - an unreachable mail server must not fail the export
         result["email"] = {"sent": 0, "error": str(exc)}
         logger.warning("export e-mail delivery failed: %s", exc)
         return
@@ -510,7 +510,7 @@ async def _maybe_archive(
     key = f"exports/{stamp}-{filename}"
     try:
         result["archive"] = await archive_export(config, key, content, content_type, filename)
-    except Exception as exc:  # noqa: BLE001 - best-effort archive
+    except Exception as exc:  # noqa: BLE001 - unreachable object storage must not fail the export
         result["archive"] = {"error": str(exc)}
         logger.warning("export archive upload failed: %s", exc)
         return
@@ -863,7 +863,7 @@ async def _load_relation_names(
             name = str(definition.get("name") or "")
             if key and name:
                 names[key] = name
-    except Exception as exc:  # noqa: BLE001 - the seed convention is the fallback
+    except httpx.HTTPError as exc:  # the seed convention is the fallback
         logger.warning("relation definitions unavailable, using the seed convention: %s", exc)
     return names
 

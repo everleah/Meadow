@@ -424,7 +424,7 @@ async def request_approval(
     """
     try:
         await set_status(active, core_url, object_id, status)
-    except Exception as exc:  # noqa: BLE001 - the data change stays applied
+    except httpx.HTTPError as exc:  # the data change stays applied
         return {"approval_error": str(exc)}
     return {"approval": status}
 
@@ -451,7 +451,7 @@ async def _relation_role(
                 key = key.split(":", 1)[1] if ":" in key else key
                 if key:
                     roles[key] = str(definition.get("role") or ROLE_LINK)
-        except Exception as exc:  # noqa: BLE001 - roles only refine the routing
+        except httpx.HTTPError as exc:  # roles only refine the routing
             logger.warning("relation roles unavailable, using built-ins: %s", exc)
         cache[_ROLE_CACHE_KEY] = roles
     return roles.get(definition_id, ROLE_LINK)

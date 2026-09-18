@@ -99,6 +99,7 @@ def object_id(core_url: str, user: str, password: str, object_type: str) -> str:
 
 def shoot(args: argparse.Namespace, shots: list[Shot]) -> int:
     """Logs in once and writes every shot; returns the number of written files."""
+    from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 
     out_dir = Path(args.out)
@@ -120,7 +121,7 @@ def shoot(args: argparse.Namespace, shots: list[Shot]) -> int:
         page = context.new_page()
         try:
             page.goto(f"{args.base_url}/login", wait_until="domcontentloaded", timeout=30_000)
-        except Exception as error:  # noqa: BLE001 - the message is the point
+        except PlaywrightError as error:  # the message is the point
             raise SystemExit(
                 f"Frontend not reachable at {args.base_url} ({error}).\n"
                 "Start the stack first (scripts/run-dev.ps1, pim-core, python -m meadow.frontend)."

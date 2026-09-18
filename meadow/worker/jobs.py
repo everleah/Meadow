@@ -22,7 +22,7 @@ import httpx
 import nats
 import nats.js.api as jsapi
 import nats.js.errors as jserrors
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from meadow.worker.http import loopback_host
 from meadow.worker.log_sender import LogSender
@@ -142,7 +142,7 @@ class JobRunner:
         """Handles one job message: running -> dispatch -> success/failed."""
         try:
             message = JobMessage.model_validate_json(msg.data)
-        except Exception as exc:  # noqa: BLE001 - invalid payload is permanent
+        except ValidationError as exc:  # invalid payload is permanent
             logger.error("invalid job message: %s", exc)
             await msg.term()
             return

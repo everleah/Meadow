@@ -91,7 +91,7 @@ async def _test_webhook(
             headers=config.headers or None,
             timeout=config.timeout_s,
         )
-    except Exception as exc:  # noqa: BLE001 - transport failures are the result
+    except httpx.HTTPError as exc:  # transport failures are the result
         return {
             "ok": False,
             "connector_type": CONNECTOR_TYPE_WEBHOOK,
@@ -172,12 +172,12 @@ def synthetic_event(name: str) -> dict[str, Any]:
 
 
 def excerpt(response: httpx.Response, limit: int = EXCERPT_LIMIT) -> str:
-    """Short, whitespace-collapsed excerpt of a response body."""
-    try:
-        text = response.text
-    except Exception:  # noqa: BLE001 - a binary body has no text
-        return ""
-    collapsed = " ".join(text.split())
+    """Short, whitespace-collapsed excerpt of a response body.
+
+    A binary body has no text: httpx decodes with `errors="replace"`, so bytes
+    outside the declared encoding become U+FFFD instead of raising.
+    """
+    collapsed = " ".join(response.text.split())
     return collapsed[:limit]
 
 

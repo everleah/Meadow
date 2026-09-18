@@ -521,7 +521,7 @@ async def serve_webhooks_dynamic(
         while True:
             try:
                 new_configs = await load_configs()
-            except Exception:  # noqa: BLE001 - keep the current config on failure
+            except Exception:  # noqa: BLE001 - the loader is injected; keep the current config
                 logger.exception("failed to load webhook connectors; keeping current config")
             else:
                 new_sig = _config_signature(new_configs)

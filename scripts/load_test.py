@@ -156,7 +156,7 @@ async def run_workers(
                 )
             latency_ms = (time.perf_counter() - start) * 1000.0
             samples.append(Sample(endpoint, latency_ms, response.status_code))
-        except Exception as exc:  # noqa: BLE001 - a load test never dies on one request
+        except httpx.HTTPError as exc:  # a load test never dies on one request
             samples.append(Sample(endpoint, (time.perf_counter() - start) * 1000.0, 0))
             if isinstance(exc, httpx.HTTPStatusError):
                 raise

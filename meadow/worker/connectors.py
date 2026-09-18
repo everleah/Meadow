@@ -15,6 +15,7 @@ import os
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from meadow.worker.http import loopback_host
 from meadow.worker.webhooks import WebhookCoalesce, WebhookConfig, WebhookFilter
@@ -129,7 +130,7 @@ def _webhook_config_from_row(row: dict[str, Any]) -> WebhookConfig | None:
     }
     try:
         return WebhookConfig.model_validate(payload)
-    except Exception:  # noqa: BLE001 - malformed connector rows are skipped, not fatal
+    except ValidationError:  # malformed connector rows are skipped, not fatal
         logger.exception("invalid webhook connector %s; skipped", key)
         return None
 

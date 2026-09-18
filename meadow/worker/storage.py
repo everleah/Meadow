@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import boto3
 from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +72,13 @@ class S3Config:
 
 
 def _ensure_bucket_sync(config: S3Config, client) -> None:
-    """Creates the bucket when it does not exist yet (best-effort)."""
+    """Creates the bucket when the head request says it is missing or forbidden."""
     try:
         client.head_bucket(Bucket=config.bucket)
-    except Exception:  # noqa: BLE001 - create when missing/forbidden head
+    except ClientError:  # create when missing/forbidden head
         try:
             client.create_bucket(Bucket=config.bucket)
-        except Exception as exc:  # noqa: BLE001 - may already exist / race
+        except ClientError as exc:  # may already exist / race
             logger.debug("create_bucket %s: %s", config.bucket, exc)
 
 

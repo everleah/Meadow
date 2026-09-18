@@ -482,7 +482,7 @@ wirft `CoreError` – der Degradationspfad war also mit einem Fehler getestet, d
 nie erzeugt. Der Stub wirft jetzt `CoreError` und sagt das im Docstring. Zweite Bestätigung
 der Lehre „ein Test-Double macht die schmale Schnittstelle sichtbar“ (§4.9).
 
-**Stand:** 234 → **60** Ausweichungen; das **Frontend ist durch**. Erledigt: `grid.py` 33 → 3,
+**Stand:** 234 → **38** Ausweichungen; jede verbliebene Stelle ist eine **benannte breite Grenze**. Erledigt: `grid.py` 33 → 3,
 `form.py` 23 → 0, `attribute_definitions.py` 16 → 2, `api.py` 15 → **0**,
 `connectors.py` 12 → 2, `categories.py` 11 → 0, `saved_searches.py` 9 → 2, `rules.py` 9 → 1,
 `relation_definitions.py` 7 → 1, `export_page.py` 6 → 0, `object_types.py` 6 → 1,
@@ -490,8 +490,9 @@ der Lehre „ein Test-Double macht die schmale Schnittstelle sichtbar“ (§4.9)
 `channels.py`/`enum_sets.py`/`units.py` je 3 → 0 und die kleinen Seiten `views.py` 3 → 0,
 `export_profiles.py` 3 → 0, `import_page.py` 3 → 1, `config_page.py` 2 → 0,
 `languages.py` 2 → 0, `settings.py` 2 → 0, `layout.py`/`auth.py`/`password.py` je 1 → 0.
-Im Frontend bleiben nur die AG-Grid-Bridges (`grid.py` 3, `attribute_definitions.py` 2,
-`saved_searches.py` 2, `object_types.py`/`relation_definitions.py`/`users.py`/`rules.py` je 1),
+Im Frontend bleiben nur die AG-Grid-Bridges (`grid.py` 3, `jobs.py` 3,
+`attribute_definitions.py` 2, `saved_searches.py` 2,
+`connectors.py`/`object_types.py`/`relation_definitions.py`/`users.py`/`rules.py` je 1),
 die Bridge `lazy_tree.py` (1) und der Datei-Dekoder in `import_page.py` (1).
 
 **Zwei weitere Werkzeug-Lehren:** (a) **`contextlib.suppress(Exception)` meldet `BLE001`
@@ -501,12 +502,23 @@ unsichtbar und wurden erst über eine eigene Suche gefunden; sie sind jetzt
 waren einzeln nur über einen **eindeutigen Anker** erreichbar (die Request-Zeile darüber);
 sie rufen jetzt geschlossen `self._error_detail(response)` auf.
 
-**Nächste Schritte:** der **Worker** (40 Stellen: `jobs.py` 16, `webhooks.py` und
-`imports.py` je 5, `bulk.py` 4, `rules_service.py`/`exports.py` je 3, `connector_test.py` 2,
-`log_sender.py`/`business_rules.py` je 1) – dort bleibt die meiste Breite bewusst
-(Kategorie 3), zu sichten sind die Stellen, die nur einen Kern-Aufruf umschließen; dazu die
-drei übrigen Nicht-UI-Module (`storage.py` 2, `tabular.py` 1) und die zwei Skripte
-(`load_test.py`, `docs_screenshots.py`).
+**Die 38 verbliebenen Stellen (bewusst breit, jede mit benanntem Grund):** Worker **21** –
+`imports.py` 5 (Batch-/Release-/Objekt-Isolation), `webhooks.py` 5 (Zustellung ⇒ Retry/DLQ,
+injizierter Loader), `rules_service.py` 3 (jede Auswertung muss verneinen ⇒ fail-closed),
+`jobs.py` 2 (Handler-Ausnahme ⇒ Job fehlgeschlagen + Retry; DLQ), `exports.py` 2 (nicht
+erreichbarer Mailserver/Objektspeicher darf den Export nicht scheitern lassen), `bulk.py` 2
+(ein schlechtes Objekt bzw. eine Wurzel darf den Lauf nicht abbrechen), `log_sender.py` 1,
+`business_rules.py` 1; Frontend **17** – die AG-Grid-Bridges und zwei Sonderfälle
+(`lazy_tree.py`: injizierter Loader; `import_page.py`: CSV/XLSX/JSON-Dekoder).
+
+**Der Nebengewinn der letzten Runde war der größte:** die Verengung schrieb die
+*tatsächlichen* Fehlerklassen der Nachbarschaft fest – `csv.Error` (Sniffer), `ValueError`
+(JSON, `datetime.fromisoformat`; bei `json.dumps` zusätzlich `TypeError`), pydantic
+`ValidationError` (`model_validate*`), botocore `ClientError` (Bucket-HEAD/CREATE),
+`playwright.sync_api.Error`. Und sie fand einen **toten Schutz**: `connector_test.excerpt`
+fing breit ab, obwohl httpx mit `errors="replace"` dekodiert (gemessen:
+`b"\xff\x00\xfe\x01"` ⇒ Ersatzzeichen statt Ausnahme) – der Guard ist entfernt,
+`response.text` kann dort nicht werfen.
 
 ## 5. Workflow
 
@@ -603,9 +615,9 @@ so, was er behauptet.
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
    geprüft, nicht als Grenze geführt (§4.7).
-2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 60** Stellen
-   sind umgesetzt, das **Frontend ist fertig**. Offen: der Worker (40, überwiegend bewusst
-   breit), `storage.py`/`tabular.py` und die zwei Skripte.
+2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
+   verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
+   injizierter Loader, Datei-Dekoder).
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
    und Tests aufbauen, dann Seitenabschnitte überführen.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
