@@ -447,12 +447,10 @@ def build_model_document(
         "type_histogram": Counter(selection.features[code].etim_type for code in sorted(used)),
         "units_needed": {
             code: {
-                "symbol": selection.units.get(code).symbol if code in selection.units else "",
-                "en": (
-                    selection.units.get(code).labels.get("en", "")
-                    if code in selection.units
-                    else ""
-                ),
+                # One lookup for both fields: the export can use a code that the
+                # document does not define.
+                "symbol": unit.symbol if (unit := selection.units.get(code)) is not None else "",
+                "en": unit.labels.get("en", "") if unit is not None else "",
                 "used_by": sum(
                     1
                     for entry in selection.classes

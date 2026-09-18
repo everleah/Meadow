@@ -16,7 +16,8 @@ import logging
 import os
 import re
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from typing import Any, TypeGuard
 from urllib.parse import quote
 
 from fastapi import Request
@@ -505,7 +506,7 @@ def _as_bool(value: object) -> object:
     return str(value).strip().lower() in ("true", "1", "on", "yes")
 
 
-def _is_multilingual_map(value: object) -> bool:
+def _is_multilingual_map(value: object) -> TypeGuard[dict[str, Any]]:
     """Whether a value is a `{language: value}` map (rather than quantified)."""
     return isinstance(value, dict) and "unit" not in value
 
@@ -857,9 +858,11 @@ def build_patch(object_id: str, client_name: object, original: dict, locale: str
     scalar name is replaced.
     """
     original_name = (original.get("attributes") or {}).get("name")
+    new_name: object
     if isinstance(original_name, dict):
-        new_name = dict(original_name)
-        new_name[locale] = client_name
+        merged = dict(original_name)
+        merged[locale] = client_name
+        new_name = merged
     else:
         new_name = client_name
     return {"id": object_id, "attributes": {"name": new_name}}
@@ -2044,7 +2047,7 @@ async def products_page(request: Request) -> None:
 
         # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
         bulk_selected_ids: set[str] = set()
-        bulk_selected_label: ui.element | None = None
+        bulk_selected_label: ui.label | None = None
         bulk_scope: ui.select | None = None
         replace_scope: ui.select | None = None
         bulk_dialog: ui.dialog | None = None
@@ -2070,9 +2073,10 @@ async def products_page(request: Request) -> None:
                 oid = _row_id(row)
                 if oid:
                     bulk_selected_ids.add(oid)
-            bulk_selected_label.set_text(
-                t("grid.bulk_selected").format(count=len(bulk_selected_ids))
-            )
+            if bulk_selected_label is not None:
+                bulk_selected_label.set_text(
+                    t("grid.bulk_selected").format(count=len(bulk_selected_ids))
+                )
             if bulk_scope is not None:
                 bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
             if replace_scope is not None:
@@ -2096,7 +2100,7 @@ async def products_page(request: Request) -> None:
             "published": "published",
             "archived": "archived",
         }
-        bulk_fields: dict[str, ui.element] = {}
+        bulk_fields: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
 
         bulk_dialog = ui.dialog()
         with bulk_dialog, ui.card().classes("w-[44rem] max-w-[94vw] max-h-[85vh] overflow-y-auto"):
@@ -2365,8 +2369,8 @@ async def products_page(request: Request) -> None:
             elif op in ("add_relation", "remove_relation"):
                 relation = bulk_fields.get("relation")
                 parameters["definition_id"] = relation.value if relation else None
-                target = bulk_picked.get("relation_target")
-                parameters["target"] = target.get("id") if target else None
+                picked_target = bulk_picked.get("relation_target")
+                parameters["target"] = picked_target.get("id") if picked_target else None
             elif op in ("release_for_channel", "withdraw_from_channel"):
                 channel = bulk_fields.get("channel")
                 parameters["channel"] = channel.value if channel else None
@@ -2665,6 +2669,9 @@ async def products_page(request: Request) -> None:
             # opened in the tree).
             tree: LazyTree | None = None
             hit_list = bool(tree_override) and not tree_path
+            # The child loader follows the shown view; annotated once so every branch
+            # can assign its own loader.
+            loader: Callable[[str], Awaitable[list[dict]]]
             if view == "collection" and collections:
 
                 async def _no_children(_node_id: str) -> list[dict]:
@@ -2861,7 +2868,9 @@ async def products_page(request: Request) -> None:
                     style_view_button(structure_btn, view == "structure")
                     style_view_button(category_btn, view == "category")
                     style_view_button(collection_btn, view == "collection")
-                    taxonomy_select.set_visibility(view == "category")
+                    # Only built when the catalog carries taxonomies.
+                    if taxonomy_select is not None:
+                        taxonomy_select.set_visibility(view == "category")
                     taxonomy_help.set_visibility(view == "category")
                     tree_select.set_visibility(view == "category")
                     dimension_select.set_visibility(view == "category")
@@ -3425,7 +3434,9 @@ async def products_page(request: Request) -> None:
 
                 def ensure_where_form() -> search_form.SearchForm:
                     """Renders the condition form once (after the catalog loaded)."""
-                    if where_state["form"] is None:
+                    # The host exists as soon as the dialog is built, which happens
+                    # before this runs - the guard keeps the call order checkable.
+                    if where_state["form"] is None and where_host is not None:
                         where_host.clear()
                         with where_host:
                             where_state["form"] = search_form.SearchForm(

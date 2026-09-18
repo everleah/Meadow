@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 2 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 72 Dateien (§4.6/§4.7). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate bis Stufe 3 ausgebaut (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für 84 Dateien – **Frontend und `scripts/` vollständig** (§4.6–§4.8). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -329,11 +329,9 @@ source files`, ruff check/format sauber, 563 pytest, jeweils Exit 0.
 
 ### 4.7 Typ-Prüfung, Stufe 2: Frontend modulweise (2026-09-18)
 
-Stufe 1 deckte die Nicht-UI-Module ab; Stufe 2 holt das Frontend dazu. Der Scope
-steht weiterhin in `[tool.mypy] files` und umfasst jetzt **72 Dateien** (27 Nicht-UI
-+ 45 Frontend, grün, `Success: no issues found in 72 source files`). Offen sind nur
-noch die vier schwersten Seiten (`attribute_definitions.py` 30, `grid.py` 26,
-`settings.py` 17, `form.py` 11).
+Stufe 1 deckte die Nicht-UI-Module ab; Stufe 2 holt das Frontend dazu, in Schritten:
+zuerst **48**, dann **72 Dateien** (27 Nicht-UI + 45 Frontend, grün). Die vier
+schwersten Seiten und `scripts/` folgten in §4.8 (84 Dateien).
 
 **Eine Einstellung war dafür entscheidend:** `follow_imports = "silent"`. mypy
 analysiert importierte Module mit – ohne den Schalter hätte jede neu aufgenommene
@@ -386,8 +384,32 @@ Annotationen also verwendbar. **Damit ist die in §4.6 offene Frage entschieden:
 NiceGUIs Element-Typing wird geprüft**, und die Reparatur ist die konkrete
 Typisierung unserer eigenen Element-Variablen statt einer dokumentierten Grenze.
 
-**Nächste Stufen:** (a) die vier verbleibenden Frontend-Seiten (§9.1); (b) danach
-`tests/` und `scripts/`; (c) `check-untyped-defs = true` als Schärfung.
+**Weiter:** die vier schwersten Seiten und `scripts/` in §4.8.
+
+### 4.8 Typ-Prüfung, Stufe 3: Frontend vollständig, `scripts/` dazu (2026-09-18)
+
+Damit ist der Frontend-Scope **abgeschlossen**: alle 49 Module laufen fehlerfrei,
+dazu die acht Python-Dateien unter `scripts/` - zusammen **84 Dateien** im Gate
+(`Success: no issues found in 84 source files`), ohne eine einzige neue Ausweichung.
+Die 217 Frontend-Fehler aus §4.6/§4.7 sind auf **0** gefallen, `scripts/` hatte 9.
+
+**Was diese Runde zusätzlich gezeigt hat:**
+
+| Fund | Reparatur |
+| --- | --- |
+| `_is_multilingual_map(value: object) -> bool` filterte JSON-Werte, danach konnte mypy nicht auf die Map zugreifen | Prädikat als `TypeGuard[dict[str, Any]]` - die Verengung wirkt dann in jeder Verzweigung, ohne `cast` |
+| `common = {...}` und dann `**common` in einen getypten Kern-Aufruf | `common: dict[str, Any]`: die Nutzlast ist heterogen (Text, Flags, Listen, bereinigte Zusatzfelder), das ist ihr Vertrag |
+| Ein behobener Fehler deckte **sieben** weitere auf (`dict(object)` verdeckte `**common`) | nach jeder Reparatur prüfen, ob eine Folgeschicht sichtbar wird - mypy meldet nach einem Fehler in einem Ausdruck dessen Typ nicht mehr |
+| dieselbe Variable in einem Scope für zwei Dinge (`target` als Widget und als Treffer-Dict, `key` als Tupel und als Text, `node` als Schleifen- und Lookup-Variable) | getrennte Namen; mypy fand dabei einen **echten Artefakt-Fehler**: in `scripts/demo_data.py` stand die Initialisierung von `chunk_nodes`/`chunk_references` doppelt |
+| `_no_children(_node_id: …)` an eine Variable zugewiesen, die vorher `load_children(node_id: …)` hielt | die Variable beschreibt eine Funktion **mit Parameternamen** - sie einmal als `Callable[[str], Awaitable[list[dict]]]` annotieren |
+| `filter_select(on_change=…)`: ein Aufrufer deklariert den Parameter als `str`, ein anderer als `Any` | `Callable[[Any], object \| Awaitable[object]]` - die Gestalt des Werts entscheidet der Aufrufer (einfach oder mehrfach) |
+
+**Nebenbefund zur Sprache:** `except TypeError, ValueError:` ohne Klammern sieht wie ein
+Python-2-Fehler aus, ist aber seit **Python 3.14 (PEP 758)** gültig.
+
+**Nächste Stufen:** (a) `tests/` (gemessen: 121 Fehler in 20 Dateien; `tests/fixtures/`
+bleibt ausgenommen, `artifacts.py` ist absichtlich kaputt); (b) danach
+`check-untyped-defs = true` als Schärfung.
 
 ## 5. Workflow
 
@@ -480,11 +502,11 @@ so, was er behauptet.
 
 **Offen (empfohlene Reihenfolge):**
 
-1. **Typ-Prüfung als Gate:** Stufen 1 und 2 stehen (§4.6/§4.7) – 72 Dateien sind grün
-   und laufen in `scripts/check.*`. **Entschieden:** NiceGUIs Element-Typing wird
-   geprüft, nicht als Grenze geführt (§4.7). Offen: die vier schwersten Seiten
-   (`attribute_definitions.py` 30, `grid.py` 26, `settings.py` 17, `form.py` 11),
-   danach `tests/` und `scripts/`, dann `check-untyped-defs = true`.
+1. **Typ-Prüfung als Gate:** Stufen 1–3 stehen (§4.6–§4.8) – **84 Dateien** sind grün
+   (`meadow/frontend` vollständig und `scripts/`) und laufen in `scripts/check.*`.
+   **Entschieden:** NiceGUIs Element-Typing wird geprüft, nicht als Grenze geführt
+   (§4.7). Offen: `tests/` (121 Fehler in 20 Dateien) und danach
+   `check-untyped-defs = true`.
 2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
    Randfällen ändert sich dabei bewusst.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen

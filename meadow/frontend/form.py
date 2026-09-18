@@ -27,6 +27,7 @@ import asyncio
 import inspect
 import logging
 from functools import partial
+from typing import Any
 from urllib.parse import quote
 
 from nicegui import app, ui
@@ -134,8 +135,10 @@ def _num_or_none(value: object) -> float | None:
     """Coerces an edge-attribute value to a number (or None)."""
     if value is None or value == "":
         return None
-    try:
+    if isinstance(value, (int, float)):
         return float(value)
+    try:
+        return float(str(value))
     except TypeError, ValueError:
         return None
 
@@ -152,8 +155,10 @@ def _coerce(atype: str, raw: object) -> object:
     if raw in (None, ""):
         return None
     if atype == "number":
-        try:
+        if isinstance(raw, (int, float)):
             return float(raw)
+        try:
+            return float(str(raw))
         except TypeError, ValueError:
             return raw
     if atype == "boolean":
@@ -381,7 +386,7 @@ async def product_form(object_id: str) -> None:
         edited: dict[str, object] = {}
         for key, value in raw_attributes.items():
             edited[key] = dict(value) if isinstance(value, dict) else value
-        main_widgets: dict[str, ui.element] = {}
+        main_widgets: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
         ref_labels: dict[str, dict] = {}
         # Pinned attributes (per object type, per user): the sticky sidebar keeps
         # them visible while scrolling. `pin_buttons` holds the rendered toggles
@@ -564,8 +569,10 @@ async def product_form(object_id: str) -> None:
                         element.style("opacity: 0.65")
                 return
             if atype == "number":
-                field: ui.element = (
-                    ui.number(value=value).props("filled dense").on_value_change(on_change)
+                field: ui.input | ui.select | ui.number | ui.switch = (
+                    ui.number(value=_num_or_none(value))
+                    .props("filled dense")
+                    .on_value_change(on_change)
                 )
             elif atype == "boolean":
                 field = ui.switch(value=bool(value)).props("dense").on_value_change(on_change)
@@ -736,7 +743,7 @@ async def product_form(object_id: str) -> None:
                 ui.label(f"{_label(defn, attr_name, locale)} · {t('form.languages_edit')}").classes(
                     "text-subtitle1"
                 )
-                inputs: dict[str, ui.element] = {}
+                inputs: dict[str, ui.input] = {}
                 for lang in all_langs:
                     code = str(lang.get("code"))
                     own = _raw_value(edited, attr_name, code)
@@ -756,7 +763,7 @@ async def product_form(object_id: str) -> None:
 
         def apply_languages(
             attr_name: str,
-            inputs: dict[str, ui.element],
+            inputs: dict[str, ui.input],
             atype: str,
             multilingual: bool,
             dialog: ui.dialog,
@@ -772,7 +779,10 @@ async def product_form(object_id: str) -> None:
             # the pinned sidebar (the attribute may be rendered in both).
             widget = main_widgets.get(attr_name)
             if widget is not None:
-                widget.value = _raw_value(edited, attr_name, edit_lang)
+                # The widget follows the attribute type, so the raw value passes
+                # through as `Any` (the same dynamic pairing drives `_field`).
+                raw: Any = _raw_value(edited, attr_name, edit_lang)
+                widget.value = raw
             render_pinned.refresh()
             dialog.close()
 
@@ -906,13 +916,15 @@ async def product_form(object_id: str) -> None:
             attr_names = [str(a) for a in (defn.get("attributes") or [])]
             if not attr_names:
                 return
-            widget_by_name: dict[str, tuple[object, str]] = {}
+            widget_by_name: dict[str, tuple[ui.input | ui.select | ui.number | ui.switch, str]] = {}
             dialog = ui.dialog()
 
             async def do_save() -> None:
                 values: dict = {}
                 for name, (widget, atype) in widget_by_name.items():
-                    value = widget.value
+                    # The widget follows the attribute type; the value is coerced
+                    # per `atype` below.
+                    value: Any = widget.value
                     if atype == "number":
                         value = _num_or_none(value)
                     elif atype == "boolean":
@@ -931,6 +943,8 @@ async def product_form(object_id: str) -> None:
                         label = _label(adef, name, locale) if adef else name
                         atype = str(adef.get("type") or "text") if adef else "text"
                         current_val = (current or {}).get(name)
+                        # Declared before the chain: the widget follows `atype`.
+                        widget: ui.input | ui.select | ui.number | ui.switch
                         if atype == "number":
                             widget = (
                                 ui.number(label, value=_num_or_none(current_val))
@@ -1215,7 +1229,7 @@ async def product_form(object_id: str) -> None:
         cat_state: dict[str, dict] = {}
         cat_ref_ids: dict[str, dict[str, str]] = {
             definition_key(defn): {
-                str(ref.get("out")): ref.get("id")
+                str(ref.get("out")): str(ref.get("id"))
                 for ref in all_references
                 if ref.get("definition_id") == definition_key(defn)
                 and ref.get("out")

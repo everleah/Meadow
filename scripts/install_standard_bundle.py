@@ -415,8 +415,8 @@ def standard_mismatch(
         return None
     # An MCF document is recognised by its `sections` object (the envelope has no
     # `kind` field); the model document is the one carrying `object_types`.
-    declared = list(declared_sections or [])
-    declares_types = "object_types" in declared or "object_types" in (sections or {})
+    section_names = list(declared_sections or [])
+    declares_types = "object_types" in section_names or "object_types" in (sections or {})
     if declares_types:
         return (
             "the model document declares no `classification_standards` entry "

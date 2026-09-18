@@ -7,6 +7,8 @@ definitions. Writes go through ``POST``/``PATCH /attribute-definitions``.
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -331,7 +333,7 @@ async def attribute_definitions_page() -> None:
                 with ui.column().classes("w-full gap-1 max-h-80 overflow-y-auto"):
                     for col in group_col_defs:
                         ui.checkbox(
-                            col["headerName"], value=col["field"] in group_visible
+                            str(col["headerName"]), value=col["field"] in group_visible
                         ).on_value_change(
                             lambda e, field=col["field"]: _toggle_group_column(field, e.value)
                         )
@@ -378,7 +380,7 @@ async def attribute_definitions_page() -> None:
                             .props("filled dense")
                             .classes("w-32")
                         )
-                    group_store: dict[str, object] = {"label": {}}
+                    group_store: dict[str, Any] = {"label": {}}
                     group_label_field = multilingual_value_editor(
                         field_label=t("attr_def.groups_label"),
                         locale=locale,
@@ -407,6 +409,7 @@ async def attribute_definitions_page() -> None:
                 if isinstance(group, str):
                     group = next((g for g in groups if str(g.get("id")) == group), None)
                 editing = group is not None
+                group = group or {}  # the reads below only run while editing
                 group_title.set_text(
                     t("attr_def.groups_edit") if editing else t("attr_def.groups_create")
                 )
@@ -544,7 +547,7 @@ async def attribute_definitions_page() -> None:
                         .classes("w-40")
                         .tooltip(t("attr_def.type_change_hint"))
                     )
-                def_store: dict[str, object] = {"label": {}}
+                def_store: dict[str, Any] = {"label": {}}
                 label_field = multilingual_value_editor(
                     field_label=t("attr_def.col_label"),
                     locale=locale,
@@ -745,6 +748,7 @@ async def attribute_definitions_page() -> None:
 
         def _fill_form(definition: dict | None) -> None:
             editing = definition is not None
+            definition = definition or {}  # the reads below only run while editing
             title_label.set_text(t("attr_def.edit") if editing else t("attr_def.create"))
             delete_btn.visible = editing
             name_input.set_value(definition["name"] if editing else "")
@@ -946,7 +950,9 @@ async def attribute_definitions_page() -> None:
             else:
                 standard_codes.pop(standard, None)
 
-            common = {
+            # The payload is heterogeneous (strings, flags, lists, the cleaned
+            # extras), so it is passed as `Any` when unpacked into the core call.
+            common: dict[str, Any] = {
                 "label": label,
                 "group_ids": group_ids,
                 "applicable_types": applicable,

@@ -1150,15 +1150,13 @@ def _chunk_assignment(
             sizes[index] += len(members)
     chunk_nodes: list[dict[str, Node]] = [{} for _ in range(count)]
     chunk_references: list[list[Reference]] = [[] for _ in range(count)]
-    chunk_nodes: list[dict[str, Node]] = [{} for _ in range(count)]
-    chunk_references: list[list[Reference]] = [[] for _ in range(count)]
     for reference in references:
         index = home.get(reference.source, 0)
         chunk_references[index].append(reference)
         for key in (reference.source, reference.target):
-            node = nodes_by_key.get(key)
-            if node is not None:
-                chunk_nodes[index].setdefault(key, node)
+            target_node = nodes_by_key.get(key)
+            if target_node is not None:
+                chunk_nodes[index].setdefault(key, target_node)
     # Objects without any reference still have to be imported.
     for node in nodes:
         chunk_nodes[home[node.key]].setdefault(node.key, node)
@@ -2049,10 +2047,10 @@ def build_retry_document(
     if not failed_nodes and not failed_references:
         return None
     for reference in failed_references.values():
-        for key in (reference.source, reference.target):
-            node = nodes_by_key.get(key)
+        for link_key in (reference.source, reference.target):
+            node = nodes_by_key.get(link_key)
             if node is not None:
-                failed_nodes.setdefault(key, node)
+                failed_nodes.setdefault(link_key, node)
     return {
         "format_version": "1.0",
         "source": SOURCE,

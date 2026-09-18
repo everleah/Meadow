@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Any
 
 from nicegui import ui
 
@@ -43,7 +44,7 @@ def normalised(value: object, *, multiple: bool = False) -> str | list[str]:
 def filter_select(
     options: Mapping[str, str] | Sequence[str],
     *,
-    on_change: Callable[[object], object | Awaitable[object]],
+    on_change: Callable[[Any], object | Awaitable[object]],
     label: str = "",
     value: str | None = None,
     multiple: bool = False,

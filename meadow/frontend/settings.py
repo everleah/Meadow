@@ -8,6 +8,8 @@ their resolved value and source (`default` | `env` | `db`), allows editing each
 
 from __future__ import annotations
 
+from typing import Any
+
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -49,8 +51,9 @@ async def settings_page() -> None:
         ui.label(t("settings.title")).classes("text-h4")
         ui.label(t("settings.subtitle")).classes("text-subtitle1")
 
-        #: Each entry is a small card with an editor + Save/Reset.
-        editors: dict[str, ui.element] = {}
+        #: Each entry is a small card with an editor + Save/Reset. The editor type
+        #: follows the key (select, switch or number) - see `_make_card`.
+        editors: dict[str, ui.select | ui.switch | ui.number] = {}
         #: Settings grouped into coloured expansions (default closed).
         GROUPS = (
             (
@@ -77,6 +80,8 @@ async def settings_page() -> None:
         def _make_card(key: str, entry: dict) -> None:
             value = entry.get("value")
             source = entry.get("source") or "default"
+            # Declared before the chain: the editor type depends on the key.
+            editor: ui.select | ui.switch | ui.number
             with ui.card().classes("w-full mt-2"):
                 with ui.row().classes("w-full items-center gap-2"):
                     ui.label(t(f"settings.{key}")).classes("text-subtitle1 font-medium")
@@ -156,44 +161,51 @@ async def settings_page() -> None:
                 settings = await client.list_system_settings(token, include_source=True)
             except Exception:  # noqa: BLE001 - keep the cached list on failure
                 return
-            # Update editors to the resolved values.
+            # Update editors to the resolved values. The shape of the value is decided
+            # by the key, so it passes as `Any` - the union of editors has no single
+            # value type.
             for key, editor in editors.items():
                 entry = settings.get(key, {})
                 value = entry.get("value")
+                new_value: Any
                 if key == "log_persist_categories":
-                    editor.set_value(list(value) if isinstance(value, list) else [])
+                    new_value = list(value) if isinstance(value, list) else []
                 elif key == "rules_degrade":
-                    editor.set_value(bool(value) if isinstance(value, bool) else False)
+                    new_value = bool(value) if isinstance(value, bool) else False
                 elif key in (
                     "log_retention_days",
                     "log_rate_limit",
                     "rules_breaker_threshold",
                     "rules_timeout_ms",
                 ):
-                    editor.set_value(int(value) if isinstance(value, (int, float)) else 0)
+                    new_value = int(value) if isinstance(value, (int, float)) else 0
                 else:
-                    editor.set_value(value if isinstance(value, str) else "")
+                    new_value = value if isinstance(value, str) else ""
+                editor.set_value(new_value)
             # Re-render source badges by updating the cards' html is complex;
             # a full page reload gives the freshest source labels.
             ui.navigate.to("/system-settings")
 
         async def save_setting(key: str) -> None:
-            editor = editors.get(key)
+            # `_make_card` registers every key a button exists for, so the editor is
+            # present; the shape of the value is decided by the key.
+            editor = editors[key]
+            current: Any = editor.value
             try:
                 value: object
                 if key == "log_persist_categories":
-                    value = list(editor.value or [])
+                    value = list(current or [])
                 elif key == "rules_degrade":
-                    value = bool(editor.value)
+                    value = bool(current)
                 elif key in (
                     "log_retention_days",
                     "log_rate_limit",
                     "rules_breaker_threshold",
                     "rules_timeout_ms",
                 ):
-                    value = int(editor.value or 0)
+                    value = int(current or 0)
                 else:
-                    value = editor.value or "WARN"
+                    value = current or "WARN"
                 await client.put_setting(token, key, value)
             except CoreError as error:
                 ui.notify(f"{t('settings.save_failed')}: {error}", color="negative")
