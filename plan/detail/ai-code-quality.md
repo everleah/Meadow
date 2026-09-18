@@ -742,8 +742,26 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   zählen dort mit); **601 pytest**, mypy **138** Dateien, Deslop-Scan **0** Befunde.
   Größte verbliebene Einzelfunktionen: `refresh_references` 61, `fetch_filtered` 53,
   `save` 51.
-- **Nächstes:** `set_view` (25 Zeilen, schaltet viele Panels sichtbar/unsichtbar) und
-  `reset_filters`; danach die Feinarbeit, die §4.11 nennt.
+- **Inkrement 5 — Filterzustand und seine URL:** die zehn Filter des Grids und ihre
+  Abbildung auf die URL sind `meadow/frontend/grid_query.py` geworden: `read_filters`
+  (Saat des Seitendicts `active`), `has_filter` (entscheidet, ob ein Aufruf überhaupt
+  Objekte lädt), `filters_query` (Query-String) und `products_url` (bookmarkbare URL).
+  Die Seite hält nur noch einen dünnen `has_filter()`/`current_url()`-Wrapper; die
+  Inline-Literale (15 Zeilen Zustand, 28 Zeilen Query-Aufbau) sind weg, ein `nonlocal`
+  weniger. **Der Rundlauf ist getestet** (`tests/test_grid_query.py`, 15 Tests): laden aus
+  der URL → `products_url` → wieder laden ergibt denselben Zustand, inklusive Quoting von
+  Suchtext und Query-Dokument. Zwei Regeln sind damit festgeschrieben statt nur Konvention:
+  ein **einzelnes** `definition_id` (Dimension) ist **kein** Filter (es wählt nur, in
+  welcher Kategorisierung die Ansicht arbeitet), und geschrieben wird es **nur** zusammen
+  mit dem `category`/`uncategorized`-Filter, zu dem es gehört. Dazu ein Seitentest für die
+  Filterleiste: `?q=…&incomplete=1` lädt, der Reset-Knopf leert Suchfeld und Schalter (der
+  Typ-/Baumfilter bleibt bewusst), und ohne Filter wartet das Grid wieder auf eine Auswahl.
+- **Messung nach 5:** `products_page` **1969 → 1917** Zeilen (vom Ausgangswert **2737**
+  also **−820**), verschachtelte Funktionen 72 → **71**; **617 pytest** (15 davon rein für
+  den Filterzustand), mypy **139** Dateien, Deslop-Scan **0** Befunde.
+- **Nächstes:** `set_view` (25 Zeilen, schaltet ~10 Panels) und danach die größten
+  verbliebenen Einzelfunktionen (`refresh_references` 61 samt `search_references`/
+  `open_references`, `save` 51, `fetch_filtered` 53).
 
 ## 5. Workflow
 
@@ -843,17 +861,16 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–4
-   und 3b/3a umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` +
+3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–4,
+   3b/3a und 5 umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` +
    10 Tests), Wizard (`bulk_wizard.py` + 16 reine und 2 Seitentests), Bedingungsdialog
    (`where_dialog.py`), Spaltenansichten (`column_views.py`), Anlegen-Dialog
-   (`create_object.py` + 4 reine und 2 Seitentests), Navigationsbaum
-   (`tree_panel.py`, Zustand als eingefrorene `TreeState`-Momentaufnahme); die Seite ist bei
-   **1969 Zeilen** (**−768**, damit unter der 2000er-Marke), Messwerkzeug
-   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **13**
-   Tests) tragen jeden Schritt. **Offen:** `set_view`/`reset_filters` (Filterleiste) und die
-   Feinarbeit größerer Einzelfunktionen (`refresh_references` 61, `fetch_filtered` 53,
-   `save` 51).
+   (`create_object.py` + 4 reine und 2 Seitentests), Navigationsbaum (`tree_panel.py`,
+   Zustand als eingefrorene `TreeState`-Momentaufnahme), Filterzustand + URL
+   (`grid_query.py` + 15 Tests); die Seite ist bei **1917 Zeilen** (**−820**), Messwerkzeug
+   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **14**
+   Tests) tragen jeden Schritt. **Offen:** `set_view`, danach die größten Einzelfunktionen
+   (`refresh_references` 61, `fetch_filtered` 53, `save` 51).
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.

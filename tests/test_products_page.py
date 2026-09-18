@@ -373,6 +373,27 @@ async def test_column_view_saves_and_lists_the_visible_fields(products_user: Use
     await products_user.should_see("Brakes")
 
 
+async def test_filter_bar_reset_returns_to_the_empty_grid(products_user: User) -> None:
+    """The reset button empties the bar; without a filter the grid waits again.
+
+    `q` and "only incomplete" are cleared, the type/tree/category stay (they are not
+    part of the bar) — and the grid loads nothing by itself again, which the hint
+    proves.
+    """
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    await products_user.open("/products?q=Brake&incomplete=1")
+    await products_user.should_not_see(t("grid.select_tree_node", locale=EN))
+    assert "Brake" in _search_terms()
+
+    products_user.find(marker="filter-reset").click()
+    await products_user.should_see(t("grid.select_tree_node", locale=EN))
+
+    search = next(iter(products_user.find(marker="filter-search").elements))
+    assert isinstance(search, ui.input)
+    assert search.value == ""
+
+
 async def test_structure_view_renders_the_tree(products_user: User) -> None:
     """The structure view draws the lazy tree of the loaded root nodes."""
     _stub_objects(*OBJECTS)

@@ -23,7 +23,7 @@ import httpx
 from fastapi import Request
 from nicegui import app, ui
 
-from meadow.frontend import config, edit_queue, taxonomy_tree
+from meadow.frontend import config, edit_queue, grid_query, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.bulk_edit import (
@@ -891,39 +891,15 @@ async def products_page(request: Request) -> None:
     await build_shell(active="/products")
     locale = current_locale()
     # Active grid filters: seeded from the URL (bookmarkable, e.g. the dashboard
-    # shortcut `?incomplete=1&type=product`) and then driven by the filter bar.
-    active: dict = {
-        "incomplete": request.query_params.get("incomplete") == "1",
-        "type": request.query_params.get("type") or None,
-        "ancestor": request.query_params.get("ancestor") or None,
-        "category": request.query_params.get("category") or None,
-        # Category dimension: the category relation type used by the `category`
-        # and `uncategorized` filters (empty = built-in primary taxonomy).
-        "definition_id": request.query_params.get("definition_id") or None,
-        "collection": request.query_params.get("collection") or None,
-        "uncategorized": request.query_params.get("uncategorized") == "1",
-        # Channel-specific releases: `?released_for=<code>` = released for that channel.
-        "released_for": request.query_params.get("released_for") or None,
-        "q": request.query_params.get("q") or None,
-        # Advanced search (the condition dialog): a compact Query DSL document.
-        "where": request.query_params.get("where") or None,
-    }
+    # shortcut `?incomplete=1&type=product`) and then driven by the filter bar. The
+    # state and its URL form live in `meadow/frontend/grid_query.py`.
+    active: dict[str, Any] = grid_query.read_filters(request.query_params)
     # Monotonic reload counter: a slow reload never overwrites a newer result.
     load_seq = {"value": 0}
 
     def has_filter() -> bool:
         """Whether any filter is active (a plain visit deliberately loads nothing)."""
-        return bool(
-            active["incomplete"]
-            or active["type"]
-            or active["ancestor"]
-            or active["category"]
-            or active["collection"]
-            or active["uncategorized"]
-            or active["released_for"]
-            or active["q"]
-            or active["where"]
-        )
+        return grid_query.has_filter(active)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("nav.products")).classes("text-h4")
@@ -1285,37 +1261,9 @@ async def products_page(request: Request) -> None:
         all_rows = make_rows(objects)
         loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
 
-        def filters_query() -> str:
-            """Builds the query string of the active filters."""
-            parts = []
-            if active["incomplete"]:
-                parts.append("incomplete=1")
-            if active["type"]:
-                parts.append(f"type={quote(str(active['type']))}")
-            if active["ancestor"]:
-                parts.append(f"ancestor={quote(str(active['ancestor']))}")
-            if active["category"]:
-                parts.append(f"category={quote(str(active['category']))}")
-                if active["definition_id"] and active["definition_id"] != PRIMARY_CATEGORY_DEF:
-                    parts.append(f"definition_id={quote(str(active['definition_id']))}")
-            if active["collection"]:
-                parts.append(f"collection={quote(str(active['collection']))}")
-            if active["released_for"]:
-                parts.append(f"released_for={quote(str(active['released_for']))}")
-            if active["uncategorized"]:
-                parts.append("uncategorized=1")
-                if active["definition_id"] and active["definition_id"] != PRIMARY_CATEGORY_DEF:
-                    parts.append(f"definition_id={quote(str(active['definition_id']))}")
-            if active["q"]:
-                parts.append(f"q={quote(str(active['q']))}")
-            if active["where"]:
-                parts.append(f"where={quote(str(active['where']))}")
-            return "&".join(parts)
-
         def current_url() -> str:
             """The URL of the current grid view (filters included)."""
-            query = filters_query()
-            return f"/products{'?' + query if query else ''}"
+            return grid_query.products_url(active)
 
         def sync_url_query() -> None:
             """Keeps the URL in sync with the active filters (bookmarkable)."""
@@ -2809,7 +2757,7 @@ async def products_page(request: Request) -> None:
                         )
                     ui.button(icon="filter_alt_off", on_click=reset_filters).props(
                         "flat dense shrink-0"
-                    ).tooltip(t("grid.filter_reset"))
+                    ).mark("filter-reset").tooltip(t("grid.filter_reset"))
                     ui.button(icon="filter_alt", on_click=lambda: where_dialog.open()).props(
                         "flat dense shrink-0"
                     ).mark("advanced-open").tooltip(t("grid.advanced_open"))
