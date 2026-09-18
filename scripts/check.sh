@@ -39,6 +39,9 @@ run_python() {
     step "ruff format --check"
     uv run ruff format --check meadow tests scripts
 
+    step "mypy"
+    uv run mypy
+
     step "pytest"
     uv run pytest -q
 }

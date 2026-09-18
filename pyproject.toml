@@ -44,5 +44,32 @@ extend-exclude = ["tests/fixtures/deslop"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.mypy]
+# The type check is a gate and grows module by module: the scope lives here, so
+# `scripts/check.*`, the local run (`uv run mypy`) and the documentation cannot
+# drift apart. A module is added once it is clean; `meadow/frontend` follows
+# (plan/detail/ai-code-quality.md §4.6).
+files = [
+    "meadow/worker",
+    "meadow/rules",
+    "meadow/tabular.py",
+    "meadow/urls.py",
+    "meadow/mef.py",
+]
+python_version = "3.14"
+show_error_codes = true
+# An `# type: ignore` that no longer suppresses anything is a lie in the code -
+# this is the check that keeps the escapes honest.
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# Libraries without a `py.typed` marker or stubs: their internals are out of our
+# hands, so only our own use of them is checked. `markdown.*` joins when the
+# frontend scope does (§4.6), otherwise `warn_unused_configs` reports it here.
+module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

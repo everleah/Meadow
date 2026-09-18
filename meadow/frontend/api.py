@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from pydantic import BaseModel
@@ -28,7 +28,7 @@ _UNSET = object()
 
 
 @contextlib.asynccontextmanager
-async def _api_client() -> httpx.AsyncClient:
+async def _api_client() -> AsyncIterator[httpx.AsyncClient]:
     """Yields the shared ASGI HTTP client without closing it.
 
     Using an asynccontextmanager keeps the existing `async with ... as client:`

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5). Der Scan meldet **null** Befunde.
+- **Stand:** Stufe 1 umgesetzt, drei Reparaturpasses gefahren und die Typ-Prüfung als Gate gestartet (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4), acht Typ-Ausweichungen entfernt (§4.5), `mypy` als Gate für die Nicht-UI-Module (§4.6). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -286,6 +286,49 @@ also tatsächlich überflüssig. Stand: **33 → 25** Type-Ignores.
   dann Abschnitte der Seite in Funktionen mit explizitem Zustand überführen – Seite
   für Seite, jeweils mit den Frontend-Tests als Netz.
 
+### 4.6 Typ-Prüfung als Gate, Stufe 1 (2026-09-18)
+
+Anlass war §4.5: **33 `# type: ignore` in `meadow/`, die niemand prüft.** Statt sie
+einzeln zu durchforsten, prüft ein Gate sie jetzt – und macht die noch nötigen
+Ausweichungen rechenbar. Der Weg dahin war eine Messung:
+
+| Schritt | Fehler | Erkenntnis |
+| --- | --- | --- |
+| mypy (Standard) über `meadow/frontend` | 361 | 134 stammten aus **einer** falschen Annotation: `_api_client` ist ein async generator, war aber als `httpx.AsyncClient` deklariert – damit war jede `async with … as client`-Stelle untypisiert |
+| nach dieser Korrektur | 227 | ein Fix, ein Drittel der Fehler weg |
+| `meadow` gesamt, ohne die zwei NiceGUI-Codes | 89 | langer Rest, max. 9 je Datei |
+| Nicht-UI-Teil (`worker`, `rules`, geteilte Module) | 7 → **0** | 6 fehlende Fremd-Stubs, 1 echter Signaturfehler (`_emit_quantified` bekam `Mapping`, verlangte `dict`) |
+
+**Entscheidung:** Das Gate startet mit den Modulen, die heute sauber sind –
+`meadow/worker`, `meadow/rules`, `meadow/tabular.py`, `urls.py`, `mef.py` (27
+Dateien). Der Scope steht in `[tool.mypy] files` in `pyproject.toml`, damit
+`scripts/check.*`, der lokale Lauf (`uv run mypy`) und diese Dokumentation nicht
+auseinanderlaufen. Ein Modul kommt dazu, sobald es sauber ist; **die UI-Module folgen
+später**, weil dort 144 Fehler aus NiceGUIs dynamischer Element-API stammen
+(`.set_value` auf `Element`) und der Rest eine lange Kette ist.
+
+**Konfiguration (`[tool.mypy]`):** `warn_unused_ignores` ist der Kern – ein
+`# type: ignore`, das nichts mehr unterdrückt, ist eine Lüge im Code und fällt jetzt
+auf. Dazu `warn_redundant_casts`, `warn_unused_configs`, `show_error_codes` und
+`ignore_missing_imports` für Bibliotheken ohne Stubs (`openpyxl`, `lxml`, `boto3`,
+`botocore`; `markdown` folgt mit dem Frontend-Scope, sonst meldet mypy die Ausnahme
+selbst als ungenutzt).
+
+**Umgang mit Ausweichungen:** Nicht jede ist ein Codeproblem – manche Behandlung wäre
+teurer oder sinnlos (dynamische NiceGUI-Elemente, untypisierte Fremdmodule). Solche
+Ausweichungen **bleiben**, sollen aber den Fehlercode nennen
+(`# type: ignore[assignment]` statt eines nackten Ignores), damit sichtbar ist, was
+unterdrückt wird; `warn_unused_ignores` räumt sie wieder weg, sobald sie überflüssig
+werden. Im aktuellen Gate-Scope gibt es derzeit keine.
+
+**Nachweis:** `scripts/check.ps1 python` grün – `Success: no issues found in 27
+source files`, ruff check/format sauber, 563 pytest, jeweils Exit 0.
+
+**Nächste Stufen:** (a) `meadow/frontend` Modul für Modul, mit der offenen Frage, ob
+NiceGUIs Element-Typing im UI-Layer überhaupt geprüft werden soll oder als
+dokumentierte Grenze gilt; (b) danach `tests/` und `scripts/`; (c)
+`check-untyped-defs = true` als Schärfung.
+
 ## 5. Workflow
 
 Der Workflow wird bewusst gestartet und repariert nie von selbst:
@@ -377,9 +420,9 @@ so, was er behauptet.
 
 **Offen (empfohlene Reihenfolge):**
 
-1. **Typ-Prüfung als Gate:** `mypy` ist deklariert, aber nicht konfiguriert und nicht
-   in `scripts/check.*`. Ohne das bleiben die 25 Type-Ignores unüberprüft (§4.5).
-   Vorschlag: mit `meadow/frontend` beginnen und Modul für Modul vorgehen.
+1. **Typ-Prüfung als Gate:** Stufe 1 steht (§4.6) – die Nicht-UI-Module (27 Dateien)
+   sind grün und laufen in `scripts/check.*`. Offen: `meadow/frontend` Modul für Modul
+   in den Scope holen und entscheiden, wie weit NiceGUIs Element-Typing geprüft wird.
 2. **`# noqa: BLE001` verengen** (§4.5) – Entscheidung pro Stelle, das Verhalten in
    Randfällen ändert sich dabei bewusst.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen

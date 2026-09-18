@@ -108,7 +108,7 @@ async def _emit_quantified(
     client: httpx.AsyncClient,
     core_url: str,
     attributes: dict[str, Any],
-    unit_map: dict[str, tuple[str, str]],
+    unit_map: Mapping[str, tuple[str, str]],
 ) -> None:
     """Re-emits canonical-SI numbers as `{"value":…,"unit":…}` objects."""
     for name, (unit_id, display_unit_id) in unit_map.items():
