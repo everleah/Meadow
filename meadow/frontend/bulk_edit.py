@@ -12,6 +12,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+#: Review status of the workflow state machine (plan/detail/workflow-freigaben.md);
+#: the default target of the `send_for_approval` bulk operation.
+APPROVAL_STATUS = "in_review"
+
 #: Operations that change data and therefore offer the "send for approval
 #: afterwards" switch (`change_status`, `send_for_approval` and `delete` do not).
 APPROVAL_MODIFIER_OPS = (

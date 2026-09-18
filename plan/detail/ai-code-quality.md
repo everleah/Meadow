@@ -611,9 +611,37 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   verschachtelte Funktionen 106 → **105**; Tests 566 → **582**, mypy 133 → **135** Dateien.
   Der Zeilengewinn bleibt klein — der Wert liegt in der Testbarkeit: Payload-Vertrag,
   Scope-/Seitenfenster-Regel und Zeilen-Extraktion waren vorher unerreichbar eingeschlossen.
-- **Nächstes (2b):** die Dialoghülle des Wizards und `refresh_config` (150 Zeilen, der
-  größte Block) mit explizitem Zustand — die Entscheidungen dafür **und das Netz** liegen
-  jetzt vor.
+- **Inkrement 2b/1 — der Konfigurationsbereich des Wizards:** `refresh_config` (160 Zeilen,
+  der größte Block) und seine sechs verschachtelten Funktionen (`choose_target`,
+  `choose_relation_target`, `reset_relation_target`, die beiden `on_pick`) sind nach
+  `meadow/frontend/bulk_wizard.py` geworden: `BulkConfigArea` bekommt die Kataloge
+  (Attribute, Relationstypen, Kategorien, Kanäle) explizit, hält Felder und Picker-Wahl
+  selbst (`fields`/`picked`/`values()`) und rendert pro Operation in den übergebenen
+  Container. Die Seite ruft nur noch `bulk_config.render(config_area, op)` und
+  `build_parameters(op, bulk_config.values(), bulk_config.picked)`. **Messung:**
+  `products_page` **2677 → 2520** Zeilen, verschachtelte Funktionen 105 → **100**.
+- **Eine Falle, die die Gates sofort fingen:** die naheliegende Variable hieß `config` — und
+  verschattet damit das importierte Modul `meadow.frontend.config`, das dieselbe Funktion
+  oben für `config.CORE_URL` benutzt (`ruff` F823, `mypy` `used-before-def`). Sie heißt
+  jetzt `bulk_config`. Ohne die beiden Prüfer wäre das ein Laufzeit-`UnboundLocalError`
+  beim Seitenaufbau gewesen.
+- **Inkrement 2b/2 — Dialoghülle und Ablauf:** die Dialogkonstruktion (Scope-/Operations-
+  Select, Auswahl-Zähler, Konfigurationsbereich, Start/Schließen), `start_bulk`, `poll_bulk`
+  und der Berichtsdialog sind jetzt `BulkWizard.build()`/`set_selection()`/`start()`/`poll()`/
+  `show_report()` in `bulk_wizard.py`, samt `WizardCatalogs` (die Kataloge der Seite als
+  Datenklasse) und `PENDING_WARN_POLLS`. Die Seite behält **nur** den Öffner-Button
+  (`bulk_wizard.open`), die Weitergabe der Auswahl (`set_selection`) und die
+  Scope-Auflösung (`_current_page_ids`/`_scope_ids` — nur sie kennt das Grid-Fenster).
+  Der Find & Replace nutzt weiter dieselbe Fortschritts-/Berichtsmaschinerie, jetzt
+  über `bulk_wizard.poll(...)`.
+- **Messung nach 2b:** `products_page` **2520 → 2357** Zeilen (vom Ausgangswert **2737** also
+  −380), verschachtelte Funktionen 100 → **95**, linearer Widget-Code 1088 → **1035**.
+  Der Wizard liegt damit in drei Modulen: Vertrag `bulk_edit.py`, Bericht `bulk_report.py`,
+  UI `bulk_wizard.py` — mit 16 reinen Tests plus zwei Seitentests, die den Weg
+  Dialog → Operation → Wert → Start → Payload über den **verschobenen** Code prüfen.
+- **Nächstes (Inkrement 3):** Baum/Panel (`render_tree`, 100 Zeilen) und die Filterleiste
+  (`set_view`, `on_filter_change`, `where_*`) — beide lesen und schreiben viel
+  Seitenzustand, dafür ist das Netz vorher noch um diese beiden Wege zu erweitern.
 
 ## 5. Workflow
 

@@ -28,16 +28,14 @@ from meadow.frontend import config, edit_queue, search_form, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.bulk_edit import (
-    approval_supported,
-    build_parameters,
+    APPROVAL_STATUS,
     ids_from_rows,
-    missing_parameters,
     page_ids,
     row_id,
 )
-from meadow.frontend.bulk_report import read_bulk_report, replace_target_options
+from meadow.frontend.bulk_report import replace_target_options
+from meadow.frontend.bulk_wizard import BulkWizard, WizardCatalogs
 from meadow.frontend.display import (
-    DEFAULT_RELEASE_STATUS,
     channel_options,
     completeness_badge,
     dimension_options,
@@ -89,12 +87,6 @@ CELL_PADDING_PX = 26
 MIN_COLUMN_PX = 70
 # Session key holding the visible column set of the current user.
 COLUMNS_STORAGE_KEY = "grid_columns"
-# Number of 2-second polls a bulk run may stay `pending` before the progress
-# dialog warns that no worker seems to be connected (~20 s).
-PENDING_WARN_POLLS = 10
-# Review status of the workflow state machine (plan/detail/workflow-freigaben.md);
-# the default target of the `send_for_approval` bulk operation.
-APPROVAL_STATUS = "in_review"
 # Relation types with a dedicated bulk operation are hidden in the generic
 # relation selection: composition (`change_parent`) and every categorisation
 # (`add_category`/`remove_category`). Their usages (`role`) decide this, so
@@ -2046,10 +2038,7 @@ async def products_page(request: Request) -> None:
 
         # --- Bulk-Edit-Wizard (Phase 7) -------------------------------------
         bulk_selected_ids: set[str] = set()
-        bulk_selected_label: ui.label | None = None
-        bulk_scope: ui.select | None = None
         replace_scope: ui.select | None = None
-        bulk_dialog: ui.dialog | None = None
 
         async def handle_selection(event) -> None:
             try:
@@ -2061,18 +2050,9 @@ async def products_page(request: Request) -> None:
                 oid = row_id(row)
                 if oid:
                     bulk_selected_ids.add(oid)
-            if bulk_selected_label is not None:
-                bulk_selected_label.set_text(
-                    t("grid.bulk_selected").format(count=len(bulk_selected_ids))
-                )
-            if bulk_scope is not None:
-                bulk_scope.set_value("selected" if bulk_selected_ids else "filtered")
+            bulk_wizard.set_selection(bulk_selected_ids)
             if replace_scope is not None:
                 replace_scope.set_value("selected" if bulk_selected_ids else "filtered")
-
-        # Bulk-wizard target selection uses the shared object picker (search +
-        # structure tree); the chosen object per field key lives in `bulk_picked`.
-        bulk_picked: dict[str, dict] = {}
 
         # Target selection for the bulk wizard: the own attributes only — an
         # imported standard's vocabulary is not a maintenance target
@@ -2082,230 +2062,6 @@ async def products_page(request: Request) -> None:
             for definition in definitions
             if definition.get("name") and visible_in_picker(definition)
         }
-        bulk_status_options = {
-            "draft": "draft",
-            "in_review": "in_review",
-            "published": "published",
-            "archived": "archived",
-        }
-        bulk_fields: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
-
-        bulk_dialog = ui.dialog()
-        with bulk_dialog, ui.card().classes("w-[44rem] max-w-[94vw] max-h-[85vh] overflow-y-auto"):
-            ui.label(t("grid.bulk_title")).classes("text-h6")
-            ui.label(t("grid.bulk_selection")).classes("text-caption text-gray-600")
-            bulk_scope = (
-                ui.select(
-                    {
-                        "filtered": t("grid.bulk_scope_filtered").format(count=len(all_rows)),
-                        "page": t("grid.bulk_scope_page"),
-                        "selected": t("grid.bulk_scope_selected"),
-                    },
-                    value="selected" if bulk_selected_ids else "filtered",
-                )
-                .props("filled dense")
-                .mark("bulk-scope")
-                .classes("w-full")
-            )
-            bulk_selected_label = ui.label("").classes("text-caption")
-            ui.label(t("grid.bulk_operation")).classes("text-caption text-gray-600")
-
-            async def _on_bulk_op_change(_event) -> None:
-                """Re-renders the wizard config area, loading pickers lazily."""
-                await refresh_config()
-
-            bulk_op = (
-                ui.select(
-                    {
-                        "set_attribute": t("grid.op_set_attribute"),
-                        "clear_attribute": t("grid.op_clear_attribute"),
-                        "change_status": t("grid.op_change_status"),
-                        "send_for_approval": t("grid.op_send_for_approval"),
-                        "add_category": t("grid.op_add_category"),
-                        "remove_category": t("grid.op_remove_category"),
-                        "add_relation": t("grid.op_add_relation"),
-                        "remove_relation": t("grid.op_remove_relation"),
-                        "change_parent": t("grid.op_change_parent"),
-                        "release_for_channel": t("grid.op_release_for_channel"),
-                        "withdraw_from_channel": t("grid.op_withdraw_from_channel"),
-                        "delete": t("grid.op_delete"),
-                    },
-                    value=None,
-                    on_change=_on_bulk_op_change,
-                )
-                .props("filled dense")
-                .mark("bulk-op")
-                .classes("w-full")
-            )
-            ui.label(t("grid.bulk_areas_hint")).classes("text-caption text-gray-400")
-            config_area = ui.column().classes("w-full mt-2 gap-2")
-
-            with ui.row().classes("w-full justify-end mt-2 gap-2"):
-                ui.button(t("grid.close"), on_click=bulk_dialog.close).props("flat")
-                ui.button(
-                    t("grid.bulk_start"), icon="play_arrow", on_click=lambda: start_bulk()
-                ).props("flat").mark("bulk-start")
-
-        async def refresh_config(_event=None) -> None:  # noqa: ARG001 - handler arg unused
-            config_area.clear()
-            bulk_fields.clear()
-            op = bulk_op.value or ""
-            with config_area:
-                if op in ("set_attribute", "clear_attribute"):
-                    select = (
-                        ui.select(bulk_attr_options, label=t("grid.bulk_attribute"))
-                        .props("filled dense")
-                        .mark("bulk-field-attribute")
-                        .classes("w-full")
-                    )
-                    bulk_fields["attribute"] = select
-                    if op == "set_attribute":
-                        value = (
-                            ui.input(label=t("grid.bulk_value"))
-                            .props("filled dense")
-                            .mark("bulk-field-value")
-                            .classes("w-full")
-                        )
-                        bulk_fields["value"] = value
-                elif op == "change_status":
-                    select = (
-                        ui.select(
-                            bulk_status_options, value=None, label=t("grid.bulk_status_label")
-                        )
-                        .props("filled dense")
-                        .mark("bulk-field-status")
-                        .classes("w-full")
-                    )
-                    bulk_fields["status"] = select
-                elif op == "send_for_approval":
-                    select = (
-                        ui.select(
-                            bulk_status_options,
-                            value=APPROVAL_STATUS,
-                            label=t("grid.approval_status"),
-                        )
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    bulk_fields["approval_status"] = select
-                elif op in ("add_category", "remove_category", "change_parent"):
-                    field_key = "category" if op != "change_parent" else "parent"
-                    label_key = (
-                        "grid.bulk_parent" if op == "change_parent" else "grid.bulk_category"
-                    )
-                    target_types = taxonomy_types if op != "change_parent" else None
-
-                    async def choose_target(field_key=field_key, target_types=target_types):
-                        async def on_pick(hit: dict) -> None:
-                            bulk_picked[field_key] = hit
-                            label.set_text(f"{hit.get('label')} · {hit.get('type')}")
-
-                        await open_object_picker(
-                            client=client,
-                            token=token,
-                            locale=locale,
-                            title=t("form.pick_target"),
-                            on_pick=on_pick,
-                            target_types=target_types,
-                        )
-
-                    with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
-                        label = ui.label(t("grid.bulk_nothing_picked")).classes(
-                            "grow text-caption text-gray-500"
-                        )
-                        ui.button(icon="account_tree", on_click=choose_target).props(
-                            "outline dense"
-                        ).tooltip(t("grid.bulk_pick_label").format(label=t(label_key)))
-                    if op in ("add_category", "remove_category") and len(category_bulk_options) > 1:
-                        # Several categorisations may exist; the primary type is
-                        # preselected so the common case stays a single click.
-                        category_type = (
-                            ui.select(
-                                category_bulk_options,
-                                value=(
-                                    PRIMARY_CATEGORY_DEF
-                                    if PRIMARY_CATEGORY_DEF in category_bulk_options
-                                    else next(iter(category_bulk_options))
-                                ),
-                                label=t("grid.bulk_category_type"),
-                            )
-                            .props("filled dense")
-                            .classes("w-full")
-                        )
-                        bulk_fields["category_definition"] = category_type
-                        ui.label(t("grid.bulk_category_type_hint")).classes(
-                            "text-caption text-gray-400"
-                        )
-                elif op in ("add_relation", "remove_relation"):
-                    relation = (
-                        ui.select(
-                            bulk_relation_options,
-                            value=None,
-                            label=t("grid.bulk_relation"),
-                        )
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    bulk_fields["relation"] = relation
-
-                    async def choose_relation_target():
-                        """Picks the target object the relation points to."""
-                        definition = relation_def_by_key.get(str(relation.value or "")) or {}
-
-                        async def on_pick(hit: dict) -> None:
-                            bulk_picked["relation_target"] = hit
-                            relation_label.set_text(f"{hit.get('label')} · {hit.get('type')}")
-
-                        await open_object_picker(
-                            client=client,
-                            token=token,
-                            locale=locale,
-                            title=t("form.pick_target"),
-                            on_pick=on_pick,
-                            target_types=effective_target_types(definition),
-                        )
-
-                    def reset_relation_target() -> None:
-                        """A different relation type needs a new target object."""
-                        bulk_picked.pop("relation_target", None)
-                        relation_label.set_text(t("grid.bulk_nothing_picked"))
-
-                    relation.on_value_change(lambda _event: reset_relation_target())
-                    with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
-                        relation_label = ui.label(t("grid.bulk_nothing_picked")).classes(
-                            "grow text-caption text-gray-500"
-                        )
-                        ui.button(icon="account_tree", on_click=choose_relation_target).props(
-                            "outline dense"
-                        ).tooltip(
-                            t("grid.bulk_pick_label").format(label=t("grid.bulk_relation_target"))
-                        )
-                    ui.label(t("grid.bulk_relation_hint")).classes("text-caption text-gray-400")
-                elif op == "delete":
-                    ui.label(t("grid.bulk_delete_warn")).classes("text-caption text-negative")
-                elif op in ("release_for_channel", "withdraw_from_channel"):
-                    select = (
-                        ui.select(channel_labels, value=None, label=t("grid.bulk_channel"))
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    bulk_fields["channel"] = select
-                    if op == "release_for_channel":
-                        status_select = (
-                            ui.select(
-                                bulk_status_options,
-                                value=DEFAULT_RELEASE_STATUS,
-                                label=t("grid.release_status"),
-                            )
-                            .props("filled dense")
-                            .classes("w-full")
-                        )
-                        bulk_fields["release_status"] = status_select
-                    ui.label(t("grid.bulk_channel_hint")).classes("text-caption text-gray-400")
-                if approval_supported(op):
-                    bulk_fields["send_for_approval"] = ui.switch(
-                        t("grid.bulk_send_for_approval")
-                    ).tooltip(f"{t('grid.approval_status')}: {APPROVAL_STATUS}")
 
         async def _current_page_ids() -> list[str]:
             """Return the object ids of the rows on the current grid page."""
@@ -2326,109 +2082,25 @@ async def products_page(request: Request) -> None:
                 rows = all_rows
             return ids_from_rows(rows)
 
-        async def start_bulk() -> None:
-            op = bulk_op.value
-            if not op:
-                ui.notify(t("grid.bulk_op_required"), color="warning")
-                return
-            ids = await _scope_ids(str(bulk_scope.value or "filtered"))
-            if not ids:
-                ui.notify(t("grid.bulk_no_objects"), color="warning")
-                return
-            parameters = build_parameters(
-                op, {key: field.value for key, field in bulk_fields.items()}, bulk_picked
-            )
-            missing = missing_parameters(parameters)
-            if missing:
-                ui.notify(t("grid.bulk_config_incomplete"), color="warning")
-                return
-            try:
-                run = await client.post_bulk(token, op=op, object_ids=ids, parameters=parameters)
-            except CoreError, httpx.HTTPError:  # show a friendly message
-                ui.notify(t("grid.bulk_start_failed"), color="negative")
-                return
-            run_id = str(run.get("id") or "")
-            bulk_dialog.close()
-            ui.notify(t("grid.bulk_started"), color="positive")
-            if run_id:
-                await poll_bulk(run_id)
-
-        async def poll_bulk(run_id: str) -> None:
-            with ui.dialog() as progress_dialog, ui.card().classes("w-[32rem]"):
-                ui.label(t("grid.bulk_running")).classes("text-subtitle1")
-                status_label = ui.label("").classes("text-caption")
-                pending_hint = ui.label("").classes("text-caption text-warning")
-                ui.linear_progress(value=0.5).classes("w-full")
-                with ui.row().classes("w-full justify-end"):
-                    ui.button(t("grid.close"), on_click=progress_dialog.close).props("flat")
-            progress_dialog.open()
-            runs: list[dict] = []
-            pending_polls = 0
-            for _ in range(120):
-                try:
-                    runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-                except CoreError, httpx.HTTPError:  # retry on transient errors
-                    runs = []
-                if not runs:
-                    break
-                status = str(runs[0].get("status") or "")
-                status_label.set_text(t("grid.bulk_status").format(status=status))
-                # A queued job is only picked up by a running worker; without one
-                # it would stay `pending` forever, so say so explicitly.
-                pending_polls = pending_polls + 1 if status == "pending" else 0
-                if pending_polls == PENDING_WARN_POLLS:
-                    pending_hint.set_text(t("grid.bulk_pending_hint"))
-                if status in ("success", "failed"):
-                    break
-                await asyncio.sleep(2)
-            progress_dialog.close()
-            if runs and runs[0].get("status") == "success":
-                _show_bulk_report(runs[0].get("result") or {})
-            else:
-                ui.notify(t("grid.bulk_failed"), color="negative")
-
-        def _show_bulk_report(result: dict) -> None:
-            report = read_bulk_report(result)
-            with (
-                ui.dialog() as report_dialog,
-                ui.card().classes("w-[32rem] max-h-[60vh] overflow-y-auto"),
-            ):
-                ui.label(t("grid.bulk_report")).classes("text-subtitle1")
-                ui.label(
-                    t("grid.bulk_report_summary").format(
-                        processed=report.processed,
-                        succeeded=report.succeeded,
-                        failed=report.failed,
-                    )
-                ).classes("text-caption")
-                if report.is_replace:
-                    ui.label(
-                        t("grid.replace_summary").format(
-                            replacements=report.replacements, skipped=report.skipped
-                        )
-                    ).classes("text-caption")
-                if report.is_relation:
-                    ui.label(
-                        t("grid.relation_summary").format(
-                            relations=report.relations, skipped=report.skipped
-                        )
-                    ).classes("text-caption")
-                if report.errors:
-                    with ui.column().classes("w-full mt-2 gap-1"):
-                        for object_id, error in report.errors:
-                            ui.label(f"{object_id} · {error}").classes("text-caption text-negative")
-                if report.blocked:
-                    # The data change is saved; only the workflow transition was
-                    # rejected (e.g. by a `workflow_guard` rule).
-                    with ui.column().classes("w-full mt-2 gap-1"):
-                        ui.label(
-                            t("grid.bulk_approval_blocked").format(count=len(report.blocked))
-                        ).classes("text-caption text-warning")
-                        for object_id, error in report.blocked:
-                            ui.label(f"{object_id} · {error}").classes("text-caption text-warning")
-                with ui.row().classes("w-full justify-end mt-2"):
-                    ui.button(t("grid.close"), on_click=report_dialog.close).props("flat")
-            report_dialog.open()
+        # The bulk-edit wizard owns its dialog, its configuration area and its run
+        # (`meadow/frontend/bulk_wizard.py`); the page supplies the catalogs and
+        # how a scope resolves to object ids.
+        bulk_wizard = BulkWizard(
+            client=client,
+            token=token,
+            locale=locale,
+            catalogs=WizardCatalogs(
+                rows=all_rows,
+                attributes=bulk_attr_options,
+                relation_options=bulk_relation_options,
+                relation_definitions=relation_def_by_key,
+                category_options=category_bulk_options,
+                taxonomy_types=taxonomy_types,
+                channel_labels=channel_labels,
+            ),
+            resolve_ids=_scope_ids,
+        )
+        bulk_wizard.build()
 
         # --- Find & Replace (Phase 9) ---------------------------------------
         # Replaces a literal text in the string-valued attributes (`text`, `url`)
@@ -2509,7 +2181,7 @@ async def products_page(request: Request) -> None:
             replace_dialog.close()
             ui.notify(t("grid.bulk_started"), color="positive")
             if run_id:
-                await poll_bulk(run_id)
+                await bulk_wizard.poll(run_id)
 
         current_tree: dict = {"tree": None, "nodes": []}
         # Tracks the active left-panel view so the action button (collapse vs.
@@ -2934,7 +2606,7 @@ async def products_page(request: Request) -> None:
                     ui.button(icon="bookmarks", on_click=views_dialog.open).props(
                         "outline"
                     ).tooltip(t("grid.views"))
-                    ui.button(icon="fact_check", on_click=bulk_dialog.open).props("outline").mark(
+                    ui.button(icon="fact_check", on_click=bulk_wizard.open).props("outline").mark(
                         "bulk-open"
                     ).tooltip(t("grid.bulk_actions"))
                     ui.button(icon="find_replace", on_click=replace_dialog.open).props(
