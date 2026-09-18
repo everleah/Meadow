@@ -388,12 +388,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def change_attribute_type(
@@ -433,12 +428,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def enum_usage(
@@ -525,12 +515,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def delete_attribute_definition(
@@ -549,12 +534,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def get_object(
         self,
@@ -612,12 +592,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - response body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def create_object(
@@ -814,12 +789,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def update_attribute_group(
@@ -850,12 +820,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def delete_attribute_group(self, token: str, group_id: str) -> None:
@@ -866,12 +831,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def list_object_children(
         self,
@@ -1320,12 +1280,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def update_job_definition(
@@ -1356,12 +1311,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def run_job(self, token: str, definition_id: str) -> dict:
@@ -1372,12 +1322,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
     async def delete_job_definition(self, token: str, definition_id: str) -> None:
@@ -1388,12 +1333,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def delete_job_run(self, token: str, run_id: str) -> None:
         """Deletes a single job run (``DELETE /jobs/runs/{run_id}``, admin only)."""
@@ -1403,12 +1343,7 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                detail = None
-                try:
-                    detail = response.json().get("error")
-                except Exception:  # noqa: BLE001 - body may not be JSON
-                    detail = None
-                raise CoreError(detail or response.text, status=response.status_code)
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     async def list_definition_runs(
         self,

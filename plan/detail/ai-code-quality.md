@@ -482,22 +482,31 @@ wirft `CoreError` – der Degradationspfad war also mit einem Fehler getestet, d
 nie erzeugt. Der Stub wirft jetzt `CoreError` und sagt das im Docstring. Zweite Bestätigung
 der Lehre „ein Test-Double macht die schmale Schnittstelle sichtbar“ (§4.9).
 
-**Stand:** 234 → **90** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
-`attribute_definitions.py` 16 → 2, `api.py` 15 → 13, `connectors.py` 12 → 1,
-`categories.py` 11 → 0, `saved_searches.py` 9 → 2, `rules.py` 9 → 1,
+**Stand:** 234 → **60** Ausweichungen; das **Frontend ist durch**. Erledigt: `grid.py` 33 → 3,
+`form.py` 23 → 0, `attribute_definitions.py` 16 → 2, `api.py` 15 → **0**,
+`connectors.py` 12 → 2, `categories.py` 11 → 0, `saved_searches.py` 9 → 2, `rules.py` 9 → 1,
 `relation_definitions.py` 7 → 1, `export_page.py` 6 → 0, `object_types.py` 6 → 1,
 `users.py` 6 → 1, `logs.py` und `object_picker.py` je 4 → 0,
-`channels.py`/`enum_sets.py`/`units.py` je 3 → 0. Die verbliebenen sind die AG-Grid-Bridges
-(Kategorie 2) und in `api.py` die 13 identischen Blöcke.
+`channels.py`/`enum_sets.py`/`units.py` je 3 → 0 und die kleinen Seiten `views.py` 3 → 0,
+`export_profiles.py` 3 → 0, `import_page.py` 3 → 1, `config_page.py` 2 → 0,
+`languages.py` 2 → 0, `settings.py` 2 → 0, `layout.py`/`auth.py`/`password.py` je 1 → 0.
+Im Frontend bleiben nur die AG-Grid-Bridges (`grid.py` 3, `attribute_definitions.py` 2,
+`saved_searches.py` 2, `object_types.py`/`relation_definitions.py`/`users.py`/`rules.py` je 1),
+die Bridge `lazy_tree.py` (1) und der Datei-Dekoder in `import_page.py` (1).
 
-**Nächste Schritte:** der **Worker** (30 Stellen: `jobs.py` 16, `imports.py` 5, `bulk.py` 4,
-`rules_service.py`/`exports.py` je 3, `connector_test.py` 2, `log_sender.py`/
-`business_rules.py` je 1) – dort bleibt die meiste Breite bewusst (Kategorie 3), zu sichten
-sind die Stellen, die nur einen Kern-Aufruf umschließen; danach die kleinen Seiten
-(`webhooks.py` 5, `import_page.py`/`views.py`/`export_profiles.py` je 3, `config_page.py`/
-`languages.py`/`settings.py` je 2, `layout.py`/`auth.py`/`password.py`/`lazy_tree.py` je 1)
-und die 13 `api.py`-Blöcke entdoppeln (identischer Text ⇒ zeilenweise statt per
-Einzel-Ersetzung).
+**Zwei weitere Werkzeug-Lehren:** (a) **`contextlib.suppress(Exception)` meldet `BLE001`
+nicht** – zwei Stellen (`object_types.py`, `relation_definitions.py`) waren in der Zählung
+unsichtbar und wurden erst über eine eigene Suche gefunden; sie sind jetzt
+`contextlib.suppress(CoreError, httpx.HTTPError)`. (b) Die 13 identischen Blöcke in `api.py`
+waren einzeln nur über einen **eindeutigen Anker** erreichbar (die Request-Zeile darüber);
+sie rufen jetzt geschlossen `self._error_detail(response)` auf.
+
+**Nächste Schritte:** der **Worker** (40 Stellen: `jobs.py` 16, `webhooks.py` und
+`imports.py` je 5, `bulk.py` 4, `rules_service.py`/`exports.py` je 3, `connector_test.py` 2,
+`log_sender.py`/`business_rules.py` je 1) – dort bleibt die meiste Breite bewusst
+(Kategorie 3), zu sichten sind die Stellen, die nur einen Kern-Aufruf umschließen; dazu die
+drei übrigen Nicht-UI-Module (`storage.py` 2, `tabular.py` 1) und die zwei Skripte
+(`load_test.py`, `docs_screenshots.py`).
 
 ## 5. Workflow
 
@@ -594,9 +603,9 @@ so, was er behauptet.
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
    geprüft, nicht als Grenze geführt (§4.7).
-2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 90** Stellen
-   sind umgesetzt. Offen: der Worker (30, überwiegend bewusst breit), die 13 identischen
-   Blöcke in `api.py` und die kleinen Seiten nach Kategorie „Kern-Aufruf“.
+2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 60** Stellen
+   sind umgesetzt, das **Frontend ist fertig**. Offen: der Worker (40, überwiegend bewusst
+   breit), `storage.py`/`tabular.py` und die zwei Skripte.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
    und Tests aufbauen, dann Seitenabschnitte überführen.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash

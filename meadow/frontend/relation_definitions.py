@@ -411,7 +411,7 @@ async def relation_definitions_page() -> None:
 
         async def reload() -> None:
             nonlocal defs, type_options, attr_options
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(CoreError, httpx.HTTPError):  # keep the cached list on failure
                 defs = await client.list_relation_definitions(token)
             try:
                 object_types = await client.list_object_types(token, limit=1000)
@@ -435,7 +435,7 @@ async def relation_definitions_page() -> None:
         async def get_selected() -> dict | None:
             try:
                 rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 return None
             return rows[0] if rows else None
 

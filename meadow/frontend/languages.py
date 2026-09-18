@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import config
@@ -39,7 +40,7 @@ async def languages_page() -> None:
 
         try:
             langs = await client.list_languages(token)
-        except Exception:  # noqa: BLE001 - show a friendly message on failure
+        except CoreError, httpx.HTTPError:  # show a friendly message on failure
             ui.label(t("lang_admin.load_failed")).classes("text-subtitle1 text-negative")
             return
 
@@ -457,7 +458,7 @@ async def languages_page() -> None:
             nonlocal langs
             try:
                 langs = await client.list_languages(token)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 langs = langs
             if selected["code"]:
                 selected["lang"] = next(

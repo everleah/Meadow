@@ -374,7 +374,7 @@ async def object_types_page() -> None:
 
         async def reload() -> None:
             nonlocal types, text_attrs
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(CoreError, httpx.HTTPError):  # keep the cached list on failure
                 types = await client.list_object_types(token, limit=1000)
             try:
                 definitions = await client.list_attribute_vocabulary(token)

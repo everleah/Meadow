@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -37,7 +38,7 @@ def _fmt_dt(value: object) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -80,7 +81,7 @@ async def export_profiles_page() -> None:
 
     try:
         profiles = await client.list_export_profiles(token)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("export_profiles.load_failed")).classes("text-subtitle1 text-negative")
         return
     profiles = sorted(profiles, key=lambda row: str(row.get("name") or "").lower())
@@ -189,7 +190,7 @@ async def export_profiles_page() -> None:
             nonlocal profiles
             try:
                 profiles = await client.list_export_profiles(token)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             profiles = sorted(profiles, key=lambda row: str(row.get("name") or "").lower())
             grid.run_grid_method("setGridOption", "rowData", _rows())

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 from nicegui import app, ui
 
 from meadow import mef, tabular
@@ -68,7 +69,7 @@ async def _wait_run(client: CoreClient, token: str, run_id: str) -> dict:
     for _ in range(120):
         try:
             runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-        except Exception:  # noqa: BLE001 - keep polling on a transient error
+        except CoreError, httpx.HTTPError:  # keep polling on a transient error
             runs = []
         if runs:
             run = runs[0]
@@ -91,7 +92,7 @@ async def import_page() -> None:
     async def _safe(coro) -> list[dict]:
         try:
             return await coro
-        except Exception:  # noqa: BLE001 - degrade so the page still opens
+        except CoreError, httpx.HTTPError:  # degrade so the page still opens
             return []
 
     object_types = await _safe(client.list_object_types(token))
@@ -304,7 +305,7 @@ async def import_page() -> None:
                         state["document"] = {}
                         state["summary"] = {}
                         _set_key_options(key_names)
-                except Exception as exc:  # noqa: BLE001 - unreadable file
+                except Exception as exc:  # noqa: BLE001 - the CSV/XLSX/JSON decoders raise their own types
                     ui.notify(t("import.parse_failed").format(err=exc), type="negative")
                     return
                 state["filename"] = name

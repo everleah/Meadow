@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -43,7 +44,7 @@ async def settings_page() -> None:
 
     try:
         settings = await client.list_system_settings(token, include_source=True)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("settings.load_failed")).classes("text-subtitle1 text-negative")
         return
 
@@ -159,7 +160,7 @@ async def settings_page() -> None:
             nonlocal settings
             try:
                 settings = await client.list_system_settings(token, include_source=True)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             # Update editors to the resolved values. The shape of the value is decided
             # by the key, so it passes as `Any` - the union of editors has no single

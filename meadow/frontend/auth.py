@@ -172,7 +172,7 @@ def current_page_path() -> str:
     """
     try:
         path = ui.context.client.page.path
-    except Exception:  # noqa: BLE001 - no page context available
+    except RuntimeError:  # no page context available
         return "/"
     return path if path and path != "/login" else "/"
 

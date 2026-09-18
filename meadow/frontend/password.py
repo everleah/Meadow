@@ -9,6 +9,7 @@ vouches for the password (e.g. integration accounts) or the user changed it.
 
 from __future__ import annotations
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend.api import CoreClient, CoreError
@@ -51,10 +52,7 @@ def open_change_password_dialog() -> None:
             response = await CoreClient(CORE_URL).change_password(
                 token, current_password=current, new_password=new
             )
-        except CoreError as error:
-            ui.notify(t("password.failed").format(err=error), color="negative")
-            return
-        except Exception as error:  # noqa: BLE001 - surface transport problems too
+        except (CoreError, httpx.HTTPError) as error:
             ui.notify(t("password.failed").format(err=error), color="negative")
             return
         finally:

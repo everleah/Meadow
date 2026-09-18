@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import (
@@ -30,7 +31,7 @@ from meadow.frontend import (
     units,  # noqa: F401  (registers the /units page)
     users,  # noqa: F401  (registers the /users page)
 )
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.grid import status_badge
 from meadow.frontend.help_page import chapter_button
 from meadow.frontend.i18n import current_locale, t
@@ -79,15 +80,15 @@ async def home() -> None:
 
         try:
             stats = await client.get_object_stats(token, locale=locale)
-        except Exception:  # noqa: BLE001 - degrade to an empty overview
+        except CoreError, httpx.HTTPError:  # degrade to an empty overview
             stats = {}
         try:
             logs = await client.list_system_logs(token, limit=10)
-        except Exception:  # noqa: BLE001 - degrade
+        except CoreError, httpx.HTTPError:  # degrade
             logs = []
         try:
             job_runs = await client.list_job_runs(token, limit=5, include_result=False)
-        except Exception:  # noqa: BLE001 - degrade
+        except CoreError, httpx.HTTPError:  # degrade
             job_runs = []
 
         counts_by_type: dict[str, int] = stats.get("by_type") or {}

@@ -103,7 +103,7 @@ class LazyTree(Tree):
         try:
             node_key = e.args["nodeKey"]
             children = await self._load_children(node_key)
-        except Exception:  # noqa: BLE001 - degrade to an empty expansion on error
+        except Exception:  # noqa: BLE001 - dispatches into an injected loader, no narrow surface
             node_key = e.args.get("nodeKey") if isinstance(e.args, dict) else None
             children = []
         if not node_key:

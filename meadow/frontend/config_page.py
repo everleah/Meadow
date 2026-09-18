@@ -16,6 +16,7 @@ import json
 import os
 import tempfile
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -98,10 +99,7 @@ async def config_page() -> None:
                         sections=selected or None,
                         include_system=bool(include_system.value),
                     )
-                except CoreError as exc:
-                    ui.notify(t("config.export_failed").format(err=exc), type="negative")
-                    return
-                except Exception as exc:  # noqa: BLE001 - degrade to notify
+                except (CoreError, httpx.HTTPError) as exc:
                     ui.notify(t("config.export_failed").format(err=exc), type="negative")
                     return
                 filename = "meadow-config.json"
@@ -163,10 +161,7 @@ async def config_page() -> None:
                     return
                 try:
                     report = await client.import_config(token, document, mode=mode)
-                except CoreError as exc:
-                    ui.notify(t("config.import_failed").format(err=exc), type="negative")
-                    return
-                except Exception as exc:  # noqa: BLE001 - degrade to notify
+                except (CoreError, httpx.HTTPError) as exc:
                     ui.notify(t("config.import_failed").format(err=exc), type="negative")
                     return
 

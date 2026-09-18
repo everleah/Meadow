@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import config
-from meadow.frontend.api import CoreClient
+from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.auth import is_admin, logout
 from meadow.frontend.i18n import current_locale, set_locale, supported_locales, t
 from meadow.frontend.password import open_change_password_dialog, refresh_banner
@@ -66,7 +67,7 @@ async def _active_ui_languages() -> list[str]:
     token = app.storage.user.get("token", "")
     try:
         langs = await CoreClient(config.CORE_URL).list_languages(token)
-    except Exception:  # noqa: BLE001 - fall back to the fixed set
+    except CoreError, httpx.HTTPError:  # fall back to the fixed set
         return list(supported_locales())
     active_ui = [
         str(lang.get("code")) for lang in langs if lang.get("active", True) and lang.get("is_ui")
