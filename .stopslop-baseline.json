@@ -1,7 +1,0 @@
-{
-  "accepted": {
-    "SLOP009|./crates/pim-core/src/attribute_definition_types.rs|hardcoded sample/credential value": 3,
-    "SLOP009|./crates/pim-core/src/attribute_values.rs|hardcoded sample/credential value": 12,
-    "SLOP009|./crates/pim-core/src/seed.rs|hardcoded sample/credential value": 1
-  }
-}

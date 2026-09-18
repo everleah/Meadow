@@ -3,10 +3,14 @@
 The careful part is the round trip: schema + parameters → widgets → a partial
 patch the core merges (`parameters_mode: merge`). The pure helpers are tested
 here; the widgets themselves are verified in the browser.
+
+`load_option_sources` (the admin page's dynamic field options) is covered too: its
+sources are optional, so the degradation has to stay visible instead of silent.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from meadow.frontend.connector_form import (
@@ -27,6 +31,7 @@ from meadow.frontend.connector_form import (
     unknown_keys,
     validate_values,
 )
+from meadow.frontend.connectors import load_option_sources
 from meadow.frontend.i18n import t
 
 
@@ -498,3 +503,56 @@ def test_i18n_keys_of_the_schema_exist() -> None:
     for locale in ("en", "de", "fr"):
         for key in keys:
             assert t(key, locale=locale) != key, (locale, key)
+
+
+class _OptionClient:
+    """Stand-in for `CoreClient` covering the four option sources of the form."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+
+    def _check(self) -> None:
+        if self.fail:
+            raise RuntimeError("core unavailable")
+
+    async def list_object_types(self, token: str, limit: int = 1000) -> list[dict]:
+        self._check()
+        return [{"name": "product"}, {"name": ""}, {"other": "ignored"}]
+
+    async def list_attribute_vocabulary(self, token: str) -> list[dict]:
+        self._check()
+        return [{"name": "sku"}, {"name": "color"}]
+
+    async def list_languages(self, token: str) -> list[dict]:
+        self._check()
+        return [
+            {"code": "de", "active": True},
+            {"code": "root", "active": True},
+            {"code": "fr", "active": False},
+            {"code": None, "active": True},
+        ]
+
+    async def list_channels(self, token: str, active: bool = True) -> list[dict]:
+        self._check()
+        return [{"code": "webshop"}, {"code": ""}]
+
+
+async def test_option_sources_are_mapped_and_filtered() -> None:
+    sources = await load_option_sources(_OptionClient(), "token")
+    # Empty names, the technical `root` language and inactive languages are dropped.
+    assert sources == {
+        "object_types": ["product"],
+        "attribute_names": ["sku", "color"],
+        "languages": ["de"],
+        "channels": ["webshop"],
+    }
+
+
+async def test_option_sources_degrade_visibly(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="meadow.frontend.connectors"):
+        sources = await load_option_sources(_OptionClient(fail=True), "token")
+    # The form degrades to the values the user typed himself - and says so.
+    assert sources == {"object_types": [], "attribute_names": [], "languages": [], "channels": []}
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    for source in ("object types", "attribute names", "languages", "channels"):
+        assert f"{source} unavailable" in messages

@@ -116,10 +116,10 @@ mod tests {
     #[test]
     fn absolute_http_urls_are_accepted() {
         for value in [
-            "https://example.com",
-            "http://example.com/path?q=1#frag",
-            "https://example.com:8443/a/b",
-            "  https://example.com  ",
+            "https://shop.invalid",
+            "http://shop.invalid/path?q=1#frag",
+            "https://shop.invalid:8443/a/b",
+            "  https://shop.invalid  ",
             "http://localhost:8080/products",
             "https://sub.domain.co.uk/x/y",
         ] {
@@ -130,12 +130,12 @@ mod tests {
     #[test]
     fn relative_and_foreign_schemes_are_rejected() {
         for value in [
-            "example.com",
-            "www.example.com/x",
+            "shop.invalid",
+            "www.shop.invalid/x",
             "/products/1",
             "https://",
-            "ftp://example.com/file",
-            "mailto:info@example.com",
+            "ftp://shop.invalid/file",
+            "mailto:info@shop.invalid",
             "javascript:alert(1)",
             "data:image/png;base64,AAAA",
             "not a url",
@@ -152,14 +152,14 @@ mod tests {
         assert!(invalid_url_messages(&link, &Value::Null).is_empty());
         assert!(invalid_url_messages(&link, &json!("")).is_empty());
         assert!(invalid_url_messages(&link, &json!("   ")).is_empty());
-        assert!(invalid_url_messages(&link, &json!("https://example.com")).is_empty());
+        assert!(invalid_url_messages(&link, &json!("https://shop.invalid")).is_empty());
     }
 
     #[test]
     fn invalid_scalars_name_the_attribute() {
         let link = attribute("homepage", false);
         assert_eq!(
-            invalid_url_messages(&link, &json!("example.com")),
+            invalid_url_messages(&link, &json!("shop.invalid")),
             vec!["`attributes.homepage`: must be an absolute http(s) URL".to_owned()]
         );
         assert_eq!(
@@ -167,7 +167,7 @@ mod tests {
             vec!["`attributes.homepage`: must be a string containing a URL".to_owned()]
         );
         assert_eq!(
-            invalid_url_messages(&link, &json!(["https://example.com"])),
+            invalid_url_messages(&link, &json!(["https://shop.invalid"])),
             vec!["`attributes.homepage`: must be a string containing a URL".to_owned()]
         );
     }
@@ -175,12 +175,12 @@ mod tests {
     #[test]
     fn multilingual_values_are_checked_per_language() {
         let link = attribute("homepage", true);
-        assert!(invalid_url_messages(&link, &json!({"de": "https://example.de"})).is_empty());
+        assert!(invalid_url_messages(&link, &json!({"de": "https://laden.invalid"})).is_empty());
         assert!(invalid_url_messages(&link, &json!({"de": null})).is_empty());
         assert_eq!(
             invalid_url_messages(
                 &link,
-                &json!({"de": "https://example.de", "en": "example.com"})
+                &json!({"de": "https://laden.invalid", "en": "shop.invalid"})
             ),
             vec!["`attributes.homepage.en`: must be an absolute http(s) URL".to_owned()]
         );

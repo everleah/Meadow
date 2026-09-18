@@ -71,7 +71,8 @@ def test_config_keeps_the_artifact_rules_on():
     # The artifact rules are what the style linters cannot see; they stay on.
     for rule in ("SLOP001", "SLOP002", "SLOP003", "SLOP004", "SLOP011", "SLOP012", "SLOP013"):
         assert rule not in config["ignore"]
-    assert config["baseline"] == ".stopslop-baseline.json"
+    # No grandfather file (§4.4): every finding of the higher tier fails the scan.
+    assert "baseline" not in config
 
 
 def test_markdown_style_groups_are_silenced_but_artifacts_are_not():
@@ -101,18 +102,12 @@ def test_scripts_pin_the_same_tool_version_and_never_repair():
     assert "check.ps1" in powershell
 
 
-def test_baseline_only_accepts_placeholder_values():
-    accepted = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
-    assert accepted
-    assert all(isinstance(count, int) and count > 0 for count in accepted.values())
-    # `code|path|message` - the fingerprint ignores line numbers on purpose, so an
-    # edit above a finding does not resurrect it.
-    assert all(fingerprint.count("|") >= 2 for fingerprint in accepted)
-    # Policy: a swallowed error, a stub or a credential finding gets repaired instead of
-    # baselined (see plan/detail/ai-code-quality.md). `SLOP009` - intentional
-    # `example.com` values in tests and the seed - is the only accepted code, so
-    # widening this set takes a deliberate decision plus a documentation change.
-    assert {fingerprint.split("|")[0] for fingerprint in accepted} == {"SLOP009"}
+def test_no_findings_are_grandfathered():
+    # Deliberate decision (plan/detail/ai-code-quality.md §4.4): the accepted set is
+    # empty, so a finding fails the scan instead of sitting in a baseline. Bringing a
+    # baseline back takes a config key, a committed file and a recorded reason.
+    assert not BASELINE.exists()
+    assert "baseline" not in _load_config()
 
 
 @requires_stopslop
@@ -137,9 +132,9 @@ def test_fixture_artifacts_are_detected(fixture: str, expected_rules: set[str]):
 
 
 @requires_stopslop
-def test_repository_passes_with_the_committed_baseline():
-    # The fixture directory is excluded, so the accepted findings are exactly the
-    # baselined ones and nothing of the higher tier is left.
+def test_repository_scan_is_clean():
+    # Nothing is grandfathered, so the repository is green only while there is no
+    # finding of the higher tier at all - the fixture directory stays excluded.
     findings, status = _scan(".", "--format", "json")
     assert [finding for finding in findings if finding["tier"] == "A"] == []
     assert status == 0

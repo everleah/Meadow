@@ -994,7 +994,7 @@ pub async fn ensure_default_admin(db: &Db) -> Result<(), ApiError> {
     let sql = "
         UPSERT user:admin CONTENT {
             username: 'admin',
-            email: 'admin@example.com',
+            email: 'admin@meadow.invalid',
             password_hash: $password_hash,
             auth_provider: 'local',
             roles: ['superadmin'],

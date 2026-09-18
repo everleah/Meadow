@@ -444,10 +444,10 @@ mod tests {
     #[test]
     fn text_converts_to_url_enum_and_reference() {
         assert_eq!(
-            convert_scalar("text", "url", &json!("https://example.com/a"), None),
-            Ok(json!("https://example.com/a"))
+            convert_scalar("text", "url", &json!("https://shop.invalid/a"), None),
+            Ok(json!("https://shop.invalid/a"))
         );
-        assert!(convert_scalar("text", "url", &json!("example.com"), None).is_err());
+        assert!(convert_scalar("text", "url", &json!("shop.invalid"), None).is_err());
 
         let codes = vec!["red".to_owned(), "green".to_owned()];
         assert_eq!(

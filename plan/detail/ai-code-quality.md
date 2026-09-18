@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 8, 9 (Qualitätssicherung, bewusst gestartete Analyse und Reparatur)
-- **Stand:** Stufe 1 umgesetzt und erster Reparaturpass gefahren (2026-09-18): Konfiguration `stopslop.toml`, Baseline (16 akzeptierte Befunde), `scripts/deslop.ps1`/`deslop.sh`, Fixtures und `tests/test_deslop.py`; sechs verschluckte Fehler und ein Weiterschleifer behoben (§4.2).
+- **Stand:** Stufe 1 umgesetzt, zwei Reparaturpasses gefahren (2026-09-18): Konfiguration `stopslop.toml` (ohne Baseline), `scripts/deslop.ps1`/`deslop.sh`, Fixtures, `tests/test_deslop.py`; sechs verschluckte Fehler sichtbar gemacht, ein Weiterschleifer entfernt (§4.2), Platzhalterwerte aufgelöst (§4.4). Der Scan meldet **null** Befunde.
 
 ## 1. Ziel und Abgrenzung
 
@@ -89,8 +89,7 @@ veröffentlichten Version. Für die gepinnte **0.5.1** gilt (alles lokal geprüf
   Konfigurations-Parsen, `exit 2`) noch als Flag akzeptiert. Das Verhalten ist
   trotzdem gestuft: ein Befund der Stufe A lässt den Lauf mit `1` scheitern, ein
   reiner Tier-B-Befund endet mit `0`. Das ist eine Eigenschaft der Version, keine
-  Einstellung – `--strict` bedeutet hier deshalb „Baseline ignorieren“, nicht
-  „Stilbefunde als Fehler“.
+  Einstellung.
 - **Konfiguration:** akzeptiert werden `select`, `extend-select`, `ignore`,
   `extend-ignore`, `exclude`, `check-imports`, `baseline`, `per-file-ignores`,
   `custom-rule`. Unbekannte Schlüssel brechen den Lauf ab, deshalb wird jeder
@@ -99,7 +98,8 @@ veröffentlichten Version. Für die gepinnte **0.5.1** gilt (alles lokal geprüf
   `{"accepted": {"<code>|<pfad>|<meldung>": <anzahl>}}`. Der Fingerabdruck enthält
   keine Zeilennummern: eine Bearbeitung oberhalb eines Befunds lässt ihn nicht
   wiederauferstehen, und wer einen Befund behebt, schrumpft das Budget von selbst.
-  Eine leere Baseline (`{"accepted": {}}`) zeigt den vollen Stand.
+  Eine leere Baseline (`{"accepted": {}}`) zeigt den vollen Stand. **Meadow nutzt sie
+  bewusst nicht** – siehe §4.4.
 - **Pfadbasierte Ausnahmen:** `SLOP005`, `SLOP006`, `SLOP008`–`SLOP010`,
   `SLOP037`–`SLOP043` überspringen Pfade, die nach Testcode aussehen (`tests`,
   `fixtures`, `mocks`, `vendor`, `generated`, `test_*`, `conftest.py`).
@@ -126,12 +126,12 @@ Zwei Ergebnisse prägen die Konfiguration:
    und die Stilgruppen (`verbosity`, `format`, `rhetoric`, `sourcing`) gelten nicht
    für Markdown. Die Artefakt-Gruppe bleibt überall an – sie ist das, was die
    bestehenden Linter nicht sehen.
-2. **Die verbleibenden Tier-A-Befunde sind bewertet und akzeptiert.** Zu Beginn waren
+2. **Die verbleibenden Tier-A-Befunde wurden vollständig aufgelöst.** Zu Beginn waren
    es zwei Gruppen: 16 × `SLOP009` (`example.com`-Werte in Rust-Inline-Tests und im
-   Seed `admin@example.com`) und 6 × `SLOP006` (bewusst abgefangene Degradierungen
-   in `meadow/frontend/`). Die sechs `SLOP006`-Stellen wurden im ersten
-   Reparaturpass behoben (§4.2), deshalb steht die Baseline jetzt bei **16
-   Befunden** – und nur ein **neuer** Befund der Stufe A lässt den Lauf scheitern.
+   Seed) und 6 × `SLOP006` (bewusst abgefangene Degradierungen in
+   `meadow/frontend/`). Die sechs `SLOP006`-Stellen behob der erste Reparaturpass
+   (§4.2), die 16 `SLOP009`-Stellen der zweite (§4.4). Es gibt deshalb **keine
+   Baseline** mehr: Der Scan ist scharf, jeder Befund der Stufe A scheitert sofort.
 
 ### 4.1 Python-Deep-Dive am Bestand (2026-09-18)
 
@@ -174,8 +174,8 @@ Weiterschleifer auf `failed_at`, zwei Namen für dieselbe Funktion, während
 `failed_at` bereits elf Aufrufer hatte.
 
 **Ergebnis:** `stopslop` meldet über den Quellbaum keine `SLOP006`- und keine
-`SLOP039`-Stelle mehr (23 → 17 Befunde, davon 16 baselined). Akzeptierter Bestand
-sind damit nur noch die 16 `SLOP009`-Einträge.
+`SLOP039`-Stelle mehr (23 → 17 Befunde, davon damals 16 in der Baseline). Die 16
+`SLOP009`-Einträge löst der zweite Pass auf (§4.4).
 
 **Nachweis:** `ruff check`, `ruff format --check`, `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test -p pim-core --lib`
@@ -204,6 +204,40 @@ tatsächliche Import-Auflösung leisten Ruff, Pylance und der Compiler bereits
 korrekt. Die vier transitiven Rahmen-Abhängigkeiten bleiben bewusst so (eine
 explizite Deklaration ist eine Abhängigkeits-Entscheidung, kein Deslop-Fund) und
 stehen als offener Punkt in §9.
+
+### 4.4 Zweiter Reparaturpass (2026-09-18)
+
+Zwei Posten aus §9, beide klein und ohne Verhaltensänderung:
+
+**(a) Die Platzhalterwerte sind aufgelöst.** Die 16 `SLOP009`-Befunde waren
+`example.com`-Werte in Rust-Inline-Tests (12 in `attribute_values.rs`, 3 in
+`attribute_definition_types.rs`) und die Seed-Adresse `admin@example.com`. Sie sind
+jetzt die reservierten `.invalid`-Namen `shop.invalid`, `laden.invalid` und
+`admin@meadow.invalid` – ebenfalls synthetisch, aber nicht mehr die Platzhalter
+einer Vorlage, und ohne die Aussage der Tests zu verändern (geprüft wird, dass
+absolute `http(s)`-URLs gelten; welche Domain, ist beliebig). Vorab gemessen:
+`https://shop.invalid/x` löst `SLOP009` nicht aus.
+
+**(b) Die Baseline ist damit abgeschafft.** `.stopslop-baseline.json` ist gelöscht,
+der Schlüssel `baseline` aus `stopslop.toml` entfernt und `--strict` aus beiden
+Skripten gestrichen (ohne Baseline gibt es nichts zu ignorieren – ein Schalter, der
+nichts tut, wäre schlechter als keiner). `tests/test_deslop.py` prüft jetzt das
+Gegenteil: Es gibt **keine** Grandfather-Datei, und der Repository-Scan ist nur grün,
+solange kein Befund der Stufe A existiert. Wird doch einmal etwas akzeptiert, braucht
+das den Schlüssel, die Datei und eine Begründung hier.
+
+**(c) Die degradierenden Options-Quellen sind prüfbar.** Der Pass aus §4.2 machte die
+sechs Fehlerpfade sichtbar, aber kein Test berührte sie – `meadow/frontend/connectors.py`
+hatte **gar keine** Abdeckung. Die vier optionalen Options-Quellen der Konnektor-Seite
+liegen jetzt als `load_option_sources(client, token)` vor (Hausmuster wie
+`object_picker.py`: reine Helfer sind testbar, Seiten nicht), und
+`tests/test_connector_form.py` deckt beide Richtungen ab – die Zuordnung samt Filterung
+(leere Namen, technische `root`-Sprache, inaktive Sprachen) und den Degradationsfall,
+in dem jede der vier Warnungen im Log erscheint (`caplog`).
+
+**Ergebnis:** `stopslop .` meldet **0 Befunde** (Exit 0). **Nachweis:**
+`scripts/check.ps1` komplett grün – cargo fmt, clippy `-D warnings`, 173 Cargo-Tests,
+ruff check + format, **563** pytest (die zwei neuen Tests inklusive).
 
 ## 5. Workflow
 
@@ -236,9 +270,9 @@ bis er behoben oder mit Begründung aufgenommen wird.
 
 | Datei | Zweck |
 | --- | --- |
-| `stopslop.toml` | gepinnte Regelauswahl: `SLOP018` aus, Stilgruppen nur für Markdown aus, Artefakt- und Strukturregeln an, Excludes, Baseline |
-| `.stopslop-baseline.json` | 16 bewertete und akzeptierte Befunde (Details in §4) |
-| `scripts/deslop.ps1`, `scripts/deslop.sh` | manueller Einstieg: `all\|changed\|staged`, `--strict` (Baseline ignorieren), `--fix-plan` (Python-Deep-Dive über `meadow` und `scripts`), Berichte unter `.tmp/deslop/` |
+| `stopslop.toml` | gepinnte Regelauswahl: `SLOP018` aus, Stilgruppen nur für Markdown aus, Artefakt- und Strukturregeln an, Excludes, **keine Baseline** |
+| *(keine Baseline)* | bewusst leer: es gibt keine akzeptierten Befunde, jeder Befund der Stufe A scheitert (§4.4) |
+| `scripts/deslop.ps1`, `scripts/deslop.sh` | manueller Einstieg: `all\|changed\|staged`, `--fix-plan` (Python-Deep-Dive über `meadow` und `scripts`), Berichte unter `.tmp/deslop/` |
 | `tests/fixtures/deslop/artifacts.py`, `artifacts.rs` | absichtlich fehlerhafte Beispiele; außerhalb des Repo-Scans und für Ruff ausgeschlossen |
 | `tests/test_deslop.py` | Konfigurations-Invarianten und Nachweis, dass die Regeln feuern; werkzeuggestützte Tests überspringen sich ohne installiertes `stopslop` |
 
@@ -263,7 +297,8 @@ so, was er behauptet.
 - Stubs werden nicht mit erfundenem Verhalten gefüllt. Entweder implementieren, als
   bewusstes Interface kennzeichnen oder die API entfernen.
 - Unterdrückungen sind keine Reparatur: Sie brauchen eine Begründung und einen engen
-  Scope und landen als Baseline-Eintrag oder `ai-slop-ignore`-Kommentar im Diff.
+  Scope und landen als `ai-slop-ignore`-Kommentar im Diff – eine Baseline gibt es
+  bewusst nicht (§4.4).
 - Score, Herkunftsvermutung und Werkzeuglabel werden nie in Produktdaten, Audit-Logs
   oder die Benutzeroberfläche übernommen.
 
@@ -274,7 +309,7 @@ so, was er behauptet.
 | 1 | Der manuelle Scan läuft auf Windows und Linux mit identischer Konfiguration | Windows verifiziert; das Shell-Skript ist syntaxgeprüft, der Linux-Lauf folgt mit CI/VPS |
 | 2 | Python- und Rust-Quelltext inklusive Kommentaren und Strings wird erfasst, generierte Pfade sind ausgeschlossen | umgesetzt (`stopslop.toml`) |
 | 3 | Ein absichtlich eingefügter Artefakt der Stufe A wird reproduzierbar gefunden | umgesetzt (`tests/test_deslop.py`: 8 Python- und 5 Rust-Regeln) |
-| 4 | Bestehende Befunde sind baselined, neue bleiben sichtbar | umgesetzt (23 Einträge, Selbstschrumpfung beim Beheben) |
+| 4 | Es gibt keine akzeptierten Bestandsbefunde; jeder Befund der Stufe A scheitert | umgesetzt (§4.4: Baseline abgeschafft, testseitig erzwungen) |
 | 5 | Ein Reparaturpass erzeugt einen nachvollziehbaren Diff und lässt die Gates laufen | umgesetzt (§4.2; der volle `cargo test`-Lauf braucht den gestoppten Dev-Kern) |
 | 6 | Die Dokumentation nennt Befunde Qualitätssignale und behauptet keine KI-Erkennung | umgesetzt (dieses Dokument) |
 
@@ -284,9 +319,9 @@ so, was er behauptet.
   jetzt im Log sichtbar. Offen bleibt die Frage, ob eine Degradierung zusätzlich in
   der Oberfläche erscheinen soll (heute bewusst nur im Log, um den Alltag nicht zu
   fluten).
-- Die 16 `SLOP009`-Befunde stammen aus Inline-Tests und dem Seed: entweder `example.com`
-  als Testkonstante dokumentieren oder eigene Testwerte nutzen, damit der Scan ganz
-  ohne Baseline auskommt.
+- Die 16 `SLOP009`-Befunde (Platzhalterwerte in Rust-Inline-Tests und im Seed): **erledigt**
+  (§4.4) – aufgelöst durch reservierte `.invalid`-Namen, die Baseline ist damit
+  abgeschafft und der Scan scharf.
 - Nach dem ersten Linux-Lauf: Rauschpegel der Stilgruppen für `docs/user/` prüfen.
 - `ai-slop-detector` bleibt bis zur Auswertung in der Dev-Gruppe; danach entscheiden,
   ob es dort bleibt oder optional lokal installiert wird.

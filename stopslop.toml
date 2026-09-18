@@ -29,11 +29,15 @@
 # `baseline`, `per-file-ignores` and `custom-rule`. `fail-on-tier` and `language`
 # are documented upstream but rejected here (exit 2), and the git-aware selection
 # (`--staged`/`--changed`) does not exist yet - scripts/deslop.* builds the file
-# list with git instead. Any finding fails the run in this version, so the
-# baseline is what keeps the repository green.
+# list with git instead. Any finding fails the run in this version.
+#
+# 6. There is deliberately **no** baseline (decision 2026-09-18): the accepted set is
+#    empty, so every finding of the higher tier fails the scan instead of sitting in a
+#    grandfather file (rationale in plan/detail/ai-code-quality.md §4.4). If a finding
+#    ever has to be accepted: run `stopslop --write-baseline .`, add the `baseline` key
+#    back here and record the reason.
 
 ignore = ["SLOP018"]
-baseline = ".stopslop-baseline.json"
 
 exclude = [
     "target/**",

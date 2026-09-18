@@ -13,10 +13,9 @@
     code on its own: the Python deep dive only reports. Repairs stay deliberate,
     one category at a time, with the focused tests re-run afterwards.
 
-    Reports land in .tmp/deslop/ (gitignored). The committed baseline in
-    .stopslop-baseline.json keeps known findings out of the way, so only new
-    findings fail the run; -Strict ignores the baseline and shows the complete
-    current state instead.
+    Reports land in .tmp/deslop/ (gitignored). Nothing is grandfathered: there is no
+    baseline, so every finding of the higher tier fails the run (rationale in
+    plan/detail/ai-code-quality.md).
 
     Findings of the lower tier are reported but do not fail the run - that is the
     upstream default, and stopslop 0.5.1 cannot change it (no `--fail-on-tier`).
@@ -24,13 +23,12 @@
 .EXAMPLE
     ./scripts/deslop.ps1
     ./scripts/deslop.ps1 -Selection staged
-    ./scripts/deslop.ps1 -Selection changed -Strict
+    ./scripts/deslop.ps1 -Selection changed
     ./scripts/deslop.ps1 -FixPlan
 #>
 param(
     [ValidateSet('all', 'changed', 'staged')]
     [string]$Selection = 'all',
-    [switch]$Strict,
     [switch]$FixPlan
 )
 
@@ -40,6 +38,22 @@ Set-Location (Join-Path $PSScriptRoot '..')
 $StopslopVersion = '0.5.1'
 $SlopDetectorVersion = '4.0'
 $ReportDir = '.tmp/deslop'
+
+function Get-ChangedFileList {
+    param([Parameter(Mandatory)][string]$DiffFilter)
+    # Only the path list is needed, so `core.autocrlf=false` is safe here and keeps
+    # git's LF/CRLF warning out of the scan output. It also has to be read with the
+    # error preference relaxed: git writes that warning to stderr, and with
+    # $ErrorActionPreference = 'Stop' PowerShell would treat it as fatal.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return @(git -c core.autocrlf=false diff --name-only --diff-filter=ACMR $DiffFilter)
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+}
 
 if (-not (Get-Command stopslop -ErrorAction SilentlyContinue)) {
     Write-Host 'stopslop is missing. Install the pinned version:' -ForegroundColor Red
@@ -61,7 +75,7 @@ if ($Selection -eq 'all') {
 }
 else {
     $diffFilter = if ($Selection -eq 'staged') { '--cached' } else { 'HEAD' }
-    $scanArgs = @(git diff --name-only --diff-filter=ACMR $diffFilter)
+    $scanArgs = Get-ChangedFileList -DiffFilter $diffFilter
     if ($scanArgs.Count -eq 0) {
         Write-Host "Nothing to scan for selection '$Selection'."
         exit 0
@@ -70,15 +84,6 @@ else {
 
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
 $jsonReport = Join-Path $ReportDir "stopslop-$Selection.json"
-
-# The baseline keeps the accepted findings of the repository out of the way;
-# -Strict shows the complete current state instead.
-$baselineArgs = @()
-if ($Strict) {
-    $emptyBaseline = Join-Path $ReportDir 'empty-baseline.json'
-    [System.IO.File]::WriteAllText($emptyBaseline, '{"accepted": {}}', (New-Object System.Text.UTF8Encoding($false)))
-    $baselineArgs = @("--baseline=$emptyBaseline")
-}
 
 Write-Host ''
 Write-Host "==> stopslop ($Selection)" -ForegroundColor Cyan
@@ -90,7 +95,7 @@ Write-Host "==> stopslop ($Selection)" -ForegroundColor Cyan
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
-    $json = & stopslop @($scanArgs + $baselineArgs + @('--format', 'json'))
+    $json = & stopslop @($scanArgs + @('--format', 'json'))
     $jsonStatus = $LASTEXITCODE
 
     if ($json) {
@@ -104,7 +109,7 @@ try {
         Write-Host "report: $jsonReport"
     }
 
-    & stopslop @($scanArgs + $baselineArgs)
+    & stopslop @($scanArgs)
     $status = [Math]::Max($jsonStatus, $LASTEXITCODE)
 
     if ($FixPlan) {

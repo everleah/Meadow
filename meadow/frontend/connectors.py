@@ -113,39 +113,13 @@ def _parse_parameters(text: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
-@ui.page("/connectors", response_timeout=PAGE_TIMEOUT)
-async def connectors_page() -> None:
-    await build_shell(active="/connectors")
-    if not auth.is_admin():
-        ui.navigate.to("/")
-        return
-    client = CoreClient(CORE_URL)
-    token = app.storage.user.get("token", "")
+async def load_option_sources(client: CoreClient, token: str) -> dict[str, list[str]]:
+    """Loads the dynamic option sources of the parameter form.
 
-    try:
-        connectors = await client.list_connectors(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
-        ui.label(t("connectors.load_failed")).classes("text-subtitle1 text-negative")
-        return
-
-    # Parameter schema per connector type (source of truth for the form) plus the
-    # dynamic option sources it references (`object_types`, `attribute_names`).
-    schemas: dict[str, dict] = {}
-    type_labels: dict[str, str] = {}
-    try:
-        for entry in await client.list_connector_types(token):
-            key = str(entry.get("type") or "")
-            if not key:
-                continue
-            schemas[key] = entry
-            type_labels[key] = t(str(entry.get("label_key") or key))
-    except Exception:  # noqa: BLE001 - degrade to the fallback type list
-        schemas = {}
-        type_labels = {}
-    if not type_labels:
-        type_labels = {
-            connector_type: _type_label(connector_type) for connector_type in _FALLBACK_TYPES
-        }
+    Each source is optional: a failing request degrades the form to the values the
+    user typed himself, and the reason is logged instead of swallowed, so a degraded
+    form stays diagnosable. Rendering continues either way.
+    """
 
     option_sources: dict[str, list[str]] = {
         "object_types": [],
@@ -186,6 +160,44 @@ async def connectors_page() -> None:
         ]
     except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
         log.warning("connector form: channels unavailable (%s)", error)
+    return option_sources
+
+
+@ui.page("/connectors", response_timeout=PAGE_TIMEOUT)
+async def connectors_page() -> None:
+    await build_shell(active="/connectors")
+    if not auth.is_admin():
+        ui.navigate.to("/")
+        return
+    client = CoreClient(CORE_URL)
+    token = app.storage.user.get("token", "")
+
+    try:
+        connectors = await client.list_connectors(token, limit=1000)
+    except Exception:  # noqa: BLE001 - show a friendly message on failure
+        ui.label(t("connectors.load_failed")).classes("text-subtitle1 text-negative")
+        return
+
+    # Parameter schema per connector type (source of truth for the form) plus the
+    # dynamic option sources it references (`object_types`, `attribute_names`).
+    schemas: dict[str, dict] = {}
+    type_labels: dict[str, str] = {}
+    try:
+        for entry in await client.list_connector_types(token):
+            key = str(entry.get("type") or "")
+            if not key:
+                continue
+            schemas[key] = entry
+            type_labels[key] = t(str(entry.get("label_key") or key))
+    except Exception:  # noqa: BLE001 - degrade to the fallback type list
+        schemas = {}
+        type_labels = {}
+    if not type_labels:
+        type_labels = {
+            connector_type: _type_label(connector_type) for connector_type in _FALLBACK_TYPES
+        }
+
+    option_sources = await load_option_sources(client, token)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("connectors.title")).classes("text-h4")

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Deliberate AI-slop scan for Meadow PIM - rationale in plan/detail/ai-code-quality.md.
 #
-#   bash scripts/deslop.sh                  # whole repository (baseline applied)
+#   bash scripts/deslop.sh                  # whole repository
 #   bash scripts/deslop.sh staged           # exactly what is about to be committed
 #   bash scripts/deslop.sh changed          # staged + unstaged changes against HEAD
-#   bash scripts/deslop.sh all --strict     # complete current state, baseline ignored
 #   bash scripts/deslop.sh changed --fix-plan
 #
 # This is a quality signal, not a verdict. It never replaces scripts/check.sh, it
@@ -20,16 +19,14 @@ slop_detector_version="4.0"
 report_dir=".tmp/deslop"
 
 selection="all"
-strict=0
 fix_plan=0
 
 for argument in "$@"; do
     case "$argument" in
         all|changed|staged) selection="$argument" ;;
-        --strict) strict=1 ;;
         --fix-plan) fix_plan=1 ;;
         *)
-            printf 'Unknown argument: %s (use all|changed|staged, --strict, --fix-plan)\n' "$argument" >&2
+            printf 'Unknown argument: %s (use all|changed|staged, --fix-plan)\n' "$argument" >&2
             exit 2
             ;;
     esac
@@ -78,24 +75,15 @@ if [ "${#scan[@]}" -eq 0 ]; then
 fi
 
 mkdir -p "$report_dir"
-printf '{"accepted": {}}\n' > "$report_dir/empty-baseline.json"
 
-# The baseline keeps the accepted findings of the repository out of the way;
-# `--strict` shows the complete current state instead.
-run_scan() {
-    if [ "$strict" -eq 1 ]; then
-        stopslop "${scan[@]}" --baseline="$report_dir/empty-baseline.json" "$@"
-    else
-        stopslop "${scan[@]}" "$@"
-    fi
-}
-
+# No baseline: every finding of the higher tier fails the run (see stopslop.toml,
+# decision 6 - the accepted set is empty on purpose).
 set +e
-run_scan --format json > "$report_dir/stopslop-$selection.json"
+stopslop "${scan[@]}" --format json > "$report_dir/stopslop-$selection.json"
 json_status=$?
 step "stopslop ($selection)"
 printf 'report: %s\n' "$report_dir/stopslop-$selection.json"
-run_scan
+stopslop "${scan[@]}"
 text_status=$?
 set -e
 
