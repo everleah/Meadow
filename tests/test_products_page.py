@@ -38,10 +38,10 @@ MAIN_FILE = Path(__file__).resolve().parents[1] / "meadow" / "frontend" / "__mai
 class FakeCore:
     """Stands in for `CoreClient`: records every call and answers with fixed data."""
 
-    #: Calls the page made, as `(method name, keyword arguments)`.
-    calls: list[tuple[str, dict[str, Any]]] = []
-    #: Rows to answer with, per method name (missing names answer with `[]`).
-    data: dict[str, list[dict]] = {}
+    #: Calls the page made, as `(method name, positional arguments, keyword arguments)`.
+    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+    #: Rows to answer with, per method name (missing names answer with `[]`/`{}`).
+    data: dict[str, Any] = {}
 
     def __init__(self, base_url: str, **kwargs: Any) -> None:
         self.base_url = base_url
@@ -51,7 +51,7 @@ class FakeCore:
         """Answers every client method: record the call, return the fixed data."""
 
         async def call(*args: Any, **kwargs: Any) -> Any:
-            FakeCore.calls.append((name, kwargs))
+            FakeCore.calls.append((name, args, kwargs))
             if name in FakeCore.data:
                 return FakeCore.data[name]
             # Like the real client: listers answer lists, everything else a record.
@@ -60,7 +60,7 @@ class FakeCore:
         return call
 
     @classmethod
-    def reset(cls, data: dict[str, list[dict]] | None = None) -> None:
+    def reset(cls, data: dict[str, Any] | None = None) -> None:
         """Clears the recording and sets the answers for the next test."""
         cls.calls = []
         cls.data = data or {}
@@ -104,8 +104,8 @@ async def test_products_page_without_filter_only_loads_the_catalogs(
     await products_user.open("/products")
 
     await products_user.should_see(t("grid.select_tree_node", locale=EN))
-    assert [name for name, _ in FakeCore.calls if name == "list_objects"] == []
-    called = {name for name, _ in FakeCore.calls}
+    assert [name for name, _, _ in FakeCore.calls if name == "list_objects"] == []
+    called = {name for name, _, _ in FakeCore.calls}
     assert {"list_channels", "list_object_types", "list_relation_definitions"} <= called
 
 
@@ -113,7 +113,7 @@ async def test_products_page_url_filters_reach_the_core(products_user: User) -> 
     """`?type=…&incomplete=1` is the bookmarkable shortcut the dashboard links to."""
     await products_user.open("/products?type=product&incomplete=1")
 
-    payloads = [kwargs for name, kwargs in FakeCore.calls if name == "list_objects"]
+    payloads = [kwargs for name, _, kwargs in FakeCore.calls if name == "list_objects"]
     assert payloads, "a filtered visit must load objects"
     assert payloads[0]["object_type"] == "product"
     assert payloads[0]["missing_required"] is True
@@ -150,6 +150,23 @@ def _stub_objects(*objects: dict) -> None:
     FakeCore.data["list_objects"] = [dict(object_) for object_ in objects]
 
 
+def _stub_tree(*objects: dict) -> None:
+    """Answers the structure tree's root load (children of the universal root)."""
+    FakeCore.data["list_object_children"] = [dict(object_) for object_ in objects]
+
+
+def _list_objects_calls() -> list[dict[str, Any]]:
+    """The keyword arguments of every `list_objects` call the page made."""
+    return [kwargs for name, _, kwargs in FakeCore.calls if name == "list_objects"]
+
+
+def _search_terms() -> list[Any]:
+    """The query every `picker_search` call carried (it is the second argument)."""
+    return [
+        args[1] for name, args, _ in FakeCore.calls if name == "picker_search" and len(args) > 1
+    ]
+
+
 def _pick(user: User, marker: str, value: str) -> None:
     """Chooses an option the way a user does, so the change handlers run.
 
@@ -163,13 +180,13 @@ def _pick(user: User, marker: str, value: str) -> None:
         element.value = value
 
 
-async def _wait_until(condition: Callable[[], bool]) -> None:
+async def _wait_until(condition: Callable[[], bool], note: str = "") -> None:
     """Waits for an async handler of the page (a click only *schedules* it)."""
     for _ in range(50):
         if condition():
             return
         await asyncio.sleep(0.02)
-    raise AssertionError("the expected effect did not happen")
+    raise AssertionError(f"the expected effect did not happen: {note}")
 
 
 async def test_bulk_wizard_posts_the_chosen_operation(products_user: User) -> None:
@@ -183,9 +200,9 @@ async def test_bulk_wizard_posts_the_chosen_operation(products_user: User) -> No
     await products_user.should_see(marker="bulk-field-status")
     _pick(products_user, "bulk-field-status", "published")
     products_user.find(marker="bulk-start").click()
-    await _wait_until(lambda: any(name == "post_bulk" for name, _ in FakeCore.calls))
+    await _wait_until(lambda: any(name == "post_bulk" for name, _, _ in FakeCore.calls))
 
-    assert [kwargs for name, kwargs in FakeCore.calls if name == "post_bulk"] == [
+    assert [kwargs for name, _, kwargs in FakeCore.calls if name == "post_bulk"] == [
         {
             "op": "change_status",
             "object_ids": ["product:1", "product:2"],
@@ -207,7 +224,80 @@ async def test_bulk_wizard_refuses_an_incomplete_configuration(products_user: Us
         lambda: products_user.notify.contains(t("grid.bulk_config_incomplete", locale=EN))
     )
 
-    assert [name for name, _ in FakeCore.calls if name == "post_bulk"] == []
+    assert [name for name, _, _ in FakeCore.calls if name == "post_bulk"] == []
     assert products_user.notify.contains(t("grid.bulk_config_incomplete", locale=EN)), (
         products_user.notify.messages
     )
+
+
+async def test_filter_search_reaches_the_core(products_user: User) -> None:
+    """Typing into the filter bar starts a server-side search (not a row scan)."""
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    await products_user.open("/products?type=product")
+
+    products_user.find(marker="filter-search").type("Brake")
+    await _wait_until(lambda: "Brake" in _search_terms())
+
+    assert "Brake" in _search_terms()
+
+
+async def test_structure_tree_selection_filters_by_ancestor(products_user: User) -> None:
+    """Picking a structure node loads its descendants (`?ancestor=`)."""
+    _stub_objects(*OBJECTS)
+    _stub_tree(*OBJECTS)
+    await products_user.open("/products")
+
+    # The tree reports the Quasar `update:selected` prop event with the node id.
+    products_user.find(marker="structure-tree").trigger("update:selected", "product:1")
+    await _wait_until(
+        lambda: any(call.get("ancestor") == "product:1" for call in _list_objects_calls())
+    )
+
+    assert any(call.get("ancestor") == "product:1" for call in _list_objects_calls())
+
+
+async def test_advanced_dialog_loads_the_catalog_and_validates_on_apply(
+    products_user: User,
+) -> None:
+    """Opening loads the field catalog; applying an untouched form is refused.
+
+    The refusal is the interesting part: the dialog validates the condition tree
+    *before* it touches the grid, so an empty group never becomes a filter — and the
+    click through the real button is what proves that wiring.
+    """
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    FakeCore.data["list_search_fields"] = {}
+    await products_user.open("/products?type=product")
+    before = len(_list_objects_calls())
+
+    products_user.find(marker="advanced-open").click()
+    await _wait_until(
+        lambda: any(name == "list_search_fields" for name, _, _ in FakeCore.calls),
+        str([name for name, _, _ in FakeCore.calls]),
+    )
+    assert any(name == "list_saved_searches" for name, _, _ in FakeCore.calls)
+
+    products_user.find(marker="advanced-apply").click()
+    await _wait_until(lambda: bool(products_user.notify.messages))
+
+    assert len(_list_objects_calls()) == before
+    assert any("group" in message for message in products_user.notify.messages), (
+        products_user.notify.messages
+    )
+
+
+async def test_column_view_saves_and_lists_the_visible_fields(products_user: User) -> None:
+    """Saving a named column set stores it and lists it in the dialog."""
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    await products_user.open("/products?type=product")
+
+    products_user.find(marker="views-open").click()
+    products_user.find(marker="views-name").type("Brakes")
+    products_user.find(marker="views-save").click()
+    await _wait_until(lambda: bool(products_user.notify.messages))
+
+    assert products_user.notify.contains("Brakes"), products_user.notify.messages
+    await products_user.should_see("Brakes")

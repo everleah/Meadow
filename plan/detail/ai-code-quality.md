@@ -639,9 +639,52 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
   Der Wizard liegt damit in drei Modulen: Vertrag `bulk_edit.py`, Bericht `bulk_report.py`,
   UI `bulk_wizard.py` — mit 16 reinen Tests plus zwei Seitentests, die den Weg
   Dialog → Operation → Wert → Start → Payload über den **verschobenen** Code prüfen.
-- **Nächstes (Inkrement 3):** Baum/Panel (`render_tree`, 100 Zeilen) und die Filterleiste
-  (`set_view`, `on_filter_change`, `where_*`) — beide lesen und schreiben viel
-  Seitenzustand, dafür ist das Netz vorher noch um diese beiden Wege zu erweitern.
+- **Inkrement 3, erst das Netz:** zwei weitere Seitentests pinnen die Wege, die verschoben
+  werden sollen. Der erste schrieb eine Annahme über den Bestand fest und korrigierte sie:
+  das Tippen in der Filterleiste löst eine **serverseitige Suche** aus
+  (`picker_search("<Begriff>", …)` und erst danach `list_objects(ids=…)`) — **nicht** etwa
+  `list_objects(q=…)`, wie der erste Testentwurf vermutete. Der zweite wählt einen
+  Strukturknoten und prüft `list_objects(ancestor="product:1")`. Dafür tragen Suchfeld und
+  Baum Marker (`filter-search`, `structure-tree`), und der Kern-Stub zeichnet jetzt auch
+  **positionale** Argumente auf — `picker_search` bekommt den Suchbegriff als zweites
+  Argument, ohne das wäre der Aufruf nicht prüfbar (Hilfen: `_stub_tree`,
+  `_list_objects_calls`, `_search_terms`). Kosten wie immer beim Netz: +5 Zeilen Marker
+  (2357 → 2362), **586** pytest.
+- **Inkrement 3b/1 — der Bedingungsdialog ist heraus:** `where_state`, `where_summary`,
+  `current_where_query`, `has_advanced_conditions`, `ensure_where_form`, `_fill_where_dialog`
+  und die sechs Handler (`open_advanced`, `apply_advanced`, `clear_advanced`,
+  `load_saved_search`, `save_as_search`) plus die Dialogkonstruktion sind
+  `meadow/frontend/where_dialog.py` geworden (`WhereDialog` mit `build`/`open`/`apply`/
+  `clear`/`summary`; `has_conditions` und `saved_search_name` als reine Funktionen). Die
+  Seite behält den Filterzustand (`active["where"]`), den Chip und den Reload und reicht sie
+  als Rückrufe hinein (`get_where`/`set_where`/`on_applied`/`reload`).
+- **Eine Lehre aus drei Fehlversuchen am Seitentest** (die den Code am Ende bestätigt haben):
+  `should_see(...)` zwischen zwei Klicks kann die Dialoginteraktion stören; ein Klick auf
+  einen Dialog-Button **funktioniert** einwandfrei (der Beweis kam über `user.notify`), aber
+  mein Test erwartete das Falsche — der Dialog **lehnt eine leere Bedingung ab**
+  („query.where: a group needs at least one condition") und lädt deshalb bewusst nicht neu.
+  Der Test pinnt jetzt genau das: Katalog wird geladen, die leere Bedingung wird abgelehnt,
+  `list_objects` wird **nicht** erneut gerufen. Ein Seitentest muss also das *gewollte*
+  Verhalten kennen, sonst testet er die eigene Annahme.
+- **Messung nach 3b/1:** `products_page` **2362 → 2215** Zeilen (vom Ausgangswert **2737** also
+  −522), verschachtelte Funktionen 95 → **85**, linearer Widget-Code 1036 → **999**;
+  **590 pytest**, mypy **136** Dateien.
+- **Inkrement 3b/2 — die Spaltenansichten:** `save_view`/`load_view`/`delete_view`/
+  `refresh_views` und ihr Dialog sind `meadow/frontend/column_views.py` geworden
+  (`ColumnViews` mit `build`/`open`/`save`/`load`/`delete`/`refresh`; die Seite liefert
+  `get_fields` und `apply_fields`). Dazu die reine Funktion `read_views`, die den
+  Speicherwert normalisiert — Nutzerspeicher überlebt Upgrades und ist schreibbar, ein
+  kaputter Eintrag darf das Grid nicht brechen (`tests/test_column_views.py`). Ein
+  Seitentest speichert eine Ansicht über die echten Widgets und prüft Meldung + Auflistung.
+- **Fund nebenbei:** `views = app.storage.user.get("views", {})` in der Seite war **toter
+  Zustand** — kein Leser (der danebenstehende Kommentar beschreibt `restore_columns`).
+  Entfernt; ein solcher Rest ist genau das, was der Deep-Dive als `lint_escape` meldet.
+- **Messung nach 3b:** `products_page` **2737 → 2182** Zeilen (**−555**), verschachtelte
+  Funktionen 106 → **81**, linearer Widget-Code 1092 → **991**; **593 pytest**, mypy **137**
+  Dateien.
+- **Nächstes:** `render_tree` (~100 Zeilen mit viel geteiltem Zustand) und die Filterleiste
+  (`set_view`, `reset_filters`); danach ist die Seite unter 2000 Zeilen und es bleibt
+  Feinarbeit.
 
 ## 5. Workflow
 
