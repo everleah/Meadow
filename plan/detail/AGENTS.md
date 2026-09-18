@@ -30,7 +30,7 @@ Owns the detailed planning documents that deepen sections 4–13 of the main arc
   - `suche-formular.md` — schema-driven search form (query builder) and the shared query DSL for saved searches *and* the grid (extension of sections 10 & 11; stages A–C implemented, per-field full text sketched in §12)
   - `frontend.md` — frontend: architecture, i18n & module overview (section 11)
   - `dokumentation-und-hilfe.md` — in-app user handbook & help (`/help`, Markdown chapters in `docs/user/`, info-button convention, generated screenshots; first stage implemented 2026-09-15, extension points in §6)
-  - `ai-code-quality.md` — AI-code quality signals and the deliberate Deslop workflow for Python, Rust, comments, strings, and planning of bounded repairs (sections 8, 9, 12)
+  - `ai-code-quality.md` — AI-code quality signals and the deliberate Deslop scan (section 12): tool decision (`stopslop` for Python + Rust incl. comments/strings, `ai-slop-detector` as a manual Python deep dive), the verified 0.5.1 contract, calibration on the existing code base, the bounded repair workflow and its acceptance criteria. Stage 1 implemented 2026-09-18 (`stopslop.toml`, `.stopslop-baseline.json`, `scripts/deslop.ps1`/`deslop.sh`, fixtures, `tests/test_deslop.py`)
   - `frontend-arbeitsflaechen.md` — frontend working areas: grid, form, mass maintenance, completeness & dashboard (section 11)
   - `betrieb-deployment.md` — operations & deployment (section 12)
   - `versionierung-audit.md` — versioning & audit (section 13)

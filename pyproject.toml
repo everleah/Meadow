@@ -35,6 +35,11 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# `tests/fixtures/deslop/` holds intentionally sloppy samples that prove the
+# Deslop rules actually fire (plan/detail/ai-code-quality.md). The directory is
+# excluded from the repository's own scan in stopslop.toml and from ruff here,
+# so neither the formatter nor the linters rewrite it.
+extend-exclude = ["tests/fixtures/deslop"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

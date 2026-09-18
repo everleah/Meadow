@@ -1,0 +1,49 @@
+# Deslop scan configuration for Meadow PIM (stopslop).
+#
+# Workflow and rationale: plan/detail/ai-code-quality.md
+# Run it deliberately with scripts/deslop.ps1 or scripts/deslop.sh.
+#
+# Decisions recorded here:
+#
+# 1. `SLOP018` (mid-prose em/en dash) is silenced repository-wide. German
+#    technical prose uses the dash as a normal means of punctuation, so the rule
+#    flags our own house style instead of an AI artifact (measured 2026-09-18:
+#    512 of 716 findings in the source tree were this rule alone).
+# 2. The prose *style* groups are silenced for Markdown only. Our plan and
+#    AGENTS documents are deliberately dense German technical text; the grouping
+#    and phrasing rules ("verbosity", "format", "rhetoric", "sourcing") judge
+#    English essay prose and produce nothing actionable there.
+# 3. The `artifact` group stays on everywhere and the `structure` group stays on
+#    for source code: leftover chat text, elision comments, stray fences,
+#    placeholder values, stubs and swallowed errors are junk in code, docs and
+#    tests alike.
+# 4. `--check-imports` (SLOP010) stays opt-in. Workspace paths, optional
+#    dependencies and dynamic imports make the import check a lead to
+#    investigate, not a gate.
+# 5. `tests/fixtures/deslop/` is excluded: it exists to prove that the rules
+#    fire, so it must not appear in the repository's own scan or baseline.
+#    tests/test_deslop.py scans it with `--no-config`.
+#
+# Verified against the pinned stopslop 0.5.1 on 2026-09-18: this version accepts
+# `select`, `extend-select`, `ignore`, `extend-ignore`, `exclude`, `check-imports`,
+# `baseline`, `per-file-ignores` and `custom-rule`. `fail-on-tier` and `language`
+# are documented upstream but rejected here (exit 2), and the git-aware selection
+# (`--staged`/`--changed`) does not exist yet - scripts/deslop.* builds the file
+# list with git instead. Any finding fails the run in this version, so the
+# baseline is what keeps the repository green.
+
+ignore = ["SLOP018"]
+baseline = ".stopslop-baseline.json"
+
+exclude = [
+    "target/**",
+    ".venv/**",
+    ".tmp/**",
+    "backups/**",
+    "resources/**",
+    "tests/fixtures/deslop/**",
+]
+
+[per-file-ignores]
+"*.md" = ["verbosity", "format", "rhetoric", "sourcing"]
+"**/*.md" = ["verbosity", "format", "rhetoric", "sourcing"]
