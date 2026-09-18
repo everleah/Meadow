@@ -101,13 +101,18 @@ def test_scripts_pin_the_same_tool_version_and_never_repair():
     assert "check.ps1" in powershell
 
 
-def test_baseline_records_a_count_per_finding():
+def test_baseline_only_accepts_placeholder_values():
     accepted = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
     assert accepted
     assert all(isinstance(count, int) and count > 0 for count in accepted.values())
     # `code|path|message` - the fingerprint ignores line numbers on purpose, so an
     # edit above a finding does not resurrect it.
     assert all(fingerprint.count("|") >= 2 for fingerprint in accepted)
+    # Policy: a swallowed error, a stub or a credential finding gets repaired instead of
+    # baselined (see plan/detail/ai-code-quality.md). `SLOP009` - intentional
+    # `example.com` values in tests and the seed - is the only accepted code, so
+    # widening this set takes a deliberate decision plus a documentation change.
+    assert {fingerprint.split("|")[0] for fingerprint in accepted} == {"SLOP009"}
 
 
 @requires_stopslop

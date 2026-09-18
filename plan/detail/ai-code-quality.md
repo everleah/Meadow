@@ -181,8 +181,29 @@ sind damit nur noch die 16 `SLOP009`-Einträge.
 `cargo clippy --all-targets -- -D warnings`, `cargo test -p pim-core --lib`
 (173 Tests), `pytest` (561 Tests), `stopslop .` = `exit 0`. Der **volle**
 `cargo test`-Lauf (und damit `scripts/check.ps1`) braucht den gestoppten Dev-Kern,
-weil Windows ein laufendes `pim-core.exe` beim Relink sperrt – hier lief die
-Variante `--lib`, die kein Binary linkt.
+weil Windows ein laufendes `pim-core.exe` beim Relink sperrt. Mit gestopptem Kern
+lief `scripts/check.ps1` danach **vollständig grün** (fmt, clippy `-D warnings`,
+173 Cargo-Tests, ruff, 561 pytest).
+
+### 4.3 Kategorie „unaufgelöste Imports“ (`SLOP010`): bewusst nicht verwendet
+
+`stopslop . --check-imports` über den Quellbaum: **271 Befunde**, davon **256 für
+unser eigenes Paket `meadow`** – der statische Namensabgleich hält das Projekt
+selbst für eine fehlende Abhängigkeit. Die restlichen 15 verteilen sich so:
+
+| Paket | Befunde | Bewertung |
+| --- | --- | --- |
+| `nats` | 7 | Fehlalarm: die Distribution heißt `nats-py`, das Import-Modul `nats` |
+| `fastapi` | 4 | echt, aber bewusst: NiceGUI baut darauf auf, und `from fastapi import Request` ist das dokumentierte Muster für Seitenhandler (`auth.py`, `export_page.py`, `grid.py`) |
+| `starlette`, `engineio`, `botocore` | je 1 | transitive Rahmen-Abhängigkeiten von NiceGUI bzw. `boto3`; die Nutzung ist typengebunden (`BaseHTTPMiddleware`, Logging-Stille, `Config`) |
+| `playwright` | 1 | Fehlalarm: steht in der Dev-Gruppe, die der Import-Check nicht kennt |
+
+**Konsequenz:** `--check-imports` gehört **nicht** in den Workflow. Das Signal-
+Rausch-Verhältnis ist mit 15 brauchbaren von 271 Befunden unbrauchbar, und die
+tatsächliche Import-Auflösung leisten Ruff, Pylance und der Compiler bereits
+korrekt. Die vier transitiven Rahmen-Abhängigkeiten bleiben bewusst so (eine
+explizite Deklaration ist eine Abhängigkeits-Entscheidung, kein Deslop-Fund) und
+stehen als offener Punkt in §9.
 
 ## 5. Workflow
 
@@ -275,3 +296,7 @@ so, was er behauptet.
   sind die Score-Spitzen und gleichzeitig die größten Frontend-Module – ein
   Aufteilungskandidat, aber nur mit den Frontend-Tests als Netz und nicht als
   Nebeneffekt einer Artefakt-Reparatur.
+- Abhängigkeits-Entscheidung (aus §4.3): `fastapi`, `starlette`, `engineio` und
+  `botocore` werden direkt importiert, sind aber nur transitiv vorhanden. Optionen:
+  explizit deklarieren (`uv add …`) oder bewusst so lassen. Kein Deslop-Fund, sondern
+  eine Paketierungs-Entscheidung des Teams.
