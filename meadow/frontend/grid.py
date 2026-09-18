@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import tempfile
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, TypeGuard
 from urllib.parse import quote
 
@@ -35,6 +35,7 @@ from meadow.frontend.bulk_edit import (
 from meadow.frontend.bulk_report import replace_target_options
 from meadow.frontend.bulk_wizard import BulkWizard, WizardCatalogs
 from meadow.frontend.column_views import ColumnViews
+from meadow.frontend.create_object import CreateObjectDialog
 from meadow.frontend.display import (
     channel_options,
     completeness_badge,
@@ -50,8 +51,6 @@ from meadow.frontend.filters import filter_select
 from meadow.frontend.help_page import chapter_button, info_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
-from meadow.frontend.lazy_tree import LazyTree
-from meadow.frontend.multilang import multilingual_value_editor
 from meadow.frontend.object_picker import OBJECT_ROOT_ID, open_object_picker, render_picker_hit
 from meadow.frontend.range_values import format_range
 from meadow.frontend.reference_data import has_value, visible_in_picker
@@ -64,6 +63,7 @@ from meadow.frontend.relation_roles import (
     effective_target_types,
     usable_definitions,
 )
+from meadow.frontend.tree_panel import TreePanel, TreeState
 from meadow.frontend.url_values import media_kind, open_media_dialog
 from meadow.frontend.where_dialog import WhereDialog
 
@@ -1543,21 +1543,6 @@ async def products_page(request: Request) -> None:
         except CoreError, httpx.HTTPError:  # degrade to an empty collection list
             collections = []
 
-        def _collection_label(c: dict) -> str:
-            return (
-                resolve_value((c.get("attributes") or {}).get("name"), locale)
-                or str(c.get("name") or "")
-                or str(c.get("id") or "")
-            )
-
-        def _collection_node(c: dict) -> dict:
-            return {
-                "id": str(c.get("id")),
-                "label": _collection_label(c),
-                "type": "collection",
-                "count": int(c.get("member_count") or 0),
-            }
-
         # Tracks the currently selected collection so leaving the collection view
         # can clear the `?collection=` filter and URL.
         active_collection: dict = {"id": None}
@@ -2232,111 +2217,12 @@ async def products_page(request: Request) -> None:
         host: ui.column | None = None
 
         def render_tree(view: str) -> None:
+            """Renders the navigation tree of `view` (see `frontend/tree_panel.py`)."""
             nonlocal current_tree
             if host is None:
                 return
-            host.clear()
-            # A tree is only built when the panel shows the hierarchy; the flat
-            # search hit list is rendered as rows (each hit can be selected or
-            # opened in the tree).
-            tree: LazyTree | None = None
-            hit_list = bool(tree_override) and not tree_path
-            # The child loader follows the shown view; annotated once so every branch
-            # can assign its own loader.
-            loader: Callable[[str], Awaitable[list[dict]]]
-            if view == "collection" and collections:
-
-                async def _no_children(_node_id: str) -> list[dict]:
-                    return []
-
-                nodes = [_collection_node(c) for c in collections]
-                loader = _no_children
-                on_select = handle_collection_select
-            elif view == "category" and (category_roots or tree_override or tree_path):
-                if tree_path:
-                    # Ancestor branch of the hit the user opened in the tree.
-                    nodes = tree_path
-                elif hit_list:
-                    # Server-side search hits: flat, no hierarchy to load.
-                    nodes = tree_override
-                else:
-                    selected_id = selected_tree["id"]
-                    roots = category_roots
-                    if selected_id:
-                        filtered = [r for r in category_roots if r["id"] == selected_id]
-                        if filtered:
-                            roots = filtered
-                    nodes = taxonomy_tree.tree_nodes(
-                        roots,
-                        more_label=(
-                            t("grid.taxonomy_more") if roots_has_more and not selected_id else None
-                        ),
-                        uncategorized=uncategorized_node,
-                    )
-                loader = load_category_children
-                on_select = handle_category_select
-            elif tree_nodes:
-                nodes = tree_nodes
-                loader = load_children
-                on_select = handle_tree_select
-            else:
-                with host:
-                    ui.label(t("grid.tree_load_failed")).classes("text-caption text-negative")
-                current_tree = {"tree": None, "nodes": []}
-                return
-            with host:
-                chain = taxonomy_tree.path_chain(tree_path) if tree_path else []
-                if chain:
-                    ui.label(t("grid.taxonomy_path").format(label=chain[-1]["label"])).classes(
-                        "text-caption text-orange-600"
-                    )
-                elif hit_list:
-                    ui.label(
-                        t("grid.taxonomy_results").format(
-                            count=len(tree_override), query=tree_query["value"]
-                        )
-                    ).classes("text-caption text-orange-600")
-                if hit_list:
-                    with ui.column().classes("w-full gap-0"):
-                        for hit in tree_override:
-                            with (
-                                ui.row()
-                                .classes("items-center gap-1 w-full py-0")
-                                .style("flex-wrap: nowrap")
-                            ):
-                                ui.button(
-                                    str(hit["label"]),
-                                    on_click=lambda n=hit: select_category(str(n["id"])),
-                                ).props("flat dense no-caps align=left").classes(
-                                    "grow justify-start text-left"
-                                )
-                                ui.button(
-                                    icon="account_tree",
-                                    on_click=lambda n=hit: show_in_tree(str(n["id"])),
-                                ).props("flat dense").tooltip(t("grid.taxonomy_in_tree"))
-                else:
-                    tree = (
-                        LazyTree(
-                            nodes,
-                            on_select=on_select,
-                            load_children=loader,
-                            virtual_scroll=True,
-                        )
-                        .classes("w-full")
-                        .mark("structure-tree")
-                    )
-                    tree.add_slot(
-                        "default-header",
-                        '<span :props="props">{{ props.node.label }}'
-                        '<small v-if="props.node.type" class="text-caption text-gray-500">'
-                        " &middot; {{ props.node.type }}</small>"
-                        '<small v-if="props.node.count !== undefined" '
-                        'class="text-caption text-gray-500">'
-                        " &middot; {{ props.node.count }}</small></span>",
-                    )
-                    if tree_path:
-                        tree.set_path(nodes, [str(node["id"]) for node in chain[:-1]])
-            current_tree = {"tree": tree, "nodes": nodes}
+            rendered = tree_panel.render(view)
+            current_tree = {"tree": rendered.tree, "nodes": rendered.nodes}
 
         async def reload_collection() -> None:
             """Reloads the selected collection: re-materializes its members
@@ -2466,10 +2352,20 @@ async def products_page(request: Request) -> None:
 
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     with ui.button_group().props("dense"):
-                        structure_btn = ui.button(icon="account_tree").tooltip(t("grid.structure"))
-                        category_btn = ui.button(icon="category").tooltip(t("grid.category"))
-                        collection_btn = ui.button(icon="collections_bookmark").tooltip(
-                            t("grid.collection")
+                        structure_btn = (
+                            ui.button(icon="account_tree")
+                            .tooltip(t("grid.structure"))
+                            .mark("view-structure")
+                        )
+                        category_btn = (
+                            ui.button(icon="category")
+                            .tooltip(t("grid.category"))
+                            .mark("view-category")
+                        )
+                        collection_btn = (
+                            ui.button(icon="collections_bookmark")
+                            .tooltip(t("grid.collection"))
+                            .mark("view-collection")
                         )
                     structure_btn.on_click(lambda: set_view("structure"))
                     category_btn.on_click(lambda: set_view("category"))
@@ -2529,8 +2425,9 @@ async def products_page(request: Request) -> None:
                 with ui.row().classes("items-center gap-2 w-full").style("flex-wrap: nowrap"):
                     filter_input = ui.input(t("grid.filter")).props("outline dense").classes("grow")
                     create_btn = (
-                        ui.button(icon="add", on_click=lambda: open_create())
+                        ui.button(icon="add", on_click=lambda: create_dialog.open())
                         .props("flat dense shrink-0")
+                        .mark("create-open")
                         .tooltip(t("grid.create_object"))
                     )
                     collapse_btn = (
@@ -2543,7 +2440,31 @@ async def products_page(request: Request) -> None:
                         .props("flat dense shrink-0")
                         .tooltip(t("grid.collection_reload"))
                     )
-                host = ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
+                    host = (
+                        ui.column().classes("w-full grow").style("min-height: 0; overflow-y: auto")
+                    )
+                    tree_panel = TreePanel(
+                        host=host,
+                        locale=locale,
+                        state=lambda: TreeState(
+                            collections=collections,
+                            category_roots=category_roots,
+                            roots_have_more=bool(roots_has_more),
+                            uncategorized=uncategorized_node,
+                            selected_id=selected_tree["id"],
+                            structure_nodes=tree_nodes,
+                            hits=tree_override,
+                            hits_query=str(tree_query["value"]),
+                            path=tree_path,
+                        ),
+                        load_children=load_children,
+                        load_category_children=load_category_children,
+                        on_tree_select=handle_tree_select,
+                        on_category_select=handle_category_select,
+                        on_collection_select=handle_collection_select,
+                        select_category=select_category,
+                        show_in_tree=show_in_tree,
+                    )
                 set_view("structure")
 
                 async def on_filter_change(event) -> None:
@@ -2782,153 +2703,19 @@ async def products_page(request: Request) -> None:
                 # supplies the display attribute (`label_attribute`) and the
                 # mandatory business keys (`key_attributes`) — a key counts as a
                 # required field for completeness (`cache.rs`, `completeness.rs`).
-                type_options = {
-                    str(item.get("name")): (
-                        resolve_value(item.get("label"), locale) or str(item.get("name"))
-                    )
-                    for item in create_types
-                }
-                type_by_name = {str(item.get("name")): item for item in create_types}
-                create_state: dict = {"parent": None}
-                create_key_inputs: dict[str, ui.element] = {}
-
-                def label_attribute_of(type_name: str) -> str:
-                    """The type's display attribute (`label_attribute`, default `name`)."""
-                    return str((type_by_name.get(type_name) or {}).get("label_attribute") or "name")
-
-                def is_multilingual_name(attribute: str) -> bool:
-                    """`name` is multilingual by convention, others by definition."""
-                    if attribute == "name":
-                        return True
-                    return bool((definitions_by_name.get(attribute) or {}).get("multilingual"))
-
-                @ui.refreshable
-                def render_create_fields() -> None:
-                    """Label attribute + business keys of the chosen type."""
-                    create_key_inputs.clear()
-                    type_name = str(create_type_select.value or "")
-                    label_attribute = label_attribute_of(type_name)
-                    if is_multilingual_name(label_attribute):
-                        multilingual_value_editor(
-                            field_label=t("grid.create_name"),
-                            locale=locale,
-                            languages=languages,
-                            value=None,
-                            store=create_state,
-                            key=label_attribute,
-                        )
-                    else:
-                        single = (
-                            ui.input(t("grid.create_name")).props("filled dense").classes("w-full")
-                        )
-                        single.on_value_change(
-                            lambda e, k=label_attribute: create_state.__setitem__(
-                                k, str(e.value or "")
-                            )
-                        )
-                    for key_name in [
-                        str(item)
-                        for item in (type_by_name.get(type_name) or {}).get("key_attributes") or []
-                    ]:
-                        definition = definitions_by_name.get(key_name) or {}
-                        label = resolve_value(definition.get("label"), locale) or key_name
-                        create_key_inputs[key_name] = (
-                            ui.input(label if label == key_name else f"{label} ({key_name})")
-                            .props("filled dense")
-                            .classes("w-full")
-                        )
-                    if create_key_inputs:
-                        ui.label(t("grid.create_key_hint")).classes("text-caption text-gray-500")
-
-                async def parent_caption(parent: str | None) -> str:
-                    """`Placement: <name>` of the composition parent (id as fallback)."""
-                    if not parent:
-                        return t("grid.create_parent_root")
-                    try:
-                        parent_object = await client.get_object(token, parent, locale=locale)
-                    except CoreError, httpx.HTTPError:  # show the raw reference
-                        return str(parent)
-                    attributes = parent_object.get("attributes") or {}
-                    label = resolve_value(attributes.get("name"), locale)
-                    return str(label or parent_object.get("id") or parent)
-
-                async def open_create() -> None:
-                    """Opens the create dialog for the tree's selection (else the root)."""
-                    create_state.clear()
-                    create_state["parent"] = active["ancestor"]
-                    default_type = next(iter(type_options), None)
-                    if create_type_select.value != default_type:
-                        create_type_select.set_value(default_type)
-                    render_create_fields.refresh()
-                    create_parent_label.set_text(
-                        t("grid.create_parent").format(
-                            parent=await parent_caption(active["ancestor"])
-                        )
-                    )
-                    create_dialog.open()
-
-                async def save_new_object() -> None:
-                    type_name = str(create_type_select.value or "")
-                    label_attribute = label_attribute_of(type_name)
-                    raw_name = create_state.get(label_attribute)
-                    if isinstance(raw_name, dict):
-                        name_value: object = {
-                            str(lang): str(text)
-                            for lang, text in raw_name.items()
-                            if str(text or "").strip()
-                        }
-                        has_name = bool(name_value)
-                    else:
-                        name_value = str(raw_name or "").strip()
-                        has_name = bool(name_value)
-                    if not has_name:
-                        ui.notify(t("grid.create_name_required"), color="warning")
-                        return
-                    attributes: dict[str, object] = {label_attribute: name_value}
-                    for key_name, field in create_key_inputs.items():
-                        value = str(getattr(field, "value", "") or "").strip()
-                        if not value:
-                            ui.notify(
-                                t("grid.create_key_required").format(name=key_name), color="warning"
-                            )
-                            return
-                        attributes[key_name] = value
-                    try:
-                        created = await client.create_object(
-                            token,
-                            object_type=type_name,
-                            attributes=attributes,
-                            parent=create_state.get("parent"),
-                        )
-                    except CoreError as error:
-                        ui.notify(f"{t('grid.create_failed')}: {error}", color="negative")
-                        return
-                    create_dialog.close()
-                    type_label = type_options.get(type_name, type_name)
-                    ui.notify(t("grid.created").format(type=type_label), color="positive")
-                    # Straight into the form: the new object is still empty.
-                    ui.navigate.to(f"/products/{created['id']}")
-
-                create_dialog = ui.dialog()
-                with create_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
-                    ui.label(t("grid.create_title")).classes("text-h6")
-                    ui.label(t("grid.create_hint")).classes("text-caption text-gray-600")
-                    create_type_select = (
-                        ui.select(type_options, label=t("grid.create_type"))
-                        .props("filled dense")
-                        .classes("w-full")
-                    )
-                    create_type_select.on_value_change(lambda e: render_create_fields.refresh())
-                    create_parent_label = ui.label().classes("text-caption text-gray-500")
-                    with ui.column().classes("w-full gap-2"):
-                        render_create_fields()
-                    with ui.row().classes("w-full justify-end gap-2"):
-                        ui.button(t("grid.close"), on_click=create_dialog.close).props("flat")
-                        ui.button(
-                            t("grid.create_save"),
-                            icon="add",
-                            on_click=lambda: save_new_object(),
-                        ).props("flat")
+                # The dialog itself (types, business keys, parent caption) lives in
+                # `meadow/frontend/create_object.py`; the page supplies the registry,
+                # the attribute definitions and the composition parent.
+                create_dialog: CreateObjectDialog = CreateObjectDialog(
+                    client=client,
+                    token=token,
+                    locale=locale,
+                    types=create_types,
+                    definitions=definitions_by_name,
+                    languages=languages,
+                    get_parent=lambda: active["ancestor"],
+                )
+                create_dialog.build()
 
                 # --- Filter bar (server-side filters) --------------------------
                 # The grid can be empty (no tree node picked), so both filters are

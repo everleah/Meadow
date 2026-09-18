@@ -32,10 +32,15 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   the auth middleware are replaced (that is the point of a page test), and modules of
   the frontend are imported inside the fixture, never at module level.
 - Widgets a page test has to *find* carry a marker (`ui.button(...).mark("bulk-start")`,
-  NiceGUI 3.x; the old `marker()` name is gone). Two rules learned the hard way: a click on
+  NiceGUI 3.x; the old `marker()` name is gone). Four rules learned the hard way: a click on
   an **async** handler only schedules it (wait for the effect, e.g. with a small
-  `_wait_until(...)` helper), and `UserInteraction` types into inputs but cannot operate a
-  select (set `.value` inside the client context instead — that is what `type()` does).
+  `_wait_until(...)` helper), `UserInteraction` types into inputs but cannot operate a
+  select (set `.value` inside the client context instead — that is what `type()` does),
+  `User.find(marker=…)` **raises** when nothing matches (so waiting through
+  `bool(user.find(...).elements)` is no wait at all — use `await user.should_see(marker=…)`
+  when the wait is about visibility, and `_wait_until` for recorded state such as core
+  calls), and `user.notify` is how a test pins the message a handler shows
+  (`notify.contains(...)`/`notify.messages`).
 
 ## Verification
 

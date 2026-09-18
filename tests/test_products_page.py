@@ -288,6 +288,76 @@ async def test_advanced_dialog_loads_the_catalog_and_validates_on_apply(
     )
 
 
+#: The type registry the create dialog reads (a plain label attribute plus a key).
+CREATE_TYPE = {
+    "name": "product",
+    "label_attribute": "title",
+    "key_attributes": ["sku"],
+}
+
+
+def _stub_create() -> None:
+    """Answers the registry, the attribute definition and the write of a new object."""
+    FakeCore.data["list_object_types"] = [dict(CREATE_TYPE)]
+    FakeCore.data["list_attribute_vocabulary"] = [
+        {"name": "title", "label": {"en": "Title"}},
+        {"name": "sku", "label": {"en": "SKU"}},
+    ]
+    FakeCore.data["create_object"] = {"id": "product:new", "type": "product"}
+
+
+async def _fill_create_dialog(user: User, name: str, key: str) -> None:
+    """Opens the dialog on the current tree selection and fills attribute and key."""
+    user.find(marker="create-open").click()
+    await user.should_see(marker="create-name")
+    user.find(marker="create-name").type(name)
+    user.find(marker="create-key-sku").type(key)
+    user.find(marker="create-save").click()
+    await _wait_until(lambda: any(name == "create_object" for name, _, _ in FakeCore.calls))
+
+
+async def test_create_dialog_writes_the_object_with_its_parent(products_user: User) -> None:
+    """The dialog posts type, label attribute and business keys to the core."""
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    _stub_create()
+    await products_user.open("/products")
+
+    await _fill_create_dialog(products_user, "Brake drum", "BD-1")
+
+    assert [kwargs for name, _, kwargs in FakeCore.calls if name == "create_object"] == [
+        {
+            "object_type": "product",
+            "attributes": {"title": "Brake drum", "sku": "BD-1"},
+            "parent": None,
+        }
+    ]
+
+
+async def test_create_dialog_passes_the_selected_tree_node_as_parent(
+    products_user: User,
+) -> None:
+    """The composition parent is part of the write: the tree selection travels."""
+    _stub_objects(*OBJECTS)
+    _stub_tree(*OBJECTS)
+    _stub_create()
+    await products_user.open("/products")
+    products_user.find(marker="structure-tree").trigger("update:selected", "product:1")
+    await _wait_until(
+        lambda: any(call.get("ancestor") == "product:1" for call in _list_objects_calls())
+    )
+
+    await _fill_create_dialog(products_user, "Brake shoe", "BS-2")
+
+    assert [kwargs for name, _, kwargs in FakeCore.calls if name == "create_object"] == [
+        {
+            "object_type": "product",
+            "attributes": {"title": "Brake shoe", "sku": "BS-2"},
+            "parent": "product:1",
+        }
+    ]
+
+
 async def test_column_view_saves_and_lists_the_visible_fields(products_user: User) -> None:
     """Saving a named column set stores it and lists it in the dialog."""
     _stub_objects(*OBJECTS)
@@ -301,3 +371,29 @@ async def test_column_view_saves_and_lists_the_visible_fields(products_user: Use
 
     assert products_user.notify.contains("Brakes"), products_user.notify.messages
     await products_user.should_see("Brakes")
+
+
+async def test_structure_view_renders_the_tree(products_user: User) -> None:
+    """The structure view draws the lazy tree of the loaded root nodes."""
+    _stub_objects(*OBJECTS)
+    _stub_tree(*OBJECTS)
+    await products_user.open("/products")
+
+    await products_user.should_see(marker="structure-tree")
+    await products_user.should_not_see(t("grid.tree_load_failed", locale=EN))
+
+
+async def test_collection_view_lists_the_saved_collections(products_user: User) -> None:
+    """Switching to the collection view renders a tree of the saved collections."""
+    _stub_objects(*OBJECTS)
+    _stub_tree()
+    FakeCore.data["list_collections"] = [
+        {"id": "collection:1", "name": "Brakes", "member_count": 2},
+    ]
+    await products_user.open("/products")
+
+    products_user.find(marker="view-collection").click()
+    await products_user.should_see(marker="structure-tree")
+
+    assert any(name == "list_collections" for name, _, _ in FakeCore.calls)
+    await products_user.should_not_see(t("grid.tree_load_failed", locale=EN))

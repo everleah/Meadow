@@ -682,9 +682,68 @@ das Netz, ist die Reihenfolge falsch — nicht die Regel.
 - **Messung nach 3b:** `products_page` **2737 → 2182** Zeilen (**−555**), verschachtelte
   Funktionen 106 → **81**, linearer Widget-Code 1092 → **991**; **593 pytest**, mypy **137**
   Dateien.
-- **Nächstes:** `render_tree` (~100 Zeilen mit viel geteiltem Zustand) und die Filterleiste
-  (`set_view`, `reset_filters`); danach ist die Seite unter 2000 Zeilen und es bleibt
-  Feinarbeit.
+- **Inkrement 4 — der Anlegen-Dialog:** `open_create`, `render_create_fields`, `save_object`
+  und die Dialogkonstruktion (Typ-Auswahl, Pflichtfelder, Eltern-Kaption) sind
+  `meadow/frontend/create_object.py` geworden (`CreateObjectDialog` mit `build`/`open`/
+  `save`/`render_fields`; `normalized_name`, `missing_key_names`, `build_attributes` als reine
+  Funktionen, 4 Tests). Der Dialog **baut sein Feldgerüst neu auf**, statt einen Refreshable
+  zu dekorieren (`form_host.clear()` + `with form_host:`) — das war die bewusste Wahl gegen
+  ein Typ-Risiko des Dekorators. Zwei Seitentests pinnen die zwei Verträge des Schreibens:
+  ohne Baumauswahl geht `parent=None` mit, mit ausgewähltem Knoten `parent="product:1"`
+  (**der Kompositions-Elternteil ist Teil des Schreibens**, Wurzelvertrag).
+- **Zwei Fallen dieses Inkrements, beide sofort generalisierbar:**
+  1. **Importzyklus `grid ↔ multilang`.** `multilang` liest `resolve_value` aus `grid`; solange
+     `grid` den Editor *nach* `display` importierte, ging das gut, als `create_object` (rein
+     alphabetisch) **vor** `display` kam, brach `import meadow.frontend.grid` ab. Der Editor
+     wird jetzt **in der Methode** importiert (mit Begründung im Code) — nicht die
+     Importreihenfolge „reparieren", sondern den Zyklus an der schwächsten Stelle lösen.
+  2. **mypy `has-type`-Kaskade.** Ein **selbstreferenzierender lokaler Wert** (`create_btn`
+     verweist auf `create_dialog`, dessen Konstruktor einen Rückruf bekommt, der wiederum
+     Seitenszustand liest) ließ mypy die Typinferenz des *ganzen* Funktionsrumpfs aufgeben:
+     **24** Fehler `Cannot determine type of …` verteilt über die Seite, darunter Namen weit
+     weg von der Änderung (`grid`, `staged_label`). Eine einzige **explizite Annotation** am
+     selbstreferenzierenden Wert (`create_dialog: CreateObjectDialog = …`) brachte alle 24 auf
+     0. Bei einer solchen Kaskade also nicht die genannten Stellen jagen, sondern den
+     selbstreferenzierenden Wert annotieren.
+- **Eine dritte Falle kommt aus dem Netz selbst:** `User.find(marker=…)` **wirft**, wenn
+  nichts passt (statt leer zurückzukommen). Ein Warten über `bool(find(...).elements)` ist
+  damit kein Warten — es schlägt beim ersten Versuch fehl, obwohl der Dialog einen Moment
+  später da ist. Für „warten, bis sichtbar" ist `await user.should_see(marker=…)` richtig
+  (`_wait_until` bleibt für Zustände ohne Marker, z. B. aufgezeichnete Kern-Aufrufe).
+- **Fund nebenbei:** die Seitenschleife baute `type_options` (`{Typ: Label}`) noch einmal auf,
+  obwohl der Dialog seine eigene Übersetzungstabelle mitbringt — ruff meldete die Zuweisung
+  als ungenutzt. Solche Reste sind der Normalfall beim Verschieben und ein Grund, die Gates
+  nach **jedem** Inkrement laufen zu lassen.
+- **Messung nach 4:** `products_page` **2182 → 2049** Zeilen (vom Ausgangswert **2737** also
+  −688), verschachtelte Funktionen 81 → **75**, linearer Widget-Code 991 → **968**;
+  **599 pytest**, mypy **138** Dateien, Deslop-Scan **0** Befunde.
+- **Inkrement 3b/3a — der Navigationsbaum:** `render_tree` (103 Zeilen) plus die beiden
+  reinen Helfer `collection_label`/`collection_node` sind `meadow/frontend/tree_panel.py`
+  geworden. Weil der Baum sehr viel Seitenszustand liest, bekommt das Panel ihn als
+  **Momentaufnahme**: `TreeState` ist eine eingefrorene Datenklasse (Kollektionen,
+  Taxonomie-Wurzeln, „mehr"-Flag, *uncategorized*-Knoten, Auswahl, Struktur-Knoten,
+  Server-Treffer, Treffer-Query, Vorfahren-Pfad), die die Seite als Rückruf liefert —
+  gelesen wird bei **jedem** Rendern, damit nie ein veralteter Stand gezeichnet wird. Die
+  sechs Selektions-/Lade-Rückrufe und die zwei Treffer-Aktionen kommen ebenfalls aus der
+  Seite; zurück kommt `RenderedTree` (Baum-Widget + Wurzelknoten). `render_tree` bleibt als
+  dünner Seiten-Wrapper (die Aufrufer bleiben unverändert). **Netz zuerst:** zwei Seitentests
+  pinnen die zwei Zweige, die sonst niemand prüfte — der Struktur-Zweig zeichnet den Baum
+  (`structure-tree`, kein „Laden fehlgeschlagen") und der Kollektions-Zweig nach dem Klick
+  auf die Ansichtsschaltfläche (dafür bekamen die drei Ansichtsbuttons die Marker
+  `view-structure`/`view-category`/`view-collection`).
+- **Werkzeug-Lehre (kostete drei rote Läufe):** ein **einzeiliger** `oldString` passt
+  unabhängig von der Einrückung — wer damit einen mehrzeiligen Block *einfügt*, landet
+  schnell auf der falschen Ebene (hier: 8 statt 20 Leerzeichen, dann 24 statt 20) und
+  zerbricht die Datei. Vor dem Einfügen eines Blocks also immer den **umgebenden Block
+  vollständig lesen** und die Einrückung aus dem Original übernehmen.
+- **Messung nach 3b/3a:** `products_page` **2049 → 1969** Zeilen (vom Ausgangswert **2737**
+  also **−768**, damit unter der angepeilten 2000er-Marke), verschachtelte Funktionen 75 →
+  **72**, linearer Widget-Code 968 → **1000** (der Wrapper und die Panel-Konstruktion
+  zählen dort mit); **601 pytest**, mypy **138** Dateien, Deslop-Scan **0** Befunde.
+  Größte verbliebene Einzelfunktionen: `refresh_references` 61, `fetch_filtered` 53,
+  `save` 51.
+- **Nächstes:** `set_view` (25 Zeilen, schaltet viele Panels sichtbar/unsichtbar) und
+  `reset_filters`; danach die Feinarbeit, die §4.11 nennt.
 
 ## 5. Workflow
 
@@ -784,11 +843,17 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (2672 Zeilen, §4.11): **Inkremente 1 und 2a umgesetzt**
-   (reine Reduktionen in `bulk_report.py` + 6 Tests, Wizard-Entscheidungen in
-   `bulk_edit.py` + 10 Tests); Messwerkzeug (`scripts/grid_structure.py`) und Seitentests
-   (`tests/test_products_page.py`) stehen, Inkrement 2b (Dialoghülle + `refresh_config`)
-   ist als nächster Block geordnet.
+3. **Struktur-Umbau `products_page`** (Ausgangswert 2737 Zeilen, §4.11): **Inkremente 1–4
+   und 3b/3a umgesetzt** — reine Reduktionen (`bulk_report.py` + 6 Tests, `bulk_edit.py` +
+   10 Tests), Wizard (`bulk_wizard.py` + 16 reine und 2 Seitentests), Bedingungsdialog
+   (`where_dialog.py`), Spaltenansichten (`column_views.py`), Anlegen-Dialog
+   (`create_object.py` + 4 reine und 2 Seitentests), Navigationsbaum
+   (`tree_panel.py`, Zustand als eingefrorene `TreeState`-Momentaufnahme); die Seite ist bei
+   **1969 Zeilen** (**−768**, damit unter der 2000er-Marke), Messwerkzeug
+   (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`, **13**
+   Tests) tragen jeden Schritt. **Offen:** `set_view`/`reset_filters` (Filterleiste) und die
+   Feinarbeit größerer Einzelfunktionen (`refresh_references` 61, `fetch_filtered` 53,
+   `save` 51).
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.
