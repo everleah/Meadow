@@ -29,6 +29,7 @@ import logging
 from datetime import datetime
 from typing import Any, Protocol
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -88,7 +89,7 @@ def _fmt_dt(value: str | None) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -96,7 +97,7 @@ def _json_pretty(value: object) -> str:
     """Pretty-prints a JSON value for the parameters textarea."""
     try:
         return _json.dumps(value, indent=2, ensure_ascii=False)
-    except Exception:  # noqa: BLE001 - fall back to the raw string
+    except TypeError, ValueError:  # fall back to the raw string
         return str(value)
 
 
@@ -107,7 +108,7 @@ def _parse_parameters(text: str | None) -> dict | None:
         return {}
     try:
         parsed = _json.loads(value)
-    except Exception as exc:  # noqa: BLE001 - show a friendly warning
+    except ValueError as exc:  # a body that is not JSON shows a warning
         ui.notify(f"{t('connectors.invalid_json')}: {exc}", color="warning")
         return None
     return parsed if isinstance(parsed, dict) else {}
@@ -150,7 +151,7 @@ async def load_option_sources(client: OptionSourceClient, token: str) -> dict[st
         option_sources["object_types"] = [
             str(item.get("name")) for item in object_types if item.get("name")
         ]
-    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+    except (CoreError, httpx.HTTPError) as error:  # the picker then only offers entered values
         log.warning("connector form: object types unavailable (%s)", error)
     try:
         # The whole vocabulary (one request): a connector writes into own attributes
@@ -160,7 +161,7 @@ async def load_option_sources(client: OptionSourceClient, token: str) -> dict[st
         option_sources["attribute_names"] = [
             str(item.get("name")) for item in definitions if item.get("name")
         ]
-    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+    except (CoreError, httpx.HTTPError) as error:  # the picker then only offers entered values
         log.warning("connector form: attribute names unavailable (%s)", error)
     try:
         languages = await client.list_languages(token)
@@ -169,14 +170,14 @@ async def load_option_sources(client: OptionSourceClient, token: str) -> dict[st
             for item in languages
             if item.get("active") and item.get("code") not in (None, "root")
         ]
-    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+    except (CoreError, httpx.HTTPError) as error:  # the picker then only offers entered values
         log.warning("connector form: languages unavailable (%s)", error)
     try:
         channels = await client.list_channels(token, active=True)
         option_sources["channels"] = [
             str(item.get("code")) for item in channels if item.get("code")
         ]
-    except Exception as error:  # noqa: BLE001 - the picker then only offers entered values
+    except (CoreError, httpx.HTTPError) as error:  # the picker then only offers entered values
         log.warning("connector form: channels unavailable (%s)", error)
     return option_sources
 
@@ -192,7 +193,7 @@ async def connectors_page() -> None:
 
     try:
         connectors = await client.list_connectors(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("connectors.load_failed")).classes("text-subtitle1 text-negative")
         return
 
@@ -207,7 +208,7 @@ async def connectors_page() -> None:
                 continue
             schemas[key] = entry
             type_labels[key] = t(str(entry.get("label_key") or key))
-    except Exception:  # noqa: BLE001 - degrade to the fallback type list
+    except CoreError, httpx.HTTPError:  # degrade to the fallback type list
         schemas = {}
         type_labels = {}
     if not type_labels:
@@ -617,14 +618,14 @@ async def connectors_page() -> None:
             nonlocal connectors
             try:
                 connectors = await client.list_connectors(token, limit=1000)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 
         async def get_selected() -> dict | None:
             try:
                 rows = await grid.get_selected_rows()
-            except Exception:  # noqa: BLE001 - degrade to no selection
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
                 rows = []
             if not rows:
                 return None

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
@@ -40,13 +41,13 @@ async def channels_page() -> None:
 
     try:
         channels = await client.list_channels(token, limit=1000)
-    except Exception:  # noqa: BLE001 - show a friendly message on failure
+    except CoreError, httpx.HTTPError:  # show a friendly message on failure
         ui.label(t("channels.load_failed")).classes("text-subtitle1 text-negative")
         return
 
     try:
         languages = await client.list_languages(token)
-    except Exception:  # noqa: BLE001 - degrade to the UI language only
+    except CoreError, httpx.HTTPError:  # degrade to the UI language only
         languages = []
 
     def _active_badge(active: bool) -> str:
@@ -166,7 +167,7 @@ async def channels_page() -> None:
             nonlocal channels
             try:
                 channels = await client.list_channels(token, limit=1000)
-            except Exception:  # noqa: BLE001 - keep the cached list on failure
+            except CoreError, httpx.HTTPError:  # keep the cached list on failure
                 return
             grid.run_grid_method("setGridOption", "rowData", _rows())
 

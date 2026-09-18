@@ -22,6 +22,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+import httpx
 from nicegui import app, ui
 
 from meadow.frontend import config, taxonomy_tree
@@ -55,7 +56,7 @@ async def _category_objects(
     for node_type in node_types:
         try:
             rows = await client.list_objects(token, object_type=node_type, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to the types that worked
+        except CoreError, httpx.HTTPError:  # degrade to the types that worked
             continue
         objects.update({str(o.get("id")): o for o in rows if isinstance(o, dict) and o.get("id")})
     return objects
@@ -102,7 +103,7 @@ async def categories_page() -> None:
         # type flagged `taxonomy: true`. They are the *nodes* of the trees.
         try:
             object_types = await client.list_object_types(token, limit=1000)
-        except Exception:  # noqa: BLE001 - degrade to the built-in taxonomy
+        except CoreError, httpx.HTTPError:  # degrade to the built-in taxonomy
             object_types = []
         taxonomy_types = taxonomy_type_names(object_types)
         # `all` feeds the node-id lookup (labels of every taxonomy), `key` is the
@@ -114,14 +115,14 @@ async def categories_page() -> None:
         # nothing but the standard's first 1000 `EF…` rows.
         try:
             attribute_definitions = await client.list_attribute_vocabulary(token)
-        except Exception:  # noqa: BLE001 - the feature picker stays empty
+        except CoreError, httpx.HTTPError:  # the feature picker stays empty
             attribute_definitions = []
 
         try:
             category_roots = await _category_roots(
                 client, token, locale, PRIMARY_CATEGORY_DEF, nodes["key"]
             )
-        except Exception:  # noqa: BLE001 - show a friendly message on failure
+        except CoreError, httpx.HTTPError:  # show a friendly message on failure
             ui.label(t("categories.load_failed")).classes("text-subtitle1 text-negative")
             return
         category_objects = await _category_objects(client, token, locale, taxonomy_types)
@@ -131,7 +132,7 @@ async def categories_page() -> None:
         # dimension drives the counters and the relation used by "show in grid".
         try:
             relation_definitions = await client.list_relation_definitions(token)
-        except Exception:  # noqa: BLE001 - degrade to the primary taxonomy only
+        except CoreError, httpx.HTTPError:  # degrade to the primary taxonomy only
             relation_definitions = []
         dimensions = dimension_options(
             relation_definitions, locale, primary_label=t("categories.dimension_primary")
@@ -168,7 +169,7 @@ async def categories_page() -> None:
         # language icon opens a dialog to edit it in every active data language.
         try:
             languages = await client.list_languages(token)
-        except Exception:  # noqa: BLE001 - fall back to the UI languages only
+        except CoreError, httpx.HTTPError:  # fall back to the UI languages only
             languages = []
         name_langs = [
             lang
@@ -248,7 +249,7 @@ async def categories_page() -> None:
                 return
             try:
                 obj = await client.get_object(token, node_id)
-            except Exception:  # noqa: BLE001 - degrade to a bare selection
+            except CoreError, httpx.HTTPError:  # degrade to a bare selection
                 obj = {"id": node_id}
             selected_category.update(
                 {
@@ -386,7 +387,7 @@ async def categories_page() -> None:
                     code_prefix=True,
                     completeness=False,
                 )
-            except Exception:  # noqa: BLE001 - keep the tree on failure
+            except CoreError, httpx.HTTPError:  # keep the tree on failure
                 ui.notify(t("grid.taxonomy_search_failed"), color="negative")
                 return
             tree_override[:] = taxonomy_tree.search_nodes(hits)
@@ -404,7 +405,7 @@ async def categories_page() -> None:
             """
             try:
                 path = await client.list_object_ancestors(token, node_id)
-            except Exception:  # noqa: BLE001 - keep the hit list on failure
+            except CoreError, httpx.HTTPError:  # keep the hit list on failure
                 ui.notify(t("grid.taxonomy_path_failed"), color="negative")
                 return
             nodes_list = [tree_node_from_object(node, locale) for node in path]
@@ -448,7 +449,7 @@ async def categories_page() -> None:
                 category_roots = await _category_roots(
                     client, token, locale, dimension["key"], nodes["key"]
                 )
-            except Exception:  # noqa: BLE001 - keep the cached roots on failure
+            except CoreError, httpx.HTTPError:  # keep the cached roots on failure
                 category_roots = category_roots
             roots_has_more["value"] = taxonomy_tree.has_more(len(category_roots))
             refresh_tree_options()
@@ -608,7 +609,7 @@ async def categories_page() -> None:
                     category_id = selected_category["id"]
                     try:
                         features = await client.list_category_attributes(token, category_id)
-                    except Exception:  # noqa: BLE001 - degrade to an empty list
+                    except CoreError, httpx.HTTPError:  # degrade to an empty list
                         features = []
                     attached = {str(row.get("attribute")) for row in features}
 

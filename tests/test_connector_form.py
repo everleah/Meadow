@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from meadow.frontend.api import CoreError
 from meadow.frontend.connector_form import (
     MISSING,
     apply_patch,
@@ -506,14 +507,18 @@ def test_i18n_keys_of_the_schema_exist() -> None:
 
 
 class _OptionClient:
-    """A client stub with the four option sources of the form (`OptionSourceClient`)."""
+    """A client stub with the four option sources of the form (`OptionSourceClient`).
+
+    A failing run raises what the real client raises (`CoreError`) - the degraded
+    path is only reachable for the core's own failures.
+    """
 
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
 
     def _check(self) -> None:
         if self.fail:
-            raise RuntimeError("core unavailable")
+            raise CoreError("core unavailable")
 
     async def list_object_types(self, token: str, limit: int = 1000) -> list[dict]:
         self._check()

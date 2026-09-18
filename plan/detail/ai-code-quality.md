@@ -470,22 +470,31 @@ Die Prüfung ergab vier Kategorien mit klarer Entscheidung:
 **Werkzeug-Lehren:** `ruff format` schreibt `except (A, B):` in die PEP-758-Form
 `except A, B:` um (Zielversion 3.14) – und `B025` deckte dabei eine echte Doppelung auf: in
 `form.py` stand `CoreError` in zwei Klauseln desselben `try`, dort bleibt nur
-`httpx.HTTPError`. Außerdem brauchen **mehrzeilige Ersetzungen die exakte Einrückung**
-(einzeilige sind tolerant); bei 13 identischen Blöcken in `api.py` ist eine
-Einzel-Ersetzung deshalb nicht möglich.
+`httpx.HTTPError`. **PEP 758 verlangt aber Klammern, sobald `as` im Spiel ist:**
+`except A, B as e:` ist ein Syntaxfehler, `except (A, B) as e:` korrekt (in `connectors.py`
+zuerst falsch geschrieben, `ruff`/mypy fanden es sofort). Außerdem brauchen **mehrzeilige
+Ersetzungen die exakte Einrückung** (einzeilige sind tolerant); bei 13 identischen Blöcken in
+`api.py` ist eine Einzel-Ersetzung deshalb nicht möglich.
 
-**Stand:** 234 → **141** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
-`attribute_definitions.py` 16 → 2, `api.py` 15 → 13, `object_types.py` 6 → 1, `users.py`
-6 → 1, `logs.py` 4 → 0, `object_picker.py` 4 → 0, `enum_sets.py` 3 → 0, `units.py` 3 → 0.
-Die verbliebenen sind die AG-Grid-Bridges (Kategorie 2), in `api.py` die 13 identischen
-Blöcke (ausgeschriebene Form von `self._error_detail(response)`).
+**Die Verengung hat einen Test-Double entlarvt:** `_OptionClient` in
+`tests/test_connector_form.py` warf `RuntimeError("core unavailable")`, der echte Client
+wirft `CoreError` – der Degradationspfad war also mit einem Fehler getestet, den der Kern
+nie erzeugt. Der Stub wirft jetzt `CoreError` und sagt das im Docstring. Zweite Bestätigung
+der Lehre „ein Test-Double macht die schmale Schnittstelle sichtbar“ (§4.9).
 
-**Nächste Schritte:** die restlichen Seiten nach Kategorie 1 (`connectors.py` 12,
-`categories.py` 11, `rules.py` 9, `saved_searches.py` 9, `relation_definitions.py` 7,
-`export_page.py` 6, `views.py`/`channels.py`/`export_profiles.py`/`import_page.py` je 3,
-`config_page.py`/`languages.py`/`settings.py` je 2, `layout.py`/`auth.py`/`password.py` je 1 …),
-die 13 `api.py`-Blöcke entdoppeln (identischer Text ⇒ zeilenweise statt per
-Einzel-Ersetzung) und die Worker-Stellen (Kategorie 3) sichten.
+**Stand:** 234 → **111** Ausweichungen. Erledigt: `grid.py` 33 → 3, `form.py` 23 → 0,
+`attribute_definitions.py` 16 → 2, `api.py` 15 → 13, `connectors.py` 12 → 1,
+`categories.py` 11 → 0, `export_page.py` 6 → 0, `object_types.py` 6 → 1, `users.py` 6 → 1,
+`logs.py` und `object_picker.py` je 4 → 0, `channels.py`/`enum_sets.py`/`units.py` je 3 → 0.
+Die verbliebenen sind die AG-Grid-Bridges (Kategorie 2) und in `api.py` die 13 identischen
+Blöcke.
+
+**Nächste Schritte:** die restlichen Seiten nach Kategorie 1 (`rules.py` 9,
+`saved_searches.py` 9, `relation_definitions.py` 7, `webhooks.py` 5, `views.py`/
+`export_profiles.py`/`import_page.py` je 3, `config_page.py`/`languages.py`/`settings.py`
+je 2, `layout.py`/`auth.py`/`password.py` je 1), die 13 `api.py`-Blöcke entdoppeln
+(identischer Text ⇒ zeilenweise statt per Einzel-Ersetzung) und die Worker-Stellen
+(Kategorie 3) sichten.
 
 ## 5. Workflow
 
@@ -582,9 +591,10 @@ so, was er behauptet.
    vollständig inkl. Frontend, `tests/`, `scripts/`) sind grün, `check_untyped_defs` ist an,
    und die Fixtures sind bewusst ausgenommen. **Entschieden:** NiceGUIs Element-Typing wird
    geprüft, nicht als Grenze geführt (§4.7).
-2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, 234 → 165 Stellen
-   sind umgesetzt. Offen: die restlichen Frontend-Seiten (Kategorie „Kern-Aufruf“) und die
-   13 identischen Blöcke in `api.py`; die Worker-Stellen bleiben bewusst breit.
+2. **`# noqa: BLE001` verengen** (§4.10): Die Entscheidungsregel steht, **234 → 111** Stellen
+   sind umgesetzt. Offen: `rules.py`/`saved_searches.py`/`relation_definitions.py` und die
+   kleinen Seiten (Kategorie „Kern-Aufruf“), die 13 identischen Blöcke in `api.py`; die
+   Worker-Stellen bleiben bewusst breit.
 3. **Struktur-Umbau `products_page`** (2323 Zeilen, §4.5): erst Helfer herausziehen
    und Tests aufbauen, dann Seitenabschnitte überführen.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash

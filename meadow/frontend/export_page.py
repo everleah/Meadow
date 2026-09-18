@@ -22,6 +22,7 @@ import os
 import tempfile
 from datetime import datetime
 
+import httpx
 from fastapi import Request
 from nicegui import app, ui
 
@@ -81,7 +82,7 @@ def _fmt_dt(value: object) -> str:
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:  # noqa: BLE001 - leave the raw value on parse failure
+    except ValueError:  # leave the raw value on parse failure
         return str(value)
 
 
@@ -144,7 +145,7 @@ async def export_page(request: Request) -> None:
             # Unknown reference data: an empty list, never the capped paged list
             # (which would silently offer the first 1000 standard features).
             return []
-        except Exception:  # noqa: BLE001 - degrade so the wizard still opens
+        except CoreError, httpx.HTTPError:  # degrade so the wizard still opens
             return []
 
     object_types = await _safe("object_types")
@@ -240,7 +241,7 @@ async def export_page(request: Request) -> None:
                 return len(await client.list_objects(token, category=detail_value, limit=1000))
             if kind == "channel":
                 return len(await client.list_objects(token, released_for=detail_value, limit=1000))
-        except Exception:  # noqa: BLE001 - count is best-effort
+        except CoreError, httpx.HTTPError:  # count is best-effort
             return None
         return None
 
@@ -896,7 +897,7 @@ async def export_page(request: Request) -> None:
         profiles: list[dict] = []
         try:
             profiles = await client.list_export_profiles(token)
-        except Exception:  # noqa: BLE001 - the wizard works without profiles
+        except CoreError, httpx.HTTPError:  # the wizard works without profiles
             profiles = []
 
         def _profile_parameters() -> dict:
@@ -1207,7 +1208,7 @@ async def export_page(request: Request) -> None:
                 definitions = await client.list_job_definitions(
                     token, job_type="outbound_export", limit=200
                 )
-            except Exception:  # noqa: BLE001 - degrade to an empty list
+            except CoreError, httpx.HTTPError:  # degrade to an empty list
                 definitions = []
             structured = [d for d in definitions if (d.get("parameters") or {}).get("source")]
             with schedule_box:
@@ -1274,7 +1275,7 @@ async def export_page(request: Request) -> None:
             recent_ids.clear()
             try:
                 runs = await client.list_job_runs(token, limit=100)
-            except Exception:  # noqa: BLE001 - degrade to an empty list
+            except CoreError, httpx.HTTPError:  # degrade to an empty list
                 runs = []
             exports = [
                 run for run in runs if str((run.get("result") or {}).get("format") or "") in FORMATS
