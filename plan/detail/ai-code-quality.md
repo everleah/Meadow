@@ -580,6 +580,17 @@ Regel für jeden Schritt: **keine Verhaltensänderung**, und der reine Teil wand
 Modul der Größe `export_fields.py` bzw. `load_option_sources` (§4.4c). Bricht Schritt 1
 das Netz, ist die Reihenfolge falsch — nicht die Regel.
 
+**Stand Inkrement 1 (2026-09-18): umgesetzt.** Neues Modul
+`meadow/frontend/bulk_report.py` mit zwei reinen Reduktionen — `read_bulk_report`
+(Zählwerte, welche Zusammenfassungszeile gilt, welche Einträge als Fehler und welche als
+vom Workflow abgelehnt gelten) und `replace_target_options` (welche Attribute ein
+Find & Replace anbieten darf) — plus `tests/test_bulk_report.py` (**6 Tests**). Die Seite
+liest den Bericht nur noch (`report.errors`, `report.is_replace`, …); die Entscheidungen
+liegen getestet vor. **Messung:** 2737 → **2722** Zeilen, linearer Widget-Code 1092 → **1085**,
+Tests 566 → **572**, mypy 133 → **134** Dateien. Der Zeilengewinn ist absichtlich klein: der
+Wert dieses Inkrements ist die Testbarkeit — der große Block ist Inkrement 2 (Bulk-Wizard), und
+dafür ist das Netz jetzt da.
+
 ## 5. Workflow
 
 Der Workflow wird bewusst gestartet und repariert nie von selbst:
@@ -678,9 +689,10 @@ so, was er behauptet.
 2. **`# noqa: BLE001` verengen:** **abgeschlossen** (§4.10) – **234 → 38**, und jede der 38
    verbliebenen Stellen ist eine benannte breite Grenze (Worker-Isolation, AG-Grid-Bridges,
    injizierter Loader, Datei-Dekoder).
-3. **Struktur-Umbau `products_page`** (2737 Zeilen, §4.11): **begonnen** – Messwerkzeug
+3. **Struktur-Umbau `products_page`** (2722 Zeilen, §4.11): **Inkrement 1 umgesetzt**
+   (reine Reduktionen in `meadow/frontend/bulk_report.py` + 6 Tests); Messwerkzeug
    (`scripts/grid_structure.py`) und Seitentests (`tests/test_products_page.py`) stehen,
-   die Inkremente 1–4 sind dort geordnet.
+   Inkrement 2 (Bulk-Wizard) ist als nächster Block geordnet.
 4. **Linux-Lauf von `scripts/deslop.sh`:** das Skript lief erstmals real (Git Bash
    unter Windows: `all` und `staged`, jeweils Exit 0); der eigentliche Linux-Lauf
    folgt mit CI/VPS. Danach den Rauschpegel der Stilgruppen für `docs/user/` prüfen.

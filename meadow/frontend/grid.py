@@ -27,6 +27,7 @@ from nicegui import app, ui
 from meadow.frontend import config, edit_queue, search_form, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
+from meadow.frontend.bulk_report import read_bulk_report, replace_target_options
 from meadow.frontend.display import (
     DEFAULT_RELEASE_STATUS,
     channel_options,
@@ -2435,9 +2436,7 @@ async def products_page(request: Request) -> None:
                 ui.notify(t("grid.bulk_failed"), color="negative")
 
         def _show_bulk_report(result: dict) -> None:
-            processed = str(result.get("processed", 0))
-            succeeded = str(result.get("succeeded", 0))
-            failed = str(result.get("failed", 0))
+            report = read_bulk_report(result)
             with (
                 ui.dialog() as report_dialog,
                 ui.card().classes("w-[32rem] max-h-[60vh] overflow-y-auto"),
@@ -2445,42 +2444,36 @@ async def products_page(request: Request) -> None:
                 ui.label(t("grid.bulk_report")).classes("text-subtitle1")
                 ui.label(
                     t("grid.bulk_report_summary").format(
-                        processed=processed, succeeded=succeeded, failed=failed
+                        processed=report.processed,
+                        succeeded=report.succeeded,
+                        failed=report.failed,
                     )
                 ).classes("text-caption")
-                if result.get("op") == "replace_text":
+                if report.is_replace:
                     ui.label(
                         t("grid.replace_summary").format(
-                            replacements=result.get("replacements", 0),
-                            skipped=result.get("skipped", 0),
+                            replacements=report.replacements, skipped=report.skipped
                         )
                     ).classes("text-caption")
-                if result.get("op") in ("add_relation", "remove_relation"):
+                if report.is_relation:
                     ui.label(
                         t("grid.relation_summary").format(
-                            relations=result.get("relations", 0),
-                            skipped=result.get("skipped", 0),
+                            relations=report.relations, skipped=report.skipped
                         )
                     ).classes("text-caption")
-                errors = [r for r in result.get("results", []) if r.get("status") == "error"]
-                if errors:
+                if report.errors:
                     with ui.column().classes("w-full mt-2 gap-1"):
-                        for r in errors:
-                            ui.label(f"{r.get('object_id')} · {r.get('error')}").classes(
-                                "text-caption text-negative"
-                            )
-                blocked = [r for r in result.get("results", []) if r.get("approval_error")]
-                if blocked:
+                        for object_id, error in report.errors:
+                            ui.label(f"{object_id} · {error}").classes("text-caption text-negative")
+                if report.blocked:
                     # The data change is saved; only the workflow transition was
                     # rejected (e.g. by a `workflow_guard` rule).
                     with ui.column().classes("w-full mt-2 gap-1"):
                         ui.label(
-                            t("grid.bulk_approval_blocked").format(count=len(blocked))
+                            t("grid.bulk_approval_blocked").format(count=len(report.blocked))
                         ).classes("text-caption text-warning")
-                        for r in blocked:
-                            ui.label(f"{r.get('object_id')} · {r.get('approval_error')}").classes(
-                                "text-caption text-warning"
-                            )
+                        for object_id, error in report.blocked:
+                            ui.label(f"{object_id} · {error}").classes("text-caption text-warning")
                 with ui.row().classes("w-full justify-end mt-2"):
                     ui.button(t("grid.close"), on_click=report_dialog.close).props("flat")
             report_dialog.open()
@@ -2490,18 +2483,11 @@ async def products_page(request: Request) -> None:
         # of the selection. It runs as the `replace_text` bulk operation (same
         # scope/progress/report machinery as the wizard) so large selections are
         # processed in the worker instead of blocking the page.
-        replace_attr_options: dict[str, str] = {"": t("grid.replace_all_attributes")}
-        replace_attr_options["name"] = t("grid.name")
-        for definition in definitions:
-            name = str(definition.get("name") or "")
-            if not name or definition.get("computed"):
-                continue
-            if str(definition.get("type") or "") not in ("text", "url"):
-                continue
-            if not visible_in_picker(definition):
-                continue
-            label = str(resolve_value(definition.get("label"), locale) or name)
-            replace_attr_options[name] = label if label == name else f"{label} ({name})"
+        replace_attr_options: dict[str, str] = {
+            "": t("grid.replace_all_attributes"),
+            "name": t("grid.name"),
+            **replace_target_options(definitions, locale),
+        }
 
         replace_dialog = ui.dialog()
         with replace_dialog, ui.card().classes("w-[34rem] max-w-[92vw]"):
