@@ -39,6 +39,10 @@ pub struct Config {
     pub rules_subject: String,
     /// NATS subject for rule-script compile validation.
     pub rules_compile_subject: String,
+    /// NATS subject for AI generation (context building + model call in the worker).
+    pub ai_generate_subject: String,
+    /// NATS subject for the AI connection test (`POST /ai/test`).
+    pub ai_test_subject: String,
     /// Timeout for a rule-evaluation request, in milliseconds.
     pub rules_timeout_ms: u64,
     /// Degrade mode: on transport failure, allow the write and skip rules.
@@ -81,6 +85,8 @@ impl Config {
             event_relay_interval_seconds: env_or_parse("EVENT_RELAY_INTERVAL_S", 5),
             rules_subject: env_or("RULES_SUBJECT", "rules.evaluate"),
             rules_compile_subject: env_or("RULES_COMPILE_SUBJECT", "rules.compile"),
+            ai_generate_subject: env_or("AI_GENERATE_SUBJECT", "ai.generate"),
+            ai_test_subject: env_or("AI_TEST_SUBJECT", "ai.test"),
             rules_timeout_ms: env_or_parse("RULES_TIMEOUT_MS", 2000),
             rules_degrade: env_or_bool("RULES_DEGRADE", false),
             rules_breaker_threshold: env_or_parse("RULES_BREAKER_THRESHOLD", 3),

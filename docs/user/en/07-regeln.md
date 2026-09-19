@@ -78,6 +78,25 @@ def run(obj, ctx, result):
         result.add_error("net_price", "range", "Net price must be positive.")
 ```
 
+## Describing a rule instead of writing it
+
+With the **AI assistance** switched on in the system settings, a **Create a
+suggestion** button sits below the script. Describe in your own words what the
+rule should do and pick a mode:
+
+- **Write new** — a complete script grows out of the description.
+- **Improve existing** — the script in the editor is the starting point.
+- **Explain** — the other direction: an existing script becomes one sentence for
+  the *Description* field.
+
+The suggestion appears in the dialog and only reaches the editor through
+**Apply** — and it is still saved through **Save** alone. Every suggestion passes
+the same check as hand-written code; when the sandbox rejects it, the reason is
+shown.
+
+With the assistance switched off, the same spot says why: it is enabled under
+*System settings*.
+
 ## Rule Lab: try before you save
 
 The **Rule Lab** runs a rule without storing anything. You choose whether to

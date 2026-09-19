@@ -1614,6 +1614,36 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
 
+    # --- AI assistance -----------------------------------------------------
+    async def ai_generate(self, token: str, payload: dict) -> dict:
+        """Asks for a suggestion (``POST /ai/generate``, admin).
+
+        The reply is ``{ok, script, ...}`` on success and ``{ok: false, errors}``
+        when the model or the policy check refused — a refusal is a normal answer,
+        not an HTTP error.
+        """
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/ai/generate",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def ai_test(self, token: str) -> dict:
+        """Tests the configured provider (``POST /ai/test``, admin)."""
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/ai/test",
+                json={},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     # --- Configuration export/import (MCF) --------------------------------
     async def export_config(
         self,

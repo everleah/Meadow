@@ -4,6 +4,7 @@
 //! value inheritance, jobs, and the event system. The architecture is
 //! documented in `plan/meadow-pim-architektur.md`.
 
+pub mod ai;
 pub mod api;
 pub mod app;
 pub mod attribute_definition_types;
@@ -76,6 +77,7 @@ pub async fn run() {
         cache: std::sync::Arc::new(cache::MetaCache::default()),
         key_locks: std::sync::Arc::new(key_lock::KeyLocks::new()),
         rules: rules::RulesClient::from_config(&config, settings.clone()),
+        ai: ai::AiClient::from_config(&config, settings.clone()),
         config,
         settings,
     };

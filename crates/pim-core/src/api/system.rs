@@ -94,7 +94,61 @@ fn default_settings() -> Map<String, Value> {
     settings.insert("rules_degrade".to_owned(), json!(false));
     settings.insert("rules_breaker_threshold".to_owned(), json!(3));
     settings.insert("rules_timeout_ms".to_owned(), json!(2000));
+    // AI assistance (plan/detail/ki-assistenz.md sections 4 and 4.1). Opt-in:
+    // with `ai_enabled = false` the feature is invisible in the UI.
+    settings.insert("ai_enabled".to_owned(), json!(false));
+    settings.insert("ai_provider".to_owned(), json!("generic"));
+    settings.insert("ai_endpoint".to_owned(), json!(""));
+    settings.insert("ai_model".to_owned(), json!(""));
+    settings.insert("ai_api_key".to_owned(), json!(""));
+    settings.insert("ai_temperature".to_owned(), json!(0.2));
+    settings.insert("ai_max_output_tokens".to_owned(), json!(2048));
+    settings.insert("ai_timeout_ms".to_owned(), json!(30_000));
+    settings.insert("ai_max_requests_per_hour".to_owned(), json!(60));
     settings
+}
+
+/// Providers the AI client knows how to talk to (`ai_provider`).
+const AI_PROVIDERS: [&str; 4] = ["generic", "openai", "azure_openai", "ollama"];
+
+/// Settings whose value must never leave the core in a response.
+///
+/// A secret is still **stored** (database or environment) and still used
+/// internally — responses report `configured` instead of the value
+/// (`plan/detail/ki-assistenz.md` section 4).
+fn secret_setting(key: &str) -> bool {
+    matches!(key, "ai_api_key")
+}
+
+/// Whether a setting value counts as set (non-empty string, non-null).
+fn is_configured(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        _ => true,
+    }
+}
+
+/// Replaces every secret value with `null` — the response-shape half of
+/// [`secret_setting`].
+fn mask_secrets(settings: &mut Map<String, Value>) {
+    let keys: Vec<String> = settings.keys().cloned().collect();
+    for key in keys {
+        if secret_setting(&key) {
+            settings.insert(key, Value::Null);
+        }
+    }
+}
+
+/// The masked form of one secret setting: no value, but the UI can tell
+/// whether something is configured and where it comes from.
+fn masked_secret(value: &Value, source: &str) -> Value {
+    json!({
+        "value": Value::Null,
+        "configured": is_configured(value),
+        "secret": true,
+        "source": source,
+    })
 }
 
 /// Returns the default + environment settings (no DB overrides). Used to seed
@@ -141,6 +195,32 @@ fn env_setting(key: &str) -> Option<Value> {
             .and_then(|value| value.parse::<i64>().ok())
             .map(|value| json!(value)),
         "rules_timeout_ms" => std::env::var("RULES_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| json!(value)),
+        "ai_enabled" => std::env::var("AI_ENABLED").ok().map(|value| {
+            json!(matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES"
+            ))
+        }),
+        "ai_provider" => std::env::var("AI_PROVIDER").ok().map(Value::String),
+        "ai_endpoint" => std::env::var("AI_ENDPOINT").ok().map(Value::String),
+        "ai_model" => std::env::var("AI_MODEL").ok().map(Value::String),
+        "ai_api_key" => std::env::var("AI_API_KEY").ok().map(Value::String),
+        "ai_temperature" => std::env::var("AI_TEMPERATURE")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| json!(value)),
+        "ai_max_output_tokens" => std::env::var("AI_MAX_OUTPUT_TOKENS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| json!(value)),
+        "ai_timeout_ms" => std::env::var("AI_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| json!(value)),
+        "ai_max_requests_per_hour" => std::env::var("AI_MAX_REQUESTS_PER_HOUR")
             .ok()
             .and_then(|value| value.parse::<i64>().ok())
             .map(|value| json!(value)),
@@ -200,6 +280,44 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), ApiError> {
             Some(ms) if (100..=60_000).contains(&ms) => Ok(()),
             _ => Err(ApiError::bad_request(
                 "`rules_timeout_ms` must be between 100 and 60000",
+            )),
+        },
+        "ai_enabled" => match value.as_bool() {
+            Some(_) => Ok(()),
+            None => Err(ApiError::bad_request("`ai_enabled` must be a boolean")),
+        },
+        "ai_provider" => match value.as_str() {
+            Some(provider) if AI_PROVIDERS.contains(&provider) => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`ai_provider` must be one of generic|openai|azure_openai|ollama",
+            )),
+        },
+        "ai_endpoint" | "ai_model" | "ai_api_key" => match value.as_str() {
+            Some(_) => Ok(()),
+            None => Err(ApiError::bad_request(format!("`{key}` must be a string"))),
+        },
+        "ai_temperature" => match value.as_f64() {
+            Some(temperature) if (0.0..=2.0).contains(&temperature) => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`ai_temperature` must be a number between 0 and 2",
+            )),
+        },
+        "ai_max_output_tokens" => match value.as_i64() {
+            Some(tokens) if (1..=32_768).contains(&tokens) => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`ai_max_output_tokens` must be between 1 and 32768",
+            )),
+        },
+        "ai_timeout_ms" => match value.as_i64() {
+            Some(ms) if (1_000..=300_000).contains(&ms) => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`ai_timeout_ms` must be between 1000 and 300000",
+            )),
+        },
+        "ai_max_requests_per_hour" => match value.as_i64() {
+            Some(limit) if limit >= 0 => Ok(()),
+            _ => Err(ApiError::bad_request(
+                "`ai_max_requests_per_hour` must be zero or a positive integer",
             )),
         },
         _ => Err(ApiError::bad_request(format!("unknown setting `{key}`"))),
@@ -426,7 +544,12 @@ pub async fn list_settings(
     if params.include_source.unwrap_or(false) {
         resolve_settings_detailed(&state.db).await.map(Json)
     } else {
-        resolve_settings(&state.db).await.map(Json)
+        // The flat form carries no source, so a secret can only be blanked out.
+        let mut resolved = resolve_settings(&state.db).await?;
+        if let Value::Object(map) = &mut resolved {
+            mask_secrets(map);
+        }
+        Ok(Json(resolved))
     }
 }
 
@@ -457,26 +580,26 @@ pub async fn put_setting(
     validate_setting(&key, &body.value)?;
     let user_id = claims.sub.clone();
 
-    // Statements: BEGIN(0), LET(1), UPSERT(2), UPDATE(3), SELECT(4), COMMIT(5).
+    // One write, or the record conflicts with itself: the former form
+    // (`BEGIN; LET $rec; UPSERT $rec CONTENT; UPDATE $rec SET …; SELECT …; COMMIT`)
+    // wrote the same record twice in one transaction, so the **second** save of
+    // any setting answered `409 concurrent write conflict` (found 2026-09-19 while
+    // verifying the AI settings, which are saved one after another).
     let sql = "
-        BEGIN TRANSACTION;
-        LET $rec = type::record('system_setting', $key);
-        UPSERT $rec CONTENT $content;
-        UPDATE $rec SET updated_at = time::now(), updated_by = $user;
-        SELECT * FROM $rec;
-        COMMIT TRANSACTION;
+        UPSERT type::record('system_setting', $key)
+            SET key = $key, value = $value, updated_at = time::now(), updated_by = $user
+            RETURN AFTER;
     ";
-    let content = json!({ "key": key, "value": body.value });
     let mut response = state
         .db
         .inner()
         .query(sql)
         .bind(("key", key.clone()))
-        .bind(("content", content))
+        .bind(("value", body.value.clone()))
         .bind(("user", user_id.clone()))
         .await?
         .check()?;
-    let settings: Vec<Value> = response.take(4)?;
+    let settings: Vec<Value> = response.take(0)?;
     let setting = settings
         .into_iter()
         .next()
@@ -605,10 +728,12 @@ async fn resolve_settings_detailed(db: &Db) -> Result<Value, ApiError> {
             value = env_value;
             source = "env".to_owned();
         }
-        result.insert(
-            key.clone(),
-            json!({ "value": value.clone(), "source": source }),
-        );
+        let entry = if secret_setting(&key) {
+            masked_secret(&value, &source)
+        } else {
+            json!({ "value": value.clone(), "source": source })
+        };
+        result.insert(key.clone(), entry);
     }
 
     let sql = "SELECT * FROM system_setting;";
@@ -622,10 +747,12 @@ async fn resolve_settings_detailed(db: &Db) -> Result<Value, ApiError> {
             continue;
         };
         if result.contains_key(key) {
-            result.insert(
-                key.to_owned(),
-                json!({ "value": value.clone(), "source": "db" }),
-            );
+            let entry = if secret_setting(key) {
+                masked_secret(value, "db")
+            } else {
+                json!({ "value": value.clone(), "source": "db" })
+            };
+            result.insert(key.to_owned(), entry);
         }
     }
 
@@ -668,6 +795,49 @@ mod tests {
         assert!(validate_setting("log_persist_categories", &json!(["nope"])).is_err());
         assert!(validate_setting("log_rate_limit", &json!(1000)).is_ok());
         assert!(validate_setting("unknown_setting", &json!(1)).is_err());
+    }
+
+    #[test]
+    fn setting_ai_validation() {
+        assert!(validate_setting("ai_enabled", &json!(true)).is_ok());
+        assert!(validate_setting("ai_enabled", &json!("yes")).is_err());
+        assert!(validate_setting("ai_provider", &json!("azure_openai")).is_ok());
+        assert!(validate_setting("ai_provider", &json!("anthropic")).is_err());
+        assert!(validate_setting("ai_endpoint", &json!("https://api.deepseek.com/v1")).is_ok());
+        assert!(validate_setting("ai_endpoint", &json!(42)).is_err());
+        assert!(validate_setting("ai_model", &json!("deepseek-chat")).is_ok());
+        assert!(validate_setting("ai_temperature", &json!(0.2)).is_ok());
+        assert!(validate_setting("ai_temperature", &json!(2)).is_ok());
+        assert!(validate_setting("ai_temperature", &json!(2.5)).is_err());
+        assert!(validate_setting("ai_max_output_tokens", &json!(2048)).is_ok());
+        assert!(validate_setting("ai_max_output_tokens", &json!(0)).is_err());
+        assert!(validate_setting("ai_timeout_ms", &json!(30_000)).is_ok());
+        assert!(validate_setting("ai_timeout_ms", &json!(200)).is_err());
+        assert!(validate_setting("ai_max_requests_per_hour", &json!(0)).is_ok());
+        assert!(validate_setting("ai_max_requests_per_hour", &json!(-1)).is_err());
+    }
+
+    #[test]
+    fn the_api_key_is_secret_and_never_serialised() {
+        assert!(secret_setting("ai_api_key"));
+        assert!(!secret_setting("ai_endpoint"));
+        // The value is gone from the response, the source and `configured` stay.
+        let entry = masked_secret(&json!("sk-secret"), "db");
+        assert_eq!(entry.get("value"), Some(&Value::Null));
+        assert_eq!(entry.get("configured"), Some(&json!(true)));
+        assert_eq!(entry.get("secret"), Some(&json!(true)));
+        assert_eq!(entry.get("source"), Some(&json!("db")));
+        assert!(!entry.to_string().contains("sk-secret"));
+        // An unset key is reported as not configured (the UI hides the buttons).
+        let unset = masked_secret(&json!("  "), "default");
+        assert_eq!(unset.get("configured"), Some(&json!(false)));
+
+        let mut flat = Map::new();
+        flat.insert("ai_api_key".to_owned(), json!("sk-secret"));
+        flat.insert("ai_model".to_owned(), json!("deepseek-chat"));
+        mask_secrets(&mut flat);
+        assert_eq!(flat.get("ai_api_key"), Some(&Value::Null));
+        assert_eq!(flat.get("ai_model"), Some(&json!("deepseek-chat")));
     }
 
     fn entry(level: &str, category: &str, message: &str) -> IngestLogEntry {

@@ -27,6 +27,7 @@ from meadow.ai.context import (
     policy_block,
 )
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
@@ -132,6 +133,9 @@ async def rules_page() -> None:
     except CoreError, httpx.HTTPError:  # degrade to default types
         object_types = []
     type_names = sorted({str(ot.get("name")) for ot in object_types if ot.get("name")})
+    # Whether the AI assistant can be used (opt-in, configured, admin page) — and
+    # why not, so the editor can say it instead of hiding the button silently.
+    ai = await ai_state(client, token)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("rules.title")).classes("text-h4")
@@ -276,6 +280,20 @@ async def rules_page() -> None:
                 script_editor = ui.codemirror("", language="Python").classes(
                     "w-full h-64 font-mono text-sm"
                 )
+                with ui.row().classes("w-full items-center gap-2"):
+                    if ai.get("available"):
+                        # The suggestion goes into the editor above - never into the
+                        # database (`plan/detail/ki-assistenz.md` §6.1).
+                        ui.button(
+                            t("rules.ai_suggest"),
+                            icon="auto_awesome",
+                            on_click=lambda: suggest_rule(script_editor),
+                        ).props("flat dense")
+                        ui.label(t("rules.ai_suggest_hint")).classes("text-caption text-gray-500")
+                    else:
+                        ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                            "text-caption text-gray-500"
+                        )
                 # Contract & policy panel: what a rule may use, taken from the sandbox
                 # itself (`meadow.ai`), plus the own attributes of the selected type.
                 # The blocks are filled on first expand — the attribute vocabulary is a
@@ -393,6 +411,45 @@ async def rules_page() -> None:
         def open_editor(rule: dict | None) -> None:
             _fill_editor(rule)
             editor_dialog.open()
+
+        def suggest_rule(editor: ui.codemirror) -> None:
+            """Opens the AI dialog; applying a suggestion fills the open editor.
+
+            The name and the description are only filled when the field is still
+            empty — an edit must not overwrite what the user typed.
+            """
+
+            def apply(reply: dict) -> None:
+                script = reply.get("script")
+                if not script:
+                    # Explain mode: the answer is prose for the description field.
+                    if not (description_input.value or "").strip():
+                        description_input.set_value(str(reply.get("description") or ""))
+                    return
+                editor.set_value(str(script))
+                if not (name_input.value or "").strip() and reply.get("rule_name"):
+                    name_input.set_value(str(reply["rule_name"]))
+                if not (description_input.value or "").strip() and reply.get("description"):
+                    description_input.set_value(str(reply["description"]))
+                dependencies = reply.get("dependencies") or []
+                if dependencies:
+                    # The dependency list belongs to the attribute definition, not to
+                    # the rule: say it instead of dropping the information.
+                    ui.notify(
+                        t("rules.ai_dependencies").format(names=", ".join(map(str, dependencies))),
+                        color="info",
+                    )
+
+            open_suggestion_dialog(
+                client=client,
+                token=token,
+                area="rule",
+                title_key="rules.ai_title",
+                object_type=lambda: next(iter(applies_select.value or []), ""),
+                rule_type=lambda: str(type_select.value or "validation"),
+                current_script=lambda: str(editor.value or ""),
+                on_apply=apply,
+            )
 
         async def save_rule() -> None:
             name = (name_input.value or "").strip()

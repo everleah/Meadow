@@ -78,6 +78,25 @@ def run(obj, ctx, result):
         result.add_error("net_price", "range", "Nettopreis muss positiv sein.")
 ```
 
+## Eine Regel beschreiben statt schreiben
+
+Ist die **KI-Assistenz** in den System-Einstellungen eingeschaltet, steht unter
+dem Skript der Knopf **Vorschlag erzeugen**. Sie beschreiben dort in eigenen
+Worten, was die Regel tun soll, und wählen den Modus:
+
+- **Neu schreiben** — aus der Beschreibung entsteht ein vollständiges Skript.
+- **Bestehendes verbessern** — das Skript im Editor ist die Grundlage.
+- **Erklären** — umgekehrt: aus einem vorhandenen Skript wird ein Satz für das
+  Feld *Beschreibung*.
+
+Der Vorschlag erscheint im Dialog und wird erst mit **Übernehmen** in den
+Editor geschrieben — gespeichert wird er trotzdem nur über **Speichern**.
+Jeder Vorschlag wird mit derselben Prüfung geprüft wie handgeschriebener Code;
+lehnt die Sandbox ihn ab, wird der Grund angezeigt.
+
+Ist die Assistenz aus, steht an dieser Stelle, warum: eingeschaltet wird sie
+unter *System-Einstellungen*.
+
 ## Rule Lab: testen vor dem Speichern
 
 Das **Rule Lab** führt eine Regel aus, ohne etwas zu speichern. Sie wählen, ob

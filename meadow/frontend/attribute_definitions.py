@@ -13,6 +13,7 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import config
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.attribute_form import (
     cleaned_payload,
@@ -40,6 +41,9 @@ async def attribute_definitions_page() -> None:
     locale = current_locale()
     client = CoreClient(config.CORE_URL)
     token = app.storage.user.get("token", "")
+    # Whether the AI assistant can be used (opt-in, configured) — and why not, so
+    # the computed box can say it instead of hiding the button silently.
+    ai = await ai_state(client, token)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("attr_def.title")).classes("text-h4")
@@ -601,6 +605,23 @@ async def attribute_definitions_page() -> None:
                     )
                     ui.label(t("attr_def.dependencies_hint")).classes("text-caption text-gray-500")
                     computed_inherited_check = ui.checkbox(t("attr_def.field_computed_inherited"))
+                    with ui.row().classes("w-full items-center gap-2"):
+                        if ai.get("available"):
+                            # The suggestion fills the fields below; the script itself
+                            # belongs to a rule, which is created on the rules page
+                            # (`plan/detail/ki-assistenz.md` §6.1: never auto-store).
+                            ui.button(
+                                t("attr_def.ai_suggest"),
+                                icon="auto_awesome",
+                                on_click=lambda: suggest_computed(),
+                            ).props("flat dense")
+                            ui.label(t("attr_def.ai_suggest_hint")).classes(
+                                "text-caption text-gray-500"
+                            )
+                        else:
+                            ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                                "text-caption text-gray-500"
+                            )
                 applicable_select = (
                     ui.select(
                         {typ: typ for typ in object_types},
@@ -816,6 +837,48 @@ async def attribute_definitions_page() -> None:
             )
             # Last: hide/lock what the loaded choices make meaningless.
             apply_field_state()
+
+        def suggest_computed() -> None:
+            """AI suggestion for a computed attribute.
+
+            Applying it fills the **metadata** (dependencies, inherited reads and —
+            when that rule already exists — the rule name). The script stays in the
+            dialog for reference: a rule is created on the rules page, never from
+            here (`plan/detail/ki-assistenz.md` §6.1).
+            """
+
+            def apply(reply: dict) -> None:
+                names = [str(name) for name in (reply.get("dependencies") or [])]
+                if names:
+                    choices = dict(dependencies_select.options or {})
+                    for name in names:
+                        choices.setdefault(name, name)
+                    current = [str(v) for v in (dependencies_select.value or [])]
+                    dependencies_select.set_options(choices, value=sorted({*current, *names}))
+                if reply.get("computed_reads_inherited") is not None:
+                    computed_inherited_check.set_value(bool(reply["computed_reads_inherited"]))
+                rule_name = str(reply.get("rule_name") or "")
+                if rule_name and rule_name in rule_options:
+                    computed_rule_select.set_options(dict(rule_options), value=rule_name)
+                    computed_check.set_value(True)
+                elif rule_name:
+                    ui.notify(t("attr_def.ai_rule_missing").format(name=rule_name), color="info")
+
+            open_suggestion_dialog(
+                client=client,
+                token=token,
+                area="computed_attribute",
+                title_key="attr_def.ai_title",
+                object_type=lambda: next(iter(applicable_select.value or []), ""),
+                rule_type=lambda: "computed",
+                target_attribute=str(name_input.value or ""),
+                declared_computed=lambda: [
+                    str(row.get("name"))
+                    for row in definitions
+                    if row.get("computed") and row.get("name")
+                ],
+                on_apply=apply,
+            )
 
         async def reload() -> None:
             nonlocal definitions

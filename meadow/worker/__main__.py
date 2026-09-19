@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 
+from meadow.worker import ai_service
 from meadow.worker.bulk import build_bulk_handler
 from meadow.worker.business_rules import build_business_rule_handler
 from meadow.worker.collections import build_collection_refresh_handler
@@ -18,6 +19,7 @@ from meadow.worker.http import loopback_host
 from meadow.worker.imports import build_import_handler
 from meadow.worker.jobs import serve_jobs
 from meadow.worker.log_sender import LogSender
+from meadow.worker.protocol import AI_GENERATE_SUBJECT, AI_TEST_SUBJECT
 from meadow.worker.rules_service import serve
 from meadow.worker.webhooks import serve_webhooks_dynamic
 
@@ -82,7 +84,24 @@ async def main() -> None:
     # of truth; `WEBHOOK_URL` only bootstraps when no connector exists yet.
     # The consumer live-reloads on connector changes (no worker restart).
     webhook_reload = float(os.environ.get("WEBHOOK_RELOAD_INTERVAL_S", "30"))
+    # AI assistance (stage 1): context building, provider call and the policy
+    # check of a suggestion. The core sends the configuration with every
+    # request, so the worker holds no secret of its own.
+    ai_generate_subject = os.environ.get("AI_GENERATE_SUBJECT", AI_GENERATE_SUBJECT)
+    ai_test_subject = os.environ.get("AI_TEST_SUBJECT", AI_TEST_SUBJECT)
     tasks: list[asyncio.Task] = [rules_task, jobs_task]
+    tasks.append(
+        asyncio.create_task(
+            ai_service.serve(
+                nats_url,
+                core_url=core_url,
+                api_key=api_key,
+                generate_subject=ai_generate_subject,
+                test_subject=ai_test_subject,
+                log_sender=log_sender,
+            )
+        )
+    )
     tasks.append(
         asyncio.create_task(
             serve_webhooks_dynamic(

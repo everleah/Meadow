@@ -10,7 +10,7 @@ use utoipa::openapi::OpenApi;
 
 use crate::cache::MetaCache;
 use crate::rules::RulesClient;
-use crate::{api, config::Config, db::Db};
+use crate::{ai::AiClient, api, config::Config, db::Db};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -25,6 +25,8 @@ pub struct AppState {
     pub key_locks: std::sync::Arc<crate::key_lock::KeyLocks>,
     /// Synchronous rule-evaluation client (NATS request/reply).
     pub rules: RulesClient,
+    /// AI-assistance client (NATS request/reply; configuration + secret handling).
+    pub ai: AiClient,
     /// Resolved runtime settings snapshot (default < env < db). Refreshed on
     /// settings writes so consumers (e.g. the rule client) see updates at
     /// runtime without a restart.
@@ -293,6 +295,8 @@ pub fn router(state: AppState) -> Router {
             "/system/settings/{key}",
             put(api::system::put_setting).delete(api::system::delete_setting),
         )
+        .route("/ai/generate", post(api::ai::generate))
+        .route("/ai/test", post(api::ai::test))
         .route(
             "/jobs",
             get(api::jobs::list_job_definitions).post(api::jobs::create_job_definition),

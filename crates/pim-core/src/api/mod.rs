@@ -1,5 +1,6 @@
 //! REST API handlers and the OpenAPI document.
 
+pub mod ai;
 pub mod attribute_definitions;
 pub mod attribute_groups;
 pub mod auth;
@@ -35,6 +36,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        ai::generate,
+        ai::test,
         auth::login,
         auth::me,
         auth::change_password,
@@ -172,6 +175,8 @@ use utoipa::OpenApi;
         languages::delete_language,
     ),
     components(schemas(
+        ai::GenerateRequest,
+        ai::TestRequest,
         auth::LoginRequest,
         auth::LoginResponse,
         auth::ChangePasswordRequest,

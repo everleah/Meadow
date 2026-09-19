@@ -61,6 +61,7 @@ files = [
     # Frontend modules, added one by one as they became clean (2026-09-18). The
     # remaining ones are the widget-heavy pages; they follow the same way.
     "meadow/frontend/__main__.py",
+    "meadow/frontend/ai_assist.py",
     "meadow/frontend/api.py",
     "meadow/frontend/attribute_definitions.py",
     "meadow/frontend/attribute_form.py",

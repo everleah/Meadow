@@ -1,7 +1,8 @@
 """Everything an assistant needs to know about Meadow — read from the code, not copied.
 
-The package holds the *knowledge* an AI assistant (and later a capability panel)
-needs to write artefacts this system accepts:
+The package holds the *knowledge* an AI assistant (and the contract panel in the rule
+editor) needs to write artefacts this system accepts, plus the machinery that turns a
+description into a suggestion:
 
 * [`policy`][meadow.ai.policy] — what the rule sandbox really allows: the builtins that
   exist, the modules that may be imported, the hard limits, and the names that are not
@@ -13,10 +14,18 @@ needs to write artefacts this system accepts:
   attributes of one object type.
 * [`examples`][meadow.ai.examples] — the curated few-shot example rules, covered by a
   compile test.
+* [`prompts`][meadow.ai.prompts] — one system prompt per area plus the user message
+  assembled from those blocks. The spike showed why the prompt is per area: with the
+  *rule* prompt a search request came back as `def run(obj, ctx, result)`
+  (`plan/detail/ki-assistenz.md` §8).
+* [`provider`][meadow.ai.provider] — the OpenAI-compatible chat call (`httpx` only, no
+  provider SDK per vendor). Holds no state and no secret.
+* [`service`][meadow.ai.service] — the whole loop: context, one model call, the policy
+  check, and **one** self-correction attempt. It stores nothing.
 
-Deliberately **not** part of this package yet: the provider client and the generation
-service (stage 1 of `plan/detail/ki-assistenz.md`). Nothing here performs I/O, holds a
-secret or needs a model — it is the part that can be built and verified without one.
+The calls run in the worker process (`meadow/worker/ai_service.py`); the core sends the
+resolved configuration with every request, so the API key never reaches the browser
+(stage 1 of `plan/detail/ki-assistenz.md`).
 """
 
 from __future__ import annotations
