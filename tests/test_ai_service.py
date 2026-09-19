@@ -218,9 +218,9 @@ def test_explain_returns_prose_instead_of_a_script() -> None:
 
 def test_an_unknown_area_or_mode_is_rejected_before_any_call() -> None:
     recorder = Recorder(_envelope(VALID_SCRIPT))
-    # `connector` is a stage-2/3 area, not a known one yet: an unknown area must
-    # not cost a model call.
-    unknown_area = asyncio.run(generate(CONFIG, _request(area="connector"), chat_fn=recorder))
+    # `export_profile` is not implemented yet: an unknown area must not cost a
+    # model call.
+    unknown_area = asyncio.run(generate(CONFIG, _request(area="export_profile"), chat_fn=recorder))
     assert unknown_area["ok"] is False
     unknown_mode = asyncio.run(generate(CONFIG, _request(mode="rewrite"), chat_fn=recorder))
     assert unknown_mode["ok"] is False

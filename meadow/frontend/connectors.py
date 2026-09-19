@@ -33,6 +33,7 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.connector_form import (
@@ -217,6 +218,9 @@ async def connectors_page() -> None:
         }
 
     option_sources = await load_option_sources(client, token)
+    # Whether the AI assistant can be used (opt-in, configured, admin page) — and
+    # why not, so the editor says it instead of hiding the button silently.
+    ai = await ai_state(client, token)
 
     with ui.column().classes("w-full p-6"):
         ui.label(t("connectors.title")).classes("text-h4")
@@ -365,6 +369,22 @@ async def connectors_page() -> None:
                         ui.label(t("connectors.parameters_hint")).classes(
                             "text-caption text-gray-500"
                         )
+                        with ui.row().classes("w-full items-center gap-2"):
+                            if ai.get("available"):
+                                # The suggestion replaces the JSON tab's content; the
+                                # user still saves through Save (never auto-stored).
+                                ui.button(
+                                    t("connectors.ai_suggest"),
+                                    icon="auto_awesome",
+                                    on_click=lambda: suggest_parameters(),
+                                ).props("flat dense")
+                                ui.label(t("connectors.ai_suggest_hint")).classes(
+                                    "text-caption text-gray-500"
+                                )
+                            else:
+                                ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                                    "text-caption text-gray-500"
+                                )
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=editor_dialog.close).props("flat")
                 test_button = ui.button(
@@ -477,6 +497,33 @@ async def connectors_page() -> None:
             _render_form()
 
         type_select.on_value_change(lambda _event: _on_type_change())
+
+        def suggest_parameters() -> None:
+            """AI suggestion for the parameters; applying it fills the JSON tab.
+
+            The tab state is set **before** switching tabs so `_on_tab_change` does
+            not render the form's values over the suggestion.
+            """
+
+            def apply(reply: dict) -> None:
+                config = reply.get("config")
+                if not isinstance(config, dict):
+                    return
+                parameters_area.set_value(_json_pretty(config))
+                editor_state["values"] = copy.deepcopy(config)
+                editor_state["tab"] = "json"
+                tabs.set_value("json")
+                _update_hints()
+
+            open_suggestion_dialog(
+                client=client,
+                token=token,
+                area="connector",
+                title_key="connectors.ai_title",
+                config_kind=lambda: str(editor_state["type"]),
+                current_script=lambda: str(parameters_area.value or ""),
+                on_apply=apply,
+            )
 
         def _fill_editor(connector: dict | None) -> None:
             editing = connector is not None

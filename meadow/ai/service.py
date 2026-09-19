@@ -28,6 +28,9 @@ from typing import Any
 from meadow.ai import prompts, provider
 from meadow.ai.context import (
     attribute_facts,
+    connector_fields_text,
+    connector_type_facts,
+    connector_types_text,
     contract_block,
     declared_computed,
     few_shot_examples,
@@ -65,6 +68,8 @@ class GenerationRequest:
     target_attribute: str | None = None
     declared_computed: tuple[str, ...] = ()
     language: str | None = None
+    #: Concrete target of a JSON-configuration area (`connector` → the type key).
+    config_kind: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> GenerationRequest:
@@ -87,6 +92,7 @@ class GenerationRequest:
             if isinstance(declared, list)
             else (),
             language=text("language"),
+            config_kind=text("config_kind"),
         )
 
 
@@ -142,14 +148,14 @@ def _parse_artefact(area: str, text: str) -> dict[str, Any]:
     query object. A malformed answer is an error, not a silent empty suggestion.
     """
     cleaned = strip_fences(text)
-    if area == "search":
+    if area in ("search", "connector"):
         try:
             payload = json.loads(cleaned)
         except ValueError as error:
             raise ProviderError(f"the model did not answer with JSON: {error}") from error
         if not isinstance(payload, dict) or not payload:
-            raise ProviderError("the answer is not a query object")
-        return {"query": payload}
+            raise ProviderError("the answer is not a JSON object")
+        return {"query": payload} if area == "search" else {"config": payload}
     if area != "computed_attribute":
         return {"script": cleaned}
     try:
@@ -176,7 +182,9 @@ async def generate(
     *,
     vocabulary_rows: list[dict[str, Any]] | None = None,
     search_catalog: dict[str, Any] | None = None,
+    json_context: dict[str, Any] | None = None,
     validate_query: QueryValidator | None = None,
+    validate_config: QueryValidator | None = None,
     chat_fn: ChatFn = provider.chat,
     state: ServiceState | None = None,
 ) -> dict[str, Any]:
@@ -215,6 +223,28 @@ async def generate(
             operators=search_operators_text(catalog),
             limits=search_limits_text(catalog),
             current_query=request.current_script,
+            language=request.language,
+        )
+    elif request.area == "connector":
+        schema = (json_context or {}).get("connector_types")
+        labels = (json_context or {}).get("labels")
+        type_key = request.config_kind or ""
+        connector_facts = connector_type_facts(schema, type_key, labels)
+        subject = f"Connector type: {type_key or '(unknown)'}"
+        types = connector_types_text(schema, labels)
+        if type_key and not connector_facts:
+            return {
+                "ok": False,
+                "attempts": 0,
+                "errors": [f"unknown connector type `{type_key}`"],
+            }
+        task = prompts.config_user_prompt(
+            area=request.area,
+            mode=request.mode,
+            description=request.description,
+            subject=subject + ("\n" + types if types else ""),
+            fields=connector_fields_text(connector_facts),
+            current_config=request.current_script,
             language=request.language,
         )
     else:
@@ -286,7 +316,10 @@ async def generate(
             continue
 
         ok, message, extra = await _check_artefact(
-            request.area, artefact, validate_query=validate_query
+            request.area,
+            artefact,
+            validate_query=validate_query,
+            validate_config=validate_config,
         )
         if ok:
             if request.area == "search":
@@ -295,6 +328,16 @@ async def generate(
                     "attempts": attempts,
                     "query": artefact["query"],
                     "preview": extra,
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
+            if request.area == "connector":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "config": artefact["config"],
                     "check": message,
                     "model": model,
                     "latency_ms": latency_ms,
@@ -340,14 +383,19 @@ async def _check_artefact(
     artefact: dict[str, Any],
     *,
     validate_query: QueryValidator | None,
+    validate_config: QueryValidator | None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Checks one artefact with the component that will execute it.
 
-    A script passes the sandbox policy (`check_script`); a search query passes the
-    core's own validation, which is the same code path the search form uses for
-    its live preview — a suggestion cannot pass a check the real execution would
-    not do.
+    A script passes the sandbox policy (`check_script`); a search query and a
+    connector configuration pass the **core's own validation** — the same code
+    path a save uses, so a suggestion cannot pass a check the real write would not
+    do.
     """
+    if area == "connector":
+        if validate_config is None:
+            return True, "well-formed JSON (not validated against the core)", None
+        return await validate_config(artefact["config"])
     if area != "search":
         ok, message = check_script(artefact["script"])
         return ok, message, None

@@ -24,6 +24,9 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     AttributeFact,
     attribute_facts,
     attribute_names_text,
+    connector_fields_text,
+    connector_type_facts,
+    connector_types_text,
     contract_block,
     declared_computed,
     few_shot_examples,
@@ -209,6 +212,109 @@ def test_the_search_limits_and_operator_table_are_words_not_raw_json() -> None:
     assert search_limits_text({}) == ""
     assert search_operators_text({}) == ""
     assert search_field_facts({}) == ()
+
+
+# --- connector schema projection (stage 2, JSON configuration) ------------------
+
+
+def _connector_schema() -> list[dict[str, object]]:
+    """A catalog like `GET /connector-types`, trimmed to what the projection reads."""
+    return [
+        {
+            "type": "webhook",
+            "direction": "outbound",
+            "label_key": "connectors.type_webhook",
+            "wired": True,
+            "groups": [
+                {
+                    "key": "target",
+                    "fields": [
+                        {
+                            "key": "url",
+                            "type": "string",
+                            "required": True,
+                            "label_key": "connector_fields.webhook.url.label",
+                            "help_key": "connector_fields.webhook.url.help",
+                        },
+                        {
+                            "key": "method",
+                            "type": "string",
+                            "enum": ["POST", "PUT"],
+                            "default": "POST",
+                        },
+                        {"key": "timeout_s", "type": "number", "minimum": 1.0, "maximum": 600.0},
+                    ],
+                },
+                {
+                    "key": "headers",
+                    "fields": [{"key": "headers", "type": "string_map", "secret": True}],
+                },
+                {
+                    "key": "filter",
+                    "fields": [
+                        {
+                            "key": "filter.event_types",
+                            "type": "string_list",
+                            "enum": ["object.created"],
+                        }
+                    ],
+                },
+                {
+                    "key": "coalesce",
+                    "fields": [
+                        {
+                            "key": "coalesce.window_seconds",
+                            "type": "number",
+                            "minimum": 1.0,
+                            "maximum": 3600.0,
+                            "show_if": {"key": "coalesce.enabled", "equals": True},
+                        }
+                    ],
+                },
+            ],
+        },
+        {"type": "json_import", "direction": "inbound", "groups": []},
+    ]
+
+
+def test_the_connector_projection_flattens_the_groups_and_keeps_the_constraints() -> None:
+    facts = connector_type_facts(_connector_schema(), "webhook")
+    assert [fact.key for fact in facts] == [
+        "url",
+        "method",
+        "timeout_s",
+        "headers",
+        "filter.event_types",
+        "coalesce.window_seconds",
+    ]
+    assert facts[0].required is True
+    assert facts[1].enum == ("POST", "PUT")
+    assert facts[1].default == "POST"
+    assert (facts[2].minimum, facts[2].maximum) == (1.0, 600.0)
+    assert facts[3].secret is True
+    assert facts[5].show_if == "only when coalesce.enabled = true"
+    # An unknown type yields no facts instead of every field of every type.
+    assert connector_type_facts(_connector_schema(), "sftp") == ()
+    assert connector_type_facts(None, "webhook") == ()
+
+
+def test_the_connector_text_names_the_constraints_and_the_ui_wording() -> None:
+    labels = {
+        "connector_fields.webhook.url.label": "Target URL",
+        "connector_fields.webhook.url.help": "Where the event is sent",
+        "connectors.type_webhook": "Webhook",
+    }
+    facts = connector_type_facts(_connector_schema(), "webhook", labels)
+    text = connector_fields_text(facts)
+    assert "url: string, required — Target URL" in text
+    assert "method: string, one of POST | PUT, default POST" in text
+    assert "timeout_s: number, 1–600" in text
+    assert "headers: string_map, secret" in text
+    assert "coalesce.window_seconds: number, 1–3600, only when coalesce.enabled = true" in text
+    # The type list names the alternatives (the model may be asked for a new type).
+    types = connector_types_text(_connector_schema(), labels)
+    assert "webhook (outbound): Webhook" in types
+    assert "json_import (inbound)" in types
 
 
 def test_the_shipped_search_examples_are_valid_dsl_objects() -> None:

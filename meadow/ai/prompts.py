@@ -22,7 +22,7 @@ from meadow.ai.context import AttributeFact, attribute_names_text
 from meadow.ai.examples import ExampleRule, search_examples
 
 #: Areas the assistant knows (the core validates the same list).
-AREAS = ("rule", "computed_attribute", "search")
+AREAS = ("rule", "computed_attribute", "search", "connector")
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
 
@@ -30,6 +30,7 @@ _AREA_TITLES = {
     "rule": "business rule",
     "computed_attribute": "computed attribute (a business rule with `rule_type = computed`)",
     "search": "saved search (a query in Meadow's search DSL)",
+    "connector": "connector configuration (the `parameters` object of a connector)",
 }
 
 _RULE_SYSTEM = """\
@@ -84,6 +85,21 @@ Non-negotiable:
   inside the documented range.
 """
 
+_CONNECTOR_SYSTEM = """\
+You are the configuration assistant of Meadow PIM, a product information management system.
+You write the `parameters` object of a connector: one JSON object.
+
+Non-negotiable:
+- Answer with the JSON object only: no explanation, no markdown fence.
+- Use only the fields listed below, with the listed type and the listed values
+  for a field that names its options.
+- A dotted field name means nesting: `filter.event_types` becomes
+  `{"filter": {"event_types": [...]}}`.
+- Leave out fields the user did not ask for unless the field is required or has
+  a default that matters. Never invent credentials — use a placeholder like
+  "EXAMPLE-TOKEN" and say so in the description field if one is needed.
+"""
+
 _SYSTEM_PROMPTS = {"rule": _RULE_SYSTEM, "computed_attribute": _COMPUTED_SYSTEM}
 
 _EXPLAIN_SYSTEM = """\
@@ -118,6 +134,8 @@ def system_prompt(area: str, mode: str) -> str:
         return _SEARCH_EXPLAIN_SYSTEM if area == "search" else _EXPLAIN_SYSTEM
     if area == "search":
         return _SEARCH_SYSTEM
+    if area == "connector":
+        return _CONNECTOR_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 
@@ -234,6 +252,44 @@ def search_user_prompt(
             sections.append("Examples of the same kind:\n" + "\n".join(examples))
     if language:
         what = "the answer" if mode == "explain" else "the search name and description"
+        sections.append(f"Write {what} in the language `{language}`; field names stay as they are.")
+    return "\n\n".join(sections)
+
+
+def config_user_prompt(
+    *,
+    area: str,
+    mode: str,
+    description: str,
+    subject: str,
+    fields: str,
+    current_config: str | None = None,
+    language: str | None = None,
+) -> str:
+    """The user message for a JSON-parameter request (connectors, later profiles/jobs).
+
+    `subject` names the concrete target in one line (connector type and name),
+    `fields` is the schema projection of that target.
+    """
+    sections: list[str] = []
+    heading = "Explain this" if mode == "explain" else "Write this"
+    sections.append(f"{heading}: {_AREA_TITLES.get(area, area)}")
+    sections.append(subject)
+    if description.strip():
+        sections.append(f"Description from the user:\n{description.strip()}")
+    if current_config and current_config.strip():
+        label = (
+            "The configuration to explain"
+            if mode == "explain"
+            else "The current configuration to improve"
+        )
+        sections.append(f"{label}:\n{current_config.strip()}")
+    if mode == "edit":
+        sections.append("Keep what works and change only what the description asks for.")
+    if mode != "explain":
+        sections.append("Fields of this configuration:\n" + fields)
+    if language:
+        what = "the answer" if mode == "explain" else "any prose you add"
         sections.append(f"Write {what} in the language `{language}`; field names stay as they are.")
     return "\n\n".join(sections)
 

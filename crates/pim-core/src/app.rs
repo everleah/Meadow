@@ -333,6 +333,10 @@ pub fn router(state: AppState) -> Router {
             post(api::connectors::test_connector),
         )
         .route(
+            "/connectors/validate",
+            post(api::connectors::validate_connector),
+        )
+        .route(
             "/imports",
             post(api::imports::create_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )

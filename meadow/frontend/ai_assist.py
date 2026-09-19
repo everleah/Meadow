@@ -65,6 +65,7 @@ def open_suggestion_dialog(
     current_script: Callable[[], str] | None = None,
     target_attribute: str | None = None,
     declared_computed: Callable[[], list[str]] | None = None,
+    config_kind: Callable[[], str] | None = None,
 ) -> None:
     """Opens the suggestion dialog; `on_apply` receives the accepted reply.
 
@@ -125,6 +126,7 @@ def open_suggestion_dialog(
             "current_script": (current_script() if current_script else None) or None,
             "target_attribute": target_attribute,
             "declared_computed": declared_computed() if declared_computed else None,
+            "config_kind": config_kind() if config_kind else None,
             "language": current_locale(),
         }
         try:
@@ -145,6 +147,8 @@ def open_suggestion_dialog(
         elif area == "search":
             # A query, not a script: show the JSON the core accepted.
             preview.value = json.dumps(reply.get("query") or {}, indent=2, ensure_ascii=False)
+        elif area == "connector":
+            preview.value = json.dumps(reply.get("config") or {}, indent=2, ensure_ascii=False)
         else:
             preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(

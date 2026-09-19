@@ -162,6 +162,58 @@ async fn ensure_unique_name(db: &Db, name: &str, except: Option<&str>) -> Result
     Ok(())
 }
 
+/// Payload for `POST /connectors/validate`: parameters to check without saving.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ValidateConnector {
+    /// Connector type whose schema the parameters are checked against.
+    pub connector_type: String,
+    /// The parameter object (same shape as on create/update).
+    pub parameters: Value,
+}
+
+/// Structural check of a connector's parameters — **without saving** (admin).
+///
+/// The same `connector_schema::validate` the write path uses, so a caller (the
+/// connector form, or the AI assistant checking a suggestion) gets exactly the
+/// verdict a save would produce. Nothing is written, nothing is required to exist.
+#[utoipa::path(
+    post,
+    path = "/connectors/validate",
+    request_body = ValidateConnector,
+    responses(
+        (status = 200, description = "Validation result", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn validate_connector(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ValidateConnector>,
+) -> Result<Json<Value>, ApiError> {
+    // Machine API key or admin JWT: the **worker** uses it to check AI
+    // suggestions, and the connector form is admin-only anyway.
+    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    if !crate::api::connector_schema::is_known_type(&body.connector_type) {
+        return Err(ApiError::bad_request(format!(
+            "unknown connector type `{}`",
+            body.connector_type
+        )));
+    }
+    let Ok(mut parameters) = parameters_object(body.parameters) else {
+        return Ok(Json(
+            json!({ "ok": false, "errors": ["`parameters` must be an object"] }),
+        ));
+    };
+    // Normalisation and defaults are part of the write path, so the check has to
+    // see the same values the save would store.
+    crate::api::connector_schema::normalize(&body.connector_type, &mut parameters);
+    crate::api::connector_schema::apply_defaults(&body.connector_type, &mut parameters);
+    let errors = crate::api::connector_schema::validate(&body.connector_type, &parameters);
+    Ok(Json(json!({ "ok": errors.is_empty(), "errors": errors })))
+}
+
 /// Creates a connector (admin only).
 #[utoipa::path(
     post,

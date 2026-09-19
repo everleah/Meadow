@@ -18,6 +18,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -98,6 +99,55 @@ def search_catalog_uri(core_url: str) -> str:
     return f"{loopback_host(core_url).rstrip('/')}/search-fields"
 
 
+def connector_types_uri(core_url: str) -> str:
+    """URL of the connector type catalog (schema of every connector type)."""
+    return f"{loopback_host(core_url).rstrip('/')}/connector-types"
+
+
+def ui_labels() -> dict[str, str]:
+    """The English UI texts, keyed by i18n key (for the schema's `label_key`).
+
+    The connector schema carries i18n **keys**, not words — the words live in the
+    frontend translations, which ship in the same Python package. Passing the
+    English text into the prompt is what lets the model understand a field like
+    `match_by_key`; a missing file simply means no labels.
+    """
+    path = Path(__file__).resolve().parents[1] / "frontend" / "locales" / "en.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:  # a missing or broken locale must not break the worker
+        logger.warning("could not read the UI labels from %s", path)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if isinstance(value, str)}
+
+
+async def validate_connector_config(
+    core_url: str, api_key: str | None, connector_type: str, parameters: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates connector parameters with the core (`POST /connectors/validate`).
+
+    Nothing is written: the core runs exactly the check its write path would run,
+    so a suggestion is judged by the component that would reject it later.
+    """
+    url = f"{loopback_host(core_url).rstrip('/')}/connectors/validate"
+    headers = {"x-api-key": api_key} if api_key else {}
+    body = {"connector_type": connector_type, "parameters": parameters}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, json=body, headers=headers)
+    if response.status_code == 400:
+        payload = response.json() if response.content else {}
+        message = payload.get("error") if isinstance(payload, dict) else None
+        return False, str(message or "the core rejected the configuration"), None
+    response.raise_for_status()
+    payload = response.json()
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if isinstance(errors, list) and errors:
+        return False, "; ".join(str(error) for error in errors), None
+    return True, "accepted by the connector schema", None
+
+
 async def preview_query(
     core_url: str, api_key: str | None, query: dict[str, Any]
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -129,6 +179,7 @@ async def handle_generate(
     api_key: str | None,
     vocabulary: JsonCache,
     search_catalog: JsonCache,
+    connector_types: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -151,10 +202,17 @@ async def handle_generate(
     # vocabulary, a rule has none for the field catalog.
     vocabulary_rows: list[dict[str, Any]] = []
     catalog: dict[str, Any] = {}
+    json_context: dict[str, Any] = {}
     try:
         if request.area == "search":
             payload = await search_catalog.get()
             catalog = payload if isinstance(payload, dict) else {}
+        elif request.area == "connector":
+            payload = await connector_types.get()
+            json_context = {
+                "connector_types": payload if isinstance(payload, list) else [],
+                "labels": ui_labels(),
+            }
         else:
             payload = await vocabulary.get()
             vocabulary_rows = (
@@ -169,6 +227,7 @@ async def handle_generate(
             "errors": [f"the AI context could not be loaded from the core: {error}"],
         }
     validator = None
+    config_validator = None
     if request.area == "search":
 
         async def validator(
@@ -176,13 +235,23 @@ async def handle_generate(
         ) -> tuple[bool, str, dict[str, Any] | None]:
             return await preview_query(core_url, api_key, query)
 
+    if request.area == "connector":
+        connector_type = request.config_kind or ""
+
+        async def config_validator(
+            parameters: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return await validate_connector_config(core_url, api_key, connector_type, parameters)
+
     try:
         return await generate(
             config,
             request,
             vocabulary_rows=vocabulary_rows,
             search_catalog=catalog,
+            json_context=json_context,
             validate_query=validator,
+            validate_config=config_validator,
             state=state,
         )
     except (ProviderError, httpx.HTTPError) as error:
@@ -249,6 +318,9 @@ async def serve(
     search_catalog = JsonCache(
         search_catalog_uri(core_url), api_key, label="the search-field catalog"
     )
+    connector_types = JsonCache(
+        connector_types_uri(core_url), api_key, label="the connector type catalog"
+    )
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
@@ -259,6 +331,7 @@ async def serve(
             api_key=api_key,
             vocabulary=vocabulary,
             search_catalog=search_catalog,
+            connector_types=connector_types,
             state=state,
         )
 

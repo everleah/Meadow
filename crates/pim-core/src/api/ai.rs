@@ -26,7 +26,7 @@ use crate::error::ApiError;
 /// remaining fields are the values the editor already has on screen.
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct GenerateRequest {
-    /// Target area: `rule` | `computed_attribute` | `search`.
+    /// Target area: `rule` | `computed_attribute` | `search` | `connector`.
     pub area: String,
     /// `create` (from a description), `edit` (improve an existing script) or
     /// `explain` (prose for the description field).
@@ -54,6 +54,10 @@ pub struct GenerateRequest {
     /// user reads (the code itself stays English).
     #[serde(default)]
     pub language: Option<String>,
+    /// Concrete target of a JSON-configuration area: the **connector type** for
+    /// `area = connector` (`webhook`, `json_import`, `json_export`).
+    #[serde(default)]
+    pub config_kind: Option<String>,
 }
 
 /// Payload for `POST /ai/test` — no fields; the core resolves the configuration.
@@ -74,12 +78,17 @@ fn unavailable(error: &AiError) -> ApiError {
 fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
     if !matches!(
         request.area.as_str(),
-        "rule" | "computed_attribute" | "search"
+        "rule" | "computed_attribute" | "search" | "connector"
     ) {
         return Err(ApiError::bad_request(format!(
-            "unknown area `{}` (expected rule, computed_attribute or search)",
+            "unknown area `{}` (expected rule, computed_attribute, search or connector)",
             request.area
         )));
+    }
+    if request.area == "connector" && request.config_kind.as_deref().unwrap_or("").is_empty() {
+        return Err(ApiError::bad_request(
+            "`config_kind` (the connector type) is required for the area `connector`",
+        ));
     }
     if !matches!(request.mode.as_str(), "create" | "edit" | "explain") {
         return Err(ApiError::bad_request(format!(
@@ -140,6 +149,7 @@ pub async fn generate(
         "target_attribute": body.target_attribute,
         "declared_computed": body.declared_computed,
         "language": body.language,
+        "config_kind": body.config_kind,
     });
     let reply = state.ai.generate(request).await.map_err(|error| {
         tracing::warn!(error = %error, "AI generation failed");
