@@ -20,6 +20,12 @@ from datetime import datetime
 import httpx
 from nicegui import app, ui
 
+from meadow.ai.context import (
+    attribute_facts,
+    attribute_names_text,
+    contract_block,
+    policy_block,
+)
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
@@ -270,9 +276,96 @@ async def rules_page() -> None:
                 script_editor = ui.codemirror("", language="Python").classes(
                     "w-full h-64 font-mono text-sm"
                 )
+                # Contract & policy panel: what a rule may use, taken from the sandbox
+                # itself (`meadow.ai`), plus the own attributes of the selected type.
+                # The blocks are filled on first expand — the attribute vocabulary is a
+                # multi-megabyte call and must not run on every dialog open.
+                with ui.expansion(t("rules.contract_title"), icon="school").classes(
+                    "w-full"
+                ) as contract_panel:
+                    ui.label(t("rules.contract_hint")).classes("text-caption text-gray-500")
+                    contract_body = ui.column().classes("w-full gap-2")
+                    contract_attr_host = ui.column().classes("w-full gap-1")
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=editor_dialog.close).props("flat")
                 ui.button(t("rules.save"), icon="save", on_click=lambda: save_rule()).props("flat")
+
+        #: Panel state: built once (lazy), the vocabulary cached per page render.
+        contract_state: dict[str, object] = {"built": False, "vocabulary": None}
+
+        async def _contract_vocabulary() -> list[dict]:
+            """The attribute vocabulary (cached) — the projection needs it."""
+            cached = contract_state.get("vocabulary")
+            if isinstance(cached, list):
+                return cached
+            vocabulary: list[dict] = await client.list_attribute_vocabulary(token)
+            contract_state["vocabulary"] = vocabulary
+            return vocabulary
+
+        async def render_contract_attributes() -> None:
+            """Render the own attributes of the currently selected object types."""
+            if not contract_state["built"]:
+                return
+            contract_attr_host.clear()
+            selected = [str(name) for name in (applies_select.value or [])]
+            with contract_attr_host:
+                if not selected:
+                    ui.label(t("rules.contract_attributes_all")).classes(
+                        "text-caption text-gray-500"
+                    )
+                    return
+                try:
+                    vocabulary = await _contract_vocabulary()
+                except CoreError, httpx.HTTPError:  # degrade to a hint, never a traceback
+                    ui.label(t("rules.contract_attributes_failed")).classes(
+                        "text-caption text-negative"
+                    )
+                    return
+                facts = {
+                    fact.name: fact
+                    for object_type in selected
+                    for fact in attribute_facts(vocabulary, object_type)
+                }
+                own = sorted(facts.values(), key=lambda fact: fact.name)
+                ui.label(
+                    t("rules.contract_attributes").format(types=", ".join(selected))
+                    + f" ({len(own)})"
+                ).classes("text-caption font-medium")
+                ui.label(attribute_names_text(own)).classes(
+                    "text-xs font-mono whitespace-pre-wrap w-full max-h-40 overflow-y-auto"
+                )
+                if any(fact.computed for fact in own):
+                    ui.label(
+                        t("rules.contract_attributes_note")
+                        + " "
+                        + ", ".join(fact.name for fact in own if fact.computed)
+                    ).classes("text-caption text-gray-500")
+
+        async def build_contract_panel() -> None:
+            """Fill the blocks once, on first expand."""
+            if contract_state["built"]:
+                return
+            contract_state["built"] = True
+            with (
+                contract_body,
+                ui.row().classes("w-full gap-4 items-start").style("flex-wrap: wrap"),
+            ):
+                with ui.column().classes("flex-1 min-w-80 gap-0"):
+                    ui.label(t("rules.contract_result")).classes("text-caption font-medium")
+                    ui.label(contract_block()).classes(
+                        "text-xs font-mono whitespace-pre-wrap w-full"
+                    )
+                with ui.column().classes("flex-1 min-w-80 gap-0"):
+                    ui.label(t("rules.contract_policy")).classes("text-caption font-medium")
+                    ui.label(policy_block()).classes(
+                        "text-xs font-mono whitespace-pre-wrap w-full max-h-64 overflow-y-auto"
+                    )
+            await render_contract_attributes()
+
+        contract_panel.on_value_change(
+            lambda event: build_contract_panel() if event.value else None
+        )
+        applies_select.on_value_change(lambda _event: render_contract_attributes())
 
         def _fill_editor(rule: dict | None) -> None:
             nonlocal editing_id

@@ -2,13 +2,15 @@
 
 - **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules und berechnete Attribute sind die ersten beiden Einsatzbereiche; außerdem Abschnitt 10 ([Suche & Collections](../meadow-pim-architektur.md#10-suche-collections--gespeicherte-suchen), Query-DSL), Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend)) und Abschnitt 12 ([Betrieb](../meadow-pim-architektur.md#12-betrieb--deployment), Provider-Konfiguration und Secret-Behandlung)
 - **Relevante Phasen:** baut auf Phase 4 (Sandbox, `rules.compile`/`rules.evaluate`), Phase 7 (Rule Lab) und Phase 9 (schema-getriebene Formulare, Query-DSL); die Stufen 0–3 unten sind **neu** und noch nicht Teil der Phasen 1–9
-- **Stand:** Entwurf / geplant — **nichts davon ist implementiert**; die Machbarkeit ist am 2026-09-19 an der laufenden Dev-Instanz **gemessen** (Spike, Abschnitt 8)
+- **Stand:** Entwurf / geplant — **Stufe 0 umgesetzt (2026-09-19)**, Stufen 1–3 offen; die Machbarkeit ist am 2026-09-19 an der laufenden Dev-Instanz **gemessen** (Spike, Abschnitt 8)
 
 ## 0. Kurzfassung
 
 Meadow bekommt eine **KI-Assistenz**, die Beschreibungen in die Artefakte übersetzt, die dieses System ohnehin schon kennt: **Regelcode** (Business Rules), **Regelcode + Abhängigkeiten** (berechnete Attribute), **Query-DSL** (Suche) und später **JSON-Parameter** (Konnektoren, Export-Profile, Jobs, Import-Mapping). Sie ist eine **Schreibhilfe im Editor**: der Vorschlag landet im Feld, **nie automatisch in der Datenbank**. Alles, was die KI erzeugt, läuft durch **dieselben Prüfungen wie handgeschriebener Code** — Compile-Policy der Sandbox, AST-Vorprüfung, Dry-Run gegen ein echtes Objekt bzw. Query-Preview im Kern.
 
 Der Ansatz ist bewusst der **kleinste tragfähige**: kein Agenten-Framework, keine Kette von Werkzeugen, kein Speicher — ein Prompt aus den **Laufzeitquellen der Wahrheit**, ein Modellaufruf, eine Prüfung, optional **ein** Korrekturversuch.
+
+**Umsetzungsstand:** Stufe 0 ist **fertig** (Abschnitt 9): `meadow/ai/` mit Politik, Vertrag, Projektion und Beispielen, das Vertrag-Panel im Regel-Editor und die generierte Referenz `docs/developer/rule-context.md`/`.json` samt Staleness-Check. Alles davon läuft **ohne Modell** und ist durch Tests und live im Browser belegt. Stufen 1–3 sind offen.
 
 ## 1. Ausgangslage
 
@@ -182,8 +184,7 @@ Gefahren wurde die komplette geplante Kette mit `deepseek-chat` (OpenAI-kompatib
 
 ## 9. Stufenplan
 
-**Stufe 0 — Vertrag sichtbar machen (kein Modell, kein Provider).**
-`meadow/ai/policy.py` + `meadow/ai/context.py` (Politik/Vertrag/Projektionen) und ein Panel im Regel-Editor. Dazu `scripts/ai_context.py` als Generator, der **eine** Referenzdatei (`docs/ai/rulemodel-context.md` + `.json`) schreibt, damit der Vertrag auch außerhalb des Codes nachlesbar ist. Wert: sofort nützlich, und der Kontext ist geprüft, bevor Geld fließt.
+**Stufe 0 — Vertrag sichtbar machen (kein Modell, kein Provider).** ✅ **umgesetzt 2026-09-19.** `meadow/ai/policy.py` (Politik aus der laufenden Sandbox, `check_script` mit AST-Vorprüfung + Compile-Politik) und `meadow/ai/context.py` (Vertragsblock mit **per `inspect` erzeugten** Signaturen, Politikblock, Projektion `attribute_facts`) plus `meadow/ai/examples.py` (kuratierte Beispielregeln, im Paket — das Frontend-Image kopiert `scripts/` nicht). Dazu das **Vertrag-Panel** im Regel-Editor („Vertrag & Politik“, `ui.expansion`, lazy beim ersten Aufklappen: die Attributliste braucht das Vokabular) und `scripts/ai_context.py`, das `docs/developer/rule-context.md` + `.json` **erzeugt**; `--check` (und ein Test) schlägt fehl, sobald die Dateien veralten. Live geprüft: Panel öffnet, zeigt Vertrag/Politik/Importe/Grenzen, ohne Objekttyp den Hinweis, mit `product` **54 eigene Attribute** und **kein** `EF…`-Merkmal.
 
 **Stufe 1 — Business Rules + berechnete Attribute (Kern der Sache).**
 Settings (Abschnitt 4) **inklusive Konfiguration im UI**: `ai_*`-Schlüssel in der Kern-Registry mit Secret-Markierung und Maskierung, auf `/system-settings` die Gruppe „AI" mit Text-/Passwortfeld (die Seite kennt heute nur Auswahl/Schalter/Zahl) und dem Knopf „Verbindung testen" (`POST /ai/test` → NATS → Worker); dazu `meadow/ai/provider.py` + `service.py`, NATS-Subject `ai.generate`, Kern-Endpunkt `POST /ai/generate` + `AiClient`, 503-Pfad, Audit, Retry, Knöpfe im Regel-Editor und im Rechen-Bereich des Attributdialogs. Modi: Neu, Ändern; „Erklären" für das `description`-Feld. **Das ist die Stufe, die den gemeldeten Bedarf deckt.**
@@ -198,9 +199,9 @@ Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dr
 
 ## 10. Tests und Verifikation
 
-- `tests/test_ai_policy.py`: AST-Prüfung (fehlende/zusätzliche Funktion, falsche Signatur, jeder Name der Verbotsliste), Built-in-Liste **gegen die echte Sandbox** (kein abgeschriebener Katalog).
-- `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp.
-- `tests/test_ai_examples.py`: jede ausgelieferte Beispielregel besteht `compile_rule` — die Beispiele können nicht von der Politik abdrifteten.
+- `tests/test_ai_policy.py`: AST-Prüfung (fehlende/zusätzliche Funktion, falsche Signatur, jeder Name der Verbotsliste), Built-in-Liste **gegen die echte Sandbox** (kein abgeschriebener Katalog). **Umgesetzt** (12 Tests).
+- `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp. **Umgesetzt** (9 Tests, inkl. Generator-Abgleich).
+- `tests/test_ai_examples.py`: jede ausgelieferte Beispielregel besteht `compile_rule` — die Beispiele können nicht von der Politik abdrifteten. **Umgesetzt** (4 Tests; läuft zusätzlich jede Beispielregel gegen ein **leeres** Objekt, damit „fehlender Wert darf nicht werfen“ nicht nur behauptet ist).
 - `tests/test_ai_service.py`: gemockter Provider — Erfolgspfad, Retry nach Politikfehler, Abbruch nach dem zweiten Versuch, `ai_enabled=false`, fehlender Key, Timeout, Worker nicht erreichbar (`503`).
 - Kern: Unit-Test für die Settings-Vorrang-Regel und die **Secret-Maskierung** (`GET /system/settings` liefert den Key nicht, aber `configured=true`), Test für den `ai.generate`- und den `ai.test`-Client (NATS-Nachricht aufbauen/antworten).
 - Alle Gates wie üblich (`scripts/check.*`), inklusive `mypy` über die neuen Module (sie gehören im selben Schritt in `[tool.mypy] files`).

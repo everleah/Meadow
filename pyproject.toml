@@ -52,6 +52,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 files = [
     "meadow/worker",
     "meadow/rules",
+    "meadow/ai",
     "meadow/tabular.py",
     "meadow/urls.py",
     "meadow/mef.py",
