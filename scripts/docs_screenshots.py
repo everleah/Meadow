@@ -57,6 +57,7 @@ SHOTS: tuple[Shot, ...] = (
     Shot("product-form", "/products/{object}", ".text-h5", settle_ms=2500, needs_object=True),
     Shot("import", "/import", ".q-card", settle_ms=1500),
     Shot("export", "/export", ".q-card", settle_ms=1500),
+    Shot("rules", "/rules", ".ag-root-wrapper", settle_ms=2500),
     Shot("help", "/help", ".help-body", settle_ms=1500),
 )
 
