@@ -27,6 +27,7 @@ from typing import Any
 
 from meadow.ai import prompts, provider
 from meadow.ai.context import (
+    allowed_values_text,
     attribute_facts,
     connector_fields_text,
     connector_type_facts,
@@ -34,6 +35,8 @@ from meadow.ai.context import (
     contract_block,
     declared_computed,
     few_shot_examples,
+    parameter_facts,
+    parameters_text,
     policy_block,
     search_field_facts,
     search_fields_text,
@@ -135,9 +138,10 @@ class ServiceState:
 #: `async (config, messages) -> ChatReply` — injectable so tests need no network.
 ChatFn = Callable[[ProviderConfig, list[dict[str, str]]], Awaitable[ChatReply]]
 
-#: `async (query) -> (ok, message, preview)` — validates a query in the core
-#: (`POST /saved-searches/preview`), injectable so tests need no core.
-QueryValidator = Callable[[dict[str, Any]], Awaitable[tuple[bool, str, dict[str, Any] | None]]]
+#: `async (payload) -> (ok, message, preview)` — checks one artefact in the core
+#: (`/saved-searches/preview`, `/connectors/validate`, `/export-profiles/validate`),
+#: injectable so tests need no core.
+PayloadValidator = Callable[[dict[str, Any]], Awaitable[tuple[bool, str, dict[str, Any] | None]]]
 
 
 def _parse_artefact(area: str, text: str) -> dict[str, Any]:
@@ -156,6 +160,17 @@ def _parse_artefact(area: str, text: str) -> dict[str, Any]:
         if not isinstance(payload, dict) or not payload:
             raise ProviderError("the answer is not a JSON object")
         return {"query": payload} if area == "search" else {"config": payload}
+    if area == "export_profile":
+        try:
+            payload = json.loads(cleaned)
+        except ValueError as error:
+            raise ProviderError(f"the model did not answer with JSON: {error}") from error
+        if not isinstance(payload, dict) or not isinstance(payload.get("format"), str):
+            raise ProviderError("the answer JSON has no `format` field")
+        parameters = payload.get("parameters")
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ProviderError("`parameters` must be an object")
+        return {"profile": {"format": payload["format"], "parameters": parameters or {}}}
     if area != "computed_attribute":
         return {"script": cleaned}
     try:
@@ -183,8 +198,8 @@ async def generate(
     vocabulary_rows: list[dict[str, Any]] | None = None,
     search_catalog: dict[str, Any] | None = None,
     json_context: dict[str, Any] | None = None,
-    validate_query: QueryValidator | None = None,
-    validate_config: QueryValidator | None = None,
+    validate_query: PayloadValidator | None = None,
+    validate_config: PayloadValidator | None = None,
     chat_fn: ChatFn = provider.chat,
     state: ServiceState | None = None,
 ) -> dict[str, Any]:
@@ -244,6 +259,17 @@ async def generate(
             description=request.description,
             subject=subject + ("\n" + types if types else ""),
             fields=connector_fields_text(connector_facts),
+            current_config=request.current_script,
+            language=request.language,
+        )
+    elif request.area == "export_profile":
+        schema = (json_context or {}).get("export_profile_schema")
+        task = prompts.config_user_prompt(
+            area=request.area,
+            mode=request.mode,
+            description=request.description,
+            subject=allowed_values_text(schema) or "Export profile",
+            fields=parameters_text(parameter_facts(schema)),
             current_config=request.current_script,
             language=request.language,
         )
@@ -343,6 +369,16 @@ async def generate(
                     "latency_ms": latency_ms,
                     "usage": usage,
                 }
+            if request.area == "export_profile":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "profile": artefact["profile"],
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -382,8 +418,8 @@ async def _check_artefact(
     area: str,
     artefact: dict[str, Any],
     *,
-    validate_query: QueryValidator | None,
-    validate_config: QueryValidator | None,
+    validate_query: PayloadValidator | None,
+    validate_config: PayloadValidator | None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Checks one artefact with the component that will execute it.
 
@@ -392,10 +428,11 @@ async def _check_artefact(
     path a save uses, so a suggestion cannot pass a check the real write would not
     do.
     """
-    if area == "connector":
+    if area in ("connector", "export_profile"):
+        payload = artefact["config"] if area == "connector" else artefact["profile"]
         if validate_config is None:
             return True, "well-formed JSON (not validated against the core)", None
-        return await validate_config(artefact["config"])
+        return await validate_config(payload)
     if area != "search":
         ok, message = check_script(artefact["script"])
         return ok, message, None

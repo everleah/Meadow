@@ -34,6 +34,108 @@ pub const PARAMETER_KEYS: &[&str] = &["fields", "locales", "options", "bmecat"];
 /// `name` limit (it is the record key and the label in the wizard).
 pub const MAX_NAME: usize = 80;
 
+/// What a parameter key holds, for the schema document (and the AI prompt).
+///
+/// The **inner** keys of `options`/`bmecat` are read by the export worker
+/// (`meadow/worker/exports.py`), so they are named in the description instead of
+/// being declared here — the core rejects unknown *top-level* keys only.
+fn parameter_shape(key: &str) -> (&'static str, &'static str) {
+    match key {
+        "fields" => (
+            "string_list",
+            "Attribute names to export; empty means the object's own attributes",
+        ),
+        "locales" => (
+            "string_list",
+            "Language codes to resolve values for; empty means the working language",
+        ),
+        "options" => (
+            "object",
+            "Format switches: `header` (csv/xlsx, default true), `separator` (default \",\"), \
+             `resolve_inheritance` (fill values maintained on an ancestor), \
+             `include_ancestors` (json/MEF: keep the composition parents)",
+        ),
+        "bmecat" => (
+            "object",
+            "BMEcat dialect: `version` (e.g. \"2005\"), `schema_variant` and the \
+             catalog header fields for the BMEcat export",
+        ),
+        _ => ("json", ""),
+    }
+}
+
+/// Payload for `POST /export-profiles/validate`: a profile to check without saving.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ValidateExportProfile {
+    /// Export format (`csv`, `xlsx`, `json`, `bmecat`).
+    pub format: String,
+    /// `{fields?, locales?, options?, bmecat?}` — the request without `source`.
+    #[serde(default)]
+    pub parameters: Option<Value>,
+}
+
+/// The parameter contract of an export profile — read-only metadata.
+///
+/// Formats and parameter shapes are the server's contract (`FORMATS`,
+/// `PARAMETER_KEYS`), so a caller (the profile editor, the AI assistant) can build
+/// a valid profile without guessing. Read-only, so `editor` may read it.
+#[utoipa::path(
+    get,
+    path = "/export-profiles/schema",
+    responses(
+        (status = 200, description = "Formats and parameter contract", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn export_profile_schema(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let parameters: Vec<Value> = PARAMETER_KEYS
+        .iter()
+        .map(|key| {
+            let (shape, description) = parameter_shape(key);
+            json!({ "key": key, "shape": shape, "description": description })
+        })
+        .collect();
+    Ok(Json(
+        json!({ "formats": FORMATS, "parameters": parameters }),
+    ))
+}
+
+/// Structural check of an export profile — **without saving** (editor or API key).
+///
+/// Runs the write path's validation (`validate_format` + `normalize_parameters`),
+/// so a caller gets exactly the verdict a save would produce.
+#[utoipa::path(
+    post,
+    path = "/export-profiles/validate",
+    request_body = ValidateExportProfile,
+    responses(
+        (status = 200, description = "Validation result", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn validate_export_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ValidateExportProfile>,
+) -> Result<Json<Value>, ApiError> {
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let mut errors: Vec<String> = Vec::new();
+    if let Err(error) = validate_format(&body.format) {
+        errors.push(error.message().to_owned());
+    }
+    if let Err(error) = normalize_parameters(body.parameters.unwrap_or(Value::Null)) {
+        errors.push(error.message().to_owned());
+    }
+    Ok(Json(json!({ "ok": errors.is_empty(), "errors": errors })))
+}
+
 fn default_limit() -> u32 {
     1000
 }

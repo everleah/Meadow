@@ -22,7 +22,7 @@ from meadow.ai.context import AttributeFact, attribute_names_text
 from meadow.ai.examples import ExampleRule, search_examples
 
 #: Areas the assistant knows (the core validates the same list).
-AREAS = ("rule", "computed_attribute", "search", "connector")
+AREAS = ("rule", "computed_attribute", "search", "connector", "export_profile")
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
 
@@ -31,6 +31,7 @@ _AREA_TITLES = {
     "computed_attribute": "computed attribute (a business rule with `rule_type = computed`)",
     "search": "saved search (a query in Meadow's search DSL)",
     "connector": "connector configuration (the `parameters` object of a connector)",
+    "export_profile": "export profile (an export format plus its `parameters`)",
 }
 
 _RULE_SYSTEM = """\
@@ -100,6 +101,21 @@ Non-negotiable:
   "EXAMPLE-TOKEN" and say so in the description field if one is needed.
 """
 
+_EXPORT_PROFILE_SYSTEM = """\
+You are the export assistant of Meadow PIM, a product information management system.
+You write an export profile: one JSON object with the keys `format` and `parameters`.
+
+Non-negotiable:
+- Answer with the JSON object only: no explanation, no markdown fence.
+- `format` is one of the allowed formats listed below.
+- `parameters` uses only the listed parameter keys with the listed shape; a
+  parameter you do not need stays out.
+- `fields` lists attribute names (without the `attributes.` prefix); leaving it
+  out or empty means the object's own attributes.
+- `locales` lists language codes; leaving it out means the working language.
+- Never invent attribute or language names that are not in the context you get.
+"""
+
 _SYSTEM_PROMPTS = {"rule": _RULE_SYSTEM, "computed_attribute": _COMPUTED_SYSTEM}
 
 _EXPLAIN_SYSTEM = """\
@@ -136,6 +152,8 @@ def system_prompt(area: str, mode: str) -> str:
         return _SEARCH_SYSTEM
     if area == "connector":
         return _CONNECTOR_SYSTEM
+    if area == "export_profile":
+        return _EXPORT_PROFILE_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 

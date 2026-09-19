@@ -375,7 +375,9 @@ def connector_types_text(schema: Any, labels: Mapping[str, str] | None = None) -
     return "Connector types:\n" + "\n".join(lines) if lines else ""
 
 
-def connector_fields_text(facts: tuple[ConnectorFieldFact, ...] | list[ConnectorFieldFact]) -> str:
+def connector_fields_text(
+    facts: tuple[ConnectorFieldFact, ...] | list[ConnectorFieldFact],
+) -> str:
     """One line per field: `key: type`, constraints, and the UI wording.
 
     A dotted key is a **nested** parameter (`filter.event_types` →
@@ -403,3 +405,61 @@ def connector_fields_text(facts: tuple[ConnectorFieldFact, ...] | list[Connector
             line += f" — {note}"
         lines.append(line)
     return "\n".join(lines)
+
+
+# --- parameter contracts (export profiles, stage 2) -----------------------------
+
+
+class ParameterFact(NamedTuple):
+    """One parameter of a contract document (`{parameters: [{key, shape, …}]}`)."""
+
+    key: str
+    shape: str
+    description: str
+
+
+def parameter_facts(schema: Any) -> tuple[ParameterFact, ...]:
+    """The parameter contract of a core schema document, in the documented order.
+
+    `GET /export-profiles/schema` answers with `{formats, parameters}`: the shapes
+    and meanings the core enforces, so this needs no hand-written copy.
+    """
+    if not isinstance(schema, Mapping):
+        return ()
+    entries = schema.get("parameters")
+    if not isinstance(entries, list):
+        return ()
+    facts: list[ParameterFact] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        key = str(entry.get("key") or "")
+        if not key:
+            continue
+        facts.append(
+            ParameterFact(
+                key=key,
+                shape=str(entry.get("shape") or ""),
+                description=str(entry.get("description") or ""),
+            )
+        )
+    return tuple(facts)
+
+
+def parameters_text(facts: tuple[ParameterFact, ...] | list[ParameterFact]) -> str:
+    """One line per parameter: `key (shape)` and what it holds."""
+    lines = [
+        f"{fact.key} ({fact.shape})" + (f" — {fact.description}" if fact.description else "")
+        for fact in facts
+    ]
+    return "\n".join(lines)
+
+
+def allowed_values_text(schema: Any, key: str = "formats") -> str:
+    """The allowed values of one field of a schema document (`formats` by default)."""
+    if not isinstance(schema, Mapping):
+        return ""
+    values = schema.get(key)
+    if not isinstance(values, list) or not values:
+        return ""
+    return f"{key}: " + " | ".join(str(value) for value in values)

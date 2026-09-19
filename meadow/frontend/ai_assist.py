@@ -149,6 +149,8 @@ def open_suggestion_dialog(
             preview.value = json.dumps(reply.get("query") or {}, indent=2, ensure_ascii=False)
         elif area == "connector":
             preview.value = json.dumps(reply.get("config") or {}, indent=2, ensure_ascii=False)
+        elif area == "export_profile":
+            preview.value = json.dumps(reply.get("profile") or {}, indent=2, ensure_ascii=False)
         else:
             preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(

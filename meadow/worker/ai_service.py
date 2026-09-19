@@ -26,6 +26,7 @@ import httpx
 from meadow.ai.provider import ProviderConfig, ProviderError
 from meadow.ai.service import (
     GenerationRequest,
+    PayloadValidator,
     ServiceState,
     generate,
     test_connection,
@@ -104,6 +105,11 @@ def connector_types_uri(core_url: str) -> str:
     return f"{loopback_host(core_url).rstrip('/')}/connector-types"
 
 
+def export_profile_schema_uri(core_url: str) -> str:
+    """URL of the export-profile contract (formats + parameter shapes)."""
+    return f"{loopback_host(core_url).rstrip('/')}/export-profiles/schema"
+
+
 def ui_labels() -> dict[str, str]:
     """The English UI texts, keyed by i18n key (for the schema's `label_key`).
 
@@ -123,19 +129,18 @@ def ui_labels() -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items() if isinstance(value, str)}
 
 
-async def validate_connector_config(
-    core_url: str, api_key: str | None, connector_type: str, parameters: dict[str, Any]
-) -> tuple[bool, str, dict[str, Any] | None]:
-    """Validates connector parameters with the core (`POST /connectors/validate`).
-
-    Nothing is written: the core runs exactly the check its write path would run,
-    so a suggestion is judged by the component that would reject it later.
-    """
-    url = f"{loopback_host(core_url).rstrip('/')}/connectors/validate"
+async def post_core(
+    core_url: str, api_key: str | None, path: str, body: dict[str, Any]
+) -> httpx.Response:
+    """POSTs to the core with the machine key (the worker's normal channel)."""
+    url = f"{loopback_host(core_url).rstrip('/')}{path}"
     headers = {"x-api-key": api_key} if api_key else {}
-    body = {"connector_type": connector_type, "parameters": parameters}
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(url, json=body, headers=headers)
+        return await client.post(url, json=body, headers=headers)
+
+
+def _verdict(response: httpx.Response) -> tuple[bool, str, dict[str, Any] | None]:
+    """Reads a `{ok, errors}` answer (or the core's `{error}`) into the check shape."""
     if response.status_code == 400:
         payload = response.json() if response.content else {}
         message = payload.get("error") if isinstance(payload, dict) else None
@@ -145,7 +150,37 @@ async def validate_connector_config(
     errors = payload.get("errors") if isinstance(payload, dict) else None
     if isinstance(errors, list) and errors:
         return False, "; ".join(str(error) for error in errors), None
-    return True, "accepted by the connector schema", None
+    return True, "accepted by the core schema", None
+
+
+async def validate_connector_config(
+    core_url: str, api_key: str | None, connector_type: str, parameters: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates connector parameters with the core (`POST /connectors/validate`).
+
+    Nothing is written: the core runs exactly the check its write path would run,
+    so a suggestion is judged by the component that would reject it later.
+    """
+    response = await post_core(
+        core_url,
+        api_key,
+        "/connectors/validate",
+        {"connector_type": connector_type, "parameters": parameters},
+    )
+    return _verdict(response)
+
+
+async def validate_export_profile(
+    core_url: str, api_key: str | None, profile: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates an export profile with the core (``POST /export-profiles/validate``)."""
+    response = await post_core(
+        core_url,
+        api_key,
+        "/export-profiles/validate",
+        {"format": profile.get("format"), "parameters": profile.get("parameters")},
+    )
+    return _verdict(response)
 
 
 async def preview_query(
@@ -180,6 +215,7 @@ async def handle_generate(
     vocabulary: JsonCache,
     search_catalog: JsonCache,
     connector_types: JsonCache,
+    export_profile_schema: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -213,6 +249,9 @@ async def handle_generate(
                 "connector_types": payload if isinstance(payload, list) else [],
                 "labels": ui_labels(),
             }
+        elif request.area == "export_profile":
+            payload = await export_profile_schema.get()
+            json_context = {"export_profile_schema": payload if isinstance(payload, dict) else {}}
         else:
             payload = await vocabulary.get()
             vocabulary_rows = (
@@ -226,8 +265,8 @@ async def handle_generate(
             "attempts": 0,
             "errors": [f"the AI context could not be loaded from the core: {error}"],
         }
-    validator = None
-    config_validator = None
+    validator: PayloadValidator | None = None
+    config_validator: PayloadValidator | None = None
     if request.area == "search":
 
         async def validator(
@@ -238,10 +277,20 @@ async def handle_generate(
     if request.area == "connector":
         connector_type = request.config_kind or ""
 
-        async def config_validator(
+        async def validate_connector(
             parameters: dict[str, Any],
         ) -> tuple[bool, str, dict[str, Any] | None]:
             return await validate_connector_config(core_url, api_key, connector_type, parameters)
+
+        config_validator = validate_connector
+    elif request.area == "export_profile":
+
+        async def validate_profile(
+            profile: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return await validate_export_profile(core_url, api_key, profile)
+
+        config_validator = validate_profile
 
     try:
         return await generate(
@@ -321,6 +370,9 @@ async def serve(
     connector_types = JsonCache(
         connector_types_uri(core_url), api_key, label="the connector type catalog"
     )
+    export_profile_schema = JsonCache(
+        export_profile_schema_uri(core_url), api_key, label="the export-profile schema"
+    )
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
@@ -332,6 +384,7 @@ async def serve(
             vocabulary=vocabulary,
             search_catalog=search_catalog,
             connector_types=connector_types,
+            export_profile_schema=export_profile_schema,
             state=state,
         )
 

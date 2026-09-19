@@ -127,6 +127,14 @@ pub fn router(state: AppState) -> Router {
                 .post(api::export_profiles::create_export_profile),
         )
         .route(
+            "/export-profiles/schema",
+            get(api::export_profiles::export_profile_schema),
+        )
+        .route(
+            "/export-profiles/validate",
+            post(api::export_profiles::validate_export_profile),
+        )
+        .route(
             "/export-profiles/{id}",
             get(api::export_profiles::get_export_profile)
                 .patch(api::export_profiles::update_export_profile)

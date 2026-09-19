@@ -24,6 +24,7 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.export_page import FORMATS
@@ -46,6 +47,19 @@ def _parameters_text(profile: dict) -> str:
     """The profile parameters as pretty JSON for the editor."""
     parameters = profile.get("parameters")
     return json.dumps(parameters or {}, indent=2, ensure_ascii=False, sort_keys=True)
+
+
+def _parse_text(raw: str) -> dict:
+    """The parameters text as an object (`{}` when it does not parse yet).
+
+    Used to feed the **current** profile to the assistant as the baseline for
+    "improve"; the editor's own validation still happens on save.
+    """
+    try:
+        parsed = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _summarize(parameters: object) -> str:
@@ -85,6 +99,9 @@ async def export_profiles_page() -> None:
         ui.label(t("export_profiles.load_failed")).classes("text-subtitle1 text-negative")
         return
     profiles = sorted(profiles, key=lambda row: str(row.get("name") or "").lower())
+    # Whether the AI assistant can be used (opt-in, configured, admin page) — and
+    # why not, so the editor says it instead of hiding the button silently.
+    ai = await ai_state(client, token)
 
     def _rows() -> list[dict]:
         return [
@@ -155,6 +172,20 @@ async def export_profiles_page() -> None:
                     .classes("w-full")
                 )
                 ui.label(t("export_profiles.parameters_hint")).classes("text-caption text-gray-500")
+                with ui.row().classes("w-full items-center gap-2"):
+                    if ai.get("available"):
+                        ui.button(
+                            t("export_profiles.ai_suggest"),
+                            icon="auto_awesome",
+                            on_click=lambda: suggest_profile(),
+                        ).props("flat dense")
+                        ui.label(t("export_profiles.ai_suggest_hint")).classes(
+                            "text-caption text-gray-500"
+                        )
+                    else:
+                        ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                            "text-caption text-gray-500"
+                        )
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 delete_btn = ui.button(
                     t("export_profiles.delete"), icon="delete", on_click=lambda: do_delete()
@@ -185,6 +216,36 @@ async def export_profiles_page() -> None:
         def open_editor(profile: dict | None) -> None:
             _fill_editor(profile)
             editor_dialog.open()
+
+        def suggest_profile() -> None:
+            """AI suggestion for format + parameters; the answer fills both fields."""
+
+            def apply(reply: dict) -> None:
+                profile = reply.get("profile")
+                if not isinstance(profile, dict):
+                    return
+                fmt = str(profile.get("format") or "").lower()
+                if fmt in FORMATS:
+                    format_select.set_value(fmt)
+                parameters_input.set_value(
+                    json.dumps(profile.get("parameters") or {}, indent=2, ensure_ascii=False)
+                )
+
+            open_suggestion_dialog(
+                client=client,
+                token=token,
+                area="export_profile",
+                title_key="export_profiles.ai_title",
+                config_kind=lambda: str(format_select.value or ""),
+                current_script=lambda: json.dumps(
+                    {
+                        "format": str(format_select.value or ""),
+                        "parameters": _parse_text(str(parameters_input.value or "")),
+                    },
+                    ensure_ascii=False,
+                ),
+                on_apply=apply,
+            )
 
         async def reload_profiles() -> None:
             nonlocal profiles
