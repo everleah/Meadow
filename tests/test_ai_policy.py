@@ -11,6 +11,7 @@ These tests pin the two facts the AI-assist plan is built on
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from types import MappingProxyType
@@ -30,6 +31,7 @@ from meadow.ai.policy import (  # noqa: E402 - after the path fix
     limits,
     policy_facts,
     sandbox_builtins,
+    unimported_modules,
 )
 from meadow.rules.contract import RULE_TYPES, Context, Result  # noqa: E402
 from meadow.rules.sandbox import build_globals  # noqa: E402
@@ -43,6 +45,17 @@ WITH_HASATTR = (
 )
 WITH_IMPORT = 'import os\n\n\ndef run(obj, ctx, result):\n    result.set_value("a", os.getcwd())\n'
 WITH_PRIVATE = 'def run(obj, ctx, result):\n    result.set_value("a", obj.__class__)\n'
+WITHOUT_IMPORT = (
+    "def run(obj, ctx, result):\n"
+    '    sku = obj["attributes"].get("sku")\n'
+    '    if isinstance(sku, str) and not re.fullmatch(r"[A-Z0-9-]+", sku):\n'
+    '        result.add_error("sku", "format", "Article number has a wrong format")\n'
+)
+
+
+def _parse(source: str) -> ast.AST:
+    """The parsed source — the pre-check works on the tree, not on text."""
+    return ast.parse(source)
 
 
 def _real_namespace() -> dict[str, Any]:
@@ -148,6 +161,58 @@ def test_check_script_catches_names_the_compiler_accepts() -> None:
     assert not ok
     assert "does not provide" in message and "hasattr" in message
     assert "getattr" in message  # the message points at the working alternative
+
+
+def test_a_module_used_without_an_import_is_rejected() -> None:
+    """`re.fullmatch(…)` without `import re` compiles and fails at runtime.
+
+    Measured 2026-09-19 on a real model suggestion: the script was accepted by
+    the policy check and the Rule Lab reported `name 're' is not defined` — the
+    rule would never have run.
+    """
+    ok, message = check_script(WITHOUT_IMPORT)
+    assert not ok
+    assert "must be imported" in message and "re" in message
+    assert "import re" in message  # the message says how to fix it
+
+    # With the import it is fine, and a local variable of the same name is not a
+    # false positive (it is bound by the assignment).
+    ok, message = check_script(VALID.replace("def run", "import re\n\n\ndef run"))
+    assert ok, message
+    ok, message = check_script(
+        "def run(obj, ctx, result):\n    re = obj['attributes'].get('name')\n"
+        "    result.set_value('titel', str(re))\n"
+    )
+    assert ok, message
+
+
+def test_only_module_names_are_reported_as_missing_imports() -> None:
+    """An unknown name stays the compiler's business — the check has one job."""
+    assert unimported_modules(_parse("def run(obj, ctx, result):\n    x = 1\n    del x\n")) == []
+    # `json` and `math` are importable; a script using both without imports
+    # reports them sorted, not once per use.
+    assert unimported_modules(
+        _parse(
+            "def run(obj, ctx, result):\n"
+            "    value = math.floor(1)\n"
+            "    other = math.ceil(2)\n"
+            "    result.log(json.dumps(value) + str(other))\n"
+        )
+    ) == ["json", "math"]
+    # Imported under an alias counts as bound; `from … import name` binds the name.
+    assert (
+        unimported_modules(
+            _parse(
+                "import re as regex\n"
+                "from json import dumps\n"
+                "\n"
+                "\n"
+                "def run(obj, ctx, result):\n"
+                "    result.log(dumps(regex.escape('a')))\n"
+            )
+        )
+        == []
+    )
 
 
 def test_check_script_defers_imports_and_private_attributes_to_the_compiler() -> None:

@@ -48,13 +48,15 @@ _VALIDATION_GTIN = """def run(obj, ctx, result):
         result.add_error("gtin", "checksum", "GTIN check digit is wrong")
 """
 
-_VALIDATION_SKU = """def run(obj, ctx, result):
+_VALIDATION_SKU = """import re
+
+def run(obj, ctx, result):
     sku = obj["attributes"].get("sku")
     if not isinstance(sku, str) or not sku.strip():
         result.add_error("sku", "missing", "Article number must be set")
         return
-    if sku != sku.strip().upper():
-        result.add_warning("sku", "format", "Article number is not upper case without spaces")
+    if not re.fullmatch(r"[A-Z0-9-]+", sku):
+        result.add_error("sku", "format", "Article number may only contain A-Z, 0-9 and -")
 """
 
 _WORKFLOW_GUARD = """def run(obj, ctx, result):

@@ -105,6 +105,8 @@ def policy_block() -> str:
             f"  importable modules — use only these: {', '.join(available_imports())}",
             f"  not available (fails at runtime): {', '.join(forbidden_helpers())}",
             "  note: getattr(value, 'name', None) exists, hasattr does not.",
+            "  note: a module must be imported before use (`import re` at the top) —",
+            "        writing `re.fullmatch(…)` without the import fails at runtime.",
             "  limits: "
             f"{facts_limits['max_source_bytes']:.0f} bytes script, "
             f"{facts_limits['timeout_seconds']}s wall clock, "

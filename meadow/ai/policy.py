@@ -164,11 +164,64 @@ def check_script(source: str) -> tuple[bool, str]:
             "(use getattr(value, 'name', None) instead of hasattr, for example)"
         )
 
+    missing_imports = unimported_modules(tree)
+    if missing_imports:
+        return False, (
+            f"a module must be imported before use: {', '.join(missing_imports)} "
+            f"(add `import {missing_imports[0]}` at the top of the script)"
+        )
+
     try:
         compile_rule(source)
     except (RuleError, SyntaxError) as error:
         return False, f"the sandbox policy rejects the script: {error}"
     return True, "matches the sandbox policy"
+
+
+def unimported_modules(tree: ast.AST) -> list[str]:
+    """Importable module names the script **uses** without importing them.
+
+    A gate the AST pre-check needs: `import` is allowed but not automatic, so
+    `re.fullmatch(…)` without `import re` compiles, passes the policy check and
+    fails at runtime with `NameError: name 're' is not defined` — the script
+    silently never ran. Measured 2026-09-19 on a real model suggestion.
+    """
+    modules = set(available_imports())
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                bound.add(node.module.split(".")[0])
+            for alias in node.names:
+                bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound.add(node.name)
+            arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            bound.update(argument.arg for argument in arguments)
+            for optional in (node.args.vararg, node.args.kwarg):
+                if optional is not None:
+                    bound.add(optional.arg)
+        elif isinstance(node, ast.Lambda):
+            arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            bound.update(argument.arg for argument in arguments)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+    used = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    provided = set(_sandbox_globals()) | set(CONTRACT_NAMES)
+    return sorted(
+        name for name in used if name in modules and name not in bound and name not in provided
+    )
 
 
 def policy_facts() -> dict[str, Any]:

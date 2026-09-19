@@ -202,7 +202,7 @@ def test_explain_returns_prose_instead_of_a_script() -> None:
     reply = asyncio.run(
         generate(
             CONFIG,
-            _request(mode="explain", current_script=VALID_SCRIPT),
+            _request(mode="explain", current_script=VALID_SCRIPT, language="de"),
             chat_fn=recorder,
         )
     )
@@ -211,6 +211,9 @@ def test_explain_returns_prose_instead_of_a_script() -> None:
     assert "script" not in reply
     # An explain request asks for prose: the system prompt names no artefact format.
     assert "prose" in recorder.messages[0][0]["content"]
+    # The prose follows the user's language — the sentence applies to the answer
+    # itself here, not only to a description field (measured on a real model).
+    assert "language `de`" in recorder.messages[0][1]["content"]
 
 
 def test_an_unknown_area_or_mode_is_rejected_before_any_call() -> None:

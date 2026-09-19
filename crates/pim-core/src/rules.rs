@@ -214,16 +214,7 @@ impl RulesClient {
         actor: Option<&str>,
         context: EvaluationContext<'_>,
     ) -> Result<RuleOutcome, EvaluateError> {
-        let payload = json!({
-            "rules": rules,
-            "object": object,
-            "mode": mode,
-            "language": language,
-            "actor": actor,
-            "channel": context.channel,
-            "release_status": context.release_status,
-            "missing_features": context.missing_features,
-        });
+        let payload = evaluation_payload(rules, object, mode, language, actor, context);
         let bytes = serde_json::to_vec(&payload)
             .map_err(|error| EvaluateError::BadReply(error.to_string()))?;
 
@@ -284,6 +275,36 @@ impl RulesClient {
             Ok(errors)
         }
     }
+}
+
+/// The NATS request payload for one rule evaluation.
+///
+/// The shape is the worker's contract (`meadow/worker/protocol.py`,
+/// `EvaluationRequest`): `missing_features` is a **list**, never `null` — a
+/// serialised `None` made the worker reject the whole request
+/// (`missing_features: Input should be a valid array`), which silently broke
+/// every Rule Lab run (`dry-run`/`test-batch` pass `EvaluationContext::default()`)
+/// while the object write path kept working, because that one always supplies a
+/// list. Found 2026-09-19 while testing an AI suggestion in the lab; the unit
+/// test below pins the field's shape.
+fn evaluation_payload(
+    rules: &[RuleSpec],
+    object: &Value,
+    mode: &str,
+    language: Option<&str>,
+    actor: Option<&str>,
+    context: EvaluationContext<'_>,
+) -> Value {
+    json!({
+        "rules": rules,
+        "object": object,
+        "mode": mode,
+        "language": language,
+        "actor": actor,
+        "channel": context.channel,
+        "release_status": context.release_status,
+        "missing_features": context.missing_features.unwrap_or(&[]),
+    })
 }
 
 /// Loads the `active` rules of the given types that apply to `object_type`.
@@ -862,6 +883,92 @@ pub async fn queue_inherited_cascade(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec() -> RuleSpec {
+        RuleSpec {
+            name: "check_sku".to_owned(),
+            rule_type: "validation".to_owned(),
+            script: "def run(obj, ctx, result):\n    pass\n".to_owned(),
+        }
+    }
+
+    fn object() -> Value {
+        json!({ "id": "object:1", "type": "product", "status": "draft", "attributes": {} })
+    }
+
+    /// The Rule Lab passes `EvaluationContext::default()`; a `null` there made
+    /// the worker reject the whole request, so the list is pinned here.
+    #[test]
+    fn the_evaluation_payload_always_carries_a_feature_list() {
+        let payload = evaluation_payload(
+            &[spec()],
+            &object(),
+            "save",
+            None,
+            None,
+            EvaluationContext::default(),
+        );
+        assert_eq!(payload.get("missing_features"), Some(&json!([])));
+        assert!(payload["missing_features"].is_array());
+        // Channel context stays optional; absent means `null`, which the worker
+        // models as `str | None`.
+        assert_eq!(payload.get("channel"), Some(&Value::Null));
+        assert_eq!(payload.get("release_status"), Some(&Value::Null));
+
+        let names = vec!["EF000123".to_owned()];
+        let with_features = evaluation_payload(
+            &[spec()],
+            &object(),
+            "transition",
+            Some("de"),
+            Some("user:admin"),
+            EvaluationContext {
+                channel: Some("web"),
+                release_status: Some("published"),
+                missing_features: Some(&names),
+            },
+        );
+        assert_eq!(with_features["missing_features"], json!(["EF000123"]));
+        assert_eq!(with_features["channel"], json!("web"));
+        assert_eq!(with_features["language"], json!("de"));
+    }
+
+    /// The keys are the worker's `EvaluationRequest` fields — a rename here has
+    /// to break a test, not a live evaluation.
+    #[test]
+    fn the_evaluation_payload_uses_the_worker_field_names() {
+        let payload = evaluation_payload(
+            &[spec()],
+            &object(),
+            "import",
+            None,
+            None,
+            EvaluationContext::default(),
+        );
+        let mut keys: Vec<&str> = payload
+            .as_object()
+            .expect("payload is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "actor",
+                "channel",
+                "language",
+                "missing_features",
+                "mode",
+                "object",
+                "release_status",
+                "rules",
+            ]
+        );
+        // The rule spec keeps its `type` key (the worker's `EvaluationRule`).
+        assert_eq!(payload["rules"][0]["type"], json!("validation"));
+        assert_eq!(payload["rules"][0]["name"], json!("check_sku"));
+    }
 
     fn declared(map: &[(&str, bool)]) -> HashMap<String, bool> {
         map.iter()

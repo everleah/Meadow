@@ -151,10 +151,12 @@ def user_prompt(
         block = _examples_block(examples)
         if block:
             sections.append(block)
-        if language:
-            sections.append(
-                f"Write the description in the language `{language}`; the code stays English."
-            )
+    if language:
+        # The prose follows the user's language, the code stays English — for
+        # `explain` the answer *is* the prose, so the sentence applies there too
+        # (measured 2026-09-19: without it a German request came back in English).
+        what = "the answer" if mode == "explain" else "the description"
+        sections.append(f"Write {what} in the language `{language}`; the code stays English.")
     return "\n\n".join(sections)
 
 
