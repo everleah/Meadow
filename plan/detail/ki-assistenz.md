@@ -1,0 +1,197 @@
+# KI-Assistenz (Regeln, berechnete Attribute, Suche, Konfiguration)
+
+- **Hauptdokument:** Abschnitt 8 ([Workflow, Freigaben & Business Rules](../meadow-pim-architektur.md#8-workflow-freigaben--business-rules)) – Business Rules und berechnete Attribute sind die ersten beiden Einsatzbereiche; außerdem Abschnitt 10 ([Suche & Collections](../meadow-pim-architektur.md#10-suche-collections--gespeicherte-suchen), Query-DSL), Abschnitt 11 ([Frontend](../meadow-pim-architektur.md#11-frontend)) und Abschnitt 12 ([Betrieb](../meadow-pim-architektur.md#12-betrieb--deployment), Provider-Konfiguration und Secret-Behandlung)
+- **Relevante Phasen:** baut auf Phase 4 (Sandbox, `rules.compile`/`rules.evaluate`), Phase 7 (Rule Lab) und Phase 9 (schema-getriebene Formulare, Query-DSL); die Stufen 0–3 unten sind **neu** und noch nicht Teil der Phasen 1–9
+- **Stand:** Entwurf / geplant — **nichts davon ist implementiert**; die Machbarkeit ist am 2026-09-19 an der laufenden Dev-Instanz **gemessen** (Spike, Abschnitt 8)
+
+## 0. Kurzfassung
+
+Meadow bekommt eine **KI-Assistenz**, die Beschreibungen in die Artefakte übersetzt, die dieses System ohnehin schon kennt: **Regelcode** (Business Rules), **Regelcode + Abhängigkeiten** (berechnete Attribute), **Query-DSL** (Suche) und später **JSON-Parameter** (Konnektoren, Export-Profile, Jobs, Import-Mapping). Sie ist eine **Schreibhilfe im Editor**: der Vorschlag landet im Feld, **nie automatisch in der Datenbank**. Alles, was die KI erzeugt, läuft durch **dieselben Prüfungen wie handgeschriebener Code** — Compile-Policy der Sandbox, AST-Vorprüfung, Dry-Run gegen ein echtes Objekt bzw. Query-Preview im Kern.
+
+Der Ansatz ist bewusst der **kleinste tragfähige**: kein Agenten-Framework, keine Kette von Werkzeugen, kein Speicher — ein Prompt aus den **Laufzeitquellen der Wahrheit**, ein Modellaufruf, eine Prüfung, optional **ein** Korrekturversuch.
+
+## 1. Ausgangslage
+
+Meadow hat genau die Bausteine, die eine solche Assistenz braucht — und zwar als **Maschinenlesbares**, nicht als Handbuchtext:
+
+| Baustein | Wo | Warum er zählt |
+| --- | --- | --- |
+| Skript-Vertrag `run(obj, ctx, result)` | `meadow/rules/contract.py` | Ergebnis-Helfer und Kontextfelder lassen sich **erzeugen** statt abschreiben |
+| Sandbox-Politik (Built-ins, Import-Whitelist, Limits) | `meadow/rules/sandbox.py`, `whitelist.py` | exakt das, was der generierte Code einhalten muss |
+| Prüfung vor dem Speichern | NATS `rules.compile` (Kern ruft den Worker), `crates/pim-core/src/api/rules.rs` | ein KI-Vorschlag wird **wie jeder andere** geprüft |
+| Ausführung gegen echte Daten | `POST /rules/{id}/dry-run`, Rule Lab | der Nutzer sieht das Ergebnis **vor** dem Speichern |
+| Feldkatalog der Suche | `GET /search-fields` | die DSL ist schema-getrieben, der Katalog ist der Prompt-Kontext |
+| Query-Prüfung ohne Speichern | `POST /saved-searches/preview` | read-only-Validierung eines KI-Entwurfs |
+| Attribut-Metadaten | `GET /attribute-definitions/vocabulary` | Namen/Typen je Objekttyp, plus `computed`/`dependencies` |
+
+Heute gibt es **keinerlei** KI-Bezug im Python-Baum (geprüft), und das ist die Wurzel des Aufwands: die Verbindung, der Kontextbau und die Einbettung in die Dialoge entstehen komplett neu.
+
+## 2. Verifizierte Grundlagen (Messungen 2026-09-19, Dev-Instanz)
+
+Alle Zahlen sind am laufenden System bzw. an der echten Sandbox gemessen, nicht geschätzt.
+
+**Sandbox-Politik:**
+
+- **101 Built-ins** sind in einer Regel sichtbar (aus `safe_builtins` + `limited_builtins` + `utility_builtins` + `meadow.rules.sandbox._EXTRA_BUILTINS`). Darunter `getattr` (der **abgesicherte** `safer_getattr`), `set`, `sorted`, `sum`, `enumerate`, `math`, `random` — aber **kein `hasattr`**.
+- `hasattr`, `eval`, `open`, `globals` und Genossen sind **keine** Built-ins: sie bestehen `compile_restricted_exec` und scheitern erst **zur Laufzeit** mit `NameError`. Verbotene Imports und private Attribute (`__class__`) werden dagegen schon beim Kompilieren abgelehnt.
+  → **Folgerung:** Die Prüfkette braucht eine **AST-Vorprüfung** für Namen, die die Sandbox nicht kennt; der Compile-Check allein reicht nicht.
+- Heute werden **keine zusätzlichen Bindings** injiziert (`build_globals(bindings=None)` → keine Extra-Globals). Kommen später welche (z. B. Einheitenumrechnung), muss der Prompt-Kontext sie **zur Laufzeit** aus derselben Quelle lesen — deshalb wird er generiert, nicht gepflegt.
+
+**Größe des Kontexts (der kritische Punkt):**
+
+| Quelle | Roh | Kompakte Projektion für den Prompt |
+| --- | --- | --- |
+| Attribut-Vokabular | 17 463 Definitionen, **8,35 MB**; für `product` **17 443 zutreffend** (Namensliste 174 654 Zeichen ≈ 44 k Token) | **eigene** Attribute (`reference_data` ausgeschlossen): `product` 54 (1 107 Zeichen), `variant` 40, `vehicle_generation` 12 |
+| Suchfeld-Katalog | 18 400 Felder, **6,63 MB** | eigene Felder als `key:value_type`: **92 Felder, 2 524 Zeichen** + eine Operator-Tabelle |
+| Regeln | 26 Regeln, 12,7 KB, 3 957 Zeichen Skriptcode | gleichartige Regeln als Few-Shot: 2–3 Stück |
+| Objekttypen / Einheiten / Konnektortypen | 14 Typen (4,8 KB), 74 Einheiten (22,7 KB), 3 Konnektortypen (5,6 KB) | nur die Namen bzw. der eine Typ |
+
+**Ohne Projektion ist der Bereich nicht machbar** (ein Prompt mit allen Attributen oder allen Suchfeldern wäre zweistellige Zehntausende Token groß und würde die relevanten Namen verwässern). Die Projektion folgt der Regel, die die Oberfläche schon hat: *wo gewählt wird, stehen die eigenen Attribute* (`display.own_attribute_names`).
+
+## 3. Architektur-Entscheidung
+
+**Der LLM-Aufruf läuft im Worker, angesprochen über NATS** — genau wie `rules.compile` und `rules.evaluate` heute:
+
+```
+Frontend (NiceGUI)  --HTTP-->  Kern (Rust)  --NATS request/reply-->  Worker (Python)  --HTTPS-->  Provider
+   Beschreibung, Modus           Auth, Audit,      AiGenerate-Request      Kontext bauen, LLM rufen,
+   Vorschlag im Editor           Settings                                 AST+Compile prüfen, 1 Retry
+```
+
+Begründung (jeweils geprüft):
+
+| Variante | Bewertung |
+| --- | --- |
+| **Worker über NATS (gewählt)** | Der Worker hat `httpx`, ist der etablierte Außen-I/O-Prozess (Importe, Exporte, Konnektoren, Webhooks) und **beherbergt die Sandbox** — das Wissen über Vertrag und Politik liegt dort schon. Der API-Key bleibt im Kern/Worker, erreicht weder Browser noch UI-Prozess. Fehlerbild wie bei den Regeln: `503`, wenn der Worker fehlt. |
+| Frontend-Prozess direkt | Weniger Bausteine, aber: der dünne Sicht-Vertrag des Frontends bricht (es müsste `meadow/rules` importieren oder die Politik duplizieren — heute importiert es das Paket **nirgends**), und der Key läge im UI-Prozess. Verworfen. |
+| Kern (Rust) ruft den Provider | Der Kern hat **keinen** HTTP-Client (kein `reqwest` in `crates/pim-core/Cargo.toml`) — das hieße eine neue Abhängigkeit plus Prompt-Bau in Rust und damit eine zweite Quelle der Wahrheit für Vertrag/Politik. Verworfen. |
+
+**Kein LangGraph, keine LangChain.** Der Ablauf ist linear (Kontext → Aufruf → Prüfung → ggf. ein Retry); es gibt keine Werkzeugschleife, keinen Graphen, keinen Zustand zwischen Anfragen. Genau so ist auch im the predecessor project die tragfähige Vorstufe gebaut (OpenAI-kompatibles Chat-Completions-Protokoll per HTTP, bewusst ohne Provider-Bibliothek). Ein Agenten-Framework würde eine schwere Abhängigkeitskette (LangChain-Core, Provider-Adapter) für einen einzelnen POST-Aufruf einführen. Sollte später einmal eine **Graph-Generierung** anstehen (Meadow hat keine Workflow-Graphen, aber die Query-DSL und MCF-Dokumente als strukturierte Artefakte), ist das eine eigene Entscheidung — die Assistenz hier braucht sie nicht.
+
+**Provider-neutral:** der Worker spricht das **OpenAI-kompatible Chat-Completions-Protokoll**; damit sind Azure OpenAI, OpenAI, DeepSeek und lokale Ollama-Instanzen ohne Codeänderung nutzbar (nur Endpoint/Modell unterscheiden sich).
+
+## 4. Konfiguration und Secret-Behandlung
+
+Meadow ist **Einzelmandant** — anders als im the predecessor project (dort `CustomerAIConfig` pro Kunde) genügt **eine** globale Konfiguration in der vorhandenen Settings-Registry (`code default < environment < database`, Admin-Seite `/system-settings` existiert bereits).
+
+| Schlüssel | Typ | Default | Bedeutung |
+| --- | --- | --- | --- |
+| `ai_enabled` | bool | `false` | **Opt-in**; solange falsch, ist die Funktion im UI unsichtbar |
+| `ai_provider` | enum | `generic` | `generic` \| `openai` \| `azure_openai` \| `ollama` (steuert Endpoint-Aufbau/Header) |
+| `ai_endpoint` | string | `""` | Basis-URL, Pflicht für `generic`/`azure_openai`/`ollama` |
+| `ai_model` | string | `""` | Modell- bzw. Deployment-Name |
+| `ai_api_key` | **secret** | `""` | Zugangsschlüssel — **maskiert** in jeder Antwort |
+| `ai_temperature` | number | `0.2` | niedrig halten (Codegenerierung) |
+| `ai_max_output_tokens` | int | `2048` | Antwortbudget |
+| `ai_timeout_ms` | int | `30000` | Aufruf-Timeout |
+| `ai_max_requests_per_hour` | int | `60` | Kostenbremse pro Instanz (0 = unbegrenzt) |
+
+Umgebungsvariablen (`AI_ENABLED`, `AI_PROVIDER`, `AI_ENDPOINT`, `AI_MODEL`, `AI_API_KEY`, …) haben **Vorrang** vor dem DB-Wert — dieselbe Auflösung wie bei den vorhandenen Einstellungen.
+
+**Secret-Regel (kleine Kern-Ergänzung, Muster `secret: true` aus `connector_schema.rs`):** Die Settings-Registry markiert `ai_api_key` als Secret. `GET /system/settings` liefert dafür **nie** den Wert, sondern eine Maskierung plus `source`; `PUT /system/settings/ai_api_key` schreibt ihn. Der echte Wert verlässt den Kern nur in der **NATS-Anfrage an den Worker** (internes Netz) — nie Richtung Browser oder UI-Prozess. Der Worker hält ihn nicht fest, er benutzt ihn pro Aufruf.
+
+## 5. Kontextbau je Bereich
+
+Der Kontext entsteht **im Worker aus den Laufzeitquellen** (`meadow.rules.*` für Politik/Vertrag, Kern-API für Datenmetadaten) — nicht aus gepflegten Texten. Zwei Blöcke sind für alle Bereiche gleich:
+
+1. **Politik-Block:** verfügbare Built-ins, importierbare Module, Verbotsliste, Limits — erzeugt aus der echten Sandbox.
+2. **Vertrags-Block:** `run(obj, ctx, result)`, die `result`-Helfer, die `ctx`-Felder — erzeugt aus `meadow/rules/contract.py`.
+
+Dazu je Bereich ein Aufgaben-Block und 2–3 Few-Shot-Beispiele (die ausgelieferten Demo-Regeln aus `scripts/demo_data_catalog.json` sind dafür geprüft und passen zur Politik).
+
+| Bereich | Zusätzlicher Kontext | Prüfung des Ergebnisses | Ausgabe |
+| --- | --- | --- | --- |
+| **Business Rule** | Regeltyp, `applies_to`-Objekttyp, dessen **eigene** Attribute (`name:type`), gleichartige aktive Regeln als Beispiele, bei „ändern" das aktuelle Skript als Baseline | AST-Vorprüfung → `compile_rule` (NATS-Policy) → optional Dry-Run | vollständiger `def run(...)`-Block |
+| **Berechnetes Attribut** | wie oben, zusätzlich: Zielattribut **mit Typ** und die **deklarierten** berechneten Attribute des Typs (nur diese darf `set_value` schreiben) | wie oben, plus Abgleich der `set_value`-Zielfelder gegen die Deklaration | Skript **+** Regelname **+** `dependencies` **+** `computed_reads_inherited` **+** Beschreibungstext |
+| **Suche (Query-DSL)** | DSL-Kurzspezifikation (Struktur, Grenzen, „fehlende Werte sind keine Treffer"), Feldliste `key:value_type`, Operator-Tabelle mit `arity`/`multi`, Basisgrenzen | `json.loads` → `POST /saved-searches/preview` (Kern validiert Feld, Operator, Wertigkeit, Tiefe) | DSL-JSON |
+| **JSON-Parameter** (Konnektor, Export-Profil, Job) | das Feld-Schema des jeweiligen Typs (`GET /connector-types` je Typ; Parameterfelder von Export-Profil/Job) | Kern-Validierung beim Speichern; MCF-Import zusätzlich mit `?dry_run=true` | JSON-Objekt |
+| **Import-Spalten-Mapping** | Zielattribute des Importtyps + Spaltenköpfe der Datei | Import-Vorschau (Dry-Run) des Kernports | Zuordnung Spalte → Attribut |
+
+## 6. Prüfkette und Sicherheitsregeln
+
+Die KI ist eine **Quelle wie jeder Mensch am Editor** — sie bekommt keine Sonderrechte:
+
+1. **Nie automatisch speichern.** Der Vorschlag wird per `set_value(...)` in den Editor geschrieben; der Nutzer prüft und speichert.
+2. **AST-Vorprüfung** (neu, `meadow/ai/policy.py`): genau **eine** Funktion `run`, Signatur `(obj, ctx, result)`, keine Namen aus der Verbotsliste (`hasattr`, `eval`, `exec`, `open`, …). Diese Prüfung fängt genau die Klasse ab, die der Compile-Check **nicht** sieht (gemessen, Abschnitt 2).
+3. **Compile-Policy** über `meadow.rules.compile_rule` — dasselbe, was `POST /rules` beim Speichern prüft (Imports, private Attribute, Größe).
+4. **Ausführung/Dry-Run** dort, wo es ihn schon gibt: Rule Lab gegen ein echtes Objekt, `POST /saved-searches/preview` für Suchen, Import-Vorschau für Mappings. Der Nutzer sieht das Ergebnis vor dem Speichern.
+5. **Ein Selbstkorrektur-Versuch:** schlägt Schritt 2–3 fehl, geht die Fehlermeldung **einmal** zurück an das Modell; danach ist Schluss und der Nutzer sieht den Fehler. Kein Endlos-Loop.
+6. **Fail-closed wie bei den Regeln:** ist `ai_enabled=false`, fehlt der Key oder ist der Worker nicht erreichbar, gibt es eine klare Meldung (`503`/Hinweis) — **keine** stille Ersatzfunktion und **kein** Einfluss auf Speicherpfade.
+7. **Audit:** jeder Aufruf wird als `audit_log`-Eintrag (`ai_generated`) mit Bereich, Zielobjekt/-regel, Modell, Versuchen und Tokenzahl festgehalten — **ohne** Prompt und ohne Objektwerte. Damit ist nachvollziehbar, woher ein Skript kam.
+8. **Datenminimierung:** in den Prompt gehen **Schema und Metadaten** (Attributnamen, Typen, Status) — **keine Objektwerte**. Wer Objektwerte braucht, nutzt den Dry-Run im Haus (Regeln), nicht das Modell.
+
+## 7. Bedienung
+
+- **Stufe 0 (ohne KI, sofort nützlich):** ein Panel neben dem Regel-Editor mit **Vertrag und Politik** (Globals, `result`-Helfer, `ctx`-Felder, erlaubte Imports, Limits, eigene Attribute des Objekttyps). Es ist gleichzeitig die sichtbare Prüfung, dass der generierte Kontext stimmt — und der Spickzettel, den man heute im Handbuch sucht.
+- **Regel-Editor (Rule Lab):** Knopf „Vorschlag erzeugen" mit Modus **Neu** / **Bestehendes ändern** / **Erklären**; Beschreibungsfeld, Ergebnis im CodeMirror-Feld, Hinweiszeile mit Prüfergebnis (`policy ok`, Fehlerliste) und Verweis auf den Dry-Run.
+- **Berechnetes Attribut (Attributdefinition):** im Rechen-Bereich des Dialogs derselbe Knopf; die KI füllt zusätzlich **Regelname**, **`dependencies`** und `computed_reads_inherited` vor (die Felder existieren dort bereits).
+- **Suche (Suchformular/gespeicherte Suche):** „Suchbeschreibung → DSL", Ergebnis im JSON-Tab, Prüfung über die Vorschau (Trefferzahl erscheint sofort).
+- **„Erklären"** (Gegenrichtung Code → Klartext) füllt das vorhandene `description`-Feld von Regel/Attribut — nützlich für Handbuch, Audit und Übergabe; dort greift auch die Regel „keine Fremdprodukt-Namen in der Oberfläche".
+- **Sichtbarkeit:** alle Knöpfe nur bei `ai_enabled` und passender Rolle (`business_rule.manage` bzw. `attribute_definition.manage`).
+
+## 8. Spike-Ergebnisse (2026-09-19, echte Modellaufrufe)
+
+Gefahren wurde die komplette geplante Kette mit `deepseek-chat` (OpenAI-kompatibel) gegen die laufende Dev-Instanz: Kontext aus den echten Quellen, Modellaufruf, AST-Prüfung, `compile_rule`, Ausführung gegen ein synthetisches Objekt, Query-Preview im Kern.
+
+| Szenario | Prompt | Latenz | Token | Ergebnis |
+| --- | --- | --- | --- | --- |
+| Berechnetes Attribut (neu) | 5 189 Zeichen (≈1 297 Token) | 1,94 s | 1 531 | **policy ok**, Dry-Run schreibt `gross_price` |
+| Validierungsregel (neu) | 4 994 | 2,06 s | ~1 500 | **policy ok** |
+| Berechnetes Attribut (**ändern**, Baseline = ausgelieferte Regel) | 5 409 | 1,62 s | 1 579 | **policy ok**, Dry-Run `gross_price = 119.0` |
+| Provokation: „nutze bitte unbedingt `hasattr`" | 4 993 | 1,39 s | 1 498 | **policy ok** — das Modell wich selbst auf `"name" in attributes` aus |
+| Suche (Query-DSL) | 4 947 | 1,61 s | 1 472 | **`POST /saved-searches/preview` akzeptiert** (1 000 Treffer) |
+
+**Ergebnis:** 5 von 5 Vorschlägen bestanden die Prüfkette im **ersten** Versuch; der Selbstkorrektur-Loop kam nicht zum Einsatz (bleibt als Netz). Ein Aufruf kostet ~1,3–1,6 k Token.
+
+**Zwei Befunde aus dem Spike (beide schon eingearbeitet):**
+
+1. **System-Prompt ist bereichsspezifisch.** Mit dem *Regel*-System-Prompt bat das Modell für eine **Suchanfrage** brav `def run(obj, ctx, result)` an (FAIL). Erst mit einem eigenen Such-Prompt kam reines JSON. → `meadow/ai/prompts.py` braucht **einen System-Prompt je Bereich**, und der Bereich muss im Kern-Endpunkt explizit sein.
+2. **Roh-Endpunkte sind als Kontext unbrauchbar.** Vokabular (8,35 MB) und Suchfeld-Katalog (6,63 MB) müssen projiziert werden (eigene Felder, kompakte Feldschreibweise, eine Operator-Tabelle) — sonst sprengt schon `product` allein das Budget (174 654 Zeichen für Namenslisten).
+
+**Nicht verifiziert** (offen): Verhalten bei sehr großen Typen mit vielen eigenen Attributen, Nicht-DeepSeek-Provider (Azure/Ollama), Import-Mapping-End-to-End, Verhalten bei Modellausfall während eines Aufrufs (Timeout-Pfad ist implementiert, aber nicht ausgelöst), sowie die Wirkung der Assistenz bei echten Nutzern.
+
+## 9. Stufenplan
+
+**Stufe 0 — Vertrag sichtbar machen (kein Modell, kein Provider).**
+`meadow/ai/policy.py` + `meadow/ai/context.py` (Politik/Vertrag/Projektionen) und ein Panel im Regel-Editor. Dazu `scripts/ai_context.py` als Generator, der **eine** Referenzdatei (`docs/ai/rulemodel-context.md` + `.json`) schreibt, damit der Vertrag auch außerhalb des Codes nachlesbar ist. Wert: sofort nützlich, und der Kontext ist geprüft, bevor Geld fließt.
+
+**Stufe 1 — Business Rules + berechnete Attribute (Kern der Sache).**
+Settings (Abschnitt 4), `meadow/ai/provider.py` + `service.py`, NATS-Subject `ai.generate`, Kern-Endpunkt `POST /ai/generate` + `AiClient`, 503-Pfad, Audit, Retry, Knöpfe im Regel-Editor und im Rechen-Bereich des Attributdialogs. Modi: Neu, Ändern; „Erklären" für das `description`-Feld. **Das ist die Stufe, die den gemeldeten Bedarf deckt.**
+
+**Stufe 2 — Suche und JSON-Parameter.**
+Query-DSL aus Beschreibung (mit Vorschau), danach die kleinen JSON-Flächen (Konnektor-Parameter, Export-Profil, Job-Parameter) und das **Import-Spalten-Mapping**.
+
+**Stufe 3 — Komfort und Betrieb.**
+„Erklären" für ganze Konfigurationen, Vorschlags-Historie je Regel/Attribut (wer hat wann was generiert — aus dem Audit ableitbar, ohne neuen Speicher), Kosten-/Nutzungsanzeige, optional Streaming der Antwort.
+
+Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dry-Run gegen echte Daten) und den größten Nutzen; Suche und JSON folgen mit derselben Mechanik, brauchen aber je eigene Prompt-/Prüfteile.
+
+## 10. Tests und Verifikation
+
+- `tests/test_ai_policy.py`: AST-Prüfung (fehlende/zusätzliche Funktion, falsche Signatur, jeder Name der Verbotsliste), Built-in-Liste **gegen die echte Sandbox** (kein abgeschriebener Katalog).
+- `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp.
+- `tests/test_ai_examples.py`: jede ausgelieferte Beispielregel besteht `compile_rule` — die Beispiele können nicht von der Politik abdrifteten.
+- `tests/test_ai_service.py`: gemockter Provider — Erfolgspfad, Retry nach Politikfehler, Abbruch nach dem zweiten Versuch, `ai_enabled=false`, fehlender Key, Timeout, Worker nicht erreichbar (`503`).
+- Kern: Unit-Test für die Settings-Vorrang-Regel und die **Secret-Maskierung** (`GET /system/settings` liefert den Key nicht), Test für den `ai.generate`-Client (NATS-Nachricht aufbauen/antworten).
+- Alle Gates wie üblich (`scripts/check.*`), inklusive `mypy` über die neuen Module (sie gehören im selben Schritt in `[tool.mypy] files`).
+
+## 11. Risiken und bewusste Nicht-Ziele
+
+| Risiko | Umgang |
+| --- | --- |
+| Modell erfindet Helfer/Parameter | Politik-Block im Prompt + AST-Vorprüfung + Compile-Policy + Dry-Run; gemessen bestand das Modell die Prüfung ohne Nachbesserung |
+| Prompt wird zu groß / verwässert | Projektionen (Abschnitt 5) mit Größentest; **keine** Rohlisten |
+| Kosten und Latenz | kleines `max_output_tokens`, Temperatur 0,2, Timeout, optionale Stundenbremse, Audit mit Tokenzahl; ~1,5 s und ~1 500 Token je Vorschlag (gemessen) |
+| Geheimnisabfluss | Key nur im Kern/Worker, maskiert in jeder Antwort, nie im Prompt, nie im Browser |
+| Modellausfall | klare Meldung, kein Ersatzweg, keine Auswirkung auf Speicherpfade |
+| „KI-Code" im Bestand | Vorschlag ist ein Vorschlag: Editor, Prüfung, Dry-Run, Audit-Eintrag — und die Regel, dass generierter Code **denselben** Weg geht wie handgeschriebener |
+
+**Nicht-Ziele:** kein Chat-Agent, kein Mehrmonats-Gedächtnis, keine automatische Aktivierung einer Regel, keine Objektwerte im Prompt, keine automatische Schemaänderung, kein Ersatz für Handbuch oder Review, keine Modellwahl pro Nutzer, **kein** Agenten-Framework.
+
+## 12. Offene Punkte
+
+1. **Provider-Voreinstellung** für die Inbetriebnahme (Beispielwerte Azure OpenAI vs. generisch/DeepSeek vs. Ollama lokal) — nur Konfiguration, keine Codeentscheidung.
+2. **Streaming** der Antwort (fühlbar schneller, aber NiceGUI/Worker-Aufwand) — Stufe 3.
+3. **Sichtbare Historie** je Regel/Attribut („welche Vorschläge gab es?") — heute über das Audit ableitbar; eigener Speicher nur, wenn der Bedarf belegt ist.
+4. **Import-Mapping**: eigene Stufe-2-Aufgabe (eigener Kontext: Spaltenköpfe + Zielattribute + Vorschau).
+5. **Sprache der Vorschläge**: Beschreibung in Arbeitssprache, Code/Kommentare auf Englisch (Projektregel) — im Prompt verankern.
