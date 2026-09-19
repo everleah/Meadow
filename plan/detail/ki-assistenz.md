@@ -88,7 +88,37 @@ Meadow ist **Einzelmandant** — anders als im the predecessor project (dort `Cu
 
 Umgebungsvariablen (`AI_ENABLED`, `AI_PROVIDER`, `AI_ENDPOINT`, `AI_MODEL`, `AI_API_KEY`, …) haben **Vorrang** vor dem DB-Wert — dieselbe Auflösung wie bei den vorhandenen Einstellungen.
 
-**Secret-Regel (kleine Kern-Ergänzung, Muster `secret: true` aus `connector_schema.rs`):** Die Settings-Registry markiert `ai_api_key` als Secret. `GET /system/settings` liefert dafür **nie** den Wert, sondern eine Maskierung plus `source`; `PUT /system/settings/ai_api_key` schreibt ihn. Der echte Wert verlässt den Kern nur in der **NATS-Anfrage an den Worker** (internes Netz) — nie Richtung Browser oder UI-Prozess. Der Worker hält ihn nicht fest, er benutzt ihn pro Aufruf.
+### 4.1 Konfiguration in der Oberfläche (vorgesehen — Admin)
+
+**Ja, die Konfiguration erfolgt im UI**, auf der vorhandenen Admin-Seite **`/system-settings`** (`meadow/frontend/settings.py`), in einer neuen Gruppe **„AI"** neben „Logging" und „Rules & Worker". Die Seite kann heute schon Werte anzeigen (`GET /system/settings?include_source=true` mit Herkunfts-Badge `default`/`env`/`db`), speichern (`PUT /system/settings/{key}`) und zurücksetzen (`DELETE /system/settings/{key}`) — es fehlen genau drei Dinge, alle klein:
+
+| Schlüssel | Bedienelement im UI | Anmerkung |
+| --- | --- | --- |
+| `ai_enabled` | Schalter | Opt-in; solange aus, sind die KI-Knöpfe unsichtbar |
+| `ai_provider` | Auswahlfeld | `generic` \| `openai` \| `azure_openai` \| `ollama` |
+| `ai_endpoint` | Textfeld | Pflicht bei `generic`/`azure_openai`/`ollama`, z. B. `https://api.deepseek.com/v1` |
+| `ai_model` | Textfeld | Modell- bzw. Deployment-Name |
+| `ai_api_key` | **Passwortfeld** | **write-only**: nie im Klartext zurückgegeben; die Seite zeigt „gesetzt"/„nicht gesetzt" |
+| `ai_temperature` | Zahlenfeld | 0–2, Vorgabe 0,2 |
+| `ai_max_output_tokens` | Zahlenfeld | Vorgabe 2048 |
+| `ai_timeout_ms` | Zahlenfeld | Vorgabe 30 000 |
+| `ai_max_requests_per_hour` | Zahlenfeld | 0 = unbegrenzt |
+| — | Knopf **„Verbindung testen"** | `POST /ai/test` → NATS → Worker schickt einen Minimal-Prompt an den Provider und meldet Ergebnis/Latenz |
+
+**Was dafür neu ist:**
+
+1. **Kern: Secret-Behandlung in der Settings-Registry.** Die Registry ist eine geschlossene Liste (`default_settings()`, `env_setting()`, `validate_setting()`, `is_known_setting()`); `ai_*` kommt dazu. Neu ist eine Markierung `secret`: `resolve_settings*` liefert für Secret-Schlüssel **nie** den Wert, sondern die Form `{"value": null, "configured": true, "secret": true, "source": "db"}` — damit kann die Oberfläche „gesetzt" anzeigen und die KI-Knöpfe einblenden, ohne den Schlüssel je zu sehen. `PUT /system/settings/ai_api_key` nimmt den echten Wert entgegen (write-only), `DELETE` setzt zurück.
+2. **Frontend: zwei Editor-Typen mehr.** Die Seite kennt heute nur Auswahl/Schalter/Zahl (`_make_card`); ein **Textfeld** und ein **Passwortfeld** sowie die neue Gruppe „AI" kommen dazu — inklusive des Knopfs „Verbindung testen".
+3. **Herkunft sichtbar machen (Falle vermeiden).** Ist `AI_API_KEY` in der **Umgebung** gesetzt, gewinnt sie gegen den DB-Wert — das Feld wäre dann wirkungslos. Deshalb zeigt die Karte (wie heute bei allen Einstellungen) den Badge `env` und **sperrt das Eingabefeld** mit dem Hinweis, dass die Umgebung Vorrang hat.
+
+**Bewertung/Randbedingungen:**
+
+- **Möglich und konsistent:** Auth (Admin-Rolle wie bei allen anderen Einstellungen), Audit (`PUT` schreibt heute schon `system_setting_updated`) und die Verteilung an den Worker sind vorhanden bzw. geplant.
+- **Wer darf was:** Konfigurieren nur `admin`/`superadmin` (die Seite prüft das bereits); *benutzen* dürfen es Rollen mit `business_rule.manage` bzw. `attribute_definition.manage`.
+- **Ehrliche Grenze:** In der Datenbank liegt der Schlüssel im Klartext (wie heute die Zugangsdaten der Konnektoren) — maskiert wird die **Ausgabe**, nicht die Ablage; die DB ist die Schutzgrenze. Wem das nicht reicht, konfiguriert **nur** per Umgebungsvariable (`AI_API_KEY`); die UI zeigt den Schlüssel dann als „aus Umgebung gesetzt" an und lässt ihn nicht überschreiben.
+- **Transport:** Browser → Kern und Kern → Worker laufen über die internen, authentifizierten Wege; der echte Wert geht nie an den Browser zurück und nie in einen Prompt.
+
+**Secret-Regel (kleine Kern-Ergänzung, Muster `secret: true` aus `connector_schema.rs`):** Die Settings-Registry markiert `ai_api_key` als Secret. `GET /system/settings` liefert dafür **nie** den Wert, sondern die Maskierung plus `configured`/`source` (Abschnitt 4.1); `PUT /system/settings/ai_api_key` schreibt ihn. Der echte Wert verlässt den Kern nur in der **NATS-Anfrage an den Worker** (internes Netz) — nie Richtung Browser oder UI-Prozess. Der Worker hält ihn nicht fest, er benutzt ihn pro Aufruf.
 
 ## 5. Kontextbau je Bereich
 
@@ -127,7 +157,7 @@ Die KI ist eine **Quelle wie jeder Mensch am Editor** — sie bekommt keine Sond
 - **Berechnetes Attribut (Attributdefinition):** im Rechen-Bereich des Dialogs derselbe Knopf; die KI füllt zusätzlich **Regelname**, **`dependencies`** und `computed_reads_inherited` vor (die Felder existieren dort bereits).
 - **Suche (Suchformular/gespeicherte Suche):** „Suchbeschreibung → DSL", Ergebnis im JSON-Tab, Prüfung über die Vorschau (Trefferzahl erscheint sofort).
 - **„Erklären"** (Gegenrichtung Code → Klartext) füllt das vorhandene `description`-Feld von Regel/Attribut — nützlich für Handbuch, Audit und Übergabe; dort greift auch die Regel „keine Fremdprodukt-Namen in der Oberfläche".
-- **Sichtbarkeit:** alle Knöpfe nur bei `ai_enabled` und passender Rolle (`business_rule.manage` bzw. `attribute_definition.manage`).
+- **Sichtbarkeit:** alle Knöpfe nur bei `ai_enabled` **und** konfiguriertem Provider (die Oberfläche erfährt über `configured`/`source`, ob ein Key hinterlegt ist, ohne ihn zu sehen) und passender Rolle (`business_rule.manage` bzw. `attribute_definition.manage`). Die **Konfiguration** selbst liegt auf `/system-settings` und ist wie diese Seite **admin-only** (Abschnitt 4.1).
 
 ## 8. Spike-Ergebnisse (2026-09-19, echte Modellaufrufe)
 
@@ -156,7 +186,7 @@ Gefahren wurde die komplette geplante Kette mit `deepseek-chat` (OpenAI-kompatib
 `meadow/ai/policy.py` + `meadow/ai/context.py` (Politik/Vertrag/Projektionen) und ein Panel im Regel-Editor. Dazu `scripts/ai_context.py` als Generator, der **eine** Referenzdatei (`docs/ai/rulemodel-context.md` + `.json`) schreibt, damit der Vertrag auch außerhalb des Codes nachlesbar ist. Wert: sofort nützlich, und der Kontext ist geprüft, bevor Geld fließt.
 
 **Stufe 1 — Business Rules + berechnete Attribute (Kern der Sache).**
-Settings (Abschnitt 4), `meadow/ai/provider.py` + `service.py`, NATS-Subject `ai.generate`, Kern-Endpunkt `POST /ai/generate` + `AiClient`, 503-Pfad, Audit, Retry, Knöpfe im Regel-Editor und im Rechen-Bereich des Attributdialogs. Modi: Neu, Ändern; „Erklären" für das `description`-Feld. **Das ist die Stufe, die den gemeldeten Bedarf deckt.**
+Settings (Abschnitt 4) **inklusive Konfiguration im UI**: `ai_*`-Schlüssel in der Kern-Registry mit Secret-Markierung und Maskierung, auf `/system-settings` die Gruppe „AI" mit Text-/Passwortfeld (die Seite kennt heute nur Auswahl/Schalter/Zahl) und dem Knopf „Verbindung testen" (`POST /ai/test` → NATS → Worker); dazu `meadow/ai/provider.py` + `service.py`, NATS-Subject `ai.generate`, Kern-Endpunkt `POST /ai/generate` + `AiClient`, 503-Pfad, Audit, Retry, Knöpfe im Regel-Editor und im Rechen-Bereich des Attributdialogs. Modi: Neu, Ändern; „Erklären" für das `description`-Feld. **Das ist die Stufe, die den gemeldeten Bedarf deckt.**
 
 **Stufe 2 — Suche und JSON-Parameter.**
 Query-DSL aus Beschreibung (mit Vorschau), danach die kleinen JSON-Flächen (Konnektor-Parameter, Export-Profil, Job-Parameter) und das **Import-Spalten-Mapping**.
@@ -172,7 +202,7 @@ Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dr
 - `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp.
 - `tests/test_ai_examples.py`: jede ausgelieferte Beispielregel besteht `compile_rule` — die Beispiele können nicht von der Politik abdrifteten.
 - `tests/test_ai_service.py`: gemockter Provider — Erfolgspfad, Retry nach Politikfehler, Abbruch nach dem zweiten Versuch, `ai_enabled=false`, fehlender Key, Timeout, Worker nicht erreichbar (`503`).
-- Kern: Unit-Test für die Settings-Vorrang-Regel und die **Secret-Maskierung** (`GET /system/settings` liefert den Key nicht), Test für den `ai.generate`-Client (NATS-Nachricht aufbauen/antworten).
+- Kern: Unit-Test für die Settings-Vorrang-Regel und die **Secret-Maskierung** (`GET /system/settings` liefert den Key nicht, aber `configured=true`), Test für den `ai.generate`- und den `ai.test`-Client (NATS-Nachricht aufbauen/antworten).
 - Alle Gates wie üblich (`scripts/check.*`), inklusive `mypy` über die neuen Module (sie gehören im selben Schritt in `[tool.mypy] files`).
 
 ## 11. Risiken und bewusste Nicht-Ziele
