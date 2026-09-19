@@ -29,6 +29,7 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth, search_form
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
@@ -125,6 +126,9 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
         catalog = await client.list_search_fields(token)
     except CoreError, httpx.HTTPError:  # the JSON tab still works without a catalog
         catalog = {}
+    # Whether the AI assistant can be used (opt-in, configured, admin page) — and
+    # why not, so the editor says it instead of hiding the button silently.
+    ai = await ai_state(client, token)
 
     def _matches(s: dict) -> bool:
         if filters["name"]:
@@ -287,6 +291,38 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
         _fill_editor(search)
         editor_dialog.open()
 
+    def suggest_query() -> None:
+        """AI suggestion for the DSL; applying it fills the JSON tab.
+
+        The tab state is set **before** switching tabs so the tab handler does not
+        render the form's query over the suggestion.
+        """
+
+        def apply(reply: dict) -> None:
+            query = reply.get("query")
+            if not isinstance(query, dict):
+                return
+            editor_state["stored"] = copy.deepcopy(query)
+            query_editor.set_value(_json.dumps(query, indent=2, ensure_ascii=False))
+            editor_state["tab"] = "json"
+            editor_tabs.set_value("json")
+            _refresh_hint()
+            # The core counted the hits while it validated the query.
+            preview = reply.get("preview")
+            count = preview.get("count") if isinstance(preview, dict) else None
+            preview_label.set_text(
+                t("search_form.preview_count", count=int(count)) if count is not None else ""
+            )
+
+        open_suggestion_dialog(
+            client=client,
+            token=token,
+            area="search",
+            title_key="saved_searches.ai_title",
+            current_script=lambda: str(query_editor.value or ""),
+            on_apply=apply,
+        )
+
     async def save_search() -> None:
         editing_id = editor_state.get("editing_id")
         name = (name_input.value or "").strip()
@@ -349,6 +385,22 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
                         language="JSON",
                     ).classes("w-full h-72 font-mono text-sm")
                     ui.label(t("saved_searches.query_hint")).classes("text-caption text-gray-500")
+                    with ui.row().classes("w-full items-center gap-2"):
+                        if ai.get("available"):
+                            # The suggestion replaces the JSON tab's content — the
+                            # user still saves through Save (never auto-stored).
+                            ui.button(
+                                t("saved_searches.ai_suggest"),
+                                icon="auto_awesome",
+                                on_click=lambda: suggest_query(),
+                            ).props("flat dense")
+                            ui.label(t("saved_searches.ai_suggest_hint")).classes(
+                                "text-caption text-gray-500"
+                            )
+                        else:
+                            ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                                "text-caption text-gray-500"
+                            )
             hint_label = ui.label("").classes("text-caption text-orange-8")
         with ui.row().classes("w-full items-center gap-2 mt-2"):
             preview_button = ui.button(

@@ -24,6 +24,7 @@ Nothing here is a prompt: the blocks are the shared material for the contract pa
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import fields as dataclass_fields
 from typing import Any, NamedTuple
 
@@ -160,3 +161,99 @@ def declared_computed(facts: tuple[AttributeFact, ...] | list[AttributeFact]) ->
 def few_shot_examples(rule_type: str, limit: int = 3) -> list[ExampleRule]:
     """Example rules of one rule type (see [`meadow.ai.examples`][meadow.ai.examples])."""
     return examples_for(rule_type, limit)
+
+
+# --- search (query DSL, stage 2) -----------------------------------------------
+
+
+class SearchFieldFact(NamedTuple):
+    """One own search field as the DSL prompt needs it."""
+
+    key: str
+    value_type: str
+    operators: tuple[str, ...]
+
+
+def search_field_facts(catalog: Mapping[str, Any]) -> tuple[SearchFieldFact, ...]:
+    """The **own** search fields of `GET /search-fields`, sorted by key.
+
+    Same rule as the attribute projection: where a field can be *chosen*, the UI
+    offers the own ones (the search form hides reference data). Measured
+    2026-09-19 on the dev instance: 18 400 fields in the catalog, 6.54 MB raw,
+    **92** own.
+    """
+    fields = catalog.get("fields")
+    if not isinstance(fields, list):
+        return ()
+    facts: list[SearchFieldFact] = []
+    for entry in fields:
+        if not isinstance(entry, Mapping) or entry.get("reference_data"):
+            continue
+        key = str(entry.get("key") or "")
+        if not key:
+            continue
+        operators = entry.get("operators")
+        facts.append(
+            SearchFieldFact(
+                key=key,
+                value_type=str(entry.get("value_type") or ""),
+                operators=(
+                    tuple(str(operator) for operator in operators)
+                    if isinstance(operators, list)
+                    else ()
+                ),
+            )
+        )
+    return tuple(sorted(facts, key=lambda fact: fact.key))
+
+
+def search_fields_text(facts: tuple[SearchFieldFact, ...] | list[SearchFieldFact]) -> str:
+    """The fields grouped by their operator set: `key:type` lines under `[ops]` headings.
+
+    Grouping is what makes this affordable. Measured 2026-09-19: the 92 own fields
+    *with* their operators are **3 075** characters grouped this way and **7 947**
+    as one line per field — the same information, 2.6× smaller, and the operator
+    constraint stays visible instead of being reduced to the type.
+    """
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for fact in facts:
+        groups.setdefault(fact.operators, []).append(f"{fact.key}:{fact.value_type}")
+    lines: list[str] = []
+    for operators, entries in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])):
+        lines.append(f"[{', '.join(operators) or 'no operators listed'}]")
+        lines.append("  " + ", ".join(entries))
+    return "\n".join(lines)
+
+
+def search_operators_text(catalog: Mapping[str, Any]) -> str:
+    """The operator table of the catalog: type, arity and whether it takes a list."""
+    operators = catalog.get("operators")
+    if not isinstance(operators, list) or not operators:
+        return ""
+    lines = ["Operators (arity = number of values, multi = the value is a list):"]
+    for entry in operators:
+        if not isinstance(entry, Mapping):
+            continue
+        kind = str(entry.get("type") or "")
+        if not kind:
+            continue
+        lines.append(
+            f"  {kind}: arity {entry.get('arity')}{' (multi)' if entry.get('multi') else ''}"
+        )
+    return "\n".join(lines)
+
+
+def search_limits_text(catalog: Mapping[str, Any]) -> str:
+    """The DSL limits in words (the core enforces them when it validates a query)."""
+    limits_value = catalog.get("limits")
+    if not isinstance(limits_value, Mapping) or not limits_value:
+        return ""
+    page_min = limits_value.get("min")
+    page_max = limits_value.get("max")
+    page_default = limits_value.get("default")
+    parts = [f"`limit` between {page_min} and {page_max} (default {page_default})"]
+    if limits_value.get("max_conditions"):
+        parts.append(f"at most {limits_value['max_conditions']} conditions per level")
+    if limits_value.get("max_depth"):
+        parts.append(f"nesting depth at most {limits_value['max_depth']}")
+    return "Limits: " + ", ".join(parts) + "."

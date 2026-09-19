@@ -218,8 +218,12 @@ def test_explain_returns_prose_instead_of_a_script() -> None:
 
 def test_an_unknown_area_or_mode_is_rejected_before_any_call() -> None:
     recorder = Recorder(_envelope(VALID_SCRIPT))
-    assert asyncio.run(generate(CONFIG, _request(area="search"), chat_fn=recorder))["ok"] is False
-    assert asyncio.run(generate(CONFIG, _request(mode="rewrite"), chat_fn=recorder))["ok"] is False
+    # `connector` is a stage-2/3 area, not a known one yet: an unknown area must
+    # not cost a model call.
+    unknown_area = asyncio.run(generate(CONFIG, _request(area="connector"), chat_fn=recorder))
+    assert unknown_area["ok"] is False
+    unknown_mode = asyncio.run(generate(CONFIG, _request(mode="rewrite"), chat_fn=recorder))
+    assert unknown_mode["ok"] is False
     assert recorder.messages == []
 
 
@@ -256,6 +260,143 @@ def test_the_hourly_budget_stops_the_calls() -> None:
     assert first["ok"] is True
     assert second["ok"] is False
     assert "budget" in str(second["errors"][0])
+
+
+SEARCH_CATALOG: dict[str, Any] = {
+    "fields": [
+        {"key": "type", "value_type": "string", "group": "system", "operators": ["eq", "ne"]},
+        {
+            "key": "attributes.net_price",
+            "value_type": "number",
+            "group": "attribute",
+            "operators": ["eq", "gt", "between"],
+        },
+        {
+            "key": "attributes.EF000123",
+            "value_type": "number",
+            "group": "attribute",
+            "reference_data": True,
+            "operators": ["eq"],
+        },
+    ],
+    "operators": [
+        {"type": "eq", "arity": 1, "group": "compare", "multi": False},
+        {"type": "between", "arity": 2, "group": "compare", "multi": True},
+    ],
+    "limits": {"default": 1000, "max": 10000, "max_conditions": 50, "max_depth": 6, "min": 1},
+}
+
+GOOD_QUERY = {
+    "where": {
+        "op": "and",
+        "conditions": [{"field": "type", "operator": "eq", "value": "product"}],
+    },
+    "limit": 500,
+}
+
+
+class QueryChecking:
+    """A fake core validator that answers with a scripted sequence."""
+
+    def __init__(self, *answers: tuple[bool, str]) -> None:
+        self.answers = list(answers)
+        self.queries: list[dict[str, Any]] = []
+
+    async def __call__(self, query: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
+        self.queries.append(query)
+        ok, message = self.answers[min(len(self.queries) - 1, len(self.answers) - 1)]
+        return ok, message, {"count": 1234} if ok else None
+
+
+def test_a_search_suggestion_is_checked_by_the_core_validator() -> None:
+    recorder = Recorder(json.dumps(GOOD_QUERY))
+    validator = QueryChecking((True, "1234 hits"))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="search", rule_type=None, target_attribute=None),
+            search_catalog=SEARCH_CATALOG,
+            validate_query=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["query"] == GOOD_QUERY
+    assert reply["preview"] == {"count": 1234}
+    assert reply["check"] == "1234 hits"
+    assert validator.queries == [GOOD_QUERY]
+    # The prompt carries the projected catalogue, not the raw one.
+    user = recorder.messages[0][1]["content"]
+    assert "attributes.net_price:number" in user
+    assert "EF000123" not in user
+    assert "between" in user
+    assert "`limit` between 1 and 10000" in user
+    # The search system prompt asks for JSON, not for a rule.
+    assert "search DSL" in recorder.messages[0][0]["content"]
+
+
+def test_a_rejected_query_gets_one_correction_turn_with_the_core_message() -> None:
+    recorder = Recorder(json.dumps(GOOD_QUERY), json.dumps(GOOD_QUERY))
+    validator = QueryChecking(
+        (False, "unknown field `attributes.nope`"),
+        (True, "12 hits"),
+    )
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="search"),
+            search_catalog=SEARCH_CATALOG,
+            validate_query=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["attempts"] == 2
+    assert "unknown field" in recorder.messages[1][-1]["content"]
+
+    recorder = Recorder(json.dumps(GOOD_QUERY), json.dumps(GOOD_QUERY))
+    failing = QueryChecking((False, "unknown field `attributes.nope`"))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="search"),
+            search_catalog=SEARCH_CATALOG,
+            validate_query=failing,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert reply["attempts"] == 2
+    assert reply["errors"] == ["unknown field `attributes.nope`"]
+
+
+def test_a_search_answer_that_is_not_json_fails() -> None:
+    recorder = Recorder("Here is your query:", "still not JSON")
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="search"),
+            search_catalog=SEARCH_CATALOG,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert any("JSON" in str(message) for message in reply["errors"])
+
+
+def test_without_a_validator_the_search_check_says_so() -> None:
+    """No core reachable: the reply must not claim the query was validated."""
+    recorder = Recorder(json.dumps(GOOD_QUERY))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="search"),
+            search_catalog=SEARCH_CATALOG,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert "not validated" in str(reply["check"])
 
 
 def test_the_connection_test_reports_success_and_missing_settings() -> None:

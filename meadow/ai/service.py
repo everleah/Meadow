@@ -32,6 +32,10 @@ from meadow.ai.context import (
     declared_computed,
     few_shot_examples,
     policy_block,
+    search_field_facts,
+    search_fields_text,
+    search_limits_text,
+    search_operators_text,
 )
 from meadow.ai.policy import check_script
 from meadow.ai.provider import ChatReply, ProviderConfig, ProviderError
@@ -125,15 +129,27 @@ class ServiceState:
 #: `async (config, messages) -> ChatReply` — injectable so tests need no network.
 ChatFn = Callable[[ProviderConfig, list[dict[str, str]]], Awaitable[ChatReply]]
 
+#: `async (query) -> (ok, message, preview)` — validates a query in the core
+#: (`POST /saved-searches/preview`), injectable so tests need no core.
+QueryValidator = Callable[[dict[str, Any]], Awaitable[tuple[bool, str, dict[str, Any] | None]]]
+
 
 def _parse_artefact(area: str, text: str) -> dict[str, Any]:
     """Reads the model's answer into the fields the editor fills.
 
     A `rule` answer is the script itself; a `computed_attribute` answer is the
-    JSON envelope with the script plus its metadata. A malformed envelope is an
-    error, not a silent empty suggestion.
+    JSON envelope with the script plus its metadata; a `search` answer is the
+    query object. A malformed answer is an error, not a silent empty suggestion.
     """
     cleaned = strip_fences(text)
+    if area == "search":
+        try:
+            payload = json.loads(cleaned)
+        except ValueError as error:
+            raise ProviderError(f"the model did not answer with JSON: {error}") from error
+        if not isinstance(payload, dict) or not payload:
+            raise ProviderError("the answer is not a query object")
+        return {"query": payload}
     if area != "computed_attribute":
         return {"script": cleaned}
     try:
@@ -159,6 +175,8 @@ async def generate(
     request: GenerationRequest,
     *,
     vocabulary_rows: list[dict[str, Any]] | None = None,
+    search_catalog: dict[str, Any] | None = None,
+    validate_query: QueryValidator | None = None,
     chat_fn: ChatFn = provider.chat,
     state: ServiceState | None = None,
 ) -> dict[str, Any]:
@@ -167,6 +185,11 @@ async def generate(
     The reply is JSON-ready for the core, which forwards it to the editor:
     `{"ok": true, "script": ..., "attempts": 1, ...}` on success and
     `{"ok": false, "errors": [...], "attempts": 2, ...}` after a failed retry.
+
+    The check differs by area: a script goes through the sandbox policy
+    (`check_script`), a search query through the **core's own validator**
+    (`validate_query` → `POST /saved-searches/preview`), which is the component
+    that will execute it later.
     """
     if request.area not in prompts.AREAS:
         return {"ok": False, "errors": [f"unknown area `{request.area}`"], "attempts": 0}
@@ -183,27 +206,39 @@ async def generate(
             ],
         }
 
-    facts = attribute_facts(vocabulary_rows or [], request.object_type or "")
-    declared = declared_computed(facts)
-    # The editor knows the declared names too; its list wins when it sends one,
-    # so a suggestion can never write a name the dialog does not offer.
-    writable = request.declared_computed or declared
-    examples = few_shot_examples(request.rule_type or "validation")
-    task = prompts.user_prompt(
-        area=request.area,
-        mode=request.mode,
-        description=request.description,
-        rule_type=request.rule_type,
-        object_type=request.object_type,
-        facts=facts,
-        declared=writable,
-        examples=examples,
-        contract=contract_block(),
-        policy=policy_block(),
-        current_script=request.current_script,
-        target_attribute=request.target_attribute,
-        language=request.language,
-    )
+    if request.area == "search":
+        catalog = search_catalog or {}
+        task = prompts.search_user_prompt(
+            mode=request.mode,
+            description=request.description,
+            fields=search_fields_text(search_field_facts(catalog)),
+            operators=search_operators_text(catalog),
+            limits=search_limits_text(catalog),
+            current_query=request.current_script,
+            language=request.language,
+        )
+    else:
+        facts = attribute_facts(vocabulary_rows or [], request.object_type or "")
+        declared = declared_computed(facts)
+        # The editor knows the declared names too; its list wins when it sends one,
+        # so a suggestion can never write a name the dialog does not offer.
+        writable = request.declared_computed or declared
+        examples = few_shot_examples(request.rule_type or "validation")
+        task = prompts.user_prompt(
+            area=request.area,
+            mode=request.mode,
+            description=request.description,
+            rule_type=request.rule_type,
+            object_type=request.object_type,
+            facts=facts,
+            declared=writable,
+            examples=examples,
+            contract=contract_block(),
+            policy=policy_block(),
+            current_script=request.current_script,
+            target_attribute=request.target_attribute,
+            language=request.language,
+        )
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": prompts.system_prompt(request.area, request.mode)},
@@ -250,8 +285,21 @@ async def generate(
             ]
             continue
 
-        ok, message = check_script(artefact["script"])
+        ok, message, extra = await _check_artefact(
+            request.area, artefact, validate_query=validate_query
+        )
         if ok:
+            if request.area == "search":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "query": artefact["query"],
+                    "preview": extra,
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -285,6 +333,30 @@ async def generate(
         "latency_ms": latency_ms,
         "usage": usage,
     }
+
+
+async def _check_artefact(
+    area: str,
+    artefact: dict[str, Any],
+    *,
+    validate_query: QueryValidator | None,
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Checks one artefact with the component that will execute it.
+
+    A script passes the sandbox policy (`check_script`); a search query passes the
+    core's own validation, which is the same code path the search form uses for
+    its live preview — a suggestion cannot pass a check the real execution would
+    not do.
+    """
+    if area != "search":
+        ok, message = check_script(artefact["script"])
+        return ok, message, None
+    if validate_query is None:
+        # Without a validator the query is only well-formed JSON; say so instead
+        # of claiming it was checked.
+        return True, "well-formed JSON (not validated against the core)", None
+    ok, message, preview = await validate_query(artefact["query"])
+    return ok, message, preview
 
 
 def _name(value: Any) -> str:

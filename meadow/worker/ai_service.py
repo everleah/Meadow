@@ -40,64 +40,95 @@ from meadow.worker.protocol import (
 
 logger = logging.getLogger(__name__)
 
-#: How long the fetched attribute vocabulary is reused (seconds).
-VOCABULARY_TTL_SECONDS = 300.0
+#: How long a fetched core document is reused (seconds).
+CACHE_TTL_SECONDS = 300.0
 
 
-class VocabularyCache:
-    """The attribute vocabulary from the core, cached with a TTL.
+class JsonCache:
+    """A JSON document from the core, cached with a TTL.
 
-    Only the projection needs it (`meadow.ai.context.attribute_facts`), and the
-    raw response is large: one fetch serves every request in the TTL window.
+    The documents this service needs are large — the attribute vocabulary is
+    6 MB, the search-field catalog 6.5 MB — so one fetch serves every request in
+    the TTL window. A fetch failure raises: a prompt built without its context
+    would produce confident nonsense, and the caller reports the error instead.
     """
 
     def __init__(
         self,
-        core_url: str,
+        url: str,
         api_key: str | None,
         *,
-        ttl_seconds: float = VOCABULARY_TTL_SECONDS,
+        label: str,
+        ttl_seconds: float = CACHE_TTL_SECONDS,
     ) -> None:
-        self._url = f"{loopback_host(core_url).rstrip('/')}/attribute-definitions/vocabulary"
+        self._url = url
         self._api_key = api_key
+        self._label = label
         self._ttl = ttl_seconds
-        self._rows: list[dict[str, Any]] = []
+        self._payload: Any = None
         self._fetched_at = 0.0
         self._lock = asyncio.Lock()
 
-    async def rows(self) -> list[dict[str, Any]]:
-        """The cached vocabulary rows, refetched when the TTL expired.
-
-        A fetch failure raises: a prompt without the attribute list would produce
-        confident nonsense, so the caller reports the error instead.
-        """
+    async def get(self) -> Any:
+        """The cached payload, refetched when the TTL expired."""
         now = time.monotonic()
-        if self._rows and now - self._fetched_at < self._ttl:
-            return self._rows
+        if self._payload is not None and now - self._fetched_at < self._ttl:
+            return self._payload
         async with self._lock:
             now = time.monotonic()
-            if self._rows and now - self._fetched_at < self._ttl:
-                return self._rows
+            if self._payload is not None and now - self._fetched_at < self._ttl:
+                return self._payload
             headers = {"x-api-key": self._api_key} if self._api_key else {}
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(self._url, headers=headers)
                 response.raise_for_status()
-                payload = response.json()
-            rows = (
-                [row for row in payload if isinstance(row, dict)]
-                if isinstance(payload, list)
-                else []
-            )
-            self._rows = rows
+                self._payload = response.json()
             self._fetched_at = time.monotonic()
-            logger.info("loaded %d attribute definitions for the AI context", len(rows))
-            return self._rows
+            logger.info("loaded %s for the AI context", self._label)
+            return self._payload
+
+
+def vocabulary_uri(core_url: str) -> str:
+    """URL of the attribute vocabulary (owned by the attribute-definition API)."""
+    return f"{loopback_host(core_url).rstrip('/')}/attribute-definitions/vocabulary"
+
+
+def search_catalog_uri(core_url: str) -> str:
+    """URL of the search-field catalog (owned by the saved-search API)."""
+    return f"{loopback_host(core_url).rstrip('/')}/search-fields"
+
+
+async def preview_query(
+    core_url: str, api_key: str | None, query: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates a generated query with the core (`POST /saved-searches/preview`).
+
+    The core owns the DSL: it checks fields, operators, value arity and the
+    limits, and answers with the live hit count. A rejection (`400`) comes back as
+    `(False, message, None)` so the service can hand it to the model for the one
+    correction attempt; a transport failure raises, because that is not a verdict.
+    """
+    url = f"{loopback_host(core_url).rstrip('/')}/saved-searches/preview"
+    headers = {"x-api-key": api_key} if api_key else {}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(url, json=query, headers=headers)
+    if response.status_code == 400:
+        payload = response.json() if response.content else {}
+        message = payload.get("error") if isinstance(payload, dict) else None
+        return False, str(message or "the core rejected the query"), None
+    response.raise_for_status()
+    payload = response.json()
+    count = payload.get("count") if isinstance(payload, dict) else None
+    return True, f"{count} hits" if count is not None else "accepted", payload
 
 
 async def handle_generate(
     envelope: AiGenerateEnvelope,
     *,
-    vocabulary: VocabularyCache,
+    core_url: str,
+    api_key: str | None,
+    vocabulary: JsonCache,
+    search_catalog: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -116,17 +147,46 @@ async def handle_generate(
     state.sync_limit(config.max_requests_per_hour)
 
     request = GenerationRequest.from_payload(envelope.request)
+    # Only what the area needs: a search request has no use for the attribute
+    # vocabulary, a rule has none for the field catalog.
+    vocabulary_rows: list[dict[str, Any]] = []
+    catalog: dict[str, Any] = {}
     try:
-        rows = await vocabulary.rows()
+        if request.area == "search":
+            payload = await search_catalog.get()
+            catalog = payload if isinstance(payload, dict) else {}
+        else:
+            payload = await vocabulary.get()
+            vocabulary_rows = (
+                [row for row in payload if isinstance(row, dict)]
+                if isinstance(payload, list)
+                else []
+            )
     except httpx.HTTPError as error:
         return {
             "ok": False,
             "attempts": 0,
-            "errors": [f"the attribute vocabulary could not be loaded: {error}"],
+            "errors": [f"the AI context could not be loaded from the core: {error}"],
         }
+    validator = None
+    if request.area == "search":
+
+        async def validator(
+            query: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return await preview_query(core_url, api_key, query)
+
     try:
-        return await generate(config, request, vocabulary_rows=rows, state=state)
-    except ProviderError as error:  # defensive: `generate` reports these itself
+        return await generate(
+            config,
+            request,
+            vocabulary_rows=vocabulary_rows,
+            search_catalog=catalog,
+            validate_query=validator,
+            state=state,
+        )
+    except (ProviderError, httpx.HTTPError) as error:
+        # A transport failure while validating is not a verdict about the query.
         return {"ok": False, "attempts": 0, "errors": [str(error)]}
 
 
@@ -185,12 +245,22 @@ async def serve(
     log_sender: LogSender | None = None,
 ) -> None:
     """Serves `ai.generate` and `ai.test` until cancelled."""
-    vocabulary = VocabularyCache(core_url, api_key)
+    vocabulary = JsonCache(vocabulary_uri(core_url), api_key, label="the attribute vocabulary")
+    search_catalog = JsonCache(
+        search_catalog_uri(core_url), api_key, label="the search-field catalog"
+    )
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
         envelope = AiGenerateEnvelope.model_validate_json(data)
-        return await handle_generate(envelope, vocabulary=vocabulary, state=state)
+        return await handle_generate(
+            envelope,
+            core_url=core_url,
+            api_key=api_key,
+            vocabulary=vocabulary,
+            search_catalog=search_catalog,
+            state=state,
+        )
 
     async def on_test(data: bytes) -> dict[str, Any]:
         return await handle_test(AiTestEnvelope.model_validate_json(data))

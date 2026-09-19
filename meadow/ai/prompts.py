@@ -19,16 +19,17 @@ the policy, the own attributes and two or three examples — not the whole model
 from __future__ import annotations
 
 from meadow.ai.context import AttributeFact, attribute_names_text
-from meadow.ai.examples import ExampleRule
+from meadow.ai.examples import ExampleRule, search_examples
 
 #: Areas the assistant knows (the core validates the same list).
-AREAS = ("rule", "computed_attribute")
+AREAS = ("rule", "computed_attribute", "search")
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
 
 _AREA_TITLES = {
     "rule": "business rule",
     "computed_attribute": "computed attribute (a business rule with `rule_type = computed`)",
+    "search": "saved search (a query in Meadow's search DSL)",
 }
 
 _RULE_SYSTEM = """\
@@ -65,6 +66,24 @@ Non-negotiable:
    "description": "<one sentence for the rule description>"}
 """
 
+_SEARCH_SYSTEM = """\
+You are the search assistant of Meadow PIM, a product information management system.
+You write a saved search: one JSON object in Meadow's search DSL.
+
+Non-negotiable:
+- Answer with the JSON object only: no explanation, no markdown fence.
+- `where` is a node: `{"op": "and"|"or", "conditions": [...]}`, where every
+  condition is `{"field": <field>, "operator": <operator>, "value": <value>}`.
+  Nested nodes are allowed inside `conditions`.
+- Use only the fields and operators listed below; a field accepts only the
+  operators listed with it.
+- `value` is a single value, or a list when the operator is marked `multi`.
+- A missing value is **not** a match: use `is_null` for "has no value",
+  `not_empty` for "has a value".
+- `sort` is optional (`[{"field": ..., "order": "asc"|"desc"}]`), `limit` is a number
+  inside the documented range.
+"""
+
 _SYSTEM_PROMPTS = {"rule": _RULE_SYSTEM, "computed_attribute": _COMPUTED_SYSTEM}
 
 _EXPLAIN_SYSTEM = """\
@@ -76,11 +95,29 @@ system. You explain an existing business rule to a colleague who maintains produ
 - Do not invent behaviour the script does not have.
 """
 
+_SEARCH_EXPLAIN_SYSTEM = """\
+You are the documentation assistant of Meadow PIM, a product information management
+system. You explain an existing saved search to a colleague who works with product data.
+
+- Answer in prose, at most three sentences, no code, no bullet list, no markdown.
+- Say which objects it selects (fields, operators, values) and what the result is
+  limited or sorted by.
+- Mention that a missing value never matches, when the query uses `is_null` or
+  `not_empty`.
+- Do not invent conditions the query does not contain.
+"""
+
 
 def system_prompt(area: str, mode: str) -> str:
-    """The system prompt for one area and mode."""
+    """The system prompt for one area and mode.
+
+    Per area on purpose: the spike showed that a prompt naming the wrong artefact
+    makes the model answer with it (`plan/detail/ki-assistenz.md` §8).
+    """
     if mode == "explain":
-        return _EXPLAIN_SYSTEM
+        return _SEARCH_EXPLAIN_SYSTEM if area == "search" else _EXPLAIN_SYSTEM
+    if area == "search":
+        return _SEARCH_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 
@@ -160,14 +197,56 @@ def user_prompt(
     return "\n\n".join(sections)
 
 
+def search_user_prompt(
+    *,
+    mode: str,
+    description: str,
+    fields: str,
+    operators: str,
+    limits: str,
+    current_query: str | None = None,
+    language: str | None = None,
+) -> str:
+    """The user message for a search request: task, field catalogue, limits.
+
+    The catalogue is the **projection** of `GET /search-fields`
+    (`meadow.ai.context.search_fields_text`); the core validates the answer, so the
+    field list here is guidance, not the guard.
+    """
+    sections: list[str] = []
+    heading = "Explain this" if mode == "explain" else "Write this"
+    sections.append(f"{heading}: {_AREA_TITLES['search']}")
+    if description.strip():
+        sections.append(f"Description from the user:\n{description.strip()}")
+    if current_query and current_query.strip():
+        label = "The query to explain" if mode == "explain" else "The current query to improve"
+        sections.append(f"{label}:\n{current_query.strip()}")
+    if mode == "edit":
+        sections.append("Keep what works and change only what the description asks for.")
+    if mode != "explain":
+        sections.append("Search fields, grouped by the operators they accept:\n" + fields)
+        if operators:
+            sections.append(operators)
+        if limits:
+            sections.append(limits)
+        examples = search_examples()
+        if examples:
+            sections.append("Examples of the same kind:\n" + "\n".join(examples))
+    if language:
+        what = "the answer" if mode == "explain" else "the search name and description"
+        sections.append(f"Write {what} in the language `{language}`; field names stay as they are.")
+    return "\n\n".join(sections)
+
+
 def retry_prompt(message: str) -> str:
     """The correction message of the single self-correction attempt.
 
     The failure is quoted verbatim: the model gets one chance to fix exactly what
-    the policy check rejected (`plan/detail/ki-assistenz.md` §6.5).
+    the check rejected (`plan/detail/ki-assistenz.md` §6.5) — the sandbox policy
+    for a script, the core's query validation for a search.
     """
     return (
-        "The script was rejected by the policy check with this message:\n"
+        "The answer was rejected with this message:\n"
         f"  {message}\n"
         "Fix exactly that and answer again with the complete artefact."
     )

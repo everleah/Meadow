@@ -21,6 +21,7 @@ Two properties of the server side show up here:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from nicegui import ui
@@ -57,9 +58,9 @@ def open_suggestion_dialog(
     client: CoreClient,
     token: str,
     area: str,
-    object_type: Callable[[], str],
     on_apply: Callable[[dict], None],
     title_key: str = "ai.title",
+    object_type: Callable[[], str] | None = None,
     rule_type: Callable[[], str] | None = None,
     current_script: Callable[[], str] | None = None,
     target_attribute: str | None = None,
@@ -120,7 +121,7 @@ def open_suggestion_dialog(
             "mode": mode,
             "description": description_input.value or "",
             "rule_type": rule_type() if rule_type else None,
-            "object_type": object_type() or None,
+            "object_type": (object_type() if object_type else None) or None,
             "current_script": (current_script() if current_script else None) or None,
             "target_attribute": target_attribute,
             "declared_computed": declared_computed() if declared_computed else None,
@@ -139,7 +140,13 @@ def open_suggestion_dialog(
                 with errors_box:
                     ui.label(f"• {message}").classes("text-caption text-negative")
             return
-        preview.value = str(reply.get("description") if mode == "explain" else reply.get("script"))
+        if mode == "explain":
+            preview.value = str(reply.get("description") or "")
+        elif area == "search":
+            # A query, not a script: show the JSON the core accepted.
+            preview.value = json.dumps(reply.get("query") or {}, indent=2, ensure_ascii=False)
+        else:
+            preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(
             attempts=reply.get("attempts") or 1,
             ms=reply.get("latency_ms") or 0,

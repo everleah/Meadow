@@ -13,7 +13,8 @@ are maintained as the *example* set, and the compile test is what keeps them hon
 
 from __future__ import annotations
 
-from typing import NamedTuple
+import json
+from typing import Any, NamedTuple
 
 
 class ExampleRule(NamedTuple):
@@ -77,6 +78,40 @@ _NORMALIZATION_IMPORT = """def run(obj, ctx, result):
     if obj["attributes"].get("product_line") is None:
         result.set_value("product_line", "pro")
 """
+
+#: Query-DSL examples (stage 2): the shape the core's `SavedSearchQuery` accepts.
+#: Kept as data, not as text — a test can parse them, and the prompt renders them
+#: with `json.dumps` so the model sees exactly the format it has to produce.
+SEARCH_EXAMPLES: tuple[dict[str, Any], ...] = (
+    {
+        "where": {
+            "op": "and",
+            "conditions": [
+                {"field": "type", "operator": "eq", "value": "product"},
+                {"field": "attributes.net_price", "operator": "between", "value": [10, 50]},
+                {"field": "status", "operator": "eq", "value": "published"},
+            ],
+        },
+        "sort": [{"field": "attributes.name.de", "order": "asc"}],
+        "limit": 500,
+    },
+    {
+        "where": {
+            "op": "or",
+            "conditions": [
+                {"field": "attributes.gtin", "operator": "is_null"},
+                {"field": "attributes.sku", "operator": "not_empty"},
+            ],
+        },
+        "limit": 200,
+    },
+)
+
+
+def search_examples(limit: int = 2) -> list[str]:
+    """Example queries as formatted JSON (the search prompt's few-shot set)."""
+    return [json.dumps(example, indent=2) for example in SEARCH_EXAMPLES[:limit]]
+
 
 #: The shipped example rules, ordered by rule type as in the plan's table.
 EXAMPLES: tuple[ExampleRule, ...] = (

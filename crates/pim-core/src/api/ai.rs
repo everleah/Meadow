@@ -26,7 +26,7 @@ use crate::error::ApiError;
 /// remaining fields are the values the editor already has on screen.
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct GenerateRequest {
-    /// Target area: `rule` | `computed_attribute`.
+    /// Target area: `rule` | `computed_attribute` | `search`.
     pub area: String,
     /// `create` (from a description), `edit` (improve an existing script) or
     /// `explain` (prose for the description field).
@@ -72,9 +72,12 @@ fn unavailable(error: &AiError) -> ApiError {
 
 /// Rejects unknown areas and modes before a model call is paid for.
 fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
-    if !matches!(request.area.as_str(), "rule" | "computed_attribute") {
+    if !matches!(
+        request.area.as_str(),
+        "rule" | "computed_attribute" | "search"
+    ) {
         return Err(ApiError::bad_request(format!(
-            "unknown area `{}` (expected rule or computed_attribute)",
+            "unknown area `{}` (expected rule, computed_attribute or search)",
             request.area
         )));
     }

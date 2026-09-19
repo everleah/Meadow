@@ -11,6 +11,7 @@ reference (`docs/developer/rule-context.*`).
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -27,6 +28,10 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     declared_computed,
     few_shot_examples,
     policy_block,
+    search_field_facts,
+    search_fields_text,
+    search_limits_text,
+    search_operators_text,
 )
 from meadow.ai.examples import EXAMPLES  # noqa: E402
 
@@ -134,6 +139,91 @@ def test_few_shot_examples_follow_the_rule_type() -> None:
     assert computed and all(example.rule_type == "computed" for example in computed)
     assert few_shot_examples("bulk") == []  # no example for that type: say so, do not fake one
     assert len(EXAMPLES) >= 4
+
+
+# --- search projection (stage 2) ------------------------------------------------
+
+
+def _search_catalog(extra_fields: int = 0) -> dict[str, object]:
+    """A catalog like `GET /search-fields`, with many reference-data fields."""
+    fields: list[dict[str, object]] = [
+        {"key": "type", "value_type": "string", "group": "system", "operators": ["eq", "ne"]},
+        {
+            "key": "attributes.net_price",
+            "value_type": "number",
+            "group": "attribute",
+            "operators": ["eq", "gt", "between"],
+        },
+        {"key": "attributes.name.de", "value_type": "text", "operators": ["eq", "contains"]},
+    ]
+    fields.extend(
+        {
+            "key": f"attributes.EF{index:06d}",
+            "value_type": "number",
+            "reference_data": True,
+            "operators": ["eq"],
+        }
+        for index in range(extra_fields)
+    )
+    return {
+        "fields": fields,
+        "groups": [{"key": "system"}, {"key": "attribute"}],
+        "operators": [
+            {"type": "eq", "arity": 1, "multi": False},
+            {"type": "between", "arity": 2, "multi": True},
+        ],
+        "limits": {"default": 1000, "max": 10000, "max_conditions": 50, "max_depth": 6, "min": 1},
+    }
+
+
+def test_the_search_projection_keeps_own_fields_and_groups_them_by_operator_set() -> None:
+    facts = search_field_facts(_search_catalog(extra_fields=500))
+    assert [fact.key for fact in facts] == [
+        "attributes.name.de",
+        "attributes.net_price",
+        "type",
+    ]
+    assert facts[1].operators == ("eq", "gt", "between")
+    assert all(not fact.key.startswith("attributes.EF") for fact in facts)
+
+    text = search_fields_text(facts)
+    # One heading per distinct operator set (three here), each followed by its fields.
+    assert text.count("[") == 3
+    assert "[eq, gt, between]" in text
+    assert "attributes.net_price:number" in text
+    # The size budget: 500 standard features must not reach the prompt.
+    assert len(text) < 300
+    assert "EF000000" not in text
+
+
+def test_the_search_limits_and_operator_table_are_words_not_raw_json() -> None:
+    catalog = _search_catalog()
+    assert search_limits_text(catalog) == (
+        "Limits: `limit` between 1 and 10000 (default 1000), "
+        "at most 50 conditions per level, nesting depth at most 6."
+    )
+    operators = search_operators_text(catalog)
+    assert "eq: arity 1" in operators
+    assert "between: arity 2 (multi)" in operators
+    # Missing parts degrade to an empty string instead of raising.
+    assert search_limits_text({}) == ""
+    assert search_operators_text({}) == ""
+    assert search_field_facts({}) == ()
+
+
+def test_the_shipped_search_examples_are_valid_dsl_objects() -> None:
+    from meadow.ai.examples import SEARCH_EXAMPLES, search_examples
+
+    for example in SEARCH_EXAMPLES:
+        assert isinstance(example["where"], dict)
+        assert isinstance(example["where"]["conditions"], list)
+        assert all("field" in condition for condition in example["where"]["conditions"])
+    rendered = search_examples(1)
+    assert len(rendered) == 1
+    # The prompt shows formatted JSON — the format the model has to produce.
+    assert rendered[0].startswith("{")
+    assert "\n  " in rendered[0]
+    assert json.loads(rendered[0]) == SEARCH_EXAMPLES[0]
 
 
 def _load_script(name: str):
