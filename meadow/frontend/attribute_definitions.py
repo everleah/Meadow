@@ -509,7 +509,7 @@ async def attribute_definitions_page() -> None:
                 gid = str(row.get("id") or "")
                 return next((g for g in groups if str(g.get("id")) == gid), None)
 
-            def _toggle_group_column(field: str, visible: bool) -> None:
+            def _toggle_group_column(field: str, visible: bool | None) -> None:
                 if visible:
                     group_visible.add(field)
                 else:
