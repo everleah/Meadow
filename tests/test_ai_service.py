@@ -398,6 +398,192 @@ def test_without_a_validator_the_search_check_says_so() -> None:
     assert "not validated" in str(reply["check"])
 
 
+# --- JSON-configuration areas (connector, export profile, job) ------------------
+
+#: A contract like `GET /jobs/schema`, trimmed to the two types the tests use.
+JOB_SCHEMA: dict[str, Any] = {
+    "job_types": [
+        {
+            "type": "inbound_import",
+            "description": "Import a stored MEF document (parents first)",
+            "parameters": [
+                {"key": "document_id", "shape": "string", "required": True, "description": "Doc"},
+                {
+                    "key": "match_by_key",
+                    "shape": "string",
+                    "required": False,
+                    "description": "Match attribute",
+                },
+            ],
+        },
+        {
+            "type": "bulk_operation",
+            "description": "Run one bulk operation over a selection",
+            "parameters": [
+                {"key": "op", "shape": "string", "required": True, "description": "Operation"},
+                {
+                    "key": "object_ids",
+                    "shape": "string_list",
+                    "required": True,
+                    "description": "Ids",
+                },
+                {
+                    "key": "parameters",
+                    "shape": "object",
+                    "required": False,
+                    "description": "Per op",
+                },
+            ],
+            "operations": [
+                {
+                    "op": "change_status",
+                    "description": "Set the global object status",
+                    "parameters": [
+                        {
+                            "key": "status",
+                            "shape": "string",
+                            "required": True,
+                            "description": "Target status",
+                        }
+                    ],
+                }
+            ],
+        },
+    ],
+    "schedule": "Cron expression with six fields (seconds first)",
+}
+
+GOOD_JOB: dict[str, Any] = {
+    "type": "bulk_operation",
+    "schedule": "0 0 3 * * *",
+    "parameters": {
+        "op": "change_status",
+        "object_ids": ["object:1"],
+        "parameters": {"status": "approved"},
+    },
+}
+
+
+class ConfigChecking:
+    """A fake core validator for a configuration object (the `/jobs/validate` shape)."""
+
+    def __init__(self, *answers: tuple[bool, str]) -> None:
+        self.answers = list(answers)
+        self.payloads: list[dict[str, Any]] = []
+
+    async def __call__(self, payload: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
+        self.payloads.append(payload)
+        ok, message = self.answers[min(len(self.payloads) - 1, len(self.answers) - 1)]
+        return ok, message, None
+
+
+def test_a_job_suggestion_is_checked_against_the_contract_of_its_type() -> None:
+    recorder = Recorder(json.dumps(GOOD_JOB))
+    validator = ConfigChecking((True, "accepted by the core schema"))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(
+                area="job", rule_type=None, target_attribute=None, config_kind="bulk_operation"
+            ),
+            json_context={"job_schema": JOB_SCHEMA},
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["job"] == GOOD_JOB
+    # The validator gets the whole definition — type, schedule and parameters.
+    assert validator.payloads == [GOOD_JOB]
+    user = recorder.messages[0][1]["content"]
+    # The prompt carries the type's parameters, the operations and the schedule rule.
+    assert "op (string, required) — Operation" in user
+    assert "object_ids (string_list, required) — Ids" in user
+    assert "`change_status` — Set the global object status" in user
+    assert "status (string, required) — Target status" in user
+    assert "six fields" in user
+    # …and the system prompt names the artefact, not a rule.
+    assert "job definition" in recorder.messages[0][0]["content"]
+
+
+def test_a_job_suggestion_is_sent_back_once_with_the_contract_errors() -> None:
+    recorder = Recorder(json.dumps(GOOD_JOB), json.dumps(GOOD_JOB))
+    validator = ConfigChecking(
+        (False, "`parameters.parameters.status` is required for `change_status`"),
+        (True, "accepted by the core schema"),
+    )
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(
+                area="job", rule_type=None, target_attribute=None, config_kind="bulk_operation"
+            ),
+            json_context={"job_schema": JOB_SCHEMA},
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["attempts"] == 2
+    assert "is required for `change_status`" in recorder.messages[1][-1]["content"]
+
+
+def test_a_job_answer_is_kept_apart_from_an_unknown_type_or_missing_contract() -> None:
+    recorder = Recorder(json.dumps(GOOD_JOB))
+    # An unknown type never reaches the provider: the schema names what exists.
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="job", config_kind="send_mails"),
+            json_context={"job_schema": JOB_SCHEMA},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert reply["attempts"] == 0
+    assert "unknown job type `send_mails`" in str(reply["errors"][0])
+    # An empty contract is reported as such, not as "unknown type".
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="job", config_kind="bulk_operation"),
+            json_context={"job_schema": {}},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert "could not be loaded" in str(reply["errors"][0])
+    assert recorder.messages == []
+
+
+def test_a_job_answer_without_the_json_object_fails() -> None:
+    recorder = Recorder("I would schedule that daily.", "still prose")
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="job", config_kind="inbound_import"),
+            json_context={"job_schema": JOB_SCHEMA},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert any("JSON" in str(message) for message in reply["errors"])
+
+
+def test_without_a_validator_a_job_check_says_it_was_not_validated() -> None:
+    recorder = Recorder(json.dumps(GOOD_JOB))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _request(area="job", config_kind="bulk_operation"),
+            json_context={"job_schema": JOB_SCHEMA},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert "not validated" in str(reply["check"])
+
+
 def test_the_connection_test_reports_success_and_missing_settings() -> None:
     recorder = Recorder("ok")
     reply = asyncio.run(run_connection_test(CONFIG, chat_fn=recorder))

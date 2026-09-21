@@ -60,6 +60,7 @@ def open_suggestion_dialog(
     area: str,
     on_apply: Callable[[dict], None],
     title_key: str = "ai.title",
+    hint_key: str = "ai.hint",
     object_type: Callable[[], str] | None = None,
     rule_type: Callable[[], str] | None = None,
     current_script: Callable[[], str] | None = None,
@@ -74,7 +75,7 @@ def open_suggestion_dialog(
     """
     with ui.dialog() as dialog, ui.card().classes("w-[46rem] max-w-[95vw]"):
         ui.label(t(title_key)).classes("text-h6")
-        ui.label(t("ai.hint")).classes("text-caption text-gray-500")
+        ui.label(t(hint_key)).classes("text-caption text-gray-500")
         with ui.row().classes("w-full gap-2 mt-2"):
             mode_select = (
                 ui.select(
@@ -151,6 +152,8 @@ def open_suggestion_dialog(
             preview.value = json.dumps(reply.get("config") or {}, indent=2, ensure_ascii=False)
         elif area == "export_profile":
             preview.value = json.dumps(reply.get("profile") or {}, indent=2, ensure_ascii=False)
+        elif area == "job":
+            preview.value = json.dumps(reply.get("job") or {}, indent=2, ensure_ascii=False)
         else:
             preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(

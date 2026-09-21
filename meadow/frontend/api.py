@@ -1234,6 +1234,22 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def job_schema(self, token: str) -> dict:
+        """Loads the parameter contract of every job type (``GET /jobs/schema``).
+
+        The core owns the contract (it is written next to the job types the queue
+        accepts), so the job form takes its type list and parameter hints from it —
+        the same document the AI assistant reads. A failing call degrades to the
+        page's fallback list.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/jobs/schema",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def list_job_definitions(
         self,
         token: str,

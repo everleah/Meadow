@@ -20,14 +20,16 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
-#: Known job types (mirrors the core's `VALID_JOB_TYPES`).
-JOB_TYPES = (
+#: Fallback job types if the core's contract (`GET /jobs/schema`) is unreachable
+#: (mirrors `VALID_JOB_TYPES`; the server list is the source of truth).
+FALLBACK_JOB_TYPES = (
     "outbound_export",
     "inbound_import",
     "business_rule",
@@ -114,6 +116,27 @@ async def jobs_page() -> None:
     except CoreError, httpx.HTTPError:  # degrade to no runs
         runs = []
 
+    ai = await ai_state(client, token)
+
+    # The job types and their parameters come from the core's contract — the same
+    # document the AI assistant reads (`GET /jobs/schema`). A failing call degrades
+    # to the fallback list instead of leaving the form without a type choice.
+    type_descriptions: dict[str, str] = {}
+    type_parameters: dict[str, list[dict]] = {}
+    try:
+        schema = await client.job_schema(token)
+        for entry in schema.get("job_types") or []:
+            key = str(entry.get("type") or "")
+            if not key:
+                continue
+            type_descriptions[key] = str(entry.get("description") or "")
+            type_parameters[key] = [row for row in entry.get("parameters") or [] if row]
+    except CoreError, httpx.HTTPError:  # degrade to the fallback type list
+        type_descriptions = {}
+        type_parameters = {}
+    if not type_descriptions:
+        type_descriptions = {job_type: "" for job_type in FALLBACK_JOB_TYPES}
+
     with ui.column().classes("w-full p-6"):
         ui.label(t("jobs.title")).classes("text-h4")
         ui.label(t("jobs.subtitle")).classes("text-subtitle1")
@@ -147,7 +170,7 @@ async def jobs_page() -> None:
 
                 with ui.row().classes("w-full gap-2 items-center mb-2"):
                     filter_select(
-                        {"": t("jobs.all_types"), **{typ: typ for typ in JOB_TYPES}},
+                        {"": t("jobs.all_types"), **{typ: typ for typ in type_descriptions}},
                         label=t("jobs.filter_type"),
                         value="",
                         classes="w-52",
@@ -210,13 +233,15 @@ async def jobs_page() -> None:
                             )
                             type_select = (
                                 ui.select(
-                                    {typ: typ for typ in JOB_TYPES},
+                                    {typ: typ for typ in type_descriptions},
                                     label=t("jobs.field_type"),
                                     value="business_rule",
+                                    on_change=lambda _: _update_type_hint(),
                                 )
                                 .props("filled dense")
                                 .classes("w-44")
                             )
+                        type_hint = ui.label("").classes("text-caption text-gray-500")
                         schedule_input = (
                             ui.input(t("jobs.field_schedule"))
                             .props("filled dense")
@@ -229,11 +254,42 @@ async def jobs_page() -> None:
                             .props("filled dense")
                             .classes("w-full")
                         )
+                        parameters_hint = ui.label(t("jobs.parameters_hint")).classes(
+                            "text-caption text-gray-500"
+                        )
+                        with ui.row().classes("w-full items-center gap-2"):
+                            if ai.get("available"):
+                                ui.button(
+                                    t("jobs.ai_suggest"),
+                                    icon="auto_awesome",
+                                    on_click=lambda: suggest_job(),
+                                ).props("flat dense")
+                                ui.label(t("jobs.ai_suggest_hint")).classes(
+                                    "text-caption text-gray-500"
+                                )
+                            else:
+                                ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                                    "text-caption text-gray-500"
+                                )
                     with ui.row().classes("w-full justify-end mt-2 gap-2"):
                         ui.button(t("grid.close"), on_click=def_dialog.close).props("flat")
                         ui.button(t("jobs.save"), icon="save", on_click=lambda: save_def()).props(
                             "flat"
                         )
+
+                def _update_type_hint() -> None:
+                    """Shows the chosen type's meaning and parameter keys (core contract)."""
+                    job_type = str(type_select.value or "")
+                    type_hint.set_text(type_descriptions.get(job_type, ""))
+                    fields = [
+                        str(row.get("key") or "")
+                        + (f":{row.get('shape')}" if row.get("shape") else "")
+                        + ("*" if row.get("required") else "")
+                        for row in type_parameters.get(job_type, [])
+                    ]
+                    parameters_hint.set_text(
+                        ", ".join(field for field in fields if field) or t("jobs.parameters_hint")
+                    )
 
                 def _parse_parameters() -> dict | None:
                     text = parameters_area.value or ""
@@ -266,12 +322,45 @@ async def jobs_page() -> None:
                         if params is not None
                         else ""
                     )
+                    _update_type_hint()
 
                 def open_editor(definition: dict | None) -> None:
                     nonlocal editing_id
                     _fill_def(definition)
                     editing_id = definition.get("id") if definition else None
                     def_dialog.open()
+
+                def suggest_job() -> None:
+                    """AI suggestion for a definition; the answer fills schedule and parameters."""
+
+                    def apply(reply: dict) -> None:
+                        job = reply.get("job")
+                        if not isinstance(job, dict):
+                            return
+                        schedule = job.get("schedule")
+                        if isinstance(schedule, str):
+                            schedule_input.set_value(schedule)
+                        parameters_area.set_value(
+                            _json.dumps(job.get("parameters") or {}, indent=2, ensure_ascii=False)
+                        )
+
+                    open_suggestion_dialog(
+                        client=client,
+                        token=token,
+                        area="job",
+                        title_key="jobs.ai_title",
+                        hint_key="ai.hint_config",
+                        config_kind=lambda: str(type_select.value or ""),
+                        current_script=lambda: _json.dumps(
+                            {
+                                "type": str(type_select.value or ""),
+                                "schedule": str(schedule_input.value or "") or None,
+                                "parameters": _parse_parameters() or {},
+                            },
+                            ensure_ascii=False,
+                        ),
+                        on_apply=apply,
+                    )
 
                 async def save_def() -> None:
                     name = (name_input.value or "").strip()

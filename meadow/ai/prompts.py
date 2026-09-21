@@ -22,7 +22,7 @@ from meadow.ai.context import AttributeFact, attribute_names_text
 from meadow.ai.examples import ExampleRule, search_examples
 
 #: Areas the assistant knows (the core validates the same list).
-AREAS = ("rule", "computed_attribute", "search", "connector", "export_profile")
+AREAS = ("rule", "computed_attribute", "search", "connector", "export_profile", "job")
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
 
@@ -32,6 +32,7 @@ _AREA_TITLES = {
     "search": "saved search (a query in Meadow's search DSL)",
     "connector": "connector configuration (the `parameters` object of a connector)",
     "export_profile": "export profile (an export format plus its `parameters`)",
+    "job": "job definition (a `type`, an optional `schedule` and its `parameters`)",
 }
 
 _RULE_SYSTEM = """\
@@ -118,6 +119,27 @@ Non-negotiable:
 
 _SYSTEM_PROMPTS = {"rule": _RULE_SYSTEM, "computed_attribute": _COMPUTED_SYSTEM}
 
+_JOB_SYSTEM = """\
+You are the automation assistant of Meadow PIM, a product information management system.
+You write a job definition: one JSON object with the keys `type` and `parameters`,
+plus `schedule` when the job should run on a timetable.
+
+Non-negotiable:
+- Answer with the JSON object only: no explanation, no markdown fence.
+- `type` is the job type named below; `parameters` uses only the parameter keys
+  listed for it, with the listed shape.
+- A parameter marked `required` must be set; a parameter that names its allowed
+  values must use one of them; leave out what the user did not ask for.
+- `schedule` is a cron expression with six fields (seconds first), for example
+  "0 0 3 * * *" for daily at 03:00. Leave it out for "only when triggered".
+- Object ids look like `object:<key>`, imported documents like
+  `import_document:<key>`, config documents like `config_document:<key>`. Never
+  invent an id, an attribute or a language that is not in the context you get.
+- For the type `bulk_operation`: `op` picks the operation, and that operation's
+  own parameters go into `parameters.parameters` — use only the keys listed for
+  that operation.
+"""
+
 _EXPLAIN_SYSTEM = """\
 You are the documentation assistant of Meadow PIM, a product information management
 system. You explain an existing business rule to a colleague who maintains product data.
@@ -139,6 +161,16 @@ system. You explain an existing saved search to a colleague who works with produ
 - Do not invent conditions the query does not contain.
 """
 
+_JOB_EXPLAIN_SYSTEM = """\
+You are the documentation assistant of Meadow PIM, a product information management
+system. You explain an existing job definition to a colleague who maintains product data.
+
+- Answer in prose, at most three sentences, no code, no bullet list, no markdown.
+- Say which job type it is, what one run does and when it runs (the schedule, or
+  only on demand).
+- Do not invent parameters or effects the definition does not have.
+"""
+
 
 def system_prompt(area: str, mode: str) -> str:
     """The system prompt for one area and mode.
@@ -147,13 +179,19 @@ def system_prompt(area: str, mode: str) -> str:
     makes the model answer with it (`plan/detail/ki-assistenz.md` §8).
     """
     if mode == "explain":
-        return _SEARCH_EXPLAIN_SYSTEM if area == "search" else _EXPLAIN_SYSTEM
+        if area == "search":
+            return _SEARCH_EXPLAIN_SYSTEM
+        if area == "job":
+            return _JOB_EXPLAIN_SYSTEM
+        return _EXPLAIN_SYSTEM
     if area == "search":
         return _SEARCH_SYSTEM
     if area == "connector":
         return _CONNECTOR_SYSTEM
     if area == "export_profile":
         return _EXPORT_PROFILE_SYSTEM
+    if area == "job":
+        return _JOB_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 
@@ -284,10 +322,10 @@ def config_user_prompt(
     current_config: str | None = None,
     language: str | None = None,
 ) -> str:
-    """The user message for a JSON-parameter request (connectors, later profiles/jobs).
+    """The user message for a JSON-parameter request (connectors, profiles, jobs).
 
-    `subject` names the concrete target in one line (connector type and name),
-    `fields` is the schema projection of that target.
+    `subject` names the concrete target in one line (connector type and name, job
+    type and description), `fields` is the schema projection of that target.
     """
     sections: list[str] = []
     heading = "Explain this" if mode == "explain" else "Write this"

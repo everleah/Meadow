@@ -27,7 +27,7 @@ use crate::error::ApiError;
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct GenerateRequest {
     /// Target area: `rule` | `computed_attribute` | `search` | `connector` |
-    /// `export_profile`.
+    /// `export_profile` | `job`.
     pub area: String,
     /// `create` (from a description), `edit` (improve an existing script) or
     /// `explain` (prose for the description field).
@@ -56,7 +56,8 @@ pub struct GenerateRequest {
     #[serde(default)]
     pub language: Option<String>,
     /// Concrete target of a JSON-configuration area: the **connector type** for
-    /// `area = connector` (`webhook`, `json_import`, `json_export`).
+    /// `area = connector` (`webhook`, `json_import`, `json_export`) and the
+    /// **job type** for `area = job` (`inbound_import`, `bulk_operation`, …).
     #[serde(default)]
     pub config_kind: Option<String>,
 }
@@ -79,17 +80,37 @@ fn unavailable(error: &AiError) -> ApiError {
 fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
     if !matches!(
         request.area.as_str(),
-        "rule" | "computed_attribute" | "search" | "connector" | "export_profile"
+        "rule" | "computed_attribute" | "search" | "connector" | "export_profile" | "job"
     ) {
         return Err(ApiError::bad_request(format!(
-            "unknown area `{}` (expected rule, computed_attribute, search, connector or export_profile)",
+            "unknown area `{}` (expected rule, computed_attribute, search, connector, \
+             export_profile or job)",
             request.area
         )));
     }
-    if request.area == "connector" && request.config_kind.as_deref().unwrap_or("").is_empty() {
-        return Err(ApiError::bad_request(
-            "`config_kind` (the connector type) is required for the area `connector`",
-        ));
+    if matches!(request.area.as_str(), "connector" | "job")
+        && request.config_kind.as_deref().unwrap_or("").is_empty()
+    {
+        let what = if request.area == "connector" {
+            "the connector type"
+        } else {
+            "the job type"
+        };
+        return Err(ApiError::bad_request(format!(
+            "`config_kind` ({what}) is required for the area `{}`",
+            request.area
+        )));
+    }
+    // A job type the queue would reject cannot be suggested: the assistant builds
+    // the parameters for it, and `POST /jobs` would refuse the result.
+    if request.area == "job"
+        && let Some(job_type) = request.config_kind.as_deref()
+        && !crate::api::jobs::is_known_job_type(job_type)
+    {
+        return Err(ApiError::bad_request(format!(
+            "unknown job type `{job_type}` (expected {})",
+            crate::api::jobs::VALID_JOB_TYPES.join(", ")
+        )));
     }
     if !matches!(request.mode.as_str(), "create" | "edit" | "explain") {
         return Err(ApiError::bad_request(format!(
@@ -210,4 +231,68 @@ pub async fn test(
         unavailable(&error)
     })?;
     Ok(Json(reply))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(area: &str, config_kind: Option<&str>) -> GenerateRequest {
+        GenerateRequest {
+            area: area.to_owned(),
+            mode: "create".to_owned(),
+            description: "something to build".to_owned(),
+            rule_type: None,
+            object_type: None,
+            current_script: None,
+            target_attribute: None,
+            declared_computed: None,
+            language: None,
+            config_kind: config_kind.map(str::to_owned),
+        }
+    }
+
+    fn message(error: ApiError) -> String {
+        error.message().to_owned()
+    }
+
+    #[test]
+    fn a_json_area_needs_its_concrete_target() {
+        // Without the type the worker cannot build the schema projection, and the
+        // request would cost a model call before failing.
+        assert!(
+            message(validate(&request("connector", None)).unwrap_err()).contains("connector type")
+        );
+        assert!(message(validate(&request("job", None)).unwrap_err()).contains("job type"));
+        assert!(validate(&request("connector", Some("webhook"))).is_ok());
+        assert!(validate(&request("job", Some("bulk_operation"))).is_ok());
+        // The other areas carry their target in `object_type`.
+        assert!(validate(&request("rule", None)).is_ok());
+        assert!(validate(&request("search", None)).is_ok());
+    }
+
+    #[test]
+    fn a_job_area_rejects_a_type_the_queue_would_reject() {
+        let error = message(validate(&request("job", Some("send_emails"))).unwrap_err());
+        assert!(error.contains("unknown job type `send_emails`"));
+        // …and the message names the types that work, so a caller can correct it.
+        assert!(error.contains("inbound_import"));
+        // A connector type is checked by the connector schema, not here.
+        assert!(validate(&request("connector", Some("whatever"))).is_ok());
+    }
+
+    #[test]
+    fn the_unknown_area_message_names_every_area() {
+        let error = message(validate(&request("calendar", None)).unwrap_err());
+        for area in [
+            "rule",
+            "computed_attribute",
+            "search",
+            "connector",
+            "export_profile",
+            "job",
+        ] {
+            assert!(error.contains(area), "`{area}` missing in: {error}");
+        }
+    }
 }

@@ -59,6 +59,14 @@ pub struct QueryCondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
     /// Child conditions and groups of a group.
+    ///
+    /// `no_recursion` is **load-bearing**: utoipa inlines a nested type into its
+    /// parent's schema, so this self-reference recursed without bound while
+    /// building `ApiDoc::openapi()` and killed the process with a stack overflow
+    /// (`GET /api-docs/openapi.json`, 2026-09-21 — the endpoint had never been
+    /// called before). With the attribute the field is documented as a plain
+    /// array and the tree is described by the node's own documentation.
+    #[schema(no_recursion)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<QueryCondition>>,
     /// Field of a condition (`type`, `status`, `id`, `attributes.<name>[.<lang>]`).

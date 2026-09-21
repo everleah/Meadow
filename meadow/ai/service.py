@@ -35,6 +35,11 @@ from meadow.ai.context import (
     contract_block,
     declared_computed,
     few_shot_examples,
+    job_operation_facts,
+    job_operations_text,
+    job_parameter_facts,
+    job_schedule_text,
+    job_types_text,
     parameter_facts,
     parameters_text,
     policy_block,
@@ -71,7 +76,8 @@ class GenerationRequest:
     target_attribute: str | None = None
     declared_computed: tuple[str, ...] = ()
     language: str | None = None
-    #: Concrete target of a JSON-configuration area (`connector` → the type key).
+    #: Concrete target of a JSON-configuration area (`connector` → the connector
+    #: type key, `job` → the job type key).
     config_kind: str | None = None
 
     @classmethod
@@ -149,17 +155,36 @@ def _parse_artefact(area: str, text: str) -> dict[str, Any]:
 
     A `rule` answer is the script itself; a `computed_attribute` answer is the
     JSON envelope with the script plus its metadata; a `search` answer is the
-    query object. A malformed answer is an error, not a silent empty suggestion.
+    query object; a `connector`, `export_profile` or `job` answer is the JSON
+    object the editor fills in. A malformed answer is an error, not a silent
+    empty suggestion.
     """
     cleaned = strip_fences(text)
-    if area in ("search", "connector"):
+    if area in ("search", "connector", "job"):
         try:
             payload = json.loads(cleaned)
         except ValueError as error:
             raise ProviderError(f"the model did not answer with JSON: {error}") from error
         if not isinstance(payload, dict) or not payload:
             raise ProviderError("the answer is not a JSON object")
-        return {"query": payload} if area == "search" else {"config": payload}
+        if area == "search":
+            return {"query": payload}
+        if area == "connector":
+            return {"config": payload}
+        # A job definition always carries `type` and `parameters`; the schedule is
+        # optional and `null` is the same as absent.
+        parameters = payload.get("parameters")
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ProviderError("`parameters` must be an object")
+        return {
+            "job": {
+                "type": str(payload.get("type") or ""),
+                "schedule": payload.get("schedule")
+                if isinstance(payload.get("schedule"), str)
+                else None,
+                "parameters": parameters or {},
+            }
+        }
     if area == "export_profile":
         try:
             payload = json.loads(cleaned)
@@ -273,6 +298,43 @@ async def generate(
             current_config=request.current_script,
             language=request.language,
         )
+    elif request.area == "job":
+        schema = (json_context or {}).get("job_schema")
+        job_type = request.config_kind or ""
+        if not job_types_text(schema):
+            return {
+                "ok": False,
+                "attempts": 0,
+                "errors": ["the job contract could not be loaded from the core"],
+            }
+        parameters = job_parameter_facts(schema, job_type)
+        if not parameters:
+            return {
+                "ok": False,
+                "attempts": 0,
+                "errors": [f"unknown job type `{job_type}`"],
+            }
+        # The subject carries everything that is not a `parameters` field: the type
+        # with its meaning, the operations of `bulk_operation` and the schedule rule.
+        subject_parts = [f"Job type: {job_type}"]
+        operations = job_operation_facts(schema, job_type)
+        if operations:
+            subject_parts.append(
+                "Operations of this type, with the parameters each reads:\n"
+                + job_operations_text(operations)
+            )
+        schedule = job_schedule_text(schema)
+        if schedule:
+            subject_parts.append(f"Schedule: {schedule}")
+        task = prompts.config_user_prompt(
+            area=request.area,
+            mode=request.mode,
+            description=request.description,
+            subject="\n".join(subject_parts),
+            fields=parameters_text(parameters),
+            current_config=request.current_script,
+            language=request.language,
+        )
     else:
         facts = attribute_facts(vocabulary_rows or [], request.object_type or "")
         declared = declared_computed(facts)
@@ -379,6 +441,16 @@ async def generate(
                     "latency_ms": latency_ms,
                     "usage": usage,
                 }
+            if request.area == "job":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "job": artefact["job"],
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -424,12 +496,20 @@ async def _check_artefact(
     """Checks one artefact with the component that will execute it.
 
     A script passes the sandbox policy (`check_script`); a search query and a
-    connector configuration pass the **core's own validation** — the same code
-    path a save uses, so a suggestion cannot pass a check the real write would not
-    do.
+    configuration object (`connector`, `export_profile`, `job`) pass the **core's
+    own validation** — for a job that is `POST /jobs/validate`, which answers with
+    the problems of the declared contract. Only the search preview and the
+    connector/export-profile validators are the save path's very check; for a job
+    definition the save is still permissive (see `api::job_schema`), so a green
+    answer means "matches the contract", not "the save will succeed".
     """
-    if area in ("connector", "export_profile"):
-        payload = artefact["config"] if area == "connector" else artefact["profile"]
+    if area in ("connector", "export_profile", "job"):
+        if area == "connector":
+            payload = artefact["config"]
+        elif area == "job":
+            payload = artefact["job"]
+        else:
+            payload = artefact["profile"]
         if validate_config is None:
             return True, "well-formed JSON (not validated against the core)", None
         return await validate_config(payload)

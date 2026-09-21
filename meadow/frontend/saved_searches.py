@@ -319,6 +319,7 @@ async def _build_search_panel(client: CoreClient, token: str, searches: list[dic
             token=token,
             area="search",
             title_key="saved_searches.ai_title",
+            hint_key="ai.hint_config",
             current_script=lambda: str(query_editor.value or ""),
             on_apply=apply,
         )

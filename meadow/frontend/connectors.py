@@ -520,6 +520,7 @@ async def connectors_page() -> None:
                 token=token,
                 area="connector",
                 title_key="connectors.ai_title",
+                hint_key="ai.hint_config",
                 config_kind=lambda: str(editor_state["type"]),
                 current_script=lambda: str(parameters_area.value or ""),
                 on_apply=apply,

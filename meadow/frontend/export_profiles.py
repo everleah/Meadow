@@ -236,6 +236,7 @@ async def export_profiles_page() -> None:
                 token=token,
                 area="export_profile",
                 title_key="export_profiles.ai_title",
+                hint_key="ai.hint_config",
                 config_kind=lambda: str(format_select.value or ""),
                 current_script=lambda: json.dumps(
                     {

@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 6 ([Hintergrundprozesse & Scheduler](../meadow-pim-architektur.md#6-hintergrundprozesse--scheduler))
 - **Relevante Phasen:** Phase 5, 7, 8
-- **Stand:** Implementiert bis Phase-5-Schritt 7: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz) + DLQ-Überwachung. Log-Retention folgt. **Phase 7:** Admin-Seite „Jobs & Scheduler“ (`meadow/frontend/jobs.py`, `/jobs`) mit Definitions-CRUD, manuellem Start und Run-Historie (Status/Dead-Letter).
+- **Stand:** Implementiert bis Phase-5-Schritt 7: Job-Schema + Definition-CRUD + Run-Status + Manual-Run + NATS-JetStream-Publish + Python-Worker-Jobkonsument + `business_rule`-Handler (Recompute) + Cron-Scheduler + parallele Verarbeitung (konfigurierbare Konkurrenz) + DLQ-Überwachung. Log-Retention folgt. **Phase 7:** Admin-Seite „Jobs & Scheduler“ (`meadow/frontend/jobs.py`, `/jobs`) mit Definitions-CRUD, manuellem Start und Run-Historie (Status/Dead-Letter). **Nachtrag 2026-09-21:** Parameter-Vertrag je Jobtyp (`GET /jobs/schema`, `POST /jobs/validate`, Abschnitt unten).
 
 ## Architektur
 
@@ -112,7 +112,17 @@ Der Scheduler und die Job-Verarbeitung sind für **geplante oder manuell gestart
 - **config_import** (Phase 9): Führt einen **MCF-Konfigurations-Import** asynchron aus – der Worker holt das gespeicherte MCF-Dokument (`GET /imports/{document_id}`, `import_document.kind = mcf`) und wendet es über `POST /config/import?mode=…` erneut an (`meadow/worker/config_import.py`), Report im `job_run.result`. Wird von `POST /config/import?async=true` erzeugt; siehe [konfiguration-export-import.md](konfiguration-export-import.md).
 - **connector_test** (Phase 9, Stage 2c): **Verbindungstest** eines Konnektors – `POST /connectors/{id}/test` (admin) legt den Lauf mit `parameters={connector_id, name, connector_type, parameters}` an; der Worker (`meadow/worker/connector_test.py`) sendet für `webhook` ein **synthetisches Event** an die gespeicherte URL (Antwort wird nicht gespeichert, es entsteht **kein** Outbox-Event) und löst für `json_import`/`json_export` die Profilwerte **trocken** auf. Ergebnis: `{ok, status_code?, latency_ms?, excerpt?, resolved?, error?}`. Siehe [konnektor-konfiguration.md](konnektor-konfiguration.md), Abschnitt 8.
 
-The **Admin-Seite `/jobs`** (Frontend) führt dieselbe Typenliste (`JOB_TYPES` ↔ `VALID_JOB_TYPES`, 7 Typen) und filtert die Definitionsliste nach Typ.
+The **Admin-Seite `/jobs`** (Frontend) liest Typenliste und Parameterhinweise aus dem Vertrag (`GET /jobs/schema`, lokale Liste `FALLBACK_JOB_TYPES` nur bei fehlgeschlagenem Abruf) und filtert die Definitionsliste nach Typ.
+
+## Parameter-Vertrag je Jobtyp (umgesetzt 2026-09-21)
+
+- **Ausgangslage:** `job_definition.parameters` ist freies JSON — nur die Konsumenten kannten seinen Inhalt (Kern: `exports.rs`, `imports.rs`, `rules.rs`, `objects.rs`, `saved_searches.rs`, `config.rs`, `connectors.rs`; Worker: `meadow/worker/*.py`). Deshalb bot das Formular eine Textfläche ohne Hinweise, und die KI-Assistenz hatte für diesen Bereich keine Quelle der Wahrheit.
+- **`crates/pim-core/src/api/job_schema.rs`** (Muster `connector_schema.rs`) beschreibt jeden Jobtyp mit seinen Parametern (`key`, `shape`, `required`, Beschreibung, erlaubte Werte) und für `bulk_operation` die **14 Operationen** mit ihren eigenen Parametern (die unter `parameters.parameters` liegen).
+- **`GET /jobs/schema`** (Editor oder `X-Api-Key`) liefert dieses Dokument: Typenliste, Parameter je Typ, Operationen je `bulk_operation` und die Cron-Regel in Worten. **`POST /jobs/validate`** prüft `{type, schedule, parameters}` **ohne zu speichern** und antwortet `{ok, errors}` — die Parameter gegen den Vertrag, den `schedule` mit `scheduler::validate_schedule` (dieselbe Prüfung, die der Scheduler beim Registrieren anwendet, sechs Felder mit Sekunden zuerst).
+- **Grundsatz (wie bei den Konnektoren):** jeder deklarierte Schlüssel wird von einem Konsumenten gelesen und jeder gelesene Schlüssel ist deklariert. Ein Rust-Test hält fest, dass jeder `VALID_JOB_TYPES`-Eintrag genau einen Vertrag hat und kein Schlüssel doppelt deklariert ist.
+- **Bewusste Grenze:** `POST`/`PATCH /jobs` prüfen **nicht** gegen den Vertrag. Job-Definitionen reisen in MCF-Dokumenten (Sektion `jobs`) und liegen in laufenden Datenbanken; ein strenger Schreibpfad würde Definitionen ablehnen, die heute laufen. Der Prüfendpunkt ist deshalb eine **Vertragsprüfung** für Formular und Assistenz, nicht der Schreibpfad — anders als bei Konnektoren und Export-Profilen, wo der Prüfaufruf genau der Schreibpfad ist. Offener Punkt: [ki-assistenz.md](ki-assistenz.md) §12.
+- **`object_ids` darf leer sein:** ein Lauf ohne Auswahl tut nichts, aber die Auswahl entsteht in der Oberfläche (Bulk-Edit) und nicht jede Definition ist für sich lauffähig. Der Vertrag sagt das in der Beschreibung, statt einen Platzhalter zu erzwingen — und die Assistenz wird nicht gezwungen, Objekt-IDs zu erfinden.
+- **Verbraucher des Dokuments:** das Job-Formular (Typenliste, Typ-Bedeutung, Parameterhinweise unter dem JSON-Feld) und der KI-Bereich `job`; das Frontend fällt bei fehlgeschlagenem Abruf auf eine lokale Liste zurück, damit das Formular auch ohne Kern-Antwort bedienbar bleibt.
 
 ## Fehlerbehandlung & Wiederholung
 

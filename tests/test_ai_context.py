@@ -30,6 +30,14 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     contract_block,
     declared_computed,
     few_shot_examples,
+    job_operation_facts,
+    job_operations_text,
+    job_parameter_facts,
+    job_schedule_text,
+    job_type_facts,
+    job_types_text,
+    parameter_facts,
+    parameters_text,
     policy_block,
     search_field_facts,
     search_fields_text,
@@ -330,6 +338,126 @@ def test_the_shipped_search_examples_are_valid_dsl_objects() -> None:
     assert rendered[0].startswith("{")
     assert "\n  " in rendered[0]
     assert json.loads(rendered[0]) == SEARCH_EXAMPLES[0]
+
+
+# --- job-definition schema projection (stage 2, JSON configuration) --------------
+
+
+def _job_schema() -> dict[str, object]:
+    """A contract like `GET /jobs/schema`, trimmed to what the projection reads."""
+    return {
+        "job_types": [
+            {
+                "type": "inbound_import",
+                "description": "Import a stored MEF document (parents first)",
+                "parameters": [
+                    {
+                        "key": "document_id",
+                        "shape": "string",
+                        "required": True,
+                        "description": "Stored import document",
+                    },
+                    {
+                        "key": "match_by_key",
+                        "shape": "string",
+                        "required": False,
+                        "description": "Attribute name to match existing objects by",
+                    },
+                ],
+            },
+            {
+                "type": "bulk_operation",
+                "description": "Run one bulk operation over a selection",
+                "parameters": [
+                    {"key": "op", "shape": "string", "required": True, "description": "Operation"},
+                    {
+                        "key": "object_ids",
+                        "shape": "string_list",
+                        "required": True,
+                        "description": "Objects to change",
+                    },
+                ],
+                "operations": [
+                    {
+                        "op": "replace_text",
+                        "description": "Find & replace inside one attribute",
+                        "parameters": [
+                            {
+                                "key": "search",
+                                "shape": "string",
+                                "required": True,
+                                "description": "Literal text to find",
+                            },
+                            {
+                                "key": "case_sensitive",
+                                "shape": "boolean",
+                                "required": False,
+                                "description": "Match case (default: off)",
+                            },
+                        ],
+                    },
+                    {
+                        "op": "delete",
+                        "description": "Delete the selected objects",
+                        "parameters": [],
+                    },
+                ],
+            },
+        ],
+        "schedule": "Cron expression with six fields (seconds first)",
+    }
+
+
+def test_the_job_projection_names_the_types_with_their_meaning() -> None:
+    assert job_type_facts(_job_schema()) == (
+        ("inbound_import", "Import a stored MEF document (parents first)"),
+        ("bulk_operation", "Run one bulk operation over a selection"),
+    )
+    assert job_types_text(_job_schema()).startswith("inbound_import — Import")
+    # Nothing to project without the schema or for an unknown type.
+    assert job_types_text({}) == ""
+    assert job_type_facts(None) == ()
+
+
+def test_the_job_projection_marks_required_fields_and_closed_values() -> None:
+    facts = job_parameter_facts(_job_schema(), "inbound_import")
+    assert [fact.key for fact in facts] == ["document_id", "match_by_key"]
+    assert facts[0].required is True
+    assert facts[1].required is False
+    text = parameters_text(facts)
+    assert "document_id (string, required) — Stored import document" in text
+    assert "match_by_key (string) — Attribute name" in text
+    # An unknown type yields no parameters instead of the fields of every type.
+    assert job_parameter_facts(_job_schema(), "send_mails") == ()
+    assert job_parameter_facts({"job_types": "nope"}, "inbound_import") == ()
+
+
+def test_the_job_projection_carries_the_operations_with_their_own_parameters() -> None:
+    operations = job_operation_facts(_job_schema(), "bulk_operation")
+    assert [operation.op for operation in operations] == ["replace_text", "delete"]
+    assert [parameter.key for parameter in operations[0].parameters] == [
+        "search",
+        "case_sensitive",
+    ]
+    text = job_operations_text(operations)
+    assert "`replace_text` — Find & replace inside one attribute" in text
+    assert "  search (string, required) — Literal text to find" in text
+    # An operation without parameters stays a one-line block.
+    assert "`delete` — Delete the selected objects" in text
+    # Only `bulk_operation` has operations; the schedule line comes from the schema.
+    assert job_operation_facts(_job_schema(), "inbound_import") == ()
+    assert job_schedule_text(_job_schema()).startswith("Cron expression")
+    assert job_schedule_text({}) == ""
+
+
+def test_the_export_profile_projection_stays_unchanged_by_the_job_fields() -> None:
+    """`required`/`allowed` are new; the export-profile rendering must not move."""
+    schema = {
+        "parameters": [
+            {"key": "fields", "shape": "string_list", "description": "Attributes to export"},
+        ]
+    }
+    assert parameters_text(parameter_facts(schema)) == "fields (string_list) — Attributes to export"
 
 
 def _load_script(name: str):

@@ -110,6 +110,11 @@ def export_profile_schema_uri(core_url: str) -> str:
     return f"{loopback_host(core_url).rstrip('/')}/export-profiles/schema"
 
 
+def job_schema_uri(core_url: str) -> str:
+    """URL of the job contract (job types + their parameters)."""
+    return f"{loopback_host(core_url).rstrip('/')}/jobs/schema"
+
+
 def ui_labels() -> dict[str, str]:
     """The English UI texts, keyed by i18n key (for the schema's `label_key`).
 
@@ -183,6 +188,34 @@ async def validate_export_profile(
     return _verdict(response)
 
 
+async def validate_job_definition(
+    core_url: str, api_key: str | None, job: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates a job definition with the core (``POST /jobs/validate``).
+
+    The core checks the definition against the declared parameter contract and the
+    cron parser the scheduler uses. It is a contract check, **not** the write
+    path's check: `POST`/`PATCH /jobs` still accept any parameters object, because
+    job definitions also travel through MCF documents (see `api::job_schema`).
+    """
+    response = await post_core(
+        core_url,
+        api_key,
+        "/jobs/validate",
+        {
+            "type": job.get("type"),
+            "schedule": job.get("schedule"),
+            "parameters": job.get("parameters"),
+        },
+    )
+    ok, message, preview = _verdict(response)
+    if ok:
+        # Say what was checked: the save path stays permissive (see above), so
+        # "accepted by the core schema" would promise more than it can hold.
+        message = "matches the job parameter contract"
+    return ok, message, preview
+
+
 async def preview_query(
     core_url: str, api_key: str | None, query: dict[str, Any]
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -216,6 +249,7 @@ async def handle_generate(
     search_catalog: JsonCache,
     connector_types: JsonCache,
     export_profile_schema: JsonCache,
+    job_schema: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -252,6 +286,9 @@ async def handle_generate(
         elif request.area == "export_profile":
             payload = await export_profile_schema.get()
             json_context = {"export_profile_schema": payload if isinstance(payload, dict) else {}}
+        elif request.area == "job":
+            payload = await job_schema.get()
+            json_context = {"job_schema": payload if isinstance(payload, dict) else {}}
         else:
             payload = await vocabulary.get()
             vocabulary_rows = (
@@ -291,6 +328,14 @@ async def handle_generate(
             return await validate_export_profile(core_url, api_key, profile)
 
         config_validator = validate_profile
+    elif request.area == "job":
+
+        async def validate_job(
+            job: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return await validate_job_definition(core_url, api_key, job)
+
+        config_validator = validate_job
 
     try:
         return await generate(
@@ -373,6 +418,7 @@ async def serve(
     export_profile_schema = JsonCache(
         export_profile_schema_uri(core_url), api_key, label="the export-profile schema"
     )
+    job_schema = JsonCache(job_schema_uri(core_url), api_key, label="the job schema")
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
@@ -385,6 +431,7 @@ async def serve(
             search_catalog=search_catalog,
             connector_types=connector_types,
             export_profile_schema=export_profile_schema,
+            job_schema=job_schema,
             state=state,
         )
 

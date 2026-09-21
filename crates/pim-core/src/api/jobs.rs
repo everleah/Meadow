@@ -21,7 +21,9 @@ use crate::error::ApiError;
 
 const TABLE: &str = "job_definition";
 const RUN_TABLE: &str = "job_run";
-const VALID_JOB_TYPES: [&str; 7] = [
+/// Every job type a definition may carry. The parameter contract of each type
+/// lives in [`super::job_schema`], which keeps this list the single source.
+pub(crate) const VALID_JOB_TYPES: [&str; 7] = [
     "outbound_export",
     "inbound_import",
     "business_rule",
@@ -31,6 +33,11 @@ const VALID_JOB_TYPES: [&str; 7] = [
     "connector_test",
 ];
 const VALID_RUN_STATUSES: [&str; 5] = ["pending", "running", "success", "failed", "retry"];
+
+/// Whether the queue would accept this job type.
+pub fn is_known_job_type(job_type: &str) -> bool {
+    VALID_JOB_TYPES.contains(&job_type)
+}
 
 /// Payload for creating a job definition.
 #[derive(Debug, Deserialize, ToSchema)]

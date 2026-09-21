@@ -16,6 +16,7 @@ pub mod exports;
 pub mod groups;
 pub mod health;
 pub mod imports;
+pub mod job_schema;
 pub mod jobs;
 pub mod keys;
 pub mod languages;
@@ -51,6 +52,8 @@ use utoipa::OpenApi;
         jobs::list_job_runs,
         jobs::update_job_run,
         jobs::run_job,
+        job_schema::job_schema,
+        job_schema::validate_job_definition,
         config::export_config,
         config::import_config,
         connectors::create_connector,
@@ -201,6 +204,7 @@ use utoipa::OpenApi;
         jobs::ListJobs,
         jobs::ListJobRuns,
         jobs::UpdateJobRun,
+        job_schema::ValidateJobDefinition,
         imports::ImportParams,
         imports::CompleteImport,
         objects::CreateObject,
@@ -278,3 +282,34 @@ use utoipa::OpenApi;
     ))
 )]
 pub struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The generated document must **build** and serialise.
+    ///
+    /// This is a crash guard, not a formality: utoipa inlines a nested type into
+    /// its parent's schema, so the self-referential `QueryCondition.conditions`
+    /// recursed without bound inside `ApiDoc::openapi()` and killed the whole
+    /// process with a stack overflow (`GET /api-docs/openapi.json`, found
+    /// 2026-09-21 — the endpoint had never been called). The field carries
+    /// `#[schema(no_recursion)]`; without a test, the next recursive type added to
+    /// the document would take the process down again instead of failing a gate.
+    #[test]
+    fn the_openapi_document_builds_and_serialises() {
+        let document = ApiDoc::openapi();
+        let json = serde_json::to_string(&document).expect("the document must serialise");
+        assert!(
+            json.len() > 10_000,
+            "suspiciously small: {} bytes",
+            json.len()
+        );
+        for path in ["/jobs/schema", "/jobs/validate", "/saved-searches/preview"] {
+            assert!(
+                document.paths.paths.contains_key(path),
+                "`{path}` is missing from the document"
+            );
+        }
+    }
+}

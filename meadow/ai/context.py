@@ -416,42 +416,59 @@ class ParameterFact(NamedTuple):
     key: str
     shape: str
     description: str
+    #: Set for a contract that marks its required fields (`GET /jobs/schema`).
+    required: bool = False
+    #: Allowed values of a closed field (empty when the field is open).
+    allowed: tuple[str, ...] = ()
 
 
-def parameter_facts(schema: Any) -> tuple[ParameterFact, ...]:
-    """The parameter contract of a core schema document, in the documented order.
+def parameter_facts(schema: Any, key: str = "parameters") -> tuple[ParameterFact, ...]:
+    """The parameter entries of a core schema document, in the documented order.
 
-    `GET /export-profiles/schema` answers with `{formats, parameters}`: the shapes
-    and meanings the core enforces, so this needs no hand-written copy.
+    `GET /export-profiles/schema` answers with `{formats, parameters}`, the job
+    schema with one such list per job type: the shapes and meanings the core
+    enforces, so this needs no hand-written copy.
     """
     if not isinstance(schema, Mapping):
         return ()
-    entries = schema.get("parameters")
+    entries = schema.get(key)
     if not isinstance(entries, list):
         return ()
     facts: list[ParameterFact] = []
     for entry in entries:
         if not isinstance(entry, Mapping):
             continue
-        key = str(entry.get("key") or "")
-        if not key:
+        name = str(entry.get("key") or "")
+        if not name:
             continue
+        allowed = entry.get("allowed")
         facts.append(
             ParameterFact(
-                key=key,
+                key=name,
                 shape=str(entry.get("shape") or ""),
                 description=str(entry.get("description") or ""),
+                required=entry.get("required") is True,
+                allowed=tuple(str(value) for value in allowed) if isinstance(allowed, list) else (),
             )
         )
     return tuple(facts)
 
 
 def parameters_text(facts: tuple[ParameterFact, ...] | list[ParameterFact]) -> str:
-    """One line per parameter: `key (shape)` and what it holds."""
-    lines = [
-        f"{fact.key} ({fact.shape})" + (f" — {fact.description}" if fact.description else "")
-        for fact in facts
-    ]
+    """One line per parameter: `key (shape)` and what it holds.
+
+    A required key says so and a closed field names its values — both matter to a
+    model that has to build a valid object from the line alone.
+    """
+    lines: list[str] = []
+    for fact in facts:
+        marks = [fact.shape] + (["required"] if fact.required else [])
+        line = f"{fact.key} ({', '.join(marks)})"
+        if fact.allowed:
+            line += " — one of: " + " | ".join(fact.allowed)
+        if fact.description:
+            line += f" — {fact.description}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -463,3 +480,102 @@ def allowed_values_text(schema: Any, key: str = "formats") -> str:
     if not isinstance(values, list) or not values:
         return ""
     return f"{key}: " + " | ".join(str(value) for value in values)
+
+
+# --- job definitions (stage 2) --------------------------------------------------
+
+
+class JobOperationFact(NamedTuple):
+    """One operation of `bulk_operation` with the parameters it reads."""
+
+    op: str
+    description: str
+    parameters: tuple[ParameterFact, ...]
+
+
+def _job_entries(schema: Any) -> list[Mapping[Any, Any]]:
+    """The `job_types` array of the job schema (empty for anything else)."""
+    if not isinstance(schema, Mapping):
+        return []
+    entries = schema.get("job_types")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, Mapping)]
+
+
+def _job_entry(schema: Any, job_type: str) -> Mapping[Any, Any] | None:
+    """The schema entry of one job type (None when the type is unknown)."""
+    for entry in _job_entries(schema):
+        if str(entry.get("type") or "") == job_type:
+            return entry
+    return None
+
+
+def job_type_facts(schema: Any) -> tuple[tuple[str, str], ...]:
+    """Every job type with its one-line description, in the documented order."""
+    return tuple(
+        (str(entry.get("type") or ""), str(entry.get("description") or ""))
+        for entry in _job_entries(schema)
+        if entry.get("type")
+    )
+
+
+def job_types_text(schema: Any) -> str:
+    """One line per job type: the `type` value and what a run of it does."""
+    return "\n".join(
+        f"{job_type} — {description}" if description else job_type
+        for job_type, description in job_type_facts(schema)
+    )
+
+
+def job_parameter_facts(schema: Any, job_type: str) -> tuple[ParameterFact, ...]:
+    """The parameters of one job type (empty for an unknown type or no schema)."""
+    entry = _job_entry(schema, job_type)
+    return parameter_facts(entry) if entry is not None else ()
+
+
+def job_operation_facts(schema: Any, job_type: str) -> tuple[JobOperationFact, ...]:
+    """The operations a type offers with their own parameters (`bulk_operation` only)."""
+    entry = _job_entry(schema, job_type)
+    if entry is None:
+        return ()
+    entries = entry.get("operations")
+    if not isinstance(entries, list):
+        return ()
+    facts: list[JobOperationFact] = []
+    for item in entries:
+        if not isinstance(item, Mapping):
+            continue
+        op = str(item.get("op") or "")
+        if not op:
+            continue
+        facts.append(
+            JobOperationFact(
+                op=op,
+                description=str(item.get("description") or ""),
+                parameters=parameter_facts(item),
+            )
+        )
+    return tuple(facts)
+
+
+def job_operations_text(operations: tuple[JobOperationFact, ...]) -> str:
+    """The operation catalog: one block per `op` with its parameter lines."""
+    blocks: list[str] = []
+    for operation in operations:
+        head = f"`{operation.op}`"
+        if operation.description:
+            head += f" — {operation.description}"
+        if operation.parameters:
+            head += "\n" + "\n".join(
+                f"  {line}" for line in parameters_text(operation.parameters).splitlines()
+            )
+        blocks.append(head)
+    return "\n".join(blocks)
+
+
+def job_schedule_text(schema: Any) -> str:
+    """The schedule line of the job schema (`GET /jobs/schema`)."""
+    if not isinstance(schema, Mapping):
+        return ""
+    return str(schema.get("schedule") or "")

@@ -314,6 +314,13 @@ pub fn router(state: AppState) -> Router {
             "/jobs/runs/{run_id}",
             axum::routing::patch(api::jobs::update_job_run).delete(api::jobs::delete_job_run),
         )
+        // The static paths come before `/jobs/{id}`: otherwise a request for
+        // `/jobs/schema` would hit the `{id}` match and answer `405`.
+        .route("/jobs/schema", get(api::job_schema::job_schema))
+        .route(
+            "/jobs/validate",
+            post(api::job_schema::validate_job_definition),
+        )
         .route(
             "/jobs/{id}",
             get(api::jobs::get_job_definition)
