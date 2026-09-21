@@ -18,6 +18,7 @@ draft → in_review → approved → published → archived
 ```
 
 - Der Rust-Kern speichert nur das Statusfeld am Objekt und protokolliert Änderungen im Audit-Log.
+- **Die Oberfläche führt die Zustandsliste an genau einer Stelle** (`meadow/frontend/display.py`: `OBJECT_STATUSES` = `RELEASE_STATUSES`, benutzt vom Produktformular, vom Kategorie-Dialog und vom Bulk-Wizard) und zeigt die fünf Zustände `draft`, `in_review`, `approved`, `published`, `archived`. Weil der Kern die Werteliste **nicht** prüft, kann in den Daten jeder andere Wert stehen (Import, API, MCF, Regel) — eine Statusauswahl nimmt den **gespeicherten Wert deshalb immer** in ihre Optionen auf (`display.status_options(current)`): ein `ui.select`, dessen Wert nicht in den Optionen liegt, wirft `Invalid value` und macht aus der Seite eine **500** (live am 2026-09-21: ein `approved`-Produkt, weil die Liste vier der fünf Zustände kannte). Die bekannten fünf haben i18n-Schlüssel `status.<zustand>` (der Kern liefert sie als `label_key` im Suchkatalog); alles andere zeigt den rohen Wert.
 
 ## Freigaben
 

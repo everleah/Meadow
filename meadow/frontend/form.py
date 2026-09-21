@@ -37,10 +37,10 @@ from meadow.frontend import auth, config, edit_queue
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.channels import channel_label
 from meadow.frontend.display import (
-    RELEASE_STATUSES,
     completeness_badge,
     resolve_value,
     status_badge,
+    status_options,
     taxonomy_options,
     taxonomy_type_names,
 )
@@ -64,10 +64,6 @@ from meadow.frontend.relation_roles import (
 from meadow.frontend.url_values import is_valid_url, open_url
 
 log = logging.getLogger(__name__)
-
-#: Workflow statuses offered in the status selector. The core validates the
-#: actual transition via the workflow guard.
-_STATUS_OPTIONS = ("draft", "in_review", "published", "archived")
 
 #: Debounce (ms) for the attribute search field: one re-render per typing pause.
 _SEARCH_DEBOUNCE_MS = 300
@@ -1408,7 +1404,7 @@ async def product_form(object_id: str) -> None:
                     with ui.row().classes("items-center gap-2 w-full"):
                         ui.label(channel_label(channel, locale)).classes("w-48")
                         ui.select(
-                            {value: value for value in RELEASE_STATUSES},
+                            status_options(status),
                             value=status or None,
                             on_change=lambda event, c=code: set_release(c, str(event.value or "")),
                         ).props(f'filled dense placeholder="{t("form.release_none")}"').classes(
@@ -1938,15 +1934,19 @@ async def product_form(object_id: str) -> None:
             dialog.open()
 
         # --- Status selector. -------------------------------------------------
+        # The stored status may be any string (the core validates no vocabulary) — the
+        # stored value is always part of the options (see `display.status_options`).
+        current_status = str(resolved.get("status") or "")
         with ui.row().classes("items-center gap-2 w-full mt-4"):
             ui.label(t("form.status")).classes("w-56 text-caption")
             status_select = (
                 ui.select(
-                    list(_STATUS_OPTIONS),
-                    value=str(resolved.get("status", "")),
+                    status_options(current_status),
+                    value=current_status or None,
                 )
                 .props("filled dense")
                 .classes("w-64")
+                .mark("form-status")
             )
 
         # --- Save. -------------------------------------------------------------

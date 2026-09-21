@@ -672,6 +672,7 @@
   "search_form.field_status": "Status",
   "status.draft": "Draft",
   "status.in_review": "In review",
+  "status.approved": "Approved",
   "status.published": "Published",
   "status.archived": "Archived",
   "search_form.field_id": "Object id",

@@ -142,6 +142,43 @@ def test_status_badge() -> None:
     assert "bg-secondary" in status_badge("unknown")
 
 
+def test_every_state_of_the_state_machine_has_a_translation() -> None:
+    """The core labels the five known states `status.<value>` — all of them exist.
+
+    `search_schema::status_options` answers a status filter with
+    `{"value": …, "label_key": "status.<value>"}` for `draft`, `in_review`,
+    `approved`, `published`, `archived`; a missing key shows up as the raw key in the
+    UI (`i18n.t` falls back to it). `approved` was missing until 2026-09-21, so the
+    fifth state of the machine rendered as `status.approved` in the filter and had no
+    option in the selectors either.
+    """
+    from meadow.frontend.display import OBJECT_STATUSES
+
+    for status in OBJECT_STATUSES:
+        for locale in ("en", "de", "fr"):
+            assert t(f"status.{status}", locale=locale) != f"status.{status}", (
+                f"`status.{status}` is not translated in {locale}"
+            )
+
+
+def test_status_options_always_offer_the_stored_value() -> None:
+    """A select whose value is missing from its options answers **500**.
+
+    The core validates no status vocabulary, so the stored value can be anything —
+    the selector has to carry it (`display.status_options`).
+    """
+    from meadow.frontend.display import OBJECT_STATUSES, status_options
+
+    assert set(status_options()) == set(OBJECT_STATUSES)
+    # The stored value is added, the known ones stay unique.
+    assert status_options("approved") == status_options()
+    assert status_options("legacy_state")["legacy_state"] == "legacy_state"
+    assert set(status_options("legacy_state")) == set(OBJECT_STATUSES) | {"legacy_state"}
+    # An empty value adds nothing (the select then shows its placeholder).
+    assert status_options("") == status_options()
+    assert status_options(None) == status_options()
+
+
 def test_completeness_badge() -> None:
     assert "bg-grey" in completeness_badge(0)
     assert "bg-orange" in completeness_badge(50)

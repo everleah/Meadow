@@ -672,6 +672,7 @@
   "search_form.field_status": "Status",
   "status.draft": "Entwurf",
   "status.in_review": "In Freigabe",
+  "status.approved": "Freigegeben",
   "status.published": "Veröffentlicht",
   "status.archived": "Archiviert",
   "search_form.field_id": "Objekt-ID",

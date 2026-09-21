@@ -22,6 +22,7 @@ import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from nicegui import ui
@@ -82,11 +83,13 @@ async def products_user(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[User]
     """Boots the real app for one test, with a stub core and no auth redirect."""
     _drop_frontend_modules()
     async with user_simulation(main_file=MAIN_FILE) as user:
-        from meadow.frontend import auth, grid, layout
+        from meadow.frontend import auth, form, grid, layout
 
         FakeCore.reset()
         monkeypatch.setattr(grid, "CoreClient", FakeCore)
         monkeypatch.setattr(layout, "CoreClient", FakeCore)
+        # The single-object form (`/products/{id}`) needs the same stub.
+        monkeypatch.setattr(form, "CoreClient", FakeCore)
 
         async def allow(  # the middleware calls `self.dispatch(request, call_next)`
             self: Any, request: Any, call_next: Callable[[Any], Awaitable[Any]]
@@ -244,6 +247,48 @@ async def test_bulk_wizard_refuses_an_incomplete_configuration(products_user: Us
     assert products_user.notify.contains(t("grid.bulk_config_incomplete", locale=EN)), (
         products_user.notify.messages
     )
+
+
+async def test_the_object_form_renders_for_a_stored_status_the_state_machine_lacks(
+    products_user: User,
+) -> None:
+    """A stored status is always selectable — this used to be a **500**.
+
+    The core validates no status vocabulary (`plan/detail/workflow-freigaben.md`), so
+    the value can come from an import, the API, an MCF document or a rule. A
+    `ui.select` whose value is not among its options raises
+    `ValueError: Invalid value: …` while the page builds, which NiceGUI answers with a
+    500 — exactly what happened on 2026-09-21 for the fifth state of the machine: the
+    selector knew four of five and an `approved` object took the whole page down.
+    """
+    FakeCore.data["get_object"] = {
+        "id": "object:1",
+        "type": "product",
+        "status": "approved",
+        "attributes": {"name": "Brake disc"},
+    }
+    # The real core answers `{classes, attributes}` here (the fake's default `[]`
+    # is not a shape the page can render).
+    FakeCore.data["list_object_category_attributes"] = {"classes": [], "attributes": []}
+    await products_user.open(f"/products/{quote('object:1', safe='')}")
+
+    element = next(iter(products_user.find(marker="form-status").elements))
+    assert isinstance(element, ui.select)
+    assert element.value == "approved"
+    assert "approved" in element.options
+
+    # …and a value no state machine knows stays selectable too.
+    FakeCore.data["get_object"] = {
+        "id": "object:1",
+        "type": "product",
+        "status": "legacy_state",
+        "attributes": {"name": "Brake disc"},
+    }
+    await products_user.open(f"/products/{quote('object:1', safe='')}")
+    element = next(iter(products_user.find(marker="form-status").elements))
+    assert isinstance(element, ui.select)
+    assert element.value == "legacy_state"
+    assert "legacy_state" in element.options
 
 
 async def test_filter_search_reaches_the_core(products_user: User) -> None:

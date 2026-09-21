@@ -672,6 +672,7 @@
   "search_form.field_status": "Statut",
   "status.draft": "Brouillon",
   "status.in_review": "En révision",
+  "status.approved": "Approuvé",
   "status.published": "Publié",
   "status.archived": "Archivé",
   "search_form.field_id": "ID d’objet",

@@ -34,6 +34,11 @@ def test_release_vocabulary_uses_the_object_status_state_machine() -> None:
     assert RELEASE_STATUSES[0] == "draft"
     assert DEFAULT_RELEASE_STATUS == "published"
     assert DEFAULT_RELEASE_STATUS in RELEASE_STATUSES
+    # The state machine has five states (`plan/detail/workflow-freigaben.md`):
+    # `draft → in_review → approved → published → archived`. `approved` was missing
+    # from every selector until 2026-09-21 — an `approved` object answered 500 on the
+    # product form (`ValueError: Invalid value: approved`).
+    assert RELEASE_STATUSES == ("draft", "in_review", "approved", "published", "archived")
 
 
 def test_channel_label_falls_back_to_another_language_then_to_the_code() -> None:

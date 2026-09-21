@@ -27,7 +27,12 @@ from nicegui import app, ui
 
 from meadow.frontend import config, taxonomy_tree
 from meadow.frontend.api import CoreClient, CoreError
-from meadow.frontend.display import dimension_options, taxonomy_options, taxonomy_type_names
+from meadow.frontend.display import (
+    dimension_options,
+    status_options,
+    taxonomy_options,
+    taxonomy_type_names,
+)
 from meadow.frontend.grid import (
     SEARCH_LIMIT,
     filter_tree_nodes,
@@ -581,12 +586,7 @@ async def categories_page() -> None:
                         ).tooltip(t("form.languages_edit"))
                     status_select = (
                         ui.select(
-                            {
-                                "draft": "draft",
-                                "in_review": "in_review",
-                                "published": "published",
-                                "archived": "archived",
-                            },
+                            status_options(str(edit_state["status"] or "draft")),
                             label=t("categories.status"),
                             value=str(edit_state["status"] or "draft"),
                         )

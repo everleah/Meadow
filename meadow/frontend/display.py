@@ -16,13 +16,35 @@ from meadow.frontend.relation_roles import (
     definition_key,
 )
 
-#: States offered for a channel release. The vocabulary is the object status
-#: state machine (the core accepts any string; `workflow_guard` rules own the
-#: transitions) — kept in sync with `form.py`'s status selector.
-RELEASE_STATUSES = ("draft", "in_review", "published", "archived")
+#: Object statuses of the workflow state machine (`plan/detail/workflow-freigaben.md`):
+#: `draft → in_review → approved → published → archived`. The transitions are
+#: `workflow_guard` business rules — the core itself accepts **any** string for
+#: `status`, so a selector must be able to show the stored value as well
+#: ([`status_options`][meadow.frontend.display.status_options]).
+OBJECT_STATUSES = ("draft", "in_review", "approved", "published", "archived")
+
+#: States offered for a channel release: the same vocabulary (the plan defines the
+#: release states as the object statuses).
+RELEASE_STATUSES = OBJECT_STATUSES
 
 #: State that counts as "released for the channel" (default of the filters).
 DEFAULT_RELEASE_STATUS = "published"
+
+
+def status_options(current: str | None = None) -> dict[str, str]:
+    """Options of a status selector: the state machine plus the stored value.
+
+    The value comes from the data, and the core validates no vocabulary, so it can be
+    anything an import, the API, an MCF document or a rule wrote. A `ui.select` whose
+    value is not among its options raises `ValueError: Invalid value: …` and turns the
+    whole page into a **500** — seen 2026-09-21, when the product form knew four of the
+    five states and opening an `approved` object answered `500` instead of the form.
+    The stored value is therefore always offered, next to the five states.
+    """
+    options = {status: status for status in OBJECT_STATUSES}
+    if current and current not in options:
+        options[current] = current
+    return options
 
 
 def resolve_value(value: object, locale: str) -> str:

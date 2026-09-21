@@ -25,13 +25,13 @@ from meadow.frontend.bulk_edit import (
     missing_parameters,
 )
 from meadow.frontend.bulk_report import read_bulk_report
-from meadow.frontend.display import DEFAULT_RELEASE_STATUS
+from meadow.frontend.display import DEFAULT_RELEASE_STATUS, OBJECT_STATUSES, status_options
 from meadow.frontend.i18n import t
 from meadow.frontend.object_picker import open_object_picker
 from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF, effective_target_types
 
 #: Review statuses of the workflow state machine, offered as plain codes.
-STATUS_OPTIONS = ("draft", "in_review", "published", "archived")
+STATUS_OPTIONS = OBJECT_STATUSES
 #: Number of 2-second polls a run may stay `pending` before the progress dialog
 #: warns that no worker seems to be connected (~20 s).
 PENDING_WARN_POLLS = 10
@@ -73,7 +73,7 @@ class BulkConfigArea:
         self.category_options = category_options
         self.taxonomy_types = taxonomy_types
         self.channel_labels = channel_labels
-        self.status_options = {status: status for status in STATUS_OPTIONS}
+        self.status_options = status_options()
         #: The field widgets the current operation rendered, by field key.
         self.fields: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
         #: The object chosen per picker key (`category`/`parent`/`relation_target`).
