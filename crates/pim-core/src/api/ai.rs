@@ -27,7 +27,7 @@ use crate::error::ApiError;
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct GenerateRequest {
     /// Target area: `rule` | `computed_attribute` | `search` | `connector` |
-    /// `export_profile` | `job`.
+    /// `export_profile` | `job` | `import_mapping`.
     pub area: String,
     /// `create` (from a description), `edit` (improve an existing script) or
     /// `explain` (prose for the description field).
@@ -60,6 +60,20 @@ pub struct GenerateRequest {
     /// **job type** for `area = job` (`inbound_import`, `bulk_operation`, …).
     #[serde(default)]
     pub config_kind: Option<String>,
+    /// The columns of the uploaded file for `area = import_mapping` — name plus a
+    /// **shape** hint (`text, 6 characters, all values different`), never a value.
+    #[serde(default)]
+    pub columns: Option<Vec<ColumnSpec>>,
+}
+
+/// One column of an uploaded file: the header and what its values look like.
+#[derive(Debug, serde::Deserialize, serde::Serialize, ToSchema)]
+pub struct ColumnSpec {
+    /// The header as it appears in the file (the key of the mapping).
+    pub name: String,
+    /// A value-free description of the cells (`number, 4 characters`).
+    #[serde(default)]
+    pub hint: String,
 }
 
 /// Payload for `POST /ai/test` — no fields; the core resolves the configuration.
@@ -80,11 +94,17 @@ fn unavailable(error: &AiError) -> ApiError {
 fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
     if !matches!(
         request.area.as_str(),
-        "rule" | "computed_attribute" | "search" | "connector" | "export_profile" | "job"
+        "rule"
+            | "computed_attribute"
+            | "search"
+            | "connector"
+            | "export_profile"
+            | "job"
+            | "import_mapping"
     ) {
         return Err(ApiError::bad_request(format!(
             "unknown area `{}` (expected rule, computed_attribute, search, connector, \
-             export_profile or job)",
+             export_profile, job or import_mapping)",
             request.area
         )));
     }
@@ -111,6 +131,18 @@ fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
             "unknown job type `{job_type}` (expected {})",
             crate::api::jobs::VALID_JOB_TYPES.join(", ")
         )));
+    }
+    // The mapping area is about the columns of *this* file: without them the worker
+    // could only guess, and the request would cost a model call before failing.
+    if request.area == "import_mapping"
+        && request
+            .columns
+            .as_ref()
+            .is_none_or(|columns| columns.is_empty())
+    {
+        return Err(ApiError::bad_request(
+            "`columns` (the column headers of the file) is required for the area `import_mapping`",
+        ));
     }
     if !matches!(request.mode.as_str(), "create" | "edit" | "explain") {
         return Err(ApiError::bad_request(format!(
@@ -172,6 +204,7 @@ pub async fn generate(
         "declared_computed": body.declared_computed,
         "language": body.language,
         "config_kind": body.config_kind,
+        "columns": body.columns,
     });
     let reply = state.ai.generate(request).await.map_err(|error| {
         tracing::warn!(error = %error, "AI generation failed");
@@ -249,6 +282,7 @@ mod tests {
             declared_computed: None,
             language: None,
             config_kind: config_kind.map(str::to_owned),
+            columns: None,
         }
     }
 
@@ -291,8 +325,26 @@ mod tests {
             "connector",
             "export_profile",
             "job",
+            "import_mapping",
         ] {
             assert!(error.contains(area), "`{area}` missing in: {error}");
         }
+    }
+
+    #[test]
+    fn the_mapping_area_needs_the_columns_of_the_file() {
+        let mut mapping = request("import_mapping", None);
+        let error = message(validate(&mapping).unwrap_err());
+        assert!(error.contains("`columns`"));
+        // An empty list is as useless as no list at all.
+        mapping.columns = Some(Vec::new());
+        assert!(validate(&mapping).is_err());
+        mapping.columns = Some(vec![ColumnSpec {
+            name: "Kunden-Nr".to_owned(),
+            hint: "text, 6 characters".to_owned(),
+        }]);
+        assert!(validate(&mapping).is_ok());
+        // The other areas do not need columns.
+        assert!(validate(&request("rule", None)).is_ok());
     }
 }

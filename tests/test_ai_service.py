@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from meadow.ai.context import ColumnFact  # noqa: E402 - after the path fix
 from meadow.ai.provider import (  # noqa: E402 - after the path fix
     ChatReply,
     ProviderConfig,
@@ -582,6 +583,157 @@ def test_without_a_validator_a_job_check_says_it_was_not_validated() -> None:
     )
     assert reply["ok"] is True
     assert "not validated" in str(reply["check"])
+
+
+# --- import mapping (stage 2) ---------------------------------------------------
+
+#: The model data the worker fetches from the core for a mapping check.
+MAPPING_VOCABULARY: list[dict[str, Any]] = [
+    {"name": "article_number", "type": "text", "applicable_types": ["product"]},
+    {"name": "title", "type": "text", "multilingual": True, "applicable_types": ["product"]},
+    {"name": "weight", "type": "number", "applicable_types": ["product"]},
+]
+
+MAPPING_TYPES: list[dict[str, Any]] = [
+    {"name": "product", "label_attribute": "name", "key_attributes": ["article_number"]},
+]
+
+MAPPING_LANGUAGES: list[dict[str, Any]] = [{"code": "de"}, {"code": "en"}]
+
+#: The columns the editor sends: header plus a value-free shape hint.
+COLUMNS: list[dict[str, str]] = [
+    {"name": "Kunden-Nr", "hint": "text, 8 characters, all values different"},
+    {"name": "Bezeichnung", "hint": "text, up to 40 characters"},
+    {"name": "Preis", "hint": "number, 4-5 characters"},
+]
+
+GOOD_MAPPING: dict[str, str] = {
+    "Kunden-Nr": "article_number",
+    "Bezeichnung": "title|de",
+    "Preis": "weight",
+}
+
+MAPPING_CONTEXT: dict[str, Any] = {
+    "columns": COLUMNS,
+    "object_types": MAPPING_TYPES,
+    "languages": MAPPING_LANGUAGES,
+}
+
+
+def _mapping_request(**overrides: Any) -> GenerationRequest:
+    """A mapping request: the columns travel with it, as the import page sends them."""
+    values: dict[str, Any] = {
+        "area": "import_mapping",
+        "object_type": "product",
+        "columns": tuple(ColumnFact(row["name"], row["hint"]) for row in COLUMNS),
+    }
+    values.update(overrides)
+    return _request(**values)
+
+
+def test_an_import_mapping_suggestion_is_checked_by_the_tabular_module() -> None:
+    recorder = Recorder(json.dumps({"mapping": GOOD_MAPPING}))
+    checks: list[dict[str, Any]] = []
+
+    async def validator(mapping: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
+        checks.append(mapping)
+        return True, "accepted", {"mapped": len(mapping), "ignored": [], "warnings": []}
+
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _mapping_request(),
+            vocabulary_rows=MAPPING_VOCABULARY,
+            json_context=MAPPING_CONTEXT,
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["mapping"] == GOOD_MAPPING
+    assert reply["preview"] == {"mapped": 3, "ignored": [], "warnings": []}
+    assert checks == [GOOD_MAPPING]
+
+    user = recorder.messages[0][1]["content"]
+    assert "Object type: product" in user
+    assert "Business key of this type: article_number" in user
+    assert "Data languages: de, en" in user
+    assert "article_number (text)" in user
+    assert "title (text, multilingual)" in user
+    assert "name (multilingual by convention" in user
+    assert "Kunden-Nr — text, 8 characters, all values different" in user
+    assert '{"mapping": {"<column>": "<target>"}}' in user
+    # The system prompt names the artefact, and the file's values are not in it.
+    assert "map the columns of an uploaded" in recorder.messages[0][0]["content"]
+    for cell in ("A-1001", "Schraube"):
+        assert cell not in user
+
+
+def test_an_import_mapping_suggestion_is_sent_back_once_with_the_check_errors() -> None:
+    recorder = Recorder(
+        json.dumps({"mapping": {"Kunden-Nr": "artikelnummer"}}),
+        json.dumps({"mapping": GOOD_MAPPING}),
+    )
+    answers = [
+        (
+            False,
+            "`artikelnummer` has no attribute definition — the value is written, "
+            "but the attribute stays untyped",
+        ),
+        (True, "accepted"),
+    ]
+
+    async def validator(mapping: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
+        del mapping
+        ok, message = answers[min(len(answers) - 1, 0)]
+        answers.pop(0)
+        return ok, message, None
+
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _mapping_request(),
+            vocabulary_rows=MAPPING_VOCABULARY,
+            json_context=MAPPING_CONTEXT,
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["attempts"] == 2
+    assert "has no attribute definition" in recorder.messages[1][-1]["content"]
+
+
+def test_an_import_mapping_without_columns_never_calls_the_model() -> None:
+    recorder = Recorder(json.dumps({"mapping": GOOD_MAPPING}))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _mapping_request(columns=()),
+            vocabulary_rows=MAPPING_VOCABULARY,
+            json_context={"columns": [], "object_types": MAPPING_TYPES, "languages": []},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert reply["attempts"] == 0
+    assert "no columns" in str(reply["errors"][0])
+    assert recorder.messages == []
+
+
+def test_an_import_mapping_answer_without_the_mapping_object_fails() -> None:
+    recorder = Recorder('{"columns": {"Kunden-Nr": "article_number"}}', '{"columns": {}}')
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _mapping_request(),
+            vocabulary_rows=MAPPING_VOCABULARY,
+            json_context=MAPPING_CONTEXT,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert any("`mapping`" in str(message) for message in reply["errors"])
 
 
 def test_the_connection_test_reports_success_and_missing_settings() -> None:

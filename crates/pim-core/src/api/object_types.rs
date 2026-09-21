@@ -18,14 +18,14 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -196,13 +196,14 @@ async fn validate_attribute_references(
     responses((status = 200, description = "Object types", body = Vec<Value>))
 )]
 pub async fn list_object_types(
-    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListObjectTypes>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    // Readable with the machine key too: the worker needs the business keys and the
+    // label attribute for the import-mapping check, exactly like it reads `/rules`,
+    // `/languages` and `/connector-types`.
+    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let mut response = state

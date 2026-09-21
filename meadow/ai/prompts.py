@@ -22,7 +22,15 @@ from meadow.ai.context import AttributeFact, attribute_names_text
 from meadow.ai.examples import ExampleRule, search_examples
 
 #: Areas the assistant knows (the core validates the same list).
-AREAS = ("rule", "computed_attribute", "search", "connector", "export_profile", "job")
+AREAS = (
+    "rule",
+    "computed_attribute",
+    "search",
+    "connector",
+    "export_profile",
+    "job",
+    "import_mapping",
+)
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
 
@@ -33,6 +41,7 @@ _AREA_TITLES = {
     "connector": "connector configuration (the `parameters` object of a connector)",
     "export_profile": "export profile (an export format plus its `parameters`)",
     "job": "job definition (a `type`, an optional `schedule` and its `parameters`)",
+    "import_mapping": "import column mapping (which file column fills which field)",
 }
 
 _RULE_SYSTEM = """\
@@ -140,6 +149,31 @@ Non-negotiable:
   that operation.
 """
 
+_IMPORT_MAPPING_SYSTEM = """\
+You are the import assistant of Meadow PIM, a product information management system.
+You map the columns of an uploaded CSV/Excel file to Meadow's fields and attributes.
+
+Non-negotiable:
+- Answer with a single JSON object, no explanation, no markdown fence:
+  {"mapping": {"<column>": "<target>", ...}}
+- Use the column names exactly as they are listed, and list **every** column —
+  a column you do not want to import gets `""`.
+- A target is exactly one of:
+  - `""` — ignore the column,
+  - `id`, `type` or `status` — a base field of the object (only `id`/`type`/`status`
+    may be written this way, never with a language),
+  - `<attribute>` — the value of that attribute,
+  - `<attribute>|<language>` — the value of that multilingual attribute in that
+    language.
+- Use only the attribute names listed as targets; never invent one. If a column
+  holds something no listed attribute describes, ignore the column (`""`) instead
+  of guessing a name.
+- Never map two columns to the same target: only the last one would survive.
+- If the object type has a business key, a column that clearly holds it must fill it.
+- Prefer the value shape over the header when the header is cryptic, and say so in
+  the description field if a decision rests on a guess.
+"""
+
 _EXPLAIN_SYSTEM = """\
 You are the documentation assistant of Meadow PIM, a product information management
 system. You explain an existing business rule to a colleague who maintains product data.
@@ -171,6 +205,17 @@ system. You explain an existing job definition to a colleague who maintains prod
 - Do not invent parameters or effects the definition does not have.
 """
 
+_MAPPING_EXPLAIN_SYSTEM = """\
+You are the documentation assistant of Meadow PIM, a product information management
+system. You explain an existing import column mapping to a colleague who works with
+product data.
+
+- Answer in prose, at most three sentences, no code, no bullet list, no markdown.
+- Say which columns are imported into which fields, which columns are ignored, and
+  name the business key when the mapping fills it.
+- Do not invent columns or targets the mapping does not have.
+"""
+
 
 def system_prompt(area: str, mode: str) -> str:
     """The system prompt for one area and mode.
@@ -183,6 +228,8 @@ def system_prompt(area: str, mode: str) -> str:
             return _SEARCH_EXPLAIN_SYSTEM
         if area == "job":
             return _JOB_EXPLAIN_SYSTEM
+        if area == "import_mapping":
+            return _MAPPING_EXPLAIN_SYSTEM
         return _EXPLAIN_SYSTEM
     if area == "search":
         return _SEARCH_SYSTEM
@@ -192,6 +239,8 @@ def system_prompt(area: str, mode: str) -> str:
         return _EXPORT_PROFILE_SYSTEM
     if area == "job":
         return _JOB_SYSTEM
+    if area == "import_mapping":
+        return _IMPORT_MAPPING_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 
@@ -347,6 +396,48 @@ def config_user_prompt(
     if language:
         what = "the answer" if mode == "explain" else "any prose you add"
         sections.append(f"Write {what} in the language `{language}`; field names stay as they are.")
+    return "\n\n".join(sections)
+
+
+def mapping_user_prompt(
+    *,
+    mode: str,
+    description: str,
+    subject: str,
+    targets: str,
+    columns: str,
+    current_mapping: str | None = None,
+    language: str | None = None,
+) -> str:
+    """The user message for an import column mapping.
+
+    `subject` names the concrete target (object type, business key, data languages),
+    `targets` is the attribute list a mapping may write and `columns` the file's
+    headers with their value shapes — the columns come last because they are what
+    the answer is built from, right before the required shape.
+    """
+    sections: list[str] = []
+    heading = "Explain this" if mode == "explain" else "Write this"
+    sections.append(f"{heading}: {_AREA_TITLES['import_mapping']}")
+    sections.append(subject)
+    if description.strip():
+        sections.append(f"Description from the user:\n{description.strip()}")
+    if current_mapping and current_mapping.strip():
+        label = "The mapping to explain" if mode == "explain" else "The current mapping to improve"
+        sections.append(f"{label}:\n{current_mapping.strip()}")
+    if mode == "edit":
+        sections.append("Keep what works and change only what the description asks for.")
+    if mode != "explain":
+        sections.append("Targets available (nothing else may be written):\n" + targets)
+        sections.append(
+            "Columns of the file (header and what the values look like, no values):\n" + columns
+        )
+        sections.append('Answer shape: {"mapping": {"<column>": "<target>"}}')
+    if language:
+        what = "the answer" if mode == "explain" else "any prose you add"
+        sections.append(
+            f"Write {what} in the language `{language}`; column names and targets stay as they are."
+        )
     return "\n\n".join(sections)
 
 

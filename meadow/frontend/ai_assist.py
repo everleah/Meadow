@@ -67,6 +67,7 @@ def open_suggestion_dialog(
     target_attribute: str | None = None,
     declared_computed: Callable[[], list[str]] | None = None,
     config_kind: Callable[[], str] | None = None,
+    columns: Callable[[], list[dict]] | None = None,
 ) -> None:
     """Opens the suggestion dialog; `on_apply` receives the accepted reply.
 
@@ -128,6 +129,7 @@ def open_suggestion_dialog(
             "target_attribute": target_attribute,
             "declared_computed": declared_computed() if declared_computed else None,
             "config_kind": config_kind() if config_kind else None,
+            "columns": columns() if columns else None,
             "language": current_locale(),
         }
         try:
@@ -154,6 +156,8 @@ def open_suggestion_dialog(
             preview.value = json.dumps(reply.get("profile") or {}, indent=2, ensure_ascii=False)
         elif area == "job":
             preview.value = json.dumps(reply.get("job") or {}, indent=2, ensure_ascii=False)
+        elif area == "import_mapping":
+            preview.value = json.dumps(reply.get("mapping") or {}, indent=2, ensure_ascii=False)
         else:
             preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(

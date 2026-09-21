@@ -182,6 +182,7 @@ use utoipa::OpenApi;
     ),
     components(schemas(
         ai::GenerateRequest,
+        ai::ColumnSpec,
         ai::TestRequest,
         auth::LoginRequest,
         auth::LoginResponse,

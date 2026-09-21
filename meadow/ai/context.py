@@ -46,6 +46,8 @@ class AttributeFact(NamedTuple):
     name: str
     value_type: str
     computed: bool
+    #: Whether the value is a `{language: value}` map (a mapping target needs a suffix).
+    multilingual: bool = False
 
 
 def _documented(value: Any) -> str:
@@ -141,6 +143,7 @@ def attribute_facts(vocabulary: list[dict], object_type: str) -> tuple[Attribute
                 name=name,
                 value_type=str(entry.get("type") or ""),
                 computed=bool(entry.get("computed")),
+                multilingual=bool(entry.get("multilingual")),
             )
         )
     return tuple(sorted(facts, key=lambda fact: fact.name))
@@ -579,3 +582,102 @@ def job_schedule_text(schema: Any) -> str:
     if not isinstance(schema, Mapping):
         return ""
     return str(schema.get("schedule") or "")
+
+
+# --- import mapping (stage 2) ----------------------------------------------------
+
+
+class ColumnFact(NamedTuple):
+    """One column of an uploaded file: its header and what the values look like."""
+
+    name: str
+    hint: str
+
+
+def column_facts(columns: Any) -> tuple[ColumnFact, ...]:
+    """The columns the editor sent (`[{name, hint}]`), in file order."""
+    if not isinstance(columns, list):
+        return ()
+    facts: list[ColumnFact] = []
+    for entry in columns:
+        if isinstance(entry, Mapping):
+            name = str(entry.get("name") or "")
+            hint = str(entry.get("hint") or "")
+        else:  # a plain list of headers is accepted too
+            name, hint = str(entry or ""), ""
+        if name:
+            facts.append(ColumnFact(name=name, hint=hint))
+    return tuple(facts)
+
+
+def mapping_columns_text(facts: tuple[ColumnFact, ...] | list[ColumnFact]) -> str:
+    """One line per column: the header and the value shape (`Kunden-Nr — text, 6 chars`)."""
+    return "\n".join(f"{fact.name} — {fact.hint}" if fact.hint else fact.name for fact in facts)
+
+
+def conventional_names(object_types: Any, object_type: str) -> tuple[str, ...]:
+    """Attribute names a type understands **without** a definition (label + keys).
+
+    An object type names a label attribute and its business keys; both may exist
+    without an `attribute_definition` (e.g. `name`, the display name the grid and the
+    exports use). An import may target them, so they belong in the target list — and
+    they are multilingual by convention (`{language: value}`).
+    """
+    if not isinstance(object_types, list):
+        return ()
+    names: list[str] = []
+    for entry in object_types:
+        if not isinstance(entry, Mapping) or str(entry.get("name") or "") != object_type:
+            continue
+        candidates = [entry.get("label_attribute"), *(entry.get("key_attributes") or [])]
+        for candidate in candidates:
+            name = str(candidate or "")
+            if name and name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+def key_attribute_names(object_types: Any, object_type: str) -> tuple[str, ...]:
+    """The business-key attributes of one object type (empty for an unknown type)."""
+    if not isinstance(object_types, list):
+        return ()
+    for entry in object_types:
+        if isinstance(entry, Mapping) and str(entry.get("name") or "") == object_type:
+            return tuple(str(name) for name in (entry.get("key_attributes") or []) if name)
+    return ()
+
+
+def language_codes(languages: Any) -> tuple[str, ...]:
+    """The data languages from `GET /languages`, in the order the core returns them."""
+    if not isinstance(languages, list):
+        return ()
+    return tuple(
+        code
+        for code in (
+            str(entry.get("code") or "") for entry in languages if isinstance(entry, Mapping)
+        )
+        if code
+    )
+
+
+def mapping_targets_text(
+    facts: tuple[AttributeFact, ...] | list[AttributeFact],
+    *,
+    conventional: tuple[str, ...] | list[str] = (),
+    languages: tuple[str, ...] | list[str] = (),
+) -> str:
+    """The targets a mapping may write: one line per attribute, conventions marked.
+
+    `computed` attributes are named as such — a rule overwrites whatever an import
+    writes there, so they are the wrong target even though the write succeeds.
+    """
+    lines: list[str] = []
+    for fact in facts:
+        marks = [fact.value_type] + (["multilingual"] if fact.multilingual else [])
+        if fact.computed:
+            marks.append("computed, a rule overwrites imported values")
+        lines.append(f"{fact.name} ({', '.join(marks)})")
+    for name in conventional:
+        suffix = f"{name}|<language>" if languages else name
+        lines.append(f"{name} (multilingual by convention — write `{suffix}`)")
+    return "\n".join(lines)

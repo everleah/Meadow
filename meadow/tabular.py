@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -180,11 +181,190 @@ def build_mef(
     }
 
 
+# --- what a column looks like, and whether a mapping works ----------------------
+
+_INTEGER = re.compile(r"^[+-]?\d+$")
+_DECIMAL = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+_BOOLEAN_WORDS = {"true", "false", "yes", "no", "ja", "nein", "wahr", "falsch"}
+
+
+def _value_kind(values: list[str]) -> str:
+    """The kind every non-empty value shares (`text` when they differ)."""
+    if not values:
+        return "empty"
+    candidates: tuple[tuple[str, Any], ...] = (
+        ("boolean", lambda value: value.lower() in _BOOLEAN_WORDS),
+        ("datetime", lambda value: bool(_DATETIME.match(value))),
+        ("date", lambda value: bool(_DATE.match(value))),
+        ("number", lambda value: bool(_DECIMAL.match(value))),
+    )
+    for kind, matches in candidates:
+        if all(matches(value) for value in values):
+            return kind
+    return "number" if all(_INTEGER.match(value) for value in values) else "text"
+
+
+def describe_columns(table: TableData) -> dict[str, str]:
+    """Describes what each column *looks like* — without a single cell value.
+
+    An AI mapping suggestion needs more than the header (a file whose columns are
+    called `Feld 17` would be pure guesswork), but object values must never reach a
+    prompt (`plan/detail/ki-assistenz.md` §6.8). This projection is the compromise:
+    the value kind, the length range, how many rows are empty and whether the values
+    differ — nothing that identifies a row.
+    """
+    rows = len(table.rows)
+    hints: dict[str, str] = {}
+    for column in table.columns:
+        filled = [value for value in (row.get(column, "") for row in table.rows) if value]
+        kind = _value_kind(filled)
+        if kind == "empty":
+            hints[column] = "empty in every row"
+            continue
+        lengths = [len(value) for value in filled]
+        parts = [kind]
+        parts.append(
+            f"{lengths[0]} characters"
+            if len(set(lengths)) == 1
+            else f"{min(lengths)}-{max(lengths)} characters"
+        )
+        if len(filled) < rows:
+            parts.append(f"empty in {rows - len(filled)} of {rows} rows")
+        if len(set(filled)) == len(filled) and len(filled) > 1:
+            parts.append("all values different")
+        hints[column] = ", ".join(parts)
+    return hints
+
+
+@dataclass(frozen=True)
+class MappingCheck:
+    """The verdict of [`check_mapping`]: what breaks the import, what merely annoys."""
+
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """Whether the mapping holds no known mistake."""
+        return not self.errors
+
+    def message(self) -> str:
+        """One line for a caller that talks to a human (or to a model)."""
+        if self.errors:
+            return "; ".join(self.errors)
+        if self.warnings:
+            return "accepted, with notes: " + "; ".join(self.warnings)
+        return "accepted"
+
+
+def check_mapping(
+    mapping: dict[str, str],
+    *,
+    columns: list[str] | tuple[str, ...],
+    attributes: dict[str, bool],
+    languages: list[str] | tuple[str, ...] = (),
+    conventional: list[str] | tuple[str, ...] = (),
+    key_attributes: list[str] | tuple[str, ...] = (),
+    default_type: str = "",
+) -> MappingCheck:
+    """Checks a column→target mapping against the file and the data model.
+
+    The check runs where the mapping is executed (`build_mef` right above) with the
+    model data the core owns, so a suggestion meets the rules the import applies.
+
+    `attributes` maps every known attribute name to *is it multilingual*;
+    `conventional` names attributes that have no definition but are understood by
+    convention (an object type's label and key attributes, e.g. `name`).
+
+    **Errors** — the import would do the wrong thing: a column the file does not
+    have, two columns writing one target (the later one wins, silently), a language
+    outside the configured data languages, a language on a base field, no column
+    mapped at all (one empty object per row), or no object type at all.
+
+    **Warnings** — the import runs, but the result is not what a user expects: a
+    target without an attribute definition (written, but untyped), a multilingual
+    attribute without a language, a column without a header, or a business key no
+    column fills (a re-import cannot match the rows).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    known_columns = {str(column) for column in columns}
+    known_languages = {str(code) for code in languages}
+    all_names = set(attributes) | set(conventional)
+    used: dict[str, list[str]] = {}
+
+    if not columns:
+        errors.append("the file has no columns")
+    if mapping and not any(str(target or "").strip() for target in mapping.values()):
+        errors.append(
+            "no column is mapped — the import would create one object per row without values"
+        )
+    if "" in known_columns:
+        warnings.append("the file has a column without a header — it cannot be mapped")
+
+    for column, raw_target in mapping.items():
+        if str(column) not in known_columns:
+            errors.append(f"`{column}` is not a column of the file")
+            continue
+        target = str(raw_target or "").strip()
+        field_name, locale = parse_target(target)
+        if not field_name:
+            continue
+        if field_name in BASE_TARGETS:
+            if locale:
+                errors.append(
+                    f"`{target}`: a language applies to an attribute, not to `{field_name}`"
+                )
+            continue
+        if locale and locale not in known_languages:
+            errors.append(f"`{target}`: `{locale}` is not a configured data language")
+        key = f"{field_name}{LOCALE_SEPARATOR}{locale}" if locale else field_name
+        used.setdefault(key, []).append(str(column))
+        if field_name not in all_names:
+            warnings.append(
+                f"`{field_name}` has no attribute definition — the value is written, "
+                "but the attribute stays untyped"
+            )
+        elif field_name in attributes and attributes[field_name] and not locale:
+            warnings.append(
+                f"`{field_name}` is multilingual — without a language the value is stored "
+                f"as a plain value; write `{field_name}{LOCALE_SEPARATOR}<language>`"
+            )
+
+    for target, columns_used in used.items():
+        if len(columns_used) > 1:
+            errors.append(
+                f"{', '.join(f'`{column}`' for column in columns_used)} write `{target}` — "
+                "only the last one would survive"
+            )
+
+    mapped_types = any(
+        parse_target(str(target or "").strip())[0] == "type" for target in mapping.values()
+    )
+    if not default_type and not mapped_types:
+        errors.append("no object type: map a `type` column or choose a default type")
+    mapped_names = {target.split(LOCALE_SEPARATOR)[0] for target in used}
+    missing_keys = [name for name in key_attributes if name not in mapped_names]
+    if missing_keys and default_type:
+        warnings.append(
+            "no column fills the business key "
+            + ", ".join(f"`{name}`" for name in missing_keys)
+            + f" of `{default_type}` — the rows import, but a re-import cannot match them"
+        )
+
+    return MappingCheck(errors=sorted(set(errors)), warnings=sorted(set(warnings)))
+
+
 __all__ = [
     "TableData",
     "BASE_TARGETS",
     "IGNORE",
     "LOCALE_SEPARATOR",
+    "MappingCheck",
+    "check_mapping",
+    "describe_columns",
     "parse_target",
     "parse_table",
     "parse_csv",

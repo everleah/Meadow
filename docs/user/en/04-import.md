@@ -33,6 +33,25 @@ For every column of the file you decide where its content belongs:
 
 **Preview** shows the first rows with your mapping before anything is written.
 
+## Having the mapping suggested
+
+When **AI assistance** is switched on in the system settings, the mapping row
+carries a **Suggest the mapping** button. Describe what is in the file ("a
+supplier's item master data, prices in euro") and the suggestion fills the
+dropdowns of the columns.
+
+The suggestion is **checked** before it appears: against the columns of your file
+and against your data model. You are told, among other things, when a column is
+not in the file at all, when two columns point at the same target (only the last
+one would survive), when a language suffix is not a known data language, or when
+no column fills the business key of the object type. The dialog shows the result
+and writes it into the fields only via **Apply** — the import itself still runs
+via **Run import**.
+
+Only the **column headers and their shape** reach the model (numbers, text,
+length, empty rows, whether the values differ) — **never a cell value**. If the
+assistance is off, this spot says why.
+
 ## Recognising existing objects
 
 You control whether an object is created or updated through:

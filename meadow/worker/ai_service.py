@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 
+from meadow import tabular
+from meadow.ai.context import conventional_names, key_attribute_names, language_codes
 from meadow.ai.provider import ProviderConfig, ProviderError
 from meadow.ai.service import (
     GenerationRequest,
@@ -115,6 +117,16 @@ def job_schema_uri(core_url: str) -> str:
     return f"{loopback_host(core_url).rstrip('/')}/jobs/schema"
 
 
+def object_types_uri(core_url: str) -> str:
+    """URL of the object type registry (business keys and label attributes)."""
+    return f"{loopback_host(core_url).rstrip('/')}/object-types"
+
+
+def languages_uri(core_url: str) -> str:
+    """URL of the language tree (the data languages an import may write)."""
+    return f"{loopback_host(core_url).rstrip('/')}/languages"
+
+
 def ui_labels() -> dict[str, str]:
     """The English UI texts, keyed by i18n key (for the schema's `label_key`).
 
@@ -188,6 +200,56 @@ async def validate_export_profile(
     return _verdict(response)
 
 
+def check_import_mapping(
+    mapping: dict[str, str],
+    *,
+    columns: list[dict[str, Any]],
+    vocabulary: Any,
+    object_types: Any,
+    languages: Any,
+    object_type: str,
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Checks a column→target mapping against the file and the data model.
+
+    The mapping is executed by `meadow.tabular.build_mef`, which builds the MEF
+    document the import writes — so the judge is the same module
+    (`meadow.tabular.check_mapping`) and the model data the core owns: the attribute
+    vocabulary, the object types (business key, label attribute) and the languages.
+
+    Neither the mapping nor this check carries an object value: the columns arrive as
+    headers plus a value-free shape hint.
+    """
+    names = [
+        str(entry.get("name") or "")
+        for entry in columns
+        if isinstance(entry, dict) and entry.get("name")
+    ]
+    attributes: dict[str, bool] = {}
+    if isinstance(vocabulary, list):
+        for entry in vocabulary:
+            if isinstance(entry, dict) and entry.get("name"):
+                attributes[str(entry["name"])] = bool(entry.get("multilingual"))
+    verdict = tabular.check_mapping(
+        mapping,
+        columns=names,
+        attributes=attributes,
+        languages=language_codes(languages),
+        conventional=conventional_names(object_types, object_type),
+        key_attributes=key_attribute_names(object_types, object_type),
+        default_type=object_type,
+    )
+    ignored = [column for column in names if not str(mapping.get(column) or "").strip()]
+    return (
+        verdict.ok,
+        verdict.message(),
+        {
+            "mapped": len(names) - len(ignored),
+            "ignored": ignored,
+            "warnings": verdict.warnings,
+        },
+    )
+
+
 async def validate_job_definition(
     core_url: str, api_key: str | None, job: dict[str, Any]
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -250,6 +312,8 @@ async def handle_generate(
     connector_types: JsonCache,
     export_profile_schema: JsonCache,
     job_schema: JsonCache,
+    object_types: JsonCache,
+    languages: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -289,6 +353,23 @@ async def handle_generate(
         elif request.area == "job":
             payload = await job_schema.get()
             json_context = {"job_schema": payload if isinstance(payload, dict) else {}}
+        elif request.area == "import_mapping":
+            payload = await vocabulary.get()
+            vocabulary_rows = (
+                [row for row in payload if isinstance(row, dict)]
+                if isinstance(payload, list)
+                else []
+            )
+            # The mapping check needs the whole model: the vocabulary for the target
+            # names, the object types for business key and label attribute, the
+            # language tree for the data languages.
+            json_context = {
+                "columns": [
+                    {"name": column.name, "hint": column.hint} for column in request.columns
+                ],
+                "object_types": await object_types.get(),
+                "languages": await languages.get(),
+            }
         else:
             payload = await vocabulary.get()
             vocabulary_rows = (
@@ -336,6 +417,24 @@ async def handle_generate(
             return await validate_job_definition(core_url, api_key, job)
 
         config_validator = validate_job
+    elif request.area == "import_mapping":
+        mapping_columns = json_context.get("columns") or []
+        model_types = json_context.get("object_types")
+        data_languages = json_context.get("languages")
+
+        async def validate_mapping(
+            mapping: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return check_import_mapping(
+                {str(column): str(target) for column, target in mapping.items()},
+                columns=mapping_columns,
+                vocabulary=vocabulary_rows,
+                object_types=model_types,
+                languages=data_languages,
+                object_type=request.object_type or "",
+            )
+
+        config_validator = validate_mapping
 
     try:
         return await generate(
@@ -419,6 +518,8 @@ async def serve(
         export_profile_schema_uri(core_url), api_key, label="the export-profile schema"
     )
     job_schema = JsonCache(job_schema_uri(core_url), api_key, label="the job schema")
+    object_types = JsonCache(object_types_uri(core_url), api_key, label="the object type registry")
+    languages = JsonCache(languages_uri(core_url), api_key, label="the language tree")
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
@@ -432,6 +533,8 @@ async def serve(
             connector_types=connector_types,
             export_profile_schema=export_profile_schema,
             job_schema=job_schema,
+            object_types=object_types,
+            languages=languages,
             state=state,
         )
 

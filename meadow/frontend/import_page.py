@@ -16,12 +16,14 @@ source reference).
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 from nicegui import app, ui
 
 from meadow import mef, tabular
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.help_page import chapter_button
@@ -102,6 +104,7 @@ async def import_page() -> None:
     definitions = await _safe(client.list_attribute_vocabulary(token))
     languages = await _safe(client.list_languages(token))
     data_languages = [str(lang.get("code")) for lang in languages] or ["de"]
+    ai = await ai_state(client, token)
     attribute_names = [str(d.get("name")) for d in definitions if d.get("name")]
     multilingual = {str(d.get("name")) for d in definitions if d.get("multilingual")}
 
@@ -242,6 +245,18 @@ async def import_page() -> None:
                     ui.label(message).classes("text-caption text-gray-500")
                     return
                 ui.label(t("import.mapping_hint")).classes("text-caption text-gray-500")
+                with ui.row().classes("w-full items-center gap-2 mt-1"):
+                    if ai.get("available"):
+                        ui.button(
+                            t("import.ai_suggest"),
+                            icon="auto_awesome",
+                            on_click=lambda: suggest_mapping(),
+                        ).props("flat dense")
+                        ui.label(t("import.ai_suggest_hint")).classes("text-caption text-gray-500")
+                    else:
+                        ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                            "text-caption text-gray-500"
+                        )
                 with ui.row().classes("flex-wrap gap-4 mt-2"):
                     for column in columns:
                         select = (
@@ -361,6 +376,43 @@ async def import_page() -> None:
                 if target in conventional_names:
                     mapping[column] = f"{target}{tabular.LOCALE_SEPARATOR}{main_lang}"
             return mapping
+
+        def suggest_mapping() -> None:
+            """AI suggestion for the mapping; the accepted answer fills the selects.
+
+            The columns travel as headers plus a **value-free** shape
+            (`tabular.describe_columns`) — a cell value must never reach a prompt
+            (`plan/detail/ki-assistenz.md` §6.8).
+            """
+            hints = tabular.describe_columns(state["table"])
+
+            def columns() -> list[dict]:
+                return [
+                    {"name": column, "hint": hints.get(column, "")}
+                    for column in state["table"].columns
+                ]
+
+            def apply(reply: dict) -> None:
+                mapping = reply.get("mapping")
+                if not isinstance(mapping, dict):
+                    return
+                for column, target in mapping.items():
+                    select = column_selects.get(str(column))
+                    if select is not None:
+                        select.set_value(str(target))
+                preview_box.clear()
+
+            open_suggestion_dialog(
+                client=client,
+                token=token,
+                area="import_mapping",
+                title_key="import.ai_title",
+                hint_key="ai.hint_config",
+                object_type=lambda: str(default_type_select.value or ""),
+                current_script=lambda: json.dumps(_current_mapping(), indent=2, ensure_ascii=False),
+                columns=columns,
+                on_apply=apply,
+            )
 
         def _build_document() -> dict:
             if state["mode"] == "mef":

@@ -36,6 +36,25 @@ Für jede Spalte der Datei legen Sie fest, wohin ihr Inhalt gehört:
 **Vorschau** zeigt die ersten Zeilen mit Ihrer Zuordnung, bevor etwas
 geschrieben wird.
 
+## Zuordnung vorschlagen lassen
+
+Ist die **KI-Assistenz** in den System-Einstellungen eingeschaltet, steht
+ber der Zuordnungszeile der Knopf **Zuordnung vorschlagen**. Sie beschreiben
+dort, was in der Datei steht ("Artikelstammdaten eines Lieferanten, Preise in
+Euro"), und der Vorschlag füllt die Auswahlfelder der Spalten.
+
+Der Vorschlag wird **geprüft**, bevor er angezeigt wird: gegen die Spalten Ihrer
+Datei und gegen Ihr Datenmodell. Gemeldet wird unter anderem, wenn eine Spalte
+gar nicht in der Datei vorkommt, wenn zwei Spalten auf dasselbe Ziel zeigen
+(nur die letzte würde überleben), wenn eine Sprachangabe keine bekannte
+Datensprache ist oder wenn der Geschäftsschlüssel des Objekttyps von keiner
+Spalte gefüllt wird. Der Dialog zeigt das Ergebnis und schreibt es erst mit
+**Übernehmen** in die Felder — importiert wird weiterhin nur über **Import**.
+
+An das Modell gehen dabei **nur die Spaltenköpfe und ihre Form** (Zahlen, Text,
+Länge, leere Zeilen, ob die Werte unterschiedlich sind) — **keine Zellwerte**.
+Ist die Assistenz aus, steht an dieser Stelle, warum.
+
 ## Wiederekennung von Objekten
 
 Ob ein Objekt neu angelegt oder aktualisiert wird, steuern Sie über:

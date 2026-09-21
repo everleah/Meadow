@@ -27,12 +27,15 @@ from typing import Any
 
 from meadow.ai import prompts, provider
 from meadow.ai.context import (
+    ColumnFact,
     allowed_values_text,
     attribute_facts,
+    column_facts,
     connector_fields_text,
     connector_type_facts,
     connector_types_text,
     contract_block,
+    conventional_names,
     declared_computed,
     few_shot_examples,
     job_operation_facts,
@@ -40,6 +43,10 @@ from meadow.ai.context import (
     job_parameter_facts,
     job_schedule_text,
     job_types_text,
+    key_attribute_names,
+    language_codes,
+    mapping_columns_text,
+    mapping_targets_text,
     parameter_facts,
     parameters_text,
     policy_block,
@@ -77,8 +84,10 @@ class GenerationRequest:
     declared_computed: tuple[str, ...] = ()
     language: str | None = None
     #: Concrete target of a JSON-configuration area (`connector` → the connector
-    #: type key, `job` → the job type key).
+    #: type key, `job` → the job type key, `import_mapping` → the default object type).
     config_kind: str | None = None
+    #: The columns of the uploaded file (`import_mapping`), in file order.
+    columns: tuple[ColumnFact, ...] = ()
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> GenerationRequest:
@@ -102,6 +111,7 @@ class GenerationRequest:
             else (),
             language=text("language"),
             config_kind=text("config_kind"),
+            columns=column_facts(payload.get("columns")),
         )
 
 
@@ -145,8 +155,9 @@ class ServiceState:
 ChatFn = Callable[[ProviderConfig, list[dict[str, str]]], Awaitable[ChatReply]]
 
 #: `async (payload) -> (ok, message, preview)` — checks one artefact in the core
-#: (`/saved-searches/preview`, `/connectors/validate`, `/export-profiles/validate`),
-#: injectable so tests need no core.
+#: (`/saved-searches/preview`, `/connectors/validate`, `/export-profiles/validate`,
+#: `/jobs/validate`) or against the data model (the import-mapping check in
+#: `meadow.tabular`), injectable so tests need no core.
 PayloadValidator = Callable[[dict[str, Any]], Awaitable[tuple[bool, str, dict[str, Any] | None]]]
 
 
@@ -155,11 +166,24 @@ def _parse_artefact(area: str, text: str) -> dict[str, Any]:
 
     A `rule` answer is the script itself; a `computed_attribute` answer is the
     JSON envelope with the script plus its metadata; a `search` answer is the
-    query object; a `connector`, `export_profile` or `job` answer is the JSON
-    object the editor fills in. A malformed answer is an error, not a silent
-    empty suggestion.
+    query object; a `connector`, `export_profile`, `job` or `import_mapping`
+    answer is the JSON object the editor fills in. A malformed answer is an error,
+    not a silent empty suggestion.
     """
     cleaned = strip_fences(text)
+    if area == "import_mapping":
+        try:
+            payload = json.loads(cleaned)
+        except ValueError as error:
+            raise ProviderError(f"the model did not answer with JSON: {error}") from error
+        mapping = payload.get("mapping") if isinstance(payload, dict) else None
+        if not isinstance(mapping, dict) or not mapping:
+            raise ProviderError("the answer JSON has no `mapping` object")
+        return {
+            "mapping": {
+                str(column): str(target or "").strip() for column, target in mapping.items()
+            }
+        }
     if area in ("search", "connector", "job"):
         try:
             payload = json.loads(cleaned)
@@ -335,6 +359,37 @@ async def generate(
             current_config=request.current_script,
             language=request.language,
         )
+    elif request.area == "import_mapping":
+        object_types = (json_context or {}).get("object_types")
+        languages = language_codes((json_context or {}).get("languages"))
+        object_type = request.object_type or ""
+        conventional = conventional_names(object_types, object_type)
+        keys = key_attribute_names(object_types, object_type)
+        facts = attribute_facts(vocabulary_rows or [], object_type)
+        if not request.columns:
+            return {
+                "ok": False,
+                "attempts": 0,
+                "errors": ["no columns: the file has not been read"],
+            }
+        subject_parts = [
+            f"Object type: {object_type}" if object_type else "Object type: not chosen",
+        ]
+        if keys:
+            subject_parts.append(
+                "Business key of this type: " + ", ".join(keys) + " — a column must fill it"
+            )
+        if languages:
+            subject_parts.append("Data languages: " + ", ".join(languages))
+        task = prompts.mapping_user_prompt(
+            mode=request.mode,
+            description=request.description,
+            subject="\n".join(subject_parts),
+            targets=mapping_targets_text(facts, conventional=conventional, languages=languages),
+            columns=mapping_columns_text(request.columns),
+            current_mapping=request.current_script,
+            language=request.language,
+        )
     else:
         facts = attribute_facts(vocabulary_rows or [], request.object_type or "")
         declared = declared_computed(facts)
@@ -451,6 +506,17 @@ async def generate(
                     "latency_ms": latency_ms,
                     "usage": usage,
                 }
+            if request.area == "import_mapping":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "mapping": artefact["mapping"],
+                    "preview": extra,
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -495,19 +561,25 @@ async def _check_artefact(
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Checks one artefact with the component that will execute it.
 
-    A script passes the sandbox policy (`check_script`); a search query and a
+    A script passes the sandbox policy (`check_script`). A search query and a
     configuration object (`connector`, `export_profile`, `job`) pass the **core's
-    own validation** — for a job that is `POST /jobs/validate`, which answers with
-    the problems of the declared contract. Only the search preview and the
-    connector/export-profile validators are the save path's very check; for a job
-    definition the save is still permissive (see `api::job_schema`), so a green
-    answer means "matches the contract", not "the save will succeed".
+    own validation** — the worker wires the matching endpoint in
+    (`/saved-searches/preview`, `/connectors/validate`, `/export-profiles/validate`,
+    `/jobs/validate`). An import mapping passes the check in `meadow.tabular`, the
+    module that builds the MEF document the import writes from.
+
+    Only for connectors, export profiles and imports is that the save path's own
+    check; a job definition survives a mapping the contract rejects (see
+    `api::job_schema`), so there a green answer means "matches the contract", not
+    "the save will succeed".
     """
-    if area in ("connector", "export_profile", "job"):
+    if area in ("connector", "export_profile", "job", "import_mapping"):
         if area == "connector":
             payload = artefact["config"]
         elif area == "job":
             payload = artefact["job"]
+        elif area == "import_mapping":
+            payload = artefact["mapping"]
         else:
             payload = artefact["profile"]
         if validate_config is None:

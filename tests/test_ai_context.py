@@ -24,10 +24,12 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     AttributeFact,
     attribute_facts,
     attribute_names_text,
+    column_facts,
     connector_fields_text,
     connector_type_facts,
     connector_types_text,
     contract_block,
+    conventional_names,
     declared_computed,
     few_shot_examples,
     job_operation_facts,
@@ -36,6 +38,10 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     job_schedule_text,
     job_type_facts,
     job_types_text,
+    key_attribute_names,
+    language_codes,
+    mapping_columns_text,
+    mapping_targets_text,
     parameter_facts,
     parameters_text,
     policy_block,
@@ -458,6 +464,80 @@ def test_the_export_profile_projection_stays_unchanged_by_the_job_fields() -> No
         ]
     }
     assert parameters_text(parameter_facts(schema)) == "fields (string_list) — Attributes to export"
+
+
+# --- import mapping (stage 2) ---------------------------------------------------
+
+
+def _object_types() -> list[dict[str, object]]:
+    return [
+        {
+            "name": "product",
+            "label_attribute": "name",
+            "key_attributes": ["sku"],
+        },
+        {"name": "variant", "label_attribute": "name", "key_attributes": []},
+    ]
+
+
+def test_the_mapping_columns_block_lists_headers_and_shapes() -> None:
+    facts = column_facts(
+        [
+            {"name": "Kunden-Nr", "hint": "text, 6 characters"},
+            {"name": "Leer", "hint": ""},
+            "Nur-Kopf",  # a plain header without a hint is accepted too
+            {"hint": "without a name"},
+        ]
+    )
+    assert [fact.name for fact in facts] == ["Kunden-Nr", "Leer", "Nur-Kopf"]
+    assert mapping_columns_text(facts) == "Kunden-Nr — text, 6 characters\nLeer\nNur-Kopf"
+    assert column_facts(None) == ()
+    assert column_facts("Kunden-Nr") == ()
+
+
+def test_the_mapping_targets_mark_multilingual_computed_and_conventions() -> None:
+    vocabulary: list[dict[str, object]] = [
+        {"name": "sku", "type": "text", "applicable_types": ["product"]},
+        {"name": "title", "type": "text", "multilingual": True, "applicable_types": ["product"]},
+        {
+            "name": "gross_price",
+            "type": "number",
+            "computed": True,
+            "applicable_types": ["product"],
+        },
+        {"name": "EF000001", "type": "number", "reference_data": True},
+        {"name": "weight", "type": "number", "applicable_types": ["variant"]},
+    ]
+    facts = attribute_facts(vocabulary, "product")
+    # The projection stays the own attributes of the type, with the new flag.
+    assert [fact.name for fact in facts] == ["gross_price", "sku", "title"]
+    assert [fact.multilingual for fact in facts] == [False, False, True]
+    text = mapping_targets_text(facts, conventional=("name",), languages=("de", "en"))
+    assert "sku (text)" in text
+    assert "title (text, multilingual)" in text
+    assert "gross_price (number, computed, a rule overwrites imported values)" in text
+    assert "name (multilingual by convention — write `name|<language>`)" in text
+    assert "EF000001" not in text
+    assert "weight" not in text
+
+
+def test_the_conventional_and_key_names_come_from_the_object_types() -> None:
+    assert conventional_names(_object_types(), "product") == ("name", "sku")
+    assert conventional_names(_object_types(), "variant") == ("name",)
+    assert conventional_names(_object_types(), "unknown") == ()
+    assert conventional_names({"not": "a list"}, "product") == ()
+    assert key_attribute_names(_object_types(), "product") == ("sku",)
+    assert key_attribute_names(_object_types(), "variant") == ()
+    assert key_attribute_names(_object_types(), "unknown") == ()
+
+
+def test_the_language_codes_ignore_anything_that_is_not_a_node() -> None:
+    assert language_codes([{"code": "de"}, {"code": "en"}, {"label": "no code"}, "de"]) == (
+        "de",
+        "en",
+    )
+    assert language_codes(None) == ()
+    assert language_codes("de") == ()
 
 
 def _load_script(name: str):
