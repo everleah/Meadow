@@ -1987,8 +1987,24 @@ pub async fn object_stats(
 
             // Resolve completeness for the page with a single edge query and
             // in-memory inheritance resolution (no per-ancestor DB round-trips).
-            let completeness =
-                crate::completeness::compute_batch(&state.cache, &state.db, &items, locale).await?;
+            let keys: Vec<&str> = items
+                .iter()
+                .filter_map(|(object_id, _, _)| object_id.split_once(':').map(|(_, key)| key))
+                .collect();
+            let composition = crate::inheritance::Composition::load(
+                &state.cache,
+                &state.db,
+                keys.iter().copied(),
+            )
+            .await?;
+            let completeness = crate::completeness::compute_batch(
+                &state.cache,
+                &state.db,
+                &items,
+                locale,
+                &composition,
+            )
+            .await?;
             for (object_id, otype, _) in &items {
                 if let Some(result) = completeness.get(object_id)
                     && !result.missing.is_empty()
@@ -2215,111 +2231,138 @@ pub async fn list_objects(
     // variant issued ~6 queries per object (~25 ms with a classification standard
     // installed), so a 1000-row page spent 18 s in it and the `missing_required`
     // filter (which scans up to 1000 rows) made the grid unusable.
-    // `compute_batch` resolves the required names per type (cached), reads the
-    // `depends_on` map and the ancestors' attributes once and walks the chains in
-    // memory — the same result, without the round-trips.
-    if locale.is_some() || completeness_filter {
-        let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+    // `compute_batch` resolves the required names per type (cached) and walks the
+    // chains in memory — the same result, without the round-trips.
+    //
+    // Completeness and inheritance describe the **same** page, so the composition
+    // (the `depends_on` map plus the ancestors' attributes) is prepared once and
+    // handed to both — loading it twice cost two extra queries per page.
+    let needs_completeness = locale.is_some() || completeness_filter;
+    let needs_inheritance = params.resolve_inheritance == Some(true);
+    if (needs_completeness || needs_inheritance) && !objects.is_empty() {
+        let keys: Vec<&str> = objects
             .iter()
-            .map(|object| {
-                (
-                    object
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned(),
-                    object
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned(),
-                    object
-                        .get("attributes")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-            })
+            .filter_map(|object| object.get("id").and_then(Value::as_str))
+            .filter_map(|object_id| object_id.split_once(':').map(|(_, key)| key))
             .collect();
-        let results =
-            crate::completeness::compute_batch(&state.cache, &state.db, &items, locale.as_deref())
+        let composition_started = std::time::Instant::now();
+        let composition =
+            crate::inheritance::Composition::load(&state.cache, &state.db, keys.iter().copied())
                 .await?;
-        let mut kept: Vec<Value> = Vec::new();
-        for mut object in objects {
-            let object_id = object
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let Some(result) = results.get(&object_id) else {
-                kept.push(object);
-                continue;
-            };
-            if completeness_filter
-                && !passes_completeness_filter(
-                    result,
-                    params.completeness_lt,
-                    params.missing_required,
-                )
-            {
-                continue;
-            }
-            if let Some(locale) = &locale {
-                object["completeness"] = json!({ (locale): result.percent });
-            }
-            kept.push(object);
-        }
-        objects = kept;
-    }
-    if completeness_filter {
-        objects = objects
-            .into_iter()
-            .skip(start.max(0) as usize)
-            .take(limit.max(0) as usize)
-            .collect();
-    }
+        tracing::debug!(
+            keys = keys.len(),
+            ms = composition_started.elapsed().as_millis() as u64,
+            "composition loaded"
+        );
 
-    // Optionally fill inherited values for the whole page (the composition map and
-    // the ancestors' attributes in two queries, then an in-memory walk per object)
-    // and mark each object's inherited attributes with their source.
-    if params.resolve_inheritance == Some(true) && !objects.is_empty() {
-        let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
-            .iter()
-            .map(|object| {
-                (
-                    object
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned(),
-                    object
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned(),
-                    object
-                        .get("attributes")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-            })
-            .collect();
-        let inherited = crate::inheritance::resolve_inheritance_batch(
-            &state.cache,
-            &state.db,
-            locale.as_deref(),
-            &mut items,
-        )
-        .await?;
-        for (index, object) in objects.iter_mut().enumerate() {
-            let (id, _, attributes) = &items[index];
-            object["attributes"] = Value::Object(attributes.clone());
-            let sources = inherited
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-            object["inherited"] = sources;
+        if needs_completeness {
+            let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+                .iter()
+                .map(|object| {
+                    (
+                        object
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        object
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        object
+                            .get("attributes")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+            let results = crate::completeness::compute_batch(
+                &state.cache,
+                &state.db,
+                &items,
+                locale.as_deref(),
+                &composition,
+            )
+            .await?;
+            let mut kept: Vec<Value> = Vec::new();
+            for mut object in objects {
+                let object_id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let Some(result) = results.get(&object_id) else {
+                    kept.push(object);
+                    continue;
+                };
+                if completeness_filter
+                    && !passes_completeness_filter(
+                        result,
+                        params.completeness_lt,
+                        params.missing_required,
+                    )
+                {
+                    continue;
+                }
+                if let Some(locale) = &locale {
+                    object["completeness"] = json!({ (locale): result.percent });
+                }
+                kept.push(object);
+            }
+            objects = kept;
+        }
+        if completeness_filter {
+            objects = objects
+                .into_iter()
+                .skip(start.max(0) as usize)
+                .take(limit.max(0) as usize)
+                .collect();
+        }
+
+        // Fill inherited values and mark each object's inherited attributes with
+        // their source (in-memory walk over the shared composition).
+        if needs_inheritance && !objects.is_empty() {
+            let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
+                .iter()
+                .map(|object| {
+                    (
+                        object
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        object
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        object
+                            .get("attributes")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+            let inherited = crate::inheritance::resolve_inheritance_batch(
+                &state.cache,
+                &state.db,
+                locale.as_deref(),
+                &mut items,
+                &composition,
+            )
+            .await?;
+            for (index, object) in objects.iter_mut().enumerate() {
+                let (id, _, attributes) = &items[index];
+                object["attributes"] = Value::Object(attributes.clone());
+                let sources = inherited
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+                object["inherited"] = sources;
+            }
         }
     }
 

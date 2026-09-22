@@ -33,6 +33,10 @@ use crate::error::ApiError;
 /// Maximum taxonomy depth walked when resolving a class's ancestors.
 const MAX_DEPTH: usize = 64;
 
+/// Categorisation edges: `object key → class node keys` (bare keys). Cached
+/// version-bound in [`MetaCache::category_edges`].
+pub(crate) type CategoryEdges = HashMap<String, Vec<String>>;
+
 /// Bare key part of a record id (`table:key` → `key`).
 pub(crate) fn key_of(record_id: &str) -> &str {
     record_id
@@ -124,6 +128,43 @@ pub(crate) async fn assigned_node_keys(
         .filter_map(Value::as_str)
         .map(|id| key_of(id).to_owned())
         .collect())
+}
+
+/// All categorisation edges as `object key → class node keys` (bare keys), in
+/// **one** query — the input of [`MetaCache::category_edges`], which caches it
+/// version-bound.
+///
+/// Without the cache every completeness page walked all category edges again
+/// (7 324 rows in the demo data, +0,11 s quiet and multiples of that under load)
+/// although only the page's objects are needed.
+pub(crate) async fn load_category_edges(
+    db: &Db,
+    relations: &[String],
+) -> Result<CategoryEdges, ApiError> {
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    if relations.is_empty() {
+        return Ok(edges);
+    }
+    let mut response = db
+        .inner()
+        .query(format!(
+            "SELECT in AS object, out AS node FROM reference WHERE definition_id IN {};",
+            crate::api::keys::record_list_literal("object", relations.iter().map(String::as_str))
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    for row in rows {
+        let object = row.get("object").and_then(Value::as_str).map(key_of);
+        let node = row.get("node").and_then(Value::as_str).map(key_of);
+        if let (Some(object), Some(node)) = (object, node) {
+            edges
+                .entry(object.to_owned())
+                .or_default()
+                .push(node.to_owned());
+        }
+    }
+    Ok(edges)
 }
 
 /// Direct `depends_on` parent of an object key (`None` at the root).
@@ -303,26 +344,14 @@ pub(crate) async fn class_required_names_batch(
         return Ok(out);
     }
     let bindings = feature_bindings(cache, db).await?;
-    // Assignments of the whole batch: object key -> class node keys.
-    let mut response = db
-        .inner()
-        .query("SELECT in AS object, out AS node FROM reference WHERE definition_id IN $relations;")
-        .bind(("relations", relations))
-        .await?
-        .check()?;
-    let rows: Vec<Value> = response.take(0)?;
+    // Assignments of the whole batch, read from the version-bound cache instead of
+    // scanning every category edge per call.
+    let edges = cache.category_edges(db).await?;
     let wanted: HashSet<&str> = object_keys.iter().map(String::as_str).collect();
     let mut assigned: HashMap<String, Vec<String>> = HashMap::new();
-    for row in rows {
-        let object = row.get("object").and_then(Value::as_str).map(key_of);
-        let node = row.get("node").and_then(Value::as_str).map(key_of);
-        if let (Some(object), Some(node)) = (object, node)
-            && wanted.contains(object)
-        {
-            assigned
-                .entry(object.to_owned())
-                .or_default()
-                .push(node.to_owned());
+    for (object, nodes) in edges.iter() {
+        if wanted.contains(object.as_str()) {
+            assigned.insert(object.clone(), nodes.clone());
         }
     }
     if assigned.is_empty() {

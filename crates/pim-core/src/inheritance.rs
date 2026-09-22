@@ -177,19 +177,72 @@ pub async fn resolve_inheritance(
     Ok(sources)
 }
 
-/// Resolves inheritance for many objects from **two** queries plus an in-memory
-/// walk, instead of one query per level (used by the object list / grid).
+/// The composition facts one batch needs, loaded **once per page**: the
+/// `depends_on` map plus the attributes and types of the ancestors that are not
+/// part of the batch.
+///
+/// [`crate::completeness::compute_batch`] and [`resolve_inheritance_batch`]
+/// describe the same page and used to load this separately (two extra queries and
+/// a duplicate walk per page); they now share one instance.
+#[derive(Debug)]
+pub(crate) struct Composition {
+    /// `child key → parent key` of the whole composition tree (shared, cached).
+    parents: Arc<HashMap<String, String>>,
+    /// Ancestor key → attributes (only ancestors **outside** the batch).
+    ancestors: HashMap<String, Map<String, Value>>,
+    /// Ancestor key → object type, for the label fallback of [`source_entry`].
+    object_types: HashMap<String, String>,
+}
+
+impl Composition {
+    /// Loads the map and the ancestors' attributes of the given object keys.
+    ///
+    /// The map comes from the version-bound [`MetaCache::composition_map`] — it is
+    /// a full scan of `reference` and was previously read twice per page (once for
+    /// completeness, once for inheritance), each time costing 0,15–0,23 s on a
+    /// quiet machine.
+    pub(crate) async fn load<'a>(
+        cache: &MetaCache,
+        db: &Db,
+        keys: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, ApiError> {
+        let parents = cache.composition_map(db).await?;
+        let mut ancestors = HashMap::new();
+        let mut object_types = HashMap::new();
+        for (key, attributes, object_type) in load_ancestor_attributes(db, &parents, keys).await? {
+            ancestors.insert(key.clone(), attributes);
+            object_types.insert(key, object_type);
+        }
+        Ok(Self {
+            parents,
+            ancestors,
+            object_types,
+        })
+    }
+
+    pub(crate) fn parents(&self) -> &HashMap<String, String> {
+        &self.parents
+    }
+
+    pub(crate) fn ancestors(&self) -> &HashMap<String, Map<String, Value>> {
+        &self.ancestors
+    }
+}
+
+/// Resolves inheritance for many objects from the composition of the page plus an
+/// in-memory walk, instead of one query per level (used by the object list / grid).
 ///
 /// `objects` holds `(record id, object type, attributes)` triples — the same
 /// shape [`crate::completeness::compute_batch`] takes, because both describe the
 /// same page — and the attributes are filled in place. The return value maps
 /// each record id to its `{name > {from, label}}` sources; an object without
 /// inherited values is absent from it.
-pub async fn resolve_inheritance_batch(
+pub(crate) async fn resolve_inheritance_batch(
     cache: &MetaCache,
     db: &Db,
     locale: Option<&str>,
     objects: &mut [(String, String, Map<String, Value>)],
+    composition: &Composition,
 ) -> Result<Map<String, Value>, ApiError> {
     let mut sources: Map<String, Value> = Map::new();
     if objects.is_empty() {
@@ -202,26 +255,8 @@ pub async fn resolve_inheritance_batch(
     };
     let chain_slice = fallback_chain.as_deref().map(|chain| chain.as_slice());
 
-    // Load the composition map and the ancestors of the page once. Per level
-    // queries would pass the page's keys as an `IN` list (with duplicates), and
-    // SurrealDB evaluates such a list per scanned row — see the module doc.
-    let mut types_by_key: HashMap<String, String> = HashMap::new();
-    for (object_id, object_type, _) in objects.iter() {
-        types_by_key.insert(key_of(object_id).to_owned(), object_type.clone());
-    }
-    let parent_by_key = load_parent_map(db).await?;
-    let mut attrs_by_key: HashMap<String, Map<String, Value>> = HashMap::new();
-    let ancestors = load_ancestor_attributes(
-        db,
-        &parent_by_key,
-        objects.iter().map(|(object_id, _, _)| key_of(object_id)),
-    )
-    .await?;
-    for (key, attributes, parent_type) in ancestors {
-        types_by_key.entry(key.clone()).or_insert(parent_type);
-        attrs_by_key.insert(key, attributes);
-    }
-
+    let (attrs_by_key, types_by_key) = lookup_maps(objects, composition);
+    let walk_started = std::time::Instant::now();
     for (object_id, _, attributes) in objects.iter_mut() {
         let missing: Vec<String> = names
             .iter()
@@ -235,7 +270,7 @@ pub async fn resolve_inheritance_batch(
         let (resolved, origins) = resolve_missing_in_memory(
             attributes,
             &missing,
-            &parent_by_key,
+            composition.parents(),
             &attrs_by_key,
             locale,
             chain_slice,
@@ -259,11 +294,46 @@ pub async fn resolve_inheritance_batch(
         }
         sources.insert(object_id.clone(), Value::Object(object_sources));
     }
+    tracing::debug!(
+        objects = objects.len(),
+        walk_ms = walk_started.elapsed().as_millis() as u64,
+        "inheritance batch resolved"
+    );
     Ok(sources)
 }
 
+/// The attribute/type lookup of a batch: **the page's own objects**, overlayed by
+/// the composition's ancestors.
+///
+/// The page's own values must be part of it: an object and its parent can appear in
+/// the same page (a re-parented object is older than its new parent, and the list
+/// orders by `created_at DESC`, so the parent can come first) — a walk that only
+/// knew the separately loaded ancestors would then stop at the parent and report
+/// nothing. Pure, so the rule is unit-tested.
+pub(crate) fn lookup_maps(
+    objects: &[(String, String, Map<String, Value>)],
+    composition: &Composition,
+) -> (HashMap<String, Map<String, Value>>, HashMap<String, String>) {
+    let mut attrs_by_key: HashMap<String, Map<String, Value>> = objects
+        .iter()
+        .map(|(object_id, _, attributes)| (key_of(object_id).to_owned(), attributes.clone()))
+        .collect();
+    let mut types_by_key: HashMap<String, String> = objects
+        .iter()
+        .map(|(object_id, object_type, _)| (key_of(object_id).to_owned(), object_type.clone()))
+        .collect();
+    for (key, attributes) in composition.ancestors() {
+        attrs_by_key.insert(key.clone(), attributes.clone());
+    }
+    for (key, object_type) in &composition.object_types {
+        types_by_key.insert(key.clone(), object_type.clone());
+    }
+    (attrs_by_key, types_by_key)
+}
+
 /// Loads the single-parent composition map (`child key → parent key`) in one
-/// query, for the batched in-memory inheritance resolution.
+/// query, for the batched in-memory inheritance resolution (cached version-bound
+/// by [`MetaCache::composition_map`]).
 pub(crate) async fn load_parent_map(db: &Db) -> Result<HashMap<String, String>, ApiError> {
     let sql =
         "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
@@ -286,7 +356,12 @@ pub(crate) async fn load_parent_map(db: &Db) -> Result<HashMap<String, String>, 
 /// reads the remaining keys in **one** query, so a partial batch resolves
 /// inheritance with the same result as the per-object walk in
 /// [`resolve_inheritance`].
-pub(crate) async fn load_ancestor_attributes<'a>(
+///
+/// Keys that are part of `known` are **not** fetched — the caller already holds
+/// their attributes (see [`lookup_maps`]). An ancestor is skipped when an earlier
+/// iteration already collected it, so the result does not depend on the order of
+/// `known`.
+async fn load_ancestor_attributes<'a>(
     db: &Db,
     parent_by_key: &HashMap<String, String>,
     known: impl IntoIterator<Item = &'a str>,
@@ -408,6 +483,50 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), value.clone()))
             .collect()
+    }
+
+    #[test]
+    fn lookup_maps_include_the_pages_own_objects() {
+        // A page can hold a child *and* its parent (a re-parented object is older
+        // than its new parent, and the list orders by `created_at DESC`). The
+        // parent's attributes then come from the page, not from the separately
+        // loaded ancestors — without them the walk would stop at the parent and
+        // report nothing.
+        let objects = vec![
+            (
+                "object:parent".to_owned(),
+                "product".to_owned(),
+                attrs(&[("sku", Value::from("PARENT-SKU"))]),
+            ),
+            ("object:child".to_owned(), "variant".to_owned(), Map::new()),
+        ];
+        let composition = Composition {
+            parents: Arc::new(HashMap::from([("child".to_owned(), "parent".to_owned())])),
+            ancestors: HashMap::new(),
+            object_types: HashMap::new(),
+        };
+        let (attrs_by_key, types_by_key) = lookup_maps(&objects, &composition);
+        assert!(attrs_by_key.contains_key("parent"));
+        assert_eq!(
+            types_by_key.get("parent").map(String::as_str),
+            Some("product")
+        );
+
+        // And the walk finds it: the child inherits the parent's own value.
+        let (resolved, origins) = resolve_missing_in_memory(
+            &objects[1].2,
+            &["sku".to_owned()],
+            composition.parents(),
+            &attrs_by_key,
+            None,
+            None,
+            "child",
+        );
+        assert_eq!(
+            resolved.get("sku").and_then(Value::as_str),
+            Some("PARENT-SKU")
+        );
+        assert_eq!(origins.get("sku").and_then(Value::as_str), Some("parent"));
     }
 
     #[test]

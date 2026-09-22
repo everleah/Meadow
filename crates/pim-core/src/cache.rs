@@ -29,6 +29,11 @@ use tokio::sync::RwLock;
 use crate::db::Db;
 use crate::error::ApiError;
 
+/// The composition map (`child key → parent key`) of the whole tree.
+pub(crate) type CompositionMap = HashMap<String, String>;
+/// A version-bound cache entry: the data version it was computed for, plus payload.
+type Versioned<T> = Option<(u64, Arc<T>)>;
+
 /// Caches frequently read, rarely written metadata.
 #[derive(Default)]
 pub struct MetaCache {
@@ -49,6 +54,15 @@ pub struct MetaCache {
     /// Relation keys (`rel_…`) of every categorisation relation, asked on every
     /// class-feature and completeness lookup.
     category_relations: RwLock<Option<Arc<Vec<String>>>>,
+    /// The composition map (`child key → parent key`) of the whole tree, bound to
+    /// `stats_version`: every page load of the grid, every dashboard aggregation
+    /// and every rule-compute batch walks it, while only a reference write can
+    /// change it.
+    composition_map: RwLock<Versioned<CompositionMap>>,
+    /// Categorisation edges (`object key → class node keys`), bound to
+    /// `stats_version` — the second full scan of `reference` that every page with
+    /// completeness ran.
+    category_edges: RwLock<Versioned<crate::class_features::CategoryEdges>>,
     /// `GET /objects/stats` payloads per working language, bound to `stats_version`.
     stats: RwLock<HashMap<String, (u64, Arc<Value>)>>,
     /// One lock per `GET /objects/stats` cache key: makes the recomputation
@@ -303,6 +317,47 @@ impl MetaCache {
     /// concurrent miss recomputes it instead of queueing (measured ~190 ms warm).
     pub async fn store_composition_types(&self, version: u64, payload: Arc<Value>) {
         *self.composition_types.write().await = Some((version, payload));
+    }
+
+    /// The composition map (`child key → parent key`) of the whole tree, bound to
+    /// [`Self::stats_version`].
+    ///
+    /// Measured 2026-09-22: the query is a scan of `reference` (28 413 rows,
+    /// 11 617 `depends_on` edges) and cost 0,15–0,23 s on a quiet machine and up to
+    /// 1 s on a busy one — per page load, twice (completeness *and* inheritance).
+    /// Only reference writes change the map, and they bump the version.
+    pub(crate) async fn composition_map(&self, db: &Db) -> Result<Arc<CompositionMap>, ApiError> {
+        let version = self.stats_version();
+        if let Some((stored, map)) = self.composition_map.read().await.as_ref()
+            && *stored == version
+        {
+            return Ok(map.clone());
+        }
+        let map = Arc::new(crate::inheritance::load_parent_map(db).await?);
+        *self.composition_map.write().await = Some((version, map.clone()));
+        Ok(map)
+    }
+
+    /// Categorisation edges (`object key → class node keys`) for all
+    /// categorisation relation types, bound to [`Self::stats_version`].
+    ///
+    /// `class_features::class_required_names_batch` needs the assignments of the
+    /// page's objects; it used to scan **all** category edges per call (7 324 rows
+    /// in the demo data, ~0,11 s quiet) although only a handful of objects ask.
+    pub(crate) async fn category_edges(
+        &self,
+        db: &Db,
+    ) -> Result<Arc<crate::class_features::CategoryEdges>, ApiError> {
+        let version = self.stats_version();
+        if let Some((stored, edges)) = self.category_edges.read().await.as_ref()
+            && *stored == version
+        {
+            return Ok(edges.clone());
+        }
+        let relations = self.category_relation_keys(db).await?;
+        let edges = Arc::new(crate::class_features::load_category_edges(db, &relations).await?);
+        *self.category_edges.write().await = Some((version, edges.clone()));
+        Ok(edges)
     }
 
     /// Invalidates cached fallback chains after language-tree changes.

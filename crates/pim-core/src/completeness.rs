@@ -205,11 +205,13 @@ pub(crate) async fn compute_batch(
     db: &Db,
     items: &[(String, String, Map<String, Value>)],
     locale: Option<&str>,
+    composition: &crate::inheritance::Composition,
 ) -> Result<HashMap<String, Completeness>, ApiError> {
     let mut out = HashMap::new();
     if items.is_empty() {
         return Ok(out);
     }
+    let started = std::time::Instant::now();
 
     // Required names per type, resolved once per type (cached across calls).
     let mut required_by_type: HashMap<String, Vec<String>> = HashMap::new();
@@ -232,26 +234,15 @@ pub(crate) async fn compute_batch(
     for (object_id, _, own) in items {
         attrs_by_key.insert(key_of(object_id).to_owned(), own.clone());
     }
-    // The composition map and the ancestors' attributes come from
-    // `crate::inheritance` — the same two helpers the grid's inheritance
-    // resolution uses, so both describe a page identically. The two calls of one
-    // page (completeness + inheritance) each read them, which is ~0.2 s together
-    // and not worth a request-scoped cache.
-    let parent_by_key = crate::inheritance::load_parent_map(db).await?;
-    // Attributes of the batch's **ancestors** (they are not part of `items` when a
-    // caller passes one page of objects). Without them the in-memory walk stops
-    // at the first unknown parent and the page would under-report inherited
-    // values — that is why `list_objects` used to compute completeness per row.
-    // One extra query, deduplicated across the batch.
-    let ancestor_attrs = crate::inheritance::load_ancestor_attributes(
-        db,
-        &parent_by_key,
-        attrs_by_key.keys().map(String::as_str),
-    )
-    .await?;
-    for (key, attrs, _) in ancestor_attrs {
-        attrs_by_key.entry(key).or_insert(attrs);
+    // The composition is prepared once per request by the caller and shared with
+    // `inheritance::resolve_inheritance_batch` (see `Composition`).
+    let parent_by_key = composition.parents();
+    for (key, attrs) in composition.ancestors() {
+        attrs_by_key
+            .entry(key.clone())
+            .or_insert_with(|| attrs.clone());
     }
+    let class_started = std::time::Instant::now();
     // Class features (Stage B): mandatory class attributes per object, resolved
     // from the categorisation edges plus the parent map we already have.
     let object_keys: Vec<String> = items
@@ -259,8 +250,9 @@ pub(crate) async fn compute_batch(
         .map(|(object_id, _, _)| key_of(object_id).to_owned())
         .collect();
     let class_required_by_key =
-        crate::class_features::class_required_names_batch(cache, db, &object_keys, &parent_by_key)
+        crate::class_features::class_required_names_batch(cache, db, &object_keys, parent_by_key)
             .await?;
+    let class_features_ms = class_started.elapsed().as_millis() as u64;
     let fallback_chain: Option<Arc<Vec<String>>> = match locale {
         Some(locale) => Some(cache.fallback_chain(db, locale).await?),
         None => None,
@@ -304,7 +296,7 @@ pub(crate) async fn compute_batch(
         let (resolved, _) = crate::inheritance::resolve_missing_in_memory(
             own,
             &missing,
-            &parent_by_key,
+            parent_by_key,
             &attrs_by_key,
             locale,
             fallback_chain.as_ref().map(|chain| chain.as_slice()),
@@ -320,6 +312,12 @@ pub(crate) async fn compute_batch(
             },
         );
     }
+    tracing::debug!(
+        items = items.len(),
+        class_features_ms,
+        total_ms = started.elapsed().as_millis() as u64,
+        "completeness batch computed"
+    );
     Ok(out)
 }
 
