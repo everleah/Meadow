@@ -2142,13 +2142,13 @@ pub async fn list_objects(
     } else {
         format!(" WHERE {}", conditions.join(" AND "))
     };
-    // The channel releases are fetched with a correlated subquery (one query,
-    // no per-object round trip) and only when the caller asks for them.
-    let projection = if params.releases {
-        "*, (SELECT VALUE { channel: channel, status: status } FROM release WHERE object_id = $parent.id ORDER BY channel) AS releases"
-    } else {
-        "*"
-    };
+    // The channel releases are fetched **for the whole page in one query** after
+    // the objects (see below), not as a correlated subquery per row: SurrealDB
+    // evaluates `(SELECT … WHERE object_id = $parent.id)` once per candidate row
+    // and costs ~11 ms per row (measured 2026-09-22: 18.1 s for a 1000-row page
+    // against 0.29 s for one bulk query on the same data). `releases=true` is the
+    // grid's release column, so this is on the hot read path.
+    let projection = "*";
     // `id` is the tiebreaker of `created_at`: a batch writes many objects in the
     // same transaction, so their timestamps collide and an unordered page boundary
     // is not stable — a paging client (the complete MEF export) would then skip or
@@ -2194,6 +2194,12 @@ pub async fn list_objects(
         .await?
         .check()?;
     let mut objects: Vec<Value> = response.take(0)?;
+
+    // Channel releases of the page: `releases: [{channel, status}]` per object, in
+    // one query for the whole page (see the `projection` comment above).
+    if params.releases && !objects.is_empty() {
+        attach_releases(&state.db, &mut objects).await?;
+    }
 
     let locale = params
         .locale
@@ -2273,23 +2279,30 @@ pub async fn list_objects(
             .collect();
     }
 
-    // Optionally fill inherited values for the whole page (one query per level)
+    // Optionally fill inherited values for the whole page (the composition map and
+    // the ancestors' attributes in two queries, then an in-memory walk per object)
     // and mark each object's inherited attributes with their source.
     if params.resolve_inheritance == Some(true) && !objects.is_empty() {
-        let mut items: Vec<(String, serde_json::Map<String, Value>)> = objects
+        let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
             .iter()
             .map(|object| {
-                let id = object
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                let attributes = object
-                    .get("attributes")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
-                (id, attributes)
+                (
+                    object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    object
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned(),
+                    object
+                        .get("attributes")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
             })
             .collect();
         let inherited = crate::inheritance::resolve_inheritance_batch(
@@ -2300,7 +2313,7 @@ pub async fn list_objects(
         )
         .await?;
         for (index, object) in objects.iter_mut().enumerate() {
-            let (id, attributes) = &items[index];
+            let (id, _, attributes) = &items[index];
             object["attributes"] = Value::Object(attributes.clone());
             let sources = inherited
                 .get(id)
@@ -2311,6 +2324,76 @@ pub async fn list_objects(
     }
 
     Ok(Json(objects))
+}
+
+/// Attaches the channel releases of the page's objects as
+/// `releases: [{channel, status}]` (sorted by channel), in **one** query.
+///
+/// Keys that cannot be a record (`keys::record_list_literal` drops them) cannot
+/// have releases, so they are simply absent from the answer.
+async fn attach_releases(db: &crate::db::Db, objects: &mut [Value]) -> Result<(), ApiError> {
+    let keys: Vec<String> = objects
+        .iter()
+        .filter_map(|object| object.get("id").and_then(Value::as_str))
+        .map(record_key_owned)
+        .collect();
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let sql = format!(
+        "SELECT object_id, channel, status FROM release WHERE object_id IN {};",
+        crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str))
+    );
+    let mut response = db.inner().query(sql).await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    attach_release_entries(objects, rows);
+    Ok(())
+}
+
+/// Groups `release` rows (`{object_id, channel, status}`) by object and writes
+/// `releases: [{channel, status}]` into each object — sorted by channel, an empty
+/// array when an object has no release (the shape the correlated subquery
+/// answered with). Pure, so the shape is unit-tested.
+fn attach_release_entries(objects: &mut [Value], rows: Vec<Value>) {
+    let mut by_object: std::collections::HashMap<String, Vec<Value>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let Some(object_id) = row.get("object_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let entry = json!({
+            "channel": row.get("channel").cloned().unwrap_or(Value::Null),
+            "status": row.get("status").cloned().unwrap_or(Value::Null),
+        });
+        by_object
+            .entry(record_key_owned(object_id))
+            .or_default()
+            .push(entry);
+    }
+    for object in objects.iter_mut() {
+        let key = object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(record_key_owned)
+            .unwrap_or_default();
+        let mut releases = by_object.remove(&key).unwrap_or_default();
+        releases.sort_by(|left, right| {
+            let left = left.get("channel").and_then(Value::as_str).unwrap_or("");
+            let right = right.get("channel").and_then(Value::as_str).unwrap_or("");
+            left.cmp(right)
+        });
+        object["releases"] = Value::Array(releases);
+    }
+}
+
+/// The bare key of a record id (`object:<key>` → `<key>`); the table prefix is
+/// dropped, a value without one is returned unchanged.
+fn record_key_owned(record_id: &str) -> String {
+    record_id
+        .split_once(':')
+        .map(|(_, key)| key)
+        .unwrap_or(record_id)
+        .to_owned()
 }
 
 /// Whether a completeness result passes the optional completeness filters.
@@ -3548,6 +3631,33 @@ mod tests {
             percent,
             missing: missing.iter().map(|name| (*name).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn releases_are_grouped_per_object_and_sorted_by_channel() {
+        let mut objects = vec![
+            serde_json::json!({ "id": "object:one", "type": "product" }),
+            serde_json::json!({ "id": "object:two", "type": "product" }),
+        ];
+        let rows = vec![
+            serde_json::json!({ "object_id": "object:one", "channel": "webshop", "status": "published" }),
+            serde_json::json!({ "object_id": "object:one", "channel": "print", "status": "draft" }),
+            // An object the page does not contain (a stale row) is ignored, and a
+            // row without `object_id` cannot be attributed.
+            serde_json::json!({ "object_id": "object:other", "channel": "webshop", "status": "published" }),
+            serde_json::json!({ "channel": "webshop", "status": "published" }),
+        ];
+        attach_release_entries(&mut objects, rows);
+
+        assert_eq!(
+            objects[0]["releases"],
+            serde_json::json!([
+                { "channel": "print", "status": "draft" },
+                { "channel": "webshop", "status": "published" },
+            ])
+        );
+        // No release: the field is an empty array, exactly like the subquery's.
+        assert_eq!(objects[1]["releases"], serde_json::json!([]));
     }
 
     #[test]

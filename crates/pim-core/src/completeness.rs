@@ -21,9 +21,6 @@ use crate::cache::MetaCache;
 use crate::db::Db;
 use crate::error::ApiError;
 
-/// Maximum composition depth walked during inheritance resolution.
-const MAX_DEPTH: usize = 1000;
-
 /// Result of a completeness computation for a single object.
 pub struct Completeness {
     /// Percentage of required attributes that are set (0-100).
@@ -183,25 +180,6 @@ pub(crate) async fn compute_with_required(
     Ok(Completeness { percent, missing })
 }
 
-/// Loads the single-parent `depends_on` map (`child key → parent key`) in one
-/// query, for the batched in-memory inheritance resolution.
-async fn load_parent_map(db: &Db) -> Result<HashMap<String, String>, ApiError> {
-    let sql =
-        "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
-    let mut response = db.inner().query(sql).await?.check()?;
-    let rows: Vec<Value> = response.take(0)?;
-    let mut map: HashMap<String, String> = HashMap::new();
-    for row in rows {
-        let child = row.get("child").and_then(Value::as_str).map(key_of);
-        let parent = row.get("parent").and_then(Value::as_str).map(key_of);
-        if let (Some(child), Some(parent)) = (child, parent) {
-            map.entry(child.to_owned())
-                .or_insert_with(|| parent.to_owned());
-        }
-    }
-    Ok(map)
-}
-
 /// Whether `own` carries every required name itself — the completeness fast path.
 ///
 /// A name that is absent from `own` can still be complete through inheritance,
@@ -254,14 +232,24 @@ pub(crate) async fn compute_batch(
     for (object_id, _, own) in items {
         attrs_by_key.insert(key_of(object_id).to_owned(), own.clone());
     }
-    let parent_by_key = load_parent_map(db).await?;
+    // The composition map and the ancestors' attributes come from
+    // `crate::inheritance` — the same two helpers the grid's inheritance
+    // resolution uses, so both describe a page identically. The two calls of one
+    // page (completeness + inheritance) each read them, which is ~0.2 s together
+    // and not worth a request-scoped cache.
+    let parent_by_key = crate::inheritance::load_parent_map(db).await?;
     // Attributes of the batch's **ancestors** (they are not part of `items` when a
-    // caller passes one page of objects). Without them `resolve_missing_in_memory`
-    // stops at the first unknown parent and the page would under-report inherited
+    // caller passes one page of objects). Without them the in-memory walk stops
+    // at the first unknown parent and the page would under-report inherited
     // values — that is why `list_objects` used to compute completeness per row.
     // One extra query, deduplicated across the batch.
-    let ancestor_attrs = load_ancestor_attributes(db, &parent_by_key, &attrs_by_key).await?;
-    for (key, attrs) in ancestor_attrs {
+    let ancestor_attrs = crate::inheritance::load_ancestor_attributes(
+        db,
+        &parent_by_key,
+        attrs_by_key.keys().map(String::as_str),
+    )
+    .await?;
+    for (key, attrs, _) in ancestor_attrs {
         attrs_by_key.entry(key).or_insert(attrs);
     }
     // Class features (Stage B): mandatory class attributes per object, resolved
@@ -313,7 +301,7 @@ pub(crate) async fn compute_batch(
             })
             .cloned()
             .collect();
-        let resolved = resolve_missing_in_memory(
+        let (resolved, _) = crate::inheritance::resolve_missing_in_memory(
             own,
             &missing,
             &parent_by_key,
@@ -333,111 +321,6 @@ pub(crate) async fn compute_batch(
         );
     }
     Ok(out)
-}
-
-/// Loads the attributes of every ancestor of the given objects that is not part of
-/// `known` (the batch itself). Walks the in-memory parent map and reads the
-/// remaining keys in **one** query, so a partial batch resolves inheritance with
-/// the same result as the per-object walk in [`crate::inheritance`].
-async fn load_ancestor_attributes(
-    db: &Db,
-    parent_by_key: &HashMap<String, String>,
-    known: &HashMap<String, Map<String, Value>>,
-) -> Result<Vec<(String, Map<String, Value>)>, ApiError> {
-    let mut wanted: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = known.keys().cloned().collect();
-    for key in known.keys() {
-        let mut current = key.clone();
-        for _ in 0..MAX_DEPTH {
-            let Some(parent) = parent_by_key.get(&current) else {
-                break;
-            };
-            if !seen.insert(parent.clone()) {
-                break;
-            }
-            wanted.push(parent.clone());
-            current = parent.clone();
-        }
-    }
-    if wanted.is_empty() {
-        return Ok(Vec::new());
-    }
-    // Record list literal, not `array::map`: a page with many distinct parents can
-    // reach thousands of keys (see `keys::record_list_literal` for the numbers).
-    let sql = format!(
-        "SELECT id, attributes FROM object WHERE id IN {};",
-        crate::api::keys::record_list_literal("object", wanted.iter().map(String::as_str))
-    );
-    let mut response = db.inner().query(sql).await?.check()?;
-    let rows: Vec<Value> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            let key = row
-                .get("id")
-                .and_then(Value::as_str)
-                .map(key_of)?
-                .to_owned();
-            let attrs = row
-                .get("attributes")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            Some((key, attrs))
-        })
-        .collect())
-}
-
-/// Resolves the given `missing` (inheritable) attribute names from an in-memory
-/// parent map, starting at `start_key`. Returns `own` with the inherited values
-/// filled (`NULL` where an ancestor declares the key but the value is empty).
-///
-/// Mirrors [`crate::inheritance::resolve_inheritance`]'s semantics: walking one
-/// query per level is replaced by a `parent_by_key`/`attrs_by_key` lookup, so
-/// aggregating over a whole dataset needs no per-ancestor database round-trips.
-#[allow(clippy::too_many_arguments)]
-fn resolve_missing_in_memory(
-    own: &Map<String, Value>,
-    missing: &[String],
-    parent_by_key: &HashMap<String, String>,
-    attrs_by_key: &HashMap<String, Map<String, Value>>,
-    locale: Option<&str>,
-    fallback_chain: Option<&[String]>,
-    start_key: &str,
-) -> Map<String, Value> {
-    let mut resolved = own.clone();
-    let mut current = start_key.to_owned();
-    let mut todo = missing.to_vec();
-    for _ in 0..MAX_DEPTH {
-        let Some(parent) = parent_by_key.get(&current).cloned() else {
-            break;
-        };
-        let Some(parent_attrs) = attrs_by_key.get(&parent) else {
-            break;
-        };
-        let mut still_missing = Vec::new();
-        for name in todo {
-            match parent_attrs.get(&name) {
-                Some(value) => {
-                    let inherited = match (locale, fallback_chain, value.is_object()) {
-                        (Some(locale), Some(chain), true) => {
-                            crate::language::resolve_value_with_chain(locale, value, chain)
-                                .unwrap_or(Value::Null)
-                        }
-                        _ => value.clone(),
-                    };
-                    resolved.insert(name, inherited);
-                }
-                None => still_missing.push(name),
-            }
-        }
-        todo = still_missing;
-        if todo.is_empty() {
-            break;
-        }
-        current = parent;
-    }
-    resolved
 }
 
 #[cfg(test)]
@@ -482,21 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_missing_inherits_from_parent() {
-        let own = Map::new();
-        let missing = vec!["sku".to_owned()];
-        let mut parents = HashMap::new();
-        parents.insert("child".to_owned(), "parent".to_owned());
-        let mut attrs = HashMap::new();
-        let mut parent_attrs = Map::new();
-        parent_attrs.insert("sku".to_owned(), Value::from("SKU-1"));
-        attrs.insert("parent".to_owned(), parent_attrs);
-        let resolved =
-            resolve_missing_in_memory(&own, &missing, &parents, &attrs, None, None, "child");
-        assert_eq!(resolved.get("sku").and_then(Value::as_str), Some("SKU-1"));
-    }
-
-    #[test]
     fn fast_path_requires_the_names_in_own_attributes() {
         let required = vec!["sku".to_owned(), "weight_kg".to_owned()];
         let mut own = Map::new();
@@ -509,78 +377,5 @@ mod tests {
         // Present even with a `null` value counts as "own" (it stops inheritance).
         assert!(all_required_present(&required, &own));
         assert!(all_required_present(&[], &Map::new()));
-    }
-
-    #[test]
-    fn resolve_missing_stops_at_nearest_ancestor() {
-        // Child misses `sku`; grandparent also has it, but the nearest parent wins.
-        let own = Map::new();
-        let missing = vec!["sku".to_owned()];
-        let mut parents = HashMap::new();
-        parents.insert("child".to_owned(), "parent".to_owned());
-        parents.insert("parent".to_owned(), "grandparent".to_owned());
-        let mut attrs = HashMap::new();
-        let mut parent_attrs = Map::new();
-        parent_attrs.insert("sku".to_owned(), Value::from("nearest"));
-        let mut grand_attrs = Map::new();
-        grand_attrs.insert("sku".to_owned(), Value::from("farther"));
-        attrs.insert("parent".to_owned(), parent_attrs);
-        attrs.insert("grandparent".to_owned(), grand_attrs);
-        let resolved =
-            resolve_missing_in_memory(&own, &missing, &parents, &attrs, None, None, "child");
-        assert_eq!(resolved.get("sku").and_then(Value::as_str), Some("nearest"));
-    }
-
-    #[test]
-    fn resolve_missing_null_value_is_not_set() {
-        // A parent declares `sku` as null → it stops inheritance but does not set
-        // the value (the further ancestor is never reached).
-        let own = Map::new();
-        let missing = vec!["sku".to_owned()];
-        let mut parents = HashMap::new();
-        parents.insert("child".to_owned(), "parent".to_owned());
-        parents.insert("parent".to_owned(), "grandparent".to_owned());
-        let mut attrs = HashMap::new();
-        let mut parent_attrs = Map::new();
-        parent_attrs.insert("sku".to_owned(), Value::Null);
-        let mut grand_attrs = Map::new();
-        grand_attrs.insert("sku".to_owned(), Value::from("farther"));
-        attrs.insert("parent".to_owned(), parent_attrs);
-        attrs.insert("grandparent".to_owned(), grand_attrs);
-        let resolved =
-            resolve_missing_in_memory(&own, &missing, &parents, &attrs, None, None, "child");
-        assert_eq!(resolved.get("sku"), Some(&Value::Null));
-        let (set, missing) = split_set(&["sku".to_owned()], &own, &resolved);
-        assert!(set.is_empty());
-        assert_eq!(missing, vec!["sku".to_owned()]);
-    }
-
-    #[test]
-    fn resolve_missing_multilingual_locale() {
-        let own = Map::new();
-        let missing = vec!["title".to_owned()];
-        let mut parents = HashMap::new();
-        parents.insert("child".to_owned(), "parent".to_owned());
-        let mut attrs = HashMap::new();
-        let mut parent_attrs = Map::new();
-        parent_attrs.insert(
-            "title".to_owned(),
-            serde_json::json!({ "root": "Produkt", "de": "Produkt DE", "en": "Product" }),
-        );
-        attrs.insert("parent".to_owned(), parent_attrs);
-        let chain = vec!["root".to_owned()];
-        let resolved = resolve_missing_in_memory(
-            &own,
-            &missing,
-            &parents,
-            &attrs,
-            Some("de"),
-            Some(&chain),
-            "child",
-        );
-        assert_eq!(
-            resolved.get("title").and_then(Value::as_str),
-            Some("Produkt DE")
-        );
     }
 }
