@@ -130,13 +130,55 @@ async def test_shell_drawer_entries_are_plain_links(products_user: User) -> None
 
 async def test_products_page_url_filters_reach_the_core(products_user: User) -> None:
     """`?type=…&incomplete=1` is the bookmarkable shortcut the dashboard links to."""
+    from meadow.frontend import grid_query
+
     await products_user.open("/products?type=product&incomplete=1")
 
     payloads = [kwargs for name, _, kwargs in FakeCore.calls if name == "list_objects"]
     assert payloads, "a filtered visit must load objects"
     assert payloads[0]["object_type"] == "product"
     assert payloads[0]["missing_required"] is True
-    assert payloads[0]["limit"] == 1000
+    # One **chunk** per request, from the offset the page has already loaded: every row
+    # carries all own attributes plus the language/inheritance cells, so 1000 rows in
+    # one request (the old `FILTERED_LIMIT`) made the page megabytes large.
+    assert payloads[0]["limit"] == grid_query.FILTERED_LIMIT
+    assert payloads[0]["start"] == 0
+
+
+async def test_a_short_chunk_offers_no_load_more(products_user: User) -> None:
+    """A chunk smaller than the page size is the end of the list."""
+    _stub_objects(*OBJECTS)
+    await products_user.open("/products?type=product")
+
+    await products_user.should_see(t("grid.loaded_count", count=len(OBJECTS), locale=EN))
+    await products_user.should_not_see(marker="grid-load-more")
+
+
+async def test_the_grid_loads_the_next_chunk_on_demand(products_user: User) -> None:
+    """A full chunk shows the control, and the next chunk is appended from `start`."""
+    from meadow.frontend import grid_query
+
+    _stub_objects(*_many_objects(grid_query.FILTERED_LIMIT))
+    await products_user.open("/products?type=product")
+
+    await products_user.should_see(marker="grid-load-more")
+    await products_user.should_see(
+        t("grid.loaded_count", count=grid_query.FILTERED_LIMIT, locale=EN)
+    )
+
+    # The next request continues where the loaded chunk ended; a short answer closes
+    # the list (and the counter counts both chunks).
+    _stub_objects(*_many_objects(5, start=grid_query.FILTERED_LIMIT))
+    products_user.find(marker="grid-load-more").click()
+    await _wait_until(lambda: len(_list_objects_calls()) > 1)
+
+    payloads = _list_objects_calls()
+    assert payloads[1]["start"] == grid_query.FILTERED_LIMIT
+    assert payloads[1]["limit"] == grid_query.FILTERED_LIMIT
+    await products_user.should_see(
+        t("grid.loaded_count", count=grid_query.FILTERED_LIMIT + 5, locale=EN)
+    )
+    await products_user.should_not_see(marker="grid-load-more")
 
 
 async def test_products_page_reports_an_empty_filter_result(products_user: User) -> None:
@@ -167,6 +209,19 @@ OBJECTS = [
 def _stub_objects(*objects: dict) -> None:
     """Answers the next grid load with these objects."""
     FakeCore.data["list_objects"] = [dict(object_) for object_ in objects]
+
+
+def _many_objects(count: int, *, start: int = 0) -> list[dict]:
+    """`count` distinct objects, numbered from `start` (a stubbed core page)."""
+    return [
+        {
+            "id": f"product:{start + index}",
+            "type": "product",
+            "status": "draft",
+            "attributes": {"name": f"Object {start + index}"},
+        }
+        for index in range(count)
+    ]
 
 
 def _stub_tree(*objects: dict) -> None:

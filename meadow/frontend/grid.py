@@ -827,8 +827,14 @@ async def products_page(request: Request) -> None:
         # show/hide the create action.
         create_types = creatable_types(object_types)
 
-        async def fetch_filtered() -> list[dict]:
-            """Loads the objects matching the active filters (see `grid_query.py`)."""
+        async def fetch_filtered(start: int = 0) -> list[dict]:
+            """Loads one chunk of the objects matching the filters (see `grid_query.py`).
+
+            `start` is the offset of the chunk: the grid appends the next chunk when the
+            user asks for it (`grid_query.loaded_chunk`), so a filtered view no longer
+            pulls 1000 rows (and their language/inheritance cells) into one page. The
+            search path stays a single capped request (`SEARCH_LIMIT` hits).
+            """
             if not has_filter():
                 return []
             if active["q"]:
@@ -857,7 +863,9 @@ async def products_page(request: Request) -> None:
                 )
             return await client.list_objects(
                 token,
-                **grid_query.list_arguments(active, has_channels=bool(channels), locale=locale),
+                **grid_query.list_arguments(
+                    active, has_channels=bool(channels), locale=locale, start=start
+                ),
             )
 
         # On a plain /products visit we deliberately avoid loading every object:
@@ -872,6 +880,51 @@ async def products_page(request: Request) -> None:
         no_objects_label = ui.label(t("grid.no_objects")).classes("text-subtitle1")
         no_objects_label.set_visibility(has_filter() and not objects)
         selection_hint.set_visibility(not has_filter())
+
+        # The grid loads its rows in **chunks** (`grid_query.FILTERED_LIMIT`): every row
+        # carries all own attributes plus the language and inheritance cells, so 1000
+        # rows meant 5,6 MB of page HTML (measured 2026-09-22). A full chunk means
+        # "there may be more" — the button below appends the next one; a short chunk is
+        # the end of the list. The label always says how many rows are loaded, so
+        # nothing is truncated silently (same contract as the taxonomy tree's paging).
+        loaded_objects: list[dict] = list(objects)
+        more_state: dict[str, bool] = {"more": grid_query.loaded_chunk(len(objects))}
+        with ui.row().classes("items-center gap-2 pt-1"):
+            more_button = ui.button(t("grid.load_more"), on_click=lambda: load_more()).props(
+                "flat dense no-caps"
+            )
+            more_button.mark("grid-load-more")
+            loaded_label = ui.label("").classes("text-caption text-gray-600")
+            loaded_label.mark("grid-loaded-count")
+
+        def update_more_controls() -> None:
+            """Shows the row counter and hides the button once the list is complete."""
+            if not loaded_objects or not has_filter():
+                loaded_label.set_visibility(False)
+                more_button.set_visibility(False)
+                return
+            loaded_label.set_text(t("grid.loaded_count", count=len(loaded_objects)))
+            loaded_label.set_visibility(True)
+            more_button.set_visibility(more_state["more"])
+
+        async def load_more() -> None:
+            """Appends the next chunk of the filtered list (client-side rendering)."""
+            if not more_state["more"]:
+                return
+            more_button.props("loading")
+            try:
+                more = await fetch_filtered(start=len(loaded_objects))
+            except CoreError, httpx.HTTPError:
+                ui.notify(t("grid.load_failed"), color="negative")
+                return
+            finally:
+                more_button.props(remove="loading")
+            more_state["more"] = grid_query.loaded_chunk(len(more) + len(loaded_objects))
+            if not more:
+                more_state["more"] = False
+                update_more_controls()
+                return
+            await append_rows(more)
 
         try:
             # The **slim vocabulary** of *all* definitions, not the paged catalog
@@ -1152,13 +1205,35 @@ async def products_page(request: Request) -> None:
             ui.navigate.to(f"/products/{quote(ids[0], safe='')}")
 
         async def apply_rows(selected_objects: list[dict]) -> None:
-            nonlocal original_by_id, all_rows, loaded_rows_by_id
+            nonlocal original_by_id, all_rows, loaded_rows_by_id, loaded_objects
             original_by_id = {str(o.get("id")): o for o in selected_objects}
             all_rows = make_rows(selected_objects)
             loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
+            loaded_objects = list(selected_objects)
+            # A search answers its capped hit list in one go, so only a filtered list
+            # (a chunked `GET /objects`) can have more to load.
+            more_state["more"] = not active["q"] and grid_query.loaded_chunk(len(selected_objects))
             grid.run_grid_method("setGridOption", "rowData", all_rows)
             selection_hint.set_visibility(len(selected_objects) == 0 and not has_filter())
             no_objects_label.set_visibility(len(selected_objects) == 0 and has_filter())
+            update_more_controls()
+
+        async def append_rows(more_objects: list[dict]) -> None:
+            """Appends a chunk to the loaded rows (the "load more" button).
+
+            Rows are built with the same `make_rows`, so the appended ones carry the
+            same cells and markers. A column the first chunk did not know (a standard
+            attribute whose only value is in a later chunk) is not offered until the
+            next filter change — the column picker's own attributes are unaffected.
+            """
+            nonlocal all_rows
+            loaded_objects.extend(more_objects)
+            original_by_id.update({str(o.get("id")): o for o in more_objects})
+            appended = make_rows(more_objects)
+            loaded_rows_by_id.update({str(row["_id"]): dict(row) for row in appended})
+            all_rows = all_rows + appended
+            grid.run_grid_method("setGridOption", "rowData", all_rows)
+            update_more_controls()
 
         async def reload_grid() -> None:
             """Re-fetches the grid rows for the active filters (no page reload)."""
@@ -2186,3 +2261,5 @@ async def products_page(request: Request) -> None:
                 # Restore the column set the user had before (reload, browser-back
                 # from the form, re-login) — the columns start hidden per definition.
                 apply_visibility(visible_fields)
+                # The row counter and the "load more" button for the first chunk.
+                update_more_controls()

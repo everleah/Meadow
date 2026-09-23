@@ -1126,6 +1126,8 @@
   "grid.completeness": "Vollständigkeit",
   "grid.releases": "Freigaben",
   "grid.no_objects": "Keine Objekte gefunden.",
+  "grid.load_more": "Weitere Objekte laden …",
+  "grid.loaded_count": "{count} Objekte geladen",
   "grid.filter_search": "Objekte durchsuchen …",
   "grid.filter_incomplete": "Nur unvollständige",
   "grid.filter_all_channels": "Alle Kanäle",

@@ -43,8 +43,13 @@ FILTER_KEYS = (
 #: Filters that are switches: `1` in the URL means on, everything else is off.
 FLAG_KEYS = ("incomplete", "uncategorized")
 
-#: How many rows a **filtered** view loads.
-FILTERED_LIMIT = 1000
+#: How many rows a **filtered** view loads per request. The page renders them
+#: client-side and appends the next chunk on demand (`grid.loaded_chunk`) — the whole
+#: point is the payload: every row carries every own attribute plus the language and
+#: inheritance cells, so 1000 rows made a single grid page 5,6 MB of HTML (measured
+#: 2026-09-22, 1000 products × ~166 columns). 200 rows keep a filtered view instant
+#: and still fill a readable amount of scrolling.
+FILTERED_LIMIT = 200
 #: How many rows a list request would load without a filter (the grid stays empty anyway).
 PLAIN_LIMIT = 100
 
@@ -114,14 +119,27 @@ def list_limit(filters: Mapping[str, object]) -> int:
     return FILTERED_LIMIT if has_filter(filters) else PLAIN_LIMIT
 
 
+def loaded_chunk(loaded: int, page_size: int = FILTERED_LIMIT) -> bool:
+    """Whether another chunk may follow, given the number of loaded rows.
+
+    A full chunk means "maybe": the truth is known when the next chunk comes back
+    short. Same rule as the taxonomy tree's paging (`taxonomy_tree.has_more`) — the
+    core's list has no total, and a count query per keystroke is not worth it.
+    """
+    return loaded > 0 and loaded % page_size == 0
+
+
 def list_arguments(
-    filters: Mapping[str, object], *, has_channels: bool, locale: str
+    filters: Mapping[str, object], *, has_channels: bool, locale: str, start: int = 0
 ) -> dict[str, Any]:
     """The core arguments of a **filtered object list** (`GET /objects`).
 
     `definition_id` (the dimension of a categorisation) is sent **only** for the
     `category` and `uncategorized` filters: for every other view the core would validate
     it and ignore it, so sending it would only pretend it had an effect.
+
+    `start` is the offset of the chunk: the grid appends the next one on demand
+    (`grid_query.loaded_chunk`), so a filtered view no longer loads 1000 rows at once.
     """
     return {
         "object_type": filters.get("type"),
@@ -141,6 +159,7 @@ def list_arguments(
         "locale": locale,
         "resolve_inheritance": True,
         "limit": list_limit(filters),
+        "start": start,
     }
 
 
