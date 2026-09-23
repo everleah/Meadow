@@ -11,6 +11,26 @@ Die Liste lädt bewusst nicht alle Objekte auf einmal. Wählen Sie links im Baum
 einen Knoten aus, zeigt die Tabelle dessen Objekte. Ohne Auswahl steht dort ein
 Hinweis, welche Aktion erwartet wird.
 
+Die Tabelle zeigt **eine Seite** von 200 Objekten; unter der Liste steht, welche
+Zeilen von wie vielen Sie sehen („1–200 von 2000 Objekten", „Seite 1 von 10")
+und mit welchen Schaltflächen Sie blättern (erste, vorherige, nächste, letzte).
+Die Zahlen kommen vom Server, nicht aus den geladenen Zeilen: Blättern holt
+genau die nächste Seite, statt die Liste im Browser immer weiter wachsen zu
+lassen. Die Seitenzahl steht in der Adresszeile (`?page=2`), ein Lesezeichen
+öffnet also dieselbe Seite.
+
+**Sortieren** — ein Klick auf eine Spaltenüberschrift sortiert die **ganze**
+Sicht über den Server (aufsteigend, absteigend, beim dritten Klick wieder in der
+Standardreihenfolge „neueste zuerst"). Das gilt für ID-Felder und Attribute
+gleichermaßen; Spalten ohne gespeicherten Wert (etwa die Vollständigkeit) lassen
+sich nicht sortieren — sonst würde nur die sichtbare Seite umsortiert und beim
+Blättern etwas anderes bedeuten. Die Sortierung steht ebenfalls in der
+Adresszeile und geht beim Blättern nicht verloren.
+
+Beim Blättern und Sortieren bleibt die **Spaltenauswahl** unverändert: welche
+Attribute eine Spalte bekommen, entscheidet die ganze Sicht, nicht die gerade
+sichtbare Seite.
+
 Der Baum hat drei Sichten (Symbolleiste über dem Baum):
 
 | Sicht | Zeigt |

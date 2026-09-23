@@ -163,47 +163,62 @@ async def test_products_page_url_filters_reach_the_core(products_user: User) -> 
     assert payloads, "a filtered visit must load objects"
     assert payloads[0]["object_type"] == "product"
     assert payloads[0]["missing_required"] is True
-    # One **chunk** per request, from the offset the page has already loaded: every row
-    # carries all own attributes plus the language/inheritance cells, so 1000 rows in
-    # one request (the old `FILTERED_LIMIT`) made the page megabytes large.
+    # One **page** per request: every row carries all own attributes plus the
+    # language/inheritance cells, so 1000 rows in one request (the old `FILTERED_LIMIT`)
+    # made the page megabytes large — the core orders and slices the view, the grid
+    # renders the page it asked for.
     assert payloads[0]["limit"] == grid_query.FILTERED_LIMIT
     assert payloads[0]["start"] == 0
+    # The view's total comes from the core's count, not from the loaded rows.
+    assert [name for name, _, _ in FakeCore.calls].count("count_objects") == 1
 
 
-async def test_a_short_chunk_offers_no_load_more(products_user: User) -> None:
-    """A chunk smaller than the page size is the end of the list."""
-    _stub_objects(*OBJECTS)
-    await products_user.open("/products?type=product")
-
-    await products_user.should_see(t("grid.loaded_count", count=len(OBJECTS), locale=EN))
-    await products_user.should_not_see(marker="grid-load-more")
-
-
-async def test_the_grid_loads_the_next_chunk_on_demand(products_user: User) -> None:
-    """A full chunk shows the control, and the next chunk is appended from `start`."""
+async def test_the_pager_steps_through_the_view(products_user: User) -> None:
+    """`?page=2` loads the second page and the pager says which rows are on screen."""
     from meadow.frontend import grid_query
 
-    _stub_objects(*_many_objects(grid_query.FILTERED_LIMIT))
+    total = grid_query.PAGE_SIZE * 3
+    FakeCore.data["count_objects"] = {"count": total}
+    _stub_objects(*_many_objects(grid_query.PAGE_SIZE))
     await products_user.open("/products?type=product")
 
-    await products_user.should_see(marker="grid-load-more")
+    await products_user.should_see(marker="grid-pager")
     await products_user.should_see(
-        t("grid.loaded_count", count=grid_query.FILTERED_LIMIT, locale=EN)
+        marker="grid-page-label", content=t("grid.page_label", page=1, pages=3, locale=EN)
+    )
+    await products_user.should_see(
+        marker="grid-page-range",
+        content=t("grid.page_range", first=1, last=grid_query.PAGE_SIZE, total=total, locale=EN),
     )
 
-    # The next request continues where the loaded chunk ended; a short answer closes
-    # the list (and the counter counts both chunks).
-    _stub_objects(*_many_objects(5, start=grid_query.FILTERED_LIMIT))
-    products_user.find(marker="grid-load-more").click()
+    _stub_objects(*_many_objects(5, start=grid_query.PAGE_SIZE))
+    products_user.find(marker="grid-page-next").click()
     await _wait_until(lambda: len(_list_objects_calls()) > 1)
 
     payloads = _list_objects_calls()
-    assert payloads[1]["start"] == grid_query.FILTERED_LIMIT
-    assert payloads[1]["limit"] == grid_query.FILTERED_LIMIT
+    assert payloads[1]["start"] == grid_query.PAGE_SIZE
+    assert payloads[1]["limit"] == grid_query.PAGE_SIZE
     await products_user.should_see(
-        t("grid.loaded_count", count=grid_query.FILTERED_LIMIT + 5, locale=EN)
+        marker="grid-page-label", content=t("grid.page_label", page=2, pages=3, locale=EN)
     )
-    await products_user.should_not_see(marker="grid-load-more")
+    await products_user.should_see(
+        marker="grid-page-range",
+        content=t(
+            "grid.page_range",
+            first=grid_query.PAGE_SIZE + 1,
+            last=grid_query.PAGE_SIZE + 5,
+            total=total,
+            locale=EN,
+        ),
+    )
+
+
+async def test_a_view_without_a_total_shows_no_pager(products_user: User) -> None:
+    """A count the core cannot answer degrades to "no pager", never to a wrong one."""
+    _stub_objects(*OBJECTS)
+    await products_user.open("/products?type=product")
+
+    await products_user.should_not_see(marker="grid-pager")
 
 
 async def test_products_page_reports_an_empty_filter_result(products_user: User) -> None:

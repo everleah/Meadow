@@ -86,14 +86,15 @@ class ExportDialog:
         token: str,
         locale: str,
         fields: Callable[[], list[str]],
-        filtered_ids: Callable[[], list[str]],
+        filtered_ids: Callable[[], Awaitable[list[str]]],
         selected_ids: Callable[[], Awaitable[list[str]]],
         count: Callable[[], int],
         has_selection: bool,
     ) -> None:
         """
         :param fields: the export fields of the currently visible columns.
-        :param filtered_ids: the ids of the current filter result.
+        :param filtered_ids: the ids of the current filter result — the whole **view**, so
+        it is resolved by paging through the core on the page (the grid holds one page).
         :param selected_ids: the ids of the rows the user selected in the grid.
         :param count: how many objects the current filter holds (shown in the scope).
         """
@@ -155,7 +156,7 @@ class ExportDialog:
         if scope == "selected":
             ids = await self.selected_ids()
         else:
-            ids = self.filtered_ids()
+            ids = await self.filtered_ids()
         if not ids:
             ui.notify(t("grid.export_no_objects"), color="warning")
             return

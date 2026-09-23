@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
 from pydantic import BaseModel
@@ -206,6 +206,8 @@ class CoreClient:
         releases: bool = False,
         locale: str | None = None,
         resolve_inheritance: bool = False,
+        sort: str | None = None,
+        order: str | None = None,
         limit: int = 100,
         start: int = 0,
     ) -> list[dict]:
@@ -226,39 +228,34 @@ class CoreClient:
         tree server-side against the search field catalog. With ``locale``, each
         object carries a ``completeness`` value for that language (computed in the
         core); with ``completeness_lt``/``missing_required`` the core only returns
-        incomplete objects (filtered before ``start``/``limit`` apply).
+        incomplete objects (filtered before ``start``/``limit`` apply). With
+        ``sort``/``order`` the core orders the whole view (a sortable field of the
+        search catalog, ``id`` as tiebreaker) before it applies ``start``/``limit`` —
+        the grid pages through sorted views with it.
         """
-        params: dict[str, str] = {"limit": str(limit), "start": str(start)}
-        if object_type:
-            params["type"] = object_type
-        if ancestor:
-            params["ancestor"] = ancestor
-        if category:
-            params["category"] = category
-        if definition_id:
-            params["definition_id"] = definition_id
-        if collection:
-            params["collection"] = collection
-        if uncategorized:
-            params["uncategorized"] = "true"
-        if completeness_lt is not None:
-            params["completeness_lt"] = str(completeness_lt)
-        if missing_required:
-            params["missing_required"] = "true"
-        if ids:
-            params["ids"] = ",".join(ids)
-        if where:
-            params["where"] = where
-        if released_for:
-            params["released_for"] = released_for
-        if release_status:
-            params["release_status"] = release_status
-        if releases:
-            params["releases"] = "true"
-        if locale:
-            params["locale"] = locale
-        if resolve_inheritance:
-            params["resolve_inheritance"] = "true"
+        params = self._object_params(
+            {
+                "object_type": object_type,
+                "ancestor": ancestor,
+                "category": category,
+                "definition_id": definition_id,
+                "collection": collection,
+                "uncategorized": uncategorized,
+                "completeness_lt": completeness_lt,
+                "missing_required": missing_required,
+                "ids": ids,
+                "where": where,
+                "released_for": released_for,
+                "release_status": release_status,
+                "releases": releases,
+                "locale": locale,
+                "resolve_inheritance": resolve_inheritance,
+                "sort": sort,
+                "order": order,
+                "limit": limit,
+                "start": start,
+            }
+        )
         async with _api_client() as client:
             response = await client.get(
                 f"{self.base_url}/objects",
@@ -267,6 +264,63 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def count_objects(self, token: str, **filters: object) -> dict:
+        """Counts the objects a view contains (``GET /objects/count``).
+
+        Takes the filters of `list_objects` (`**filters`, the grid builds them once for
+        a page, its total and its column set — see `grid_query.py`) and answers
+        ``{"count": n}``. The core ignores ``limit``/``start``/``sort`` here; the grid
+        still sends the sort so a page and its total share one completeness walk.
+        """
+        return await self._object_query(token, "objects/count", filters)
+
+    async def attribute_usage(self, token: str, **filters: object) -> dict:
+        """The attribute names a view carries data for (``GET /objects/attribute-usage``).
+
+        Same filters as `list_objects` plus ``sample`` (how many objects of the view are
+        inspected, default in the core: 1000); answers ``{"names": [...], "sampled": n}``.
+        """
+        return await self._object_query(token, "objects/attribute-usage", filters)
+
+    @staticmethod
+    def _object_params(filters: Mapping[str, object]) -> dict[str, str]:
+        """The query parameters of an object query.
+
+        One builder for ``GET /objects``, ``/objects/count`` and
+        ``/objects/attribute-usage``: the grid asks all three with the **same** filter
+        arguments, so a parameter that is dropped here would silently change what a view
+        means. ``object_type`` is the API's ``type`` (``type`` is a builtin in Python),
+        a list of ids becomes a comma list, ``True`` becomes ``true`` and unset values
+        (``None``/``False``/empty) are left out.
+        """
+        params: dict[str, str] = {}
+        for key, value in filters.items():
+            if value is None or (isinstance(value, str) and not value):
+                continue
+            name = "type" if key == "object_type" else key
+            if isinstance(value, bool):
+                if value:
+                    params[name] = "true"
+                continue
+            if key == "ids":
+                entries = value if isinstance(value, list | tuple | set) else [value]
+                params[name] = ",".join(str(entry) for entry in entries)
+                continue
+            params[name] = str(value)
+        return params
+
+    async def _object_query(self, token: str, path: str, filters: Mapping[str, object]) -> dict:
+        """Runs an object query that answers one object (count, attribute usage)."""
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/{path}",
+                params=self._object_params(filters),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
 
     async def get_object_stats(
         self,

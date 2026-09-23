@@ -9,7 +9,7 @@ tested without a browser (`tests/test_bulk_edit.py`).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 #: Review status of the workflow state machine (plan/detail/workflow-freigaben.md);
@@ -49,12 +49,6 @@ def row_id(row: object) -> str | None:
 def ids_from_rows(rows: Iterable[object]) -> list[str]:
     """The object ids of grid rows, skipping the rows without one."""
     return [oid for oid in (row_id(row) for row in rows) if oid]
-
-
-def page_ids(rows: Sequence[object], page: int, size: int) -> list[str]:
-    """The ids of one grid page, as AG Grid's pagination reports it."""
-    start = page * size
-    return ids_from_rows(rows[start : start + size])
 
 
 def build_parameters(

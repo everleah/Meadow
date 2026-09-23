@@ -22,6 +22,7 @@ from meadow.frontend.grid import (
     language_field,
     offered_definitions,
     present_attribute_names,
+    sort_field,
 )
 
 
@@ -67,6 +68,103 @@ def test_standard_columns_stay_offered_when_a_view_restores_them() -> None:
         present_names=set(),
     )
     assert [definition["name"] for definition in offered] == ["EF000001"]
+
+
+def test_only_columns_with_a_stored_field_are_sortable() -> None:
+    """The core sorts the view, so a column without a stored field must not offer it."""
+    definitions = {
+        "color": _definition("color"),
+        "title": _definition("title", multilingual=True),
+    }
+
+    assert sort_field("_type", definitions=definitions, locale="de") == "type"
+    assert sort_field("_status", definitions=definitions, locale="de") == "status"
+    # The conventional label: the base key works for a string and for a language map.
+    assert sort_field("_name", definitions=definitions, locale="de") == "attributes.name"
+    assert sort_field("_id", definitions=definitions, locale="de") is None
+    assert sort_field("_completeness", definitions=definitions, locale="de") is None
+    assert sort_field("_releases", definitions=definitions, locale="de") is None
+    assert sort_field("_refs", definitions=definitions, locale="de") is None
+
+
+def test_a_multilingual_column_sorts_by_its_language() -> None:
+    """The column shows one language, so the view must be ordered by that language."""
+    definitions = {
+        "color": _definition("color"),
+        "title": _definition("title", multilingual=True),
+    }
+    # The declared data languages of the catalog (`GET /languages`) gate the variants.
+    declared = ["de", "en"]
+
+    assert (
+        sort_field(
+            attribute_field("title"), definitions=definitions, locale="de", languages=declared
+        )
+        == "attributes.title.de"
+    )
+    # A scalar attribute has no language variants.
+    assert (
+        sort_field(
+            attribute_field("color"), definitions=definitions, locale="de", languages=declared
+        )
+        == "attributes.color"
+    )
+    # The per-language columns name their language themselves.
+    assert (
+        sort_field(
+            attribute_field(language_field("title", "en")),
+            definitions=definitions,
+            locale="de",
+            languages=declared,
+        )
+        == "attributes.title.en"
+    )
+    assert (
+        sort_field(
+            language_field("_name", "fr"), definitions=definitions, locale="de", languages=declared
+        )
+        == "attributes.name.fr"
+    )
+    # An unknown attribute (a standard's feature without a definition here) has no
+    # language knowledge: the base key is the only safe field.
+    assert (
+        sort_field(
+            attribute_field("EF000001"),
+            definitions=definitions,
+            locale="de",
+            languages=declared,
+        )
+        == "attributes.EF000001"
+    )
+    # Without a language catalog (a degraded page) the base key stays the safe answer.
+    assert (
+        sort_field(attribute_field("title"), definitions=definitions, locale="de")
+        == "attributes.title"
+    )
+
+
+def test_a_locale_outside_the_catalog_falls_back_to_the_base_language() -> None:
+    """The core only sorts declared languages — everything else is a `400`."""
+    definitions = {"title": _definition("title", multilingual=True)}
+
+    assert (
+        sort_field(
+            attribute_field("title"),
+            definitions=definitions,
+            locale="de-AT",
+            languages=["de", "en"],
+        )
+        == "attributes.title.de"
+    )
+    assert (
+        sort_field(
+            attribute_field("title"),
+            definitions=definitions,
+            locale="pt-BR",
+            languages=["de", "en"],
+        )
+        == "attributes.title"
+    )
 
 
 def test_hidden_standard_vocabulary_is_not_offered() -> None:

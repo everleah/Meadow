@@ -245,8 +245,11 @@ class BulkConfigArea:
 class WizardCatalogs:
     """The page's catalogs the wizard renders its configuration from."""
 
-    #: The rows of the current grid view (count of the "filtered" scope).
+    #: The rows of the current grid **page** (the scope of the same name).
     rows: Sequence[object]
+    #: How many objects the "filtered" scope covers — the **view**, not the loaded page:
+    #: the grid pages server-side, so its rows are one page of the view.
+    filtered_total: int
     #: Own attributes offered as targets (name → label).
     attributes: dict[str, str]
     #: Relation types with a dedicated bulk operation (key → label).
@@ -316,7 +319,7 @@ class BulkWizard:
                 ui.select(
                     {
                         "filtered": t("grid.bulk_scope_filtered").format(
-                            count=len(self.catalogs.rows)
+                            count=self.catalogs.filtered_total
                         ),
                         "page": t("grid.bulk_scope_page"),
                         "selected": t("grid.bulk_scope_selected"),

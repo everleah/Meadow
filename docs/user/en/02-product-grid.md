@@ -11,6 +11,24 @@ The list deliberately does not load every object at once. Pick a node in the
 tree on the left and the table shows that node's objects. Without a selection it
 tells you which action it expects.
 
+The table shows **one page** of 200 objects; below the list it says which rows of
+how many you are looking at ("1–200 of 2000 objects", "Page 1 of 10") and which
+buttons step through the pages (first, previous, next, last). The numbers come
+from the server, not from the loaded rows: stepping fetches exactly the next
+page instead of letting the list grow in the browser. The page number is part of
+the address (`?page=2`), so a bookmark opens the same page.
+
+**Sorting** — clicking a column header sorts the **whole** view on the server
+(ascending, descending, and a third click returns to the default order, newest
+first). This works the same for id fields and attributes; columns without a
+stored value (such as completeness) cannot be sorted — sorting them would only
+reorder the visible page and mean something else once you step on. The sort is
+part of the address as well and stays while you page.
+
+While paging and sorting, the **column selection** stays as it is: which
+attributes get a column is decided for the whole view, not by the page on
+screen.
+
 The tree has three views (toolbar above the tree):
 
 | View | Shows |

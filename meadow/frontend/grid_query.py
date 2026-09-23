@@ -16,6 +16,14 @@ Two rules are part of the contract:
   travels **only** with the ``category``/``uncategorized`` filter it belongs to — a data
   filter without the taxonomy it counts would be dropped by the core, and a dimension
   alone is not a filter (`has_filter` ignores it).
+
+``sort``/``order``/``page`` are the **view** part of the state (like the column set):
+they order the view and select its page, travel in the URL so the view is bookmarkable,
+and are ignored by `has_filter` — they describe how a filtered view is read, not which
+objects belong to it. The grid pages server-side: `GET /objects` serves one page
+(`PAGE_SIZE` rows from `page_start`), `GET /objects/count` its total and
+`GET /objects/attribute-usage` the attribute names the whole view carries data for (so
+the columns do not depend on the page that happens to be loaded).
 """
 
 from __future__ import annotations
@@ -26,7 +34,10 @@ from urllib.parse import quote
 
 from meadow.frontend.relation_roles import PRIMARY_CATEGORY_DEF
 
-#: Every filter the grid knows, in the order the URL lists them.
+#: Every filter the grid knows, in the order the URL lists them. The last three are
+#: **not** filters but part of the view (like the column set): `sort`/`order` order the
+#: view and `page` selects its page. They travel in the URL so a sorted or paged view
+#: is bookmarkable, but `has_filter` ignores them — a plain visit still loads nothing.
 FILTER_KEYS = (
     "incomplete",
     "type",
@@ -38,20 +49,37 @@ FILTER_KEYS = (
     "released_for",
     "q",
     "where",
+    "sort",
+    "order",
+    "page",
 )
+
+#: How many rows one request of a **view walk** asks for (the export and bulk scopes
+#: cover the whole view, not the page on screen). 1000 is the core's documented cap for
+#: `GET /objects`.
+VIEW_PAGE = 1000
+
+#: How many objects `GET /objects/attribute-usage` inspects for the column set: it
+#: answers which attributes carry data **in the view**, so a standard attribute's column
+#: does not appear depending on which page happens to be loaded.
+USAGE_SAMPLE = 1000
 
 #: Filters that are switches: `1` in the URL means on, everything else is off.
 FLAG_KEYS = ("incomplete", "uncategorized")
 
-#: How many rows a **filtered** view loads per request. The page renders them
-#: client-side and appends the next chunk on demand (`grid.loaded_chunk`) — the whole
-#: point is the payload: every row carries every own attribute plus the language and
-#: inheritance cells, so 1000 rows made a single grid page 5,6 MB of HTML (measured
-#: 2026-09-22, 1000 products × ~166 columns). 200 rows keep a filtered view instant
-#: and still fill a readable amount of scrolling.
+#: How many rows a **page** of a filtered view holds. Every row carries every own
+#: attribute plus the language and inheritance cells, so the page size is also the
+#: payload lever: 1000 rows made a single grid page 5,6 MB of HTML (measured 2026-09-22,
+#: 1000 products × ~166 columns), 200 rows keep it instant and still fill a readable
+#: amount of scrolling.
 FILTERED_LIMIT = 200
 #: How many rows a list request would load without a filter (the grid stays empty anyway).
 PLAIN_LIMIT = 100
+
+#: The page size of a filtered view: the list asks for exactly this many rows
+#: (`GET /objects?limit=<PAGE_SIZE>&start=<page start>`) and `page_count` divides the
+#: total of `GET /objects/count` by it.
+PAGE_SIZE = FILTERED_LIMIT
 
 #: Filters that make a visit "filtered" (the grid then loads objects by itself).
 #: `definition_id` is missing on purpose: it only belongs to a category filter.
@@ -105,7 +133,34 @@ def filters_query(filters: Mapping[str, object]) -> str:
         parts.append(f"q={quote(str(filters['q']))}")
     if filters.get("where"):
         parts.append(f"where={quote(str(filters['where']))}")
+    # The view part: a sorted view stays sorted when it is bookmarked, and a page
+    # beyond the first is worth carrying (page 1 is the default and stays out).
+    if filters.get("sort"):
+        parts.append(f"sort={quote(str(filters['sort']))}")
+        if filters.get("order"):
+            parts.append(f"order={quote(str(filters['order']))}")
+    if page_number(filters) > 1:
+        parts.append(f"page={page_number(filters)}")
     return "&".join(parts)
+
+
+def page_number(filters: Mapping[str, object]) -> int:
+    """The 1-based page of the view (1 for absent, empty or nonsense)."""
+    try:
+        page = int(str(filters.get("page") or "").strip())
+    except ValueError:
+        return 1
+    return max(page, 1)
+
+
+def page_start(filters: Mapping[str, object]) -> int:
+    """The offset the view's current page starts at (`?start=` of `GET /objects`)."""
+    return (page_number(filters) - 1) * PAGE_SIZE
+
+
+def page_count(total: int, size: int = PAGE_SIZE) -> int:
+    """How many pages `total` rows have (an empty view is page 1 of 1)."""
+    return max(1, -(-max(total, 0) // size))
 
 
 def products_url(filters: Mapping[str, object]) -> str:
@@ -115,31 +170,20 @@ def products_url(filters: Mapping[str, object]) -> str:
 
 
 def list_limit(filters: Mapping[str, object]) -> int:
-    """How many rows a list request asks for (a filtered view asks for more)."""
-    return FILTERED_LIMIT if has_filter(filters) else PLAIN_LIMIT
+    """How many rows a list request asks for (a filtered view asks for a page)."""
+    return PAGE_SIZE if has_filter(filters) else PLAIN_LIMIT
 
 
-def loaded_chunk(loaded: int, page_size: int = FILTERED_LIMIT) -> bool:
-    """Whether another chunk may follow, given the number of loaded rows.
+def filter_arguments(filters: Mapping[str, object], *, locale: str) -> dict[str, Any]:
+    """The parameters every object query of one view shares.
 
-    A full chunk means "maybe": the truth is known when the next chunk comes back
-    short. Same rule as the taxonomy tree's paging (`taxonomy_tree.has_more`) — the
-    core's list has no total, and a count query per keystroke is not worth it.
-    """
-    return loaded > 0 and loaded % page_size == 0
-
-
-def list_arguments(
-    filters: Mapping[str, object], *, has_channels: bool, locale: str, start: int = 0
-) -> dict[str, Any]:
-    """The core arguments of a **filtered object list** (`GET /objects`).
+    `GET /objects` (a page), `GET /objects/count` (its total) and
+    `GET /objects/attribute-usage` (its column set) must describe the **same** view, so
+    they are built from one function — a page and its total can never disagree.
 
     `definition_id` (the dimension of a categorisation) is sent **only** for the
-    `category` and `uncategorized` filters: for every other view the core would validate
-    it and ignore it, so sending it would only pretend it had an effect.
-
-    `start` is the offset of the chunk: the grid appends the next one on demand
-    (`grid_query.loaded_chunk`), so a filtered view no longer loads 1000 rows at once.
+    `category`/`uncategorized` filters: for every other view the core would validate it
+    and ignore it, so sending it would only pretend it had an effect.
     """
     return {
         "object_type": filters.get("type"),
@@ -153,14 +197,59 @@ def list_arguments(
         "collection": filters.get("collection"),
         "uncategorized": bool(filters.get("uncategorized")),
         "released_for": filters.get("released_for"),
-        "releases": has_channels,
         "missing_required": bool(filters.get("incomplete")),
         "where": filters.get("where"),
         "locale": locale,
-        "resolve_inheritance": True,
-        "limit": list_limit(filters),
-        "start": start,
     }
+
+
+def sort_arguments(filters: Mapping[str, object]) -> dict[str, Any]:
+    """The `sort`/`order` pair of the view (`None` = the core's default order)."""
+    return {"sort": filters.get("sort") or None, "order": filters.get("order") or None}
+
+
+def list_arguments(
+    filters: Mapping[str, object],
+    *,
+    has_channels: bool,
+    locale: str,
+    start: int | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """The core arguments of a **filtered object list** (`GET /objects`).
+
+    Without `start`/`limit` this is the view's current **page**
+    (`[page_start, page_start + PAGE_SIZE)`); a caller that walks the whole view — the
+    export and the bulk scopes mean the view, not the rows on screen — overrides them
+    with an explicit offset and `VIEW_PAGE` rows per request. `releases`/
+    `resolve_inheritance` are page rendering, not filters.
+    """
+    return {
+        **filter_arguments(filters, locale=locale),
+        "releases": has_channels,
+        "resolve_inheritance": True,
+        "limit": list_limit(filters) if limit is None else limit,
+        "start": page_start(filters) if start is None else start,
+        **sort_arguments(filters),
+    }
+
+
+def count_arguments(filters: Mapping[str, object], *, locale: str) -> dict[str, Any]:
+    """The core arguments of the view's total (`GET /objects/count`).
+
+    `sort`/`order` travel **with** the count so the core shares one completeness walk
+    between a page and its total (it caches the walk per filter *and* sort,
+    `crates/AGENTS.md`); `releases`/`resolve_inheritance`/`limit`/`start` describe the
+    page, not the view.
+    """
+    return {**filter_arguments(filters, locale=locale), **sort_arguments(filters)}
+
+
+def usage_arguments(
+    filters: Mapping[str, object], *, locale: str, sample: int = USAGE_SAMPLE
+) -> dict[str, Any]:
+    """The core arguments of the view's column set (`GET /objects/attribute-usage`)."""
+    return {**filter_arguments(filters, locale=locale), "sample": sample}
 
 
 def search_arguments(

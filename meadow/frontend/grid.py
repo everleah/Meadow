@@ -25,7 +25,6 @@ from meadow.frontend.api import CoreClient, CoreError, is_session_expired
 from meadow.frontend.auth import handle_session_expired
 from meadow.frontend.bulk_edit import (
     ids_from_rows,
-    page_ids,
     row_id,
 )
 from meadow.frontend.bulk_report import replace_target_options
@@ -313,6 +312,60 @@ def restore_columns(stored: object, known_fields: set[str]) -> set[str] | None:
 def language_field(prefix: str, language: str) -> str:
     """Returns the field name of a per-language column (`<prefix>__<lang>`)."""
     return f"{prefix}{LANG_SEPARATOR}{language}"
+
+
+def sort_field(
+    column_field: str,
+    *,
+    definitions: Mapping[str, Mapping[str, object]],
+    locale: str,
+    languages: Iterable[str] = (),
+) -> str | None:
+    """The core sort field of a grid column, or ``None`` when it cannot be sorted.
+
+    The grid's columns are display fields; the core sorts on the **stored** field and
+    only accepts a *sortable* field of the search catalog (`GET /search-fields`, see
+    `crates/AGENTS.md`), so a column either maps to such a field or the grid must not
+    offer sorting for it at all — a sort that only reorders the loaded page while the
+    view stays unsorted would be a lie.
+
+    The mapping of the three mappable shapes:
+
+    - ``_type``/``_status`` are the stored `type`/`status` columns.
+    - ``_name`` is the **conventional label** (`attributes.name`). The base key is used
+      deliberately: it is the one spelling that works for both shapes an object may
+      store (a plain string, as collections do, and a language map), and on the dev data
+      it orders exactly like the `de` value (`de` is the first entry of every map).
+    - ``attr_<name>`` is the attribute's working-language value — a multilingual
+      attribute is sorted by its **language** entry (`attributes.<name>.<lang>`), which
+      is the value the column shows. The column's own per-language columns
+      (`attr_<name>__<lang>`, `_name__<lang>`) sort by that language.
+    """
+    if column_field in ("_type", "_status"):
+        return column_field[1:]
+    if column_field == NAME_FIELD_PREFIX:
+        return "attributes.name"
+    if column_field.startswith(f"{NAME_FIELD_PREFIX}{LANG_SEPARATOR}"):
+        language = column_field.split(LANG_SEPARATOR, 1)[1]
+        return f"attributes.name.{language}" if language else None
+    if not column_field.startswith("attr_"):
+        return None
+    name = column_field[len("attr_") :]
+    if not name:
+        return None
+    if LANG_SEPARATOR in name:
+        attribute, language = name.split(LANG_SEPARATOR, 1)
+        return f"attributes.{attribute}.{language}" if attribute and language else None
+    definition = definitions.get(name) or {}
+    if definition.get("multilingual"):
+        # The core only knows the languages its catalog declares. A working language
+        # outside of them (e.g. `de-DE` without a declared variant) falls back to the
+        # attribute's base language when there is one, otherwise to the base field.
+        declared = {str(code) for code in languages}
+        for candidate in (locale, locale.split("-")[0] if locale else ""):
+            if candidate and candidate in declared:
+                return f"attributes.{name}.{candidate}"
+    return f"attributes.{name}"
 
 
 def present_attribute_names(objects: Iterable[Mapping[str, object]]) -> set[str]:
@@ -827,13 +880,14 @@ async def products_page(request: Request) -> None:
         # show/hide the create action.
         create_types = creatable_types(object_types)
 
-        async def fetch_filtered(start: int = 0) -> list[dict]:
-            """Loads one chunk of the objects matching the filters (see `grid_query.py`).
+        async def fetch_filtered() -> list[dict]:
+            """Loads the current **page** of the objects matching the filters.
 
-            `start` is the offset of the chunk: the grid appends the next chunk when the
-            user asks for it (`grid_query.loaded_chunk`), so a filtered view no longer
-            pulls 1000 rows (and their language/inheritance cells) into one page. The
-            search path stays a single capped request (`SEARCH_LIMIT` hits).
+            The page is `?page=` of the view (`grid_query.PAGE_SIZE` rows from
+            `page_start`) and comes **ordered** by the core: sorting and paging belong to
+            the whole view, not to the loaded rows, so the grid renders what the server
+            decided (`grid_query.list_arguments`). The search path stays a single capped
+            request (`SEARCH_LIMIT` hits) — a hit list is a result, not a page of a view.
             """
             if not has_filter():
                 return []
@@ -863,68 +917,120 @@ async def products_page(request: Request) -> None:
                 )
             return await client.list_objects(
                 token,
-                **grid_query.list_arguments(
-                    active, has_channels=bool(channels), locale=locale, start=start
-                ),
+                **grid_query.list_arguments(active, has_channels=bool(channels), locale=locale),
             )
+
+        async def fetch_total() -> int | None:
+            """The number of objects in the view (`None` = no pager).
+
+            `GET /objects/count` takes exactly the list's filters (`grid_query` builds
+            both from one function), so the total can never describe another view. A
+            search or a plain visit has no pager: the hit list is capped by design.
+            """
+            if not has_filter() or active["q"]:
+                return None
+            payload = await client.count_objects(
+                token, **grid_query.count_arguments(active, locale=locale)
+            )
+            count = payload.get("count")
+            return int(count) if isinstance(count, int) else None
+
+        async def fetch_usage_names() -> set[str]:
+            """The attribute names the **whole view** carries data for.
+
+            The column set used to follow the loaded rows, so a standard attribute got
+            its column when a page happened to carry its first value. With paging that
+            would make the columns depend on the page: the core answers it for the view
+            (`GET /objects/attribute-usage`, `grid_query.usage_arguments`).
+            """
+            if not has_filter():
+                return set()
+            payload = await client.attribute_usage(
+                token, **grid_query.usage_arguments(active, locale=locale)
+            )
+            return {str(name) for name in payload.get("names") or []}
 
         # On a plain /products visit we deliberately avoid loading every object:
         # the grid stays empty and the user picks a node in the tree or searches.
         # A filter (e.g. `?incomplete=1&type=product`, `?ancestor=…`, `?category=…`)
         # loads the targeted objects so shortcuts still work.
         objects: list[dict] = []
+        total: int | None = None
         try:
             objects = await fetch_filtered()
+            total = await fetch_total()
         except CoreError, httpx.HTTPError:  # keep the page usable (filter bar + grid)
             ui.notify(t("grid.load_failed"), color="negative")
         no_objects_label = ui.label(t("grid.no_objects")).classes("text-subtitle1")
         no_objects_label.set_visibility(has_filter() and not objects)
         selection_hint.set_visibility(not has_filter())
 
-        # The grid loads its rows in **chunks** (`grid_query.FILTERED_LIMIT`): every row
-        # carries all own attributes plus the language and inheritance cells, so 1000
-        # rows meant 5,6 MB of page HTML (measured 2026-09-22). A full chunk means
-        # "there may be more" — the button below appends the next one; a short chunk is
-        # the end of the list. The label always says how many rows are loaded, so
-        # nothing is truncated silently (same contract as the taxonomy tree's paging).
+        # The grid pages **server-side** (`grid_query.PAGE_SIZE` rows per page): every row
+        # carries all own attributes plus the language and inheritance cells, so one page
+        # of 1000 rows was 5,6 MB of HTML (measured 2026-09-22). The core owns the order
+        # and the total, this row only steps through the pages and always says which rows
+        # of how many are on screen — nothing is truncated silently.
         loaded_objects: list[dict] = list(objects)
-        more_state: dict[str, bool] = {"more": grid_query.loaded_chunk(len(objects))}
-        with ui.row().classes("items-center gap-2 pt-1"):
-            more_button = ui.button(t("grid.load_more"), on_click=lambda: load_more()).props(
-                "flat dense no-caps"
+        view_state: dict[str, int | None] = {"total": total}
+        with ui.row().classes("items-center gap-2 pt-1") as pager_row:
+            pager_row.mark("grid-pager")
+            first_button = (
+                ui.button(icon="first_page", on_click=lambda: load_page(1))
+                .props("flat dense round")
+                .mark("grid-page-first")
+                .tooltip(t("grid.page_first"))
             )
-            more_button.mark("grid-load-more")
-            loaded_label = ui.label("").classes("text-caption text-gray-600")
-            loaded_label.mark("grid-loaded-count")
+            prev_button = (
+                ui.button(
+                    icon="chevron_left",
+                    on_click=lambda: load_page(grid_query.page_number(active) - 1),
+                )
+                .props("flat dense round")
+                .mark("grid-page-prev")
+                .tooltip(t("grid.page_prev"))
+            )
+            range_label = ui.label("").classes("text-caption")
+            range_label.mark("grid-page-range")
+            next_button = (
+                ui.button(
+                    icon="chevron_right",
+                    on_click=lambda: load_page(grid_query.page_number(active) + 1),
+                )
+                .props("flat dense round")
+                .mark("grid-page-next")
+                .tooltip(t("grid.page_next"))
+            )
+            last_button = (
+                ui.button(
+                    icon="last_page",
+                    on_click=lambda: load_page(grid_query.page_count(view_state["total"] or 0)),
+                )
+                .props("flat dense round")
+                .mark("grid-page-last")
+                .tooltip(t("grid.page_last"))
+            )
+            pages_label = ui.label("").classes("text-caption text-gray-600")
+            pages_label.mark("grid-page-label")
 
-        def update_more_controls() -> None:
-            """Shows the row counter and hides the button once the list is complete."""
-            if not loaded_objects or not has_filter():
-                loaded_label.set_visibility(False)
-                more_button.set_visibility(False)
+        def update_pager_controls() -> None:
+            """Shows the page controls and what they can do (`None` total = no pager)."""
+            total = view_state["total"]
+            if total is None or not has_filter() or active["q"]:
+                # No total (a search, a plain visit or a failed count): the rows are
+                # shown without a pager instead of pretending a page count.
+                pager_row.set_visibility(False)
                 return
-            loaded_label.set_text(t("grid.loaded_count", count=len(loaded_objects)))
-            loaded_label.set_visibility(True)
-            more_button.set_visibility(more_state["more"])
-
-        async def load_more() -> None:
-            """Appends the next chunk of the filtered list (client-side rendering)."""
-            if not more_state["more"]:
-                return
-            more_button.props("loading")
-            try:
-                more = await fetch_filtered(start=len(loaded_objects))
-            except CoreError, httpx.HTTPError:
-                ui.notify(t("grid.load_failed"), color="negative")
-                return
-            finally:
-                more_button.props(remove="loading")
-            more_state["more"] = grid_query.loaded_chunk(len(more) + len(loaded_objects))
-            if not more:
-                more_state["more"] = False
-                update_more_controls()
-                return
-            await append_rows(more)
+            pager_row.set_visibility(True)
+            page = grid_query.page_number(active)
+            pages = grid_query.page_count(total)
+            first_row = grid_query.page_start(active) + 1
+            last_row = min(total, first_row + len(loaded_objects) - 1) if loaded_objects else 0
+            range_label.set_text(t("grid.page_range", first=first_row, last=last_row, total=total))
+            pages_label.set_text(t("grid.page_label", page=page, pages=pages))
+            first_button.set_enabled(page > 1)
+            prev_button.set_enabled(page > 1)
+            next_button.set_enabled(page < pages)
+            last_button.set_enabled(page < pages)
 
         try:
             # The **slim vocabulary** of *all* definitions, not the paged catalog
@@ -998,9 +1104,17 @@ async def products_page(request: Request) -> None:
         # authentication is cleared on logout, see `auth.clear_session`).
         restored = restore_columns(app.storage.user.get(COLUMNS_STORAGE_KEY), candidate_fields)
         visible_fields: set[str] = restored or set(default_fields)
-        #: Attribute names the loaded objects carry a value for. Reference data is
-        #: *read*, not chosen: a standard column is offered once data exists.
-        present_names = present_attribute_names(objects)
+        #: Attribute names the view carries a value for. Reference data is *read*, not
+        #: chosen: a standard column is offered once data exists — and with server
+        #: paging that must be a property of the **view**, not of the page on screen,
+        #: so the core answers it (`GET /objects/attribute-usage`) and the loadable rows
+        #: only add what the sample did not cover.
+        usage_names: set[str] = set()
+        try:
+            usage_names = await fetch_usage_names()
+        except CoreError, httpx.HTTPError:  # degrade to the loaded rows
+            usage_names = set()
+        present_names = present_attribute_names(objects) | usage_names
         #: Own catalogue plus the standard attributes that carry data (or are
         #: restored) — the vocabulary of an imported standard is 17 377 strong and
         #: must not become 17 377 columns and picker rows.
@@ -1131,6 +1245,25 @@ async def products_page(request: Request) -> None:
                 {"headerName": "", "field": "_refs", "width": 60, "pinned": "right"},
             ]
         )
+        # Which core field a column sorts by (`None` = not sortable). The core sorts the
+        # **view**, so a column either has such a field or the header offers no sorting at
+        # all — a sort that only reordered the loaded page would mean something else on
+        # the next page (a computed column like `_completeness` has no stored field).
+        server_sort: dict[str, str] = {}
+        for column in column_defs:
+            field = str(column.get("field") or "")
+            core_field = sort_field(
+                field,
+                definitions=definitions_by_name,
+                locale=locale,
+                languages=[str(row.get("code") or "") for row in languages],
+            )
+            column["sortable"] = core_field is not None
+            if core_field:
+                server_sort[field] = core_field
+        #: Set while the column state is applied programmatically: AG Grid reports that as
+        #: a sort change, and it must not start a reload of its own.
+        suppress_sort: dict[str, bool] = {"value": False}
 
         original_by_id = {str(object_.get("id")): object_ for object_ in objects}
         # The rows exactly as they were loaded: staged values are compared against
@@ -1217,44 +1350,120 @@ async def products_page(request: Request) -> None:
             all_rows = make_rows(selected_objects)
             loaded_rows_by_id = {str(row["_id"]): dict(row) for row in all_rows}
             loaded_objects = list(selected_objects)
-            # A search answers its capped hit list in one go, so only a filtered list
-            # (a chunked `GET /objects`) can have more to load.
-            more_state["more"] = not active["q"] and grid_query.loaded_chunk(len(selected_objects))
             grid.run_grid_method("setGridOption", "rowData", all_rows)
             selection_hint.set_visibility(len(selected_objects) == 0 and not has_filter())
             no_objects_label.set_visibility(len(selected_objects) == 0 and has_filter())
-            update_more_controls()
+            update_pager_controls()
 
-        async def append_rows(more_objects: list[dict]) -> None:
-            """Appends a chunk to the loaded rows (the "load more" button).
+        async def reload_grid(*, reset_page: bool = True) -> None:
+            """Fetches the view's current page and total (no page reload).
 
-            Rows are built with the same `make_rows`, so the appended ones carry the
-            same cells and markers. A column the first chunk did not know (a standard
-            attribute whose only value is in a later chunk) is not offered until the
-            next filter change — the column picker's own attributes are unaffected.
+            A filter change starts at page 1 (`reset_page`), a page step keeps the page it
+            was given. Rows and total are two requests against the same filter chain
+            (`grid_query`), and the core shares one completeness walk between them.
             """
-            nonlocal all_rows
-            loaded_objects.extend(more_objects)
-            original_by_id.update({str(o.get("id")): o for o in more_objects})
-            appended = make_rows(more_objects)
-            loaded_rows_by_id.update({str(row["_id"]): dict(row) for row in appended})
-            all_rows = all_rows + appended
-            grid.run_grid_method("setGridOption", "rowData", all_rows)
-            update_more_controls()
-
-        async def reload_grid() -> None:
-            """Re-fetches the grid rows for the active filters (no page reload)."""
+            if reset_page:
+                active["page"] = None
+                view_state["total"] = None
             load_seq["value"] += 1
             seq = load_seq["value"]
             try:
                 new_objects = await fetch_filtered()
+                total = await fetch_total()
             except CoreError, httpx.HTTPError:  # keep the current rows
                 ui.notify(t("grid.load_failed"), color="negative")
                 return
             if seq != load_seq["value"]:
                 return  # a newer reload already applied its rows
+            view_state["total"] = total
             await apply_rows(new_objects)
             sync_url_query()
+
+        async def load_page(page: int) -> None:
+            """Jumps to a page of the current view (`grid_query.PAGE_SIZE` rows each)."""
+            if not has_filter() or active["q"]:
+                return
+            total = view_state["total"]
+            target = max(1, page)
+            if total is not None:
+                target = min(target, grid_query.page_count(total))
+            if target == grid_query.page_number(active):
+                return
+            active["page"] = None if target == 1 else str(target)
+            await reload_grid(reset_page=False)
+
+        async def handle_sort_changed() -> None:
+            """Sorts the **view** when the user clicks a column header.
+
+            AG Grid sorts the rows it holds (all of them: one page), but which rows are on
+            a page is the server's decision — a sort that only reordered the loaded page
+            would silently mean something else on the next page. The core sorts on the
+            stored field (`sort_field`), so a column without one is not sortable at all
+            (`column_defs`) and never reaches this handler.
+            """
+            if suppress_sort["value"] or not has_filter() or active["q"]:
+                return
+            try:
+                state = await grid.run_grid_method("getColumnState")
+            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
+                return
+            sorted_columns = [
+                column
+                for column in (state or [])
+                if isinstance(column, dict) and column.get("sort")
+            ]
+            if not sorted_columns:
+                # The third click on a header clears the sort: back to the core's order.
+                if not active["sort"]:
+                    return
+                active.update(sort=None, order=None)
+            else:
+                first = sorted_columns[0]
+                field = server_sort.get(str(first.get("colId") or ""))
+                if not field:
+                    return
+                order = "desc" if str(first.get("sort")) == "desc" else "asc"
+                if (active["sort"], active["order"]) == (field, order):
+                    return
+                active.update(sort=field, order=order)
+            await reload_grid()
+
+        async def on_sort_changed(_event) -> None:
+            """AG Grid event → the view's sort (see `handle_sort_changed`)."""
+            await handle_sort_changed()
+
+        def restore_sort_state() -> None:
+            """Shows the view's `?sort=` in the grid's header.
+
+            The rows already arrive ordered by the core; this only sets the column state,
+            so the header shows which field the view is sorted by and the next click on it
+            continues the asc/desc cycle. AG Grid reports the programmatic change as a
+            sort change, hence `suppress_sort`.
+            """
+            field = active["sort"]
+            if not field:
+                return
+            column = next(
+                (
+                    str(candidate.get("field") or "")
+                    for candidate in column_defs
+                    if server_sort.get(str(candidate.get("field") or "")) == field
+                ),
+                "",
+            )
+            if not column:
+                return
+            suppress_sort["value"] = True
+            try:
+                grid.run_grid_method(
+                    "applyColumnState",
+                    {
+                        "state": [{"colId": column, "sort": active["order"] or "asc"}],
+                        "defaultState": {"sort": None},
+                    },
+                )
+            finally:
+                suppress_sort["value"] = False
 
         async def handle_tree_select(e) -> None:
             selected = e.value if hasattr(e, "value") else None
@@ -1645,14 +1854,40 @@ async def products_page(request: Request) -> None:
             if definition.get("name") and visible_in_picker(definition)
         }
 
+        async def view_ids() -> list[str]:
+            """Every object id of the current **view** (the grid holds one page of it).
+
+            The scope "current filter" of the export dialog and of the bulk wizard means
+            the view, not the rows on screen: with server paging those are one page, and
+            an export or a bulk run over a single page would silently leave the rest of
+            the view untouched. The core pages through `GET /objects` (`limit` caps at
+            1000, `grid_query.VIEW_PAGE`) until a short page says the view is complete.
+            """
+            if not has_filter():
+                return []
+            ids: list[str] = []
+            while True:
+                chunk = await client.list_objects(
+                    token,
+                    **grid_query.list_arguments(
+                        active,
+                        has_channels=False,
+                        locale=locale,
+                        start=len(ids),
+                        limit=grid_query.VIEW_PAGE,
+                    ),
+                )
+                # `GET /objects` answers core objects (`id`), not grid rows (`_id`).
+                for row in chunk:
+                    object_id = row.get("id") if isinstance(row, dict) else None
+                    if object_id:
+                        ids.append(str(object_id))
+                if len(chunk) < grid_query.VIEW_PAGE:
+                    return ids
+
         async def _current_page_ids() -> list[str]:
-            """Return the object ids of the rows on the current grid page."""
-            try:
-                page = int(await grid.run_grid_method("paginationGetCurrentPage") or 0)
-                size = int(await grid.run_grid_method("paginationGetPageSize") or 50)
-            except Exception:  # noqa: BLE001 - the AG Grid bridge has no narrow contract
-                page, size = 0, 50
-            return page_ids(all_rows, page, size)
+            """The object ids of the page on screen (the grid shows exactly one)."""
+            return ids_from_rows(all_rows)
 
         async def _scope_ids(scope: str) -> list[str]:
             """Resolves a selection scope (`filtered`/`page`/`selected`) to ids."""
@@ -1660,6 +1895,8 @@ async def products_page(request: Request) -> None:
                 rows: list = await grid.get_selected_rows()
             elif scope == "page":
                 return await _current_page_ids()
+            elif scope == "filtered":
+                return await view_ids()
             else:
                 rows = all_rows
             return ids_from_rows(rows)
@@ -1673,6 +1910,7 @@ async def products_page(request: Request) -> None:
             locale=locale,
             catalogs=WizardCatalogs(
                 rows=all_rows,
+                filtered_total=view_state["total"] or len(all_rows),
                 attributes=bulk_attr_options,
                 relation_options=bulk_relation_options,
                 relation_definitions=relation_def_by_key,
@@ -1699,7 +1937,7 @@ async def products_page(request: Request) -> None:
                 **replace_target_options(definitions, locale),
             },
             scope_ids=_scope_ids,
-            count=lambda: len(all_rows),
+            count=lambda: view_state["total"] or len(all_rows),
             initial_scope="selected" if bulk_selected_ids else "filtered",
             on_started=bulk_wizard.poll,
         )
@@ -1841,9 +2079,9 @@ async def products_page(request: Request) -> None:
             token=token,
             locale=locale,
             fields=_export_fields,
-            filtered_ids=lambda: ids_from_rows(all_rows),
+            filtered_ids=view_ids,
             selected_ids=_selected_ids,
-            count=lambda: len(all_rows),
+            count=lambda: view_state["total"] or len(all_rows),
             has_selection=bool(bulk_selected_ids),
         )
         export_dialog.build()
@@ -2246,8 +2484,12 @@ async def products_page(request: Request) -> None:
                             "columnDefs": column_defs,
                             "rowData": all_rows,
                             "rowSelection": {"mode": "multiRow"},
-                            "pagination": True,
-                            "paginationPageSize": 50,
+                            # The rows are already one **page** of the view (the core
+                            # ordered and sliced it): AG Grid's own pagination would page
+                            # through that page and report its size as the total. The
+                            # pager below the grid is the view's, and the header click
+                            # sorts the view on the server (`handle_sort_changed`).
+                            "pagination": False,
                             # Header tooltips via the native browser tooltip (`title`):
                             # AG Grid's own tooltip component does not show up here.
                             "enableBrowserTooltips": True,
@@ -2265,8 +2507,12 @@ async def products_page(request: Request) -> None:
                 grid.on("cellClicked", handle_cell_clicked, ["data", "colId"])
                 grid.on("cellDoubleClicked", handle_open_cell, ["data", "colId"])
                 grid.on("selectionChanged", handle_selection, ["selectedRows"])
+                grid.on("sortChanged", on_sort_changed)
                 # Restore the column set the user had before (reload, browser-back
                 # from the form, re-login) — the columns start hidden per definition.
                 apply_visibility(visible_fields)
-                # The row counter and the "load more" button for the first chunk.
-                update_more_controls()
+                # A sorted view goes through the URL: show the arrow of the header the
+                # view is sorted by (the data itself is already ordered by the core).
+                restore_sort_state()
+                # The view's page controls (page/range/enabled steps).
+                update_pager_controls()

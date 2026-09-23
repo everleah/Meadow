@@ -12,7 +12,6 @@ from meadow.frontend.bulk_edit import (
     build_parameters,
     ids_from_rows,
     missing_parameters,
-    page_ids,
     row_id,
 )
 
@@ -102,11 +101,3 @@ def test_row_id_reads_data_dicts_and_row_nodes() -> None:
 
 def test_ids_from_rows_skips_rows_without_an_id() -> None:
     assert ids_from_rows([{"_id": "a"}, {"data": {}}, "b", {"_id": "c"}]) == ["a", "c"]
-
-
-def test_page_ids_slices_by_page_and_size() -> None:
-    rows = [{"_id": f"id{index}"} for index in range(25)]
-
-    assert page_ids(rows, 0, 10) == [f"id{index}" for index in range(10)]
-    assert page_ids(rows, 2, 10) == [f"id{index}" for index in range(20, 25)]
-    assert page_ids(rows, 3, 10) == []
