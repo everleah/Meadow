@@ -679,6 +679,7 @@
   "search_form.field_created_at": "Created",
   "search_form.field_updated_at": "Updated",
   "search_form.field_source": "Source",
+  "search_form.field_name": "Name",
   "search_form.group_system": "Object",
   "search_form.group_attributes": "Attributes",
   "search_form.section_conditions": "Conditions",

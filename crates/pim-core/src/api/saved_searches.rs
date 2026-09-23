@@ -19,11 +19,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
+use crate::cache::MetaCache;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -326,11 +328,12 @@ async fn fetch_object(db: &Db, id: &str) -> Result<Option<Value>, ApiError> {
 /// Returns the catalog so the caller can execute the normalized query without
 /// loading it twice.
 async fn check_query(
+    cache: &MetaCache,
     db: &Db,
     query: &mut SavedSearchQuery,
-) -> Result<search_schema::Catalog, ApiError> {
+) -> Result<Arc<search_schema::Catalog>, ApiError> {
     search_schema::normalize_query(query);
-    let catalog = search_schema::load(db).await?;
+    let catalog = cache.search_catalog(db).await?;
     let errors = search_schema::validate_query(query, &catalog);
     if !errors.is_empty() {
         return Err(ApiError::bad_request(errors.join("; ")));
@@ -477,7 +480,7 @@ pub async fn create_saved_search(
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
     let mut query = body.query;
-    check_query(&state.db, &mut query).await?;
+    check_query(&state.cache, &state.db, &mut query).await?;
     let mut attributes = Map::new();
     attributes.insert("name".to_owned(), Value::String(name));
     attributes.insert(
@@ -582,7 +585,7 @@ pub async fn update_saved_search(
     }
     if let Some(query) = body.query {
         let mut query = query;
-        check_query(&state.db, &mut query).await?;
+        check_query(&state.cache, &state.db, &mut query).await?;
         attributes.insert(
             "query".to_owned(),
             serde_json::to_value(&query).unwrap_or_else(|_| json!({})),
@@ -732,7 +735,7 @@ pub async fn execute_saved_search(
         .transpose()
         .map_err(|e| ApiError::bad_request(format!("invalid stored query: {e}")))?
         .unwrap_or_default();
-    let catalog = check_query(&state.db, &mut query).await?;
+    let catalog = check_query(&state.cache, &state.db, &mut query).await?;
     let ids = execute_query(&state.db, &query, &catalog).await?;
     Ok(Json(json!({ "count": ids.len(), "ids": ids })))
 }
@@ -756,10 +759,10 @@ pub async fn list_search_fields(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
-    let catalog = search_schema::load(&state.db).await?;
-    let document = serde_json::to_value(&catalog)
+    let document = state.cache.search_fields_json(&state.db).await?;
+    let parsed: Value = serde_json::from_str(&document)
         .map_err(|error| ApiError::internal(format!("catalog is not serializable: {error}")))?;
-    Ok(Json(document))
+    Ok(Json(parsed))
 }
 
 /// Runs a query without storing it (live hit count for the search form).
@@ -784,7 +787,7 @@ pub async fn preview_saved_search(
 ) -> Result<Json<Value>, ApiError> {
     api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
     let mut query = body;
-    let catalog = check_query(&state.db, &mut query).await?;
+    let catalog = check_query(&state.cache, &state.db, &mut query).await?;
     let ids = execute_query(&state.db, &query, &catalog).await?;
     Ok(Json(json!({ "count": ids.len(), "ids": ids })))
 }
@@ -1237,7 +1240,7 @@ pub async fn refresh_collection(
         .transpose()
         .map_err(|e| ApiError::bad_request(format!("invalid stored query: {e}")))?
         .unwrap_or_default();
-    let catalog = check_query(&state.db, &mut query).await?;
+    let catalog = check_query(&state.cache, &state.db, &mut query).await?;
     let ids = execute_query(&state.db, &query, &catalog).await?;
 
     let member_keys: Vec<String> = ids

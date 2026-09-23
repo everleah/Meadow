@@ -33,6 +33,9 @@ use crate::error::ApiError;
 pub(crate) type CompositionMap = HashMap<String, String>;
 /// A version-bound cache entry: the data version it was computed for, plus payload.
 type Versioned<T> = Option<(u64, Arc<T>)>;
+/// Version-bound entries **per key** (the payload of an arbitrary number of keys,
+/// e.g. one per working language or per filtered view).
+type VersionedMap<T> = HashMap<String, (u64, Arc<T>)>;
 
 /// Caches frequently read, rarely written metadata.
 #[derive(Default)]
@@ -54,11 +57,33 @@ pub struct MetaCache {
     /// Relation keys (`rel_…`) of every categorisation relation, asked on every
     /// class-feature and completeness lookup.
     category_relations: RwLock<Option<Arc<Vec<String>>>>,
+    /// The search-field catalog (`GET /search-fields`), bound to `stats_version`.
+    ///
+    /// Loading and building it costs ~0,9 s of queries (17 463 attribute
+    /// definitions, 263 ms just for the distinct statuses) plus the in-memory
+    /// build, and `GET /objects?where=…` plus every saved-search execution paid
+    /// that **per request** — measured 4,5 s and 5,5 s in the debug build.
+    search_catalog: RwLock<Option<(u64, Arc<crate::api::search_schema::Catalog>)>>,
+    /// The catalog as a **serialized** document, bound to `stats_version` (the
+    /// answer of `GET /search-fields`; 5,9 MB, so the bytes are cached, like the
+    /// attribute vocabulary).
+    search_fields_json: RwLock<Option<(u64, Arc<String>)>>,
     /// The composition map (`child key → parent key`) of the whole tree, bound to
     /// `stats_version`: every page load of the grid, every dashboard aggregation
     /// and every rule-compute batch walks it, while only a reference write can
     /// change it.
     composition_map: RwLock<Versioned<CompositionMap>>,
+    /// The ordered keys of a **completeness-filtered** object view, per
+    /// `(filter, sort)`, bound to `stats_version`.
+    ///
+    /// The completeness filter runs in Rust (it needs the required names per type
+    /// and the values inherited along `depends_on`), so a page of such a view is only
+    /// known after walking **every** candidate: the "nur unvollständige" view of the
+    /// dev data matches 230 of 4614 candidates and cost 3 s per request, and a pager
+    /// asks for that view again for every page. The walk's key list is therefore
+    /// cached — the total, the following pages and the column set of the same view
+    /// share it. Every write bumps the version, so a stale view is never served.
+    view_keys: RwLock<VersionedMap<Vec<String>>>,
     /// Categorisation edges (`object key → class node keys`), bound to
     /// `stats_version` — the second full scan of `reference` that every page with
     /// completeness ran.
@@ -317,6 +342,75 @@ impl MetaCache {
     /// concurrent miss recomputes it instead of queueing (measured ~190 ms warm).
     pub async fn store_composition_types(&self, version: u64, payload: Arc<Value>) {
         *self.composition_types.write().await = Some((version, payload));
+    }
+
+    /// The ordered keys of a completeness-filtered view (see [`Self::view_keys`]),
+    /// if they were computed for `version`.
+    pub async fn cached_view_keys(&self, key: &str, version: u64) -> Option<Arc<Vec<String>>> {
+        self.view_keys
+            .read()
+            .await
+            .get(key)
+            .filter(|(stored, _)| *stored == version)
+            .map(|(_, keys)| keys.clone())
+    }
+
+    /// Stores the ordered keys of a completeness-filtered view.
+    ///
+    /// The key is the filter **and** its sort (a view is its rows in their order), so
+    /// the cache holds one entry per view a client asked for. Every write bumps
+    /// [`Self::stats_version`], which makes the entry unreachable at once; the map is
+    /// not pruned on the bump, so the entries of the previous version stay until the
+    /// same view is asked for again. That is the price of not walking 4614 candidates
+    /// per request (3 s) — an unbounded number of *distinct* filters is the same
+    /// memory question the stats cache answers the same way.
+    pub async fn store_view_keys(&self, key: &str, version: u64, keys: Arc<Vec<String>>) {
+        self.view_keys
+            .write()
+            .await
+            .insert(key.to_owned(), (version, keys));
+    }
+
+    /// The search-field catalog, bound to [`Self::stats_version`].
+    ///
+    /// Everything that feeds it bumps the version: attribute definitions, object
+    /// types, units, enum sets, relation definitions, the language tree — and the
+    /// objects themselves, because the catalog offers the **used statuses**
+    /// (`SELECT status FROM object GROUP BY status`).
+    pub(crate) async fn search_catalog(
+        &self,
+        db: &Db,
+    ) -> Result<Arc<crate::api::search_schema::Catalog>, ApiError> {
+        let version = self.stats_version();
+        if let Some((stored, catalog)) = self.search_catalog.read().await.as_ref()
+            && *stored == version
+        {
+            return Ok(catalog.clone());
+        }
+        let catalog = Arc::new(crate::api::search_schema::load(db).await?);
+        *self.search_catalog.write().await = Some((version, catalog.clone()));
+        Ok(catalog)
+    }
+
+    /// The serialized search-field document (`GET /search-fields`), bound to
+    /// [`Self::stats_version`].
+    ///
+    /// Serializing the catalog costs seconds in the debug build and the document is
+    /// 5,9 MB, so the finished bytes are cached — the same reasoning as
+    /// [`Self::attribute_vocabulary_json`].
+    pub async fn search_fields_json(&self, db: &Db) -> Result<Arc<String>, ApiError> {
+        let version = self.stats_version();
+        if let Some((stored, json)) = self.search_fields_json.read().await.as_ref()
+            && *stored == version
+        {
+            return Ok(json.clone());
+        }
+        let catalog = self.search_catalog(db).await?;
+        let document = serde_json::to_value(catalog.as_ref())
+            .map_err(|error| ApiError::internal(format!("catalog is not serializable: {error}")))?;
+        let json = Arc::new(document.to_string());
+        *self.search_fields_json.write().await = Some((version, json.clone()));
+        Ok(json)
     }
 
     /// The composition map (`child key → parent key`) of the whole tree, bound to

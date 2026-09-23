@@ -679,6 +679,7 @@
   "search_form.field_created_at": "Angelegt",
   "search_form.field_updated_at": "Geändert",
   "search_form.field_source": "Quelle",
+  "search_form.field_name": "Name",
   "search_form.group_system": "Objekt",
   "search_form.group_attributes": "Attribute",
   "search_form.section_conditions": "Bedingungen",

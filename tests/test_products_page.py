@@ -42,6 +42,7 @@ class FakeCore:
     #: Calls the page made, as `(method name, positional arguments, keyword arguments)`.
     calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
     #: Rows to answer with, per method name (missing names answer with `[]`/`{}`).
+    #: An `Exception` **value** makes the call fail, like a core that answers an error.
     data: dict[str, Any] = {}
 
     def __init__(self, base_url: str, **kwargs: Any) -> None:
@@ -54,7 +55,10 @@ class FakeCore:
         async def call(*args: Any, **kwargs: Any) -> Any:
             FakeCore.calls.append((name, args, kwargs))
             if name in FakeCore.data:
-                return FakeCore.data[name]
+                answer = FakeCore.data[name]
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
             # Like the real client: listers answer lists, everything else a record.
             return [] if name.startswith("list_") else {}
 
@@ -126,6 +130,27 @@ async def test_shell_drawer_entries_are_plain_links(products_user: User) -> None
     links = products_user.find(marker="nav-link").elements
     hrefs = {element.props.get("href") for element in links}
     assert {"/", "/products", "/export", "/import", "/help"} <= hrefs
+
+
+async def test_a_failing_catalog_call_degrades_instead_of_killing_the_page(
+    products_user: User,
+) -> None:
+    """One rejected catalog request must not take the whole grid down.
+
+    Found live 2026-09-23: after a core restart the stored token was refused, the
+    page's `GET /languages` answered `401`, and the grid replied `500 UnboundLocalError`
+    — an error *page* over a name that was only bound inside the `try`. Every catalog
+    call of the page degrades instead (the session handler navigates to the login
+    page), so the page must still build.
+    """
+    from meadow.frontend.api import CoreError
+
+    FakeCore.reset({"list_languages": CoreError("invalid or expired token", status=401)})
+    await products_user.open("/products")
+
+    # The page is there (with its empty-grid hint) instead of a server error.
+    await products_user.should_see(t("grid.select_tree_node", locale=EN))
+    assert "list_languages" in {name for name, _, _ in FakeCore.calls}
 
 
 async def test_products_page_url_filters_reach_the_core(products_user: User) -> None:

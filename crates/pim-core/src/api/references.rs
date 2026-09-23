@@ -1784,6 +1784,32 @@ pub async fn category_member_keys(
     Ok(result)
 }
 
+/// Bare keys of every object that is categorised in a dimension — the value of
+/// the `uncategorized` filter's `NOT IN` list.
+///
+/// The whole counterpart of [`category_member_keys`]: that one walks a subtree,
+/// this one asks the definition directly (one flat read of the relation rows).
+pub async fn categorised_object_keys(db: &Db, definition: &str) -> Result<Vec<String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query("SELECT in AS member FROM reference WHERE definition_id = $def;")
+        .bind(("def", definition.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut result: Vec<String> = Vec::new();
+    for row in &rows {
+        if let Some(member) = row.get("member").and_then(Value::as_str) {
+            let key = key_of(member).to_owned();
+            if seen.insert(key.clone()) {
+                result.push(key);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Number of objects assigned to each node's composition subtree, for several
 /// nodes in **one pass** — the batch variant of [`category_member_keys`].
 ///

@@ -3,7 +3,7 @@
 //! Every object is part of the composition tree: creating an object also
 //! creates its `depends_on` edge to the universal root.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::Json;
@@ -164,6 +164,19 @@ pub struct ListObjects {
     /// (`?resolve_inheritance=true`, one edge query per hierarchy level).
     #[serde(default)]
     pub resolve_inheritance: Option<bool>,
+    /// Sort field of the page: a **sortable** field of the search catalog
+    /// (`GET /search-fields`) — `type`, `status`, `created_at`, `updated_at` or
+    /// `attributes.<name>[.<lang>]`. Absent keeps the default order
+    /// (`created_at` descending, `id` as tiebreaker).
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Direction of `sort`: `asc` (default) or `desc`.
+    #[serde(default)]
+    pub order: Option<String>,
+    /// How many of the matching objects `GET /objects/attribute-usage` inspects
+    /// (capped at 5000, default 1000). Ignored by every other endpoint.
+    #[serde(default = "default_sample")]
+    pub sample: u32,
     /// Maximum number of results (capped at 1000).
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -175,6 +188,26 @@ pub struct ListObjects {
 fn default_limit() -> u32 {
     100
 }
+
+fn default_sample() -> u32 {
+    1000
+}
+
+/// Upper bound of `?sample=` on `GET /objects/attribute-usage`.
+const MAX_SAMPLE: u32 = 5000;
+
+/// Page size of a completeness-filtered scan (`GET /objects/count`,
+/// `GET /objects/attribute-usage`): the same size `/objects/stats` uses to keep
+/// one response in the few-megabyte range.
+const SCAN_PAGE: i64 = 10_000;
+
+/// The default order of an object list: newest first, `id` as tiebreaker.
+///
+/// `id` is the tiebreaker of `created_at`: a batch writes many objects in the
+/// same transaction, so their timestamps collide and an unordered page boundary
+/// is not stable — a paging client (the complete MEF export) would then skip or
+/// repeat rows.
+const DEFAULT_ORDER: &str = "created_at DESC, id";
 
 /// Splits a `table:key` path segment and verifies the expected table.
 fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
@@ -2034,31 +2067,76 @@ pub async fn object_stats(
     Ok(Json(payload))
 }
 
-/// Lists objects, optionally filtered by type.
-#[utoipa::path(
-    get,
-    path = "/objects",
-    params(ListObjects),
-    responses((status = 200, description = "Objects", body = Vec<Value>))
-)]
-pub async fn list_objects(
-    State(state): State<AppState>,
-    Query(params): Query<ListObjects>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    let limit = params.limit.clamp(1, 1000) as i64;
-    let start = params.start as i64;
-    // The completeness filter is not expressible in SQL (it needs the inherited
-    // required attributes), so it is applied to the scanned window before the
-    // result is sliced; the documented `limit` cap doubles as the scan window.
-    let completeness_filter = params.completeness_lt.is_some() || params.missing_required;
-    let (scan_limit, scan_start) = if completeness_filter {
-        (1000, 0)
-    } else {
-        (limit, start)
-    };
+/// The SurrealQL rendering of an object list's filters, plus the bindings they
+/// need.
+///
+/// Shared by every endpoint that answers "which objects does this view contain"
+/// (`GET /objects`, `/objects/count`, `/objects/attribute-usage`), so a filter
+/// cannot mean two different things. Building it is the whole condition chain of
+/// the grid: type, composition subtree, categorisation, collection, channel
+/// release, id list and the `?where=` condition tree — and it is the only place
+/// that knows a filter is **not** expressible in SQL.
+struct ObjectFilter {
+    /// Predicates, joined with `AND` by [`Self::where_clause`].
+    conditions: Vec<String>,
+    /// Bindings of `conditions` (`type`, `category_definition`, `f0`, …).
+    binds: Vec<(String, Value)>,
+    /// `?completeness_lt=` (applied in Rust, see [`Self::has_completeness_filter`]).
+    completeness_lt: Option<i64>,
+    /// `?missing_required=` (applied in Rust).
+    missing_required: bool,
+}
 
+impl ObjectFilter {
+    /// The ` WHERE …` fragment (empty when the view is unfiltered).
+    fn where_clause(&self) -> String {
+        if self.conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", self.conditions.join(" AND "))
+        }
+    }
+
+    /// Whether a completeness filter is active.
+    ///
+    /// Completeness is the one filter SurrealQL cannot express: it needs the
+    /// required attribute names per type **and** the values inherited along
+    /// `depends_on`, both of which live in the cache and are resolved in Rust
+    /// (`crate::completeness::compute_batch`). Endpoints that need a total or a
+    /// column set over such a view therefore scan the candidates
+    /// ([`scan_completeness_filtered`]) instead of asking the database.
+    fn has_completeness_filter(&self) -> bool {
+        self.completeness_lt.is_some() || self.missing_required
+    }
+
+    /// The cache key of a completeness-filtered view.
+    ///
+    /// A view is its rows **in their order**, so the sort belongs to the key. The
+    /// conditions already carry every id list as a literal; the remaining bindings
+    /// follow, so two filters that differ only in a bound value cannot collide.
+    fn view_key(&self, order: &str) -> String {
+        let mut key = format!(
+            "completeness-view:{order}|{}",
+            self.conditions.join(" AND ")
+        );
+        for (name, value) in &self.binds {
+            key.push('|');
+            key.push_str(name);
+            key.push('=');
+            key.push_str(&value.to_string());
+        }
+        key
+    }
+}
+
+/// Builds the filter of an object list request.
+async fn build_object_filter(
+    state: &AppState,
+    params: &ListObjects,
+) -> Result<ObjectFilter, ApiError> {
     // Soft-deleted objects (and their cascade descendants) are hidden.
     let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut binds: Vec<(String, Value)> = Vec::new();
     if params.object_type.is_some() {
         conditions.push("type = $type".to_owned());
     }
@@ -2103,19 +2181,42 @@ pub async fn list_objects(
         conditions.push(format!("id IN {literal}"));
     }
     if params.released_for.is_some() {
-        conditions.push(
-            "id IN (SELECT VALUE object_id FROM release WHERE channel = $released_for AND status = $release_status)"
-                .to_owned(),
-        );
+        // The released objects are resolved in Rust and rendered as a **record list
+        // literal**, not as `id IN (SELECT VALUE object_id FROM release WHERE …)`:
+        // a subquery in an id filter is evaluated per candidate row once the
+        // projection is `*` (see the `uncategorized` branch for the measurement).
+        let keys = released_object_keys(state, params).await?;
+        let literal =
+            crate::api::keys::record_list_literal("object", keys.iter().map(String::as_str));
+        conditions.push(format!("id IN {literal}"));
     }
     if params.uncategorized {
         // "Nicht kategorisiert" is per taxonomy: every taxonomy node type is
         // excluded (plus the universal root), so a classification hierarchy does
         // not count as a categorisation.
-        conditions.push(
-            "id NOT IN (SELECT VALUE in FROM reference WHERE definition_id = $category_definition) AND type NOT IN $taxonomy_types"
-                .to_owned(),
-        );
+        //
+        // The categorised keys are resolved in Rust and rendered as a **record list
+        // literal**, like every other id-list filter. The obvious `id NOT IN
+        // (SELECT VALUE in FROM reference WHERE …)` is catastrophic here: SurrealDB
+        // evaluates that subquery per candidate row once the projection is `*`,
+        // measured 2026-09-23 on the dev data (11 633 objects, 2 386 categorised) —
+        // `SELECT * … id NOT IN (SELECT …) ORDER BY created_at DESC, id LIMIT 1`
+        // took **159 s** against **1.4 s** for the same query with the literal
+        // (0.41 s without the sort; `SELECT id` stayed at 0.36 s, so the projection
+        // and the subquery interact).
+        let definition = category_definition
+            .as_deref()
+            .unwrap_or(crate::api::references::PRIMARY_CATEGORY_DEFINITION);
+        let categorised =
+            crate::api::references::categorised_object_keys(&state.db, definition).await?;
+        let literal =
+            crate::api::keys::record_list_literal("object", categorised.iter().map(String::as_str));
+        conditions.push(format!("id NOT IN {literal}"));
+        // The taxonomy nodes themselves are not "objects to categorise", so their
+        // types are excluded as well.
+        let mut taxonomy_types = crate::api::object_types::taxonomy_types(&state.db).await?;
+        taxonomy_types.push("root".to_owned());
+        binds.push(("taxonomy_types".to_owned(), json!(taxonomy_types)));
     }
     if let Some(ids) = &params.ids {
         let object_ids: Vec<String> = ids
@@ -2139,11 +2240,10 @@ pub async fn list_objects(
     // Advanced search (`?where=`): the same condition tree the search form
     // produces, validated against the catalog and rendered by the shared
     // filter renderer (see `plan/detail/suche-formular.md`).
-    let mut filter_params: Vec<(String, Value)> = Vec::new();
     if let Some(raw) = &params.where_ {
         let mut advanced: crate::api::saved_searches::SavedSearchQuery = serde_json::from_str(raw)
             .map_err(|error| ApiError::bad_request(format!("invalid `where`: {error}")))?;
-        let catalog = crate::api::search_schema::load(&state.db).await?;
+        let catalog = state.cache.search_catalog(&state.db).await?;
         crate::api::search_schema::normalize_query(&mut advanced);
         let errors = crate::api::search_schema::validate_query(&advanced, &catalog);
         if !errors.is_empty() {
@@ -2151,78 +2251,230 @@ pub async fn list_objects(
         }
         let rendered = crate::api::search_schema::render_query(&advanced, &catalog)?;
         conditions.extend(rendered.clauses);
-        filter_params = rendered.params;
+        binds.extend(rendered.params);
     }
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
+
+    if let Some(object_type) = &params.object_type {
+        binds.push(("type".to_owned(), Value::String(object_type.clone())));
+    }
+    Ok(ObjectFilter {
+        conditions,
+        binds,
+        completeness_lt: params.completeness_lt,
+        missing_required: params.missing_required,
+    })
+}
+
+/// The bare keys of the objects released for a channel with the requested state
+/// (`?released_for=`/`?release_status=`).
+///
+/// Resolved in Rust so the list query filters on a **record list literal** instead
+/// of `id IN (SELECT VALUE object_id FROM release WHERE …)`: a subquery in an id
+/// filter is evaluated per candidate row once the projection is `*` (measured
+/// 2026-09-23, see the `uncategorized` branch — 159 s against 1.4 s).
+async fn released_object_keys(
+    state: &AppState,
+    params: &ListObjects,
+) -> Result<Vec<String>, ApiError> {
+    let Some(released_for) = &params.released_for else {
+        return Ok(Vec::new());
     };
+    let status = params
+        .release_status
+        .as_deref()
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+        .unwrap_or("published")
+        .to_owned();
+    let mut response = state
+        .db
+        .inner()
+        .query("SELECT VALUE object_id FROM release WHERE channel = $channel AND status = $status;")
+        .bind(("channel", crate::api::channels::channel_code(released_for)))
+        .bind(("status", status))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .iter()
+        .filter_map(Value::as_str)
+        .map(record_key_owned)
+        .collect())
+}
+
+/// Applies an [`ObjectFilter`]'s bindings to a query.
+fn bind_filter<'r>(
+    mut query: surrealdb::method::Query<'r, surrealdb::engine::remote::ws::Client>,
+    filter: &ObjectFilter,
+) -> surrealdb::method::Query<'r, surrealdb::engine::remote::ws::Client> {
+    for (key, value) in &filter.binds {
+        query = query.bind((key.as_str(), value.clone()));
+    }
+    query
+}
+
+/// The working locale of a list request (`?locale=`, trimmed, empty = unset).
+fn working_locale(params: &ListObjects) -> Option<String> {
+    params
+        .locale
+        .as_deref()
+        .map(str::trim)
+        .filter(|locale| !locale.is_empty())
+        .map(str::to_owned)
+}
+
+/// The `ORDER BY` clause of an object list.
+///
+/// Without `?sort=` the default order applies (see [`DEFAULT_ORDER`]). A custom
+/// sort is validated against the search catalog — the same rule as a saved
+/// search's sort clause — and keeps the `id` tiebreaker, so a client can page
+/// through a sorted view without skipping or repeating rows.
+async fn render_order(state: &AppState, params: &ListObjects) -> Result<String, ApiError> {
+    // `?order=` is validated even without `?sort=`: a direction that orders nothing
+    // is a client bug, not a silent no-op.
+    let direction = render_direction(params.order.as_deref())?;
+    let Some(field) = params
+        .sort
+        .as_deref()
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    else {
+        return Ok(DEFAULT_ORDER.to_owned());
+    };
+    // The catalog is cache-backed (`MetaCache::search_catalog`), so validating a
+    // sort costs one lookup after the first request of a data version.
+    let catalog = state.cache.search_catalog(&state.db).await?;
+    let key = crate::api::search_schema::sanitize_field(field)?;
+    let Some(declared) = catalog.field(&key) else {
+        return Err(ApiError::bad_request(format!(
+            "unknown sort field `{field}`"
+        )));
+    };
+    if !declared.sortable {
+        return Err(ApiError::bad_request(format!("`{field}` cannot be sorted")));
+    }
+    Ok(format!("{key} {direction}, id"))
+}
+
+/// The SQL direction of `?order=`: `asc` (default) or `desc`.
+fn render_direction(order: Option<&str>) -> Result<&'static str, ApiError> {
+    match order.map(str::trim).filter(|order| !order.is_empty()) {
+        None => Ok("ASC"),
+        Some(value) if value.eq_ignore_ascii_case("asc") => Ok("ASC"),
+        Some(value) if value.eq_ignore_ascii_case("desc") => Ok("DESC"),
+        Some(value) => Err(ApiError::bad_request(format!(
+            "invalid `order` `{value}`: expected asc or desc"
+        ))),
+    }
+}
+
+/// The `(id, type, attributes)` triples the batched completeness and inheritance
+/// computations take, built from a list of objects.
+fn batch_items(objects: &[Value]) -> Vec<(String, String, Map<String, Value>)> {
+    objects
+        .iter()
+        .map(|object| {
+            (
+                object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                object
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                object
+                    .get("attributes")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+/// The bare keys of a list of objects (`object:<key>` → `<key>`).
+fn object_keys(objects: &[Value]) -> Vec<&str> {
+    objects
+        .iter()
+        .filter_map(|object| object.get("id").and_then(Value::as_str))
+        .filter_map(|object_id| object_id.split_once(':').map(|(_, key)| key))
+        .collect()
+}
+
+/// Lists objects, optionally filtered by type.
+#[utoipa::path(
+    get,
+    path = "/objects",
+    params(ListObjects),
+    responses((status = 200, description = "Objects", body = Vec<Value>))
+)]
+pub async fn list_objects(
+    State(state): State<AppState>,
+    Query(params): Query<ListObjects>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let limit = params.limit.clamp(1, 1000) as i64;
+    let start = params.start as i64;
+    let filter = build_object_filter(&state, &params).await?;
+    let completeness_filter = filter.has_completeness_filter();
+    let locale = working_locale(&params);
+    let needs_inheritance = params.resolve_inheritance == Some(true);
+    let order = render_order(&state, &params).await?;
+
     // The channel releases are fetched **for the whole page in one query** after
     // the objects (see below), not as a correlated subquery per row: SurrealDB
     // evaluates `(SELECT … WHERE object_id = $parent.id)` once per candidate row
     // and costs ~11 ms per row (measured 2026-09-22: 18.1 s for a 1000-row page
     // against 0.29 s for one bulk query on the same data). `releases=true` is the
     // grid's release column, so this is on the hot read path.
-    let projection = "*";
-    // `id` is the tiebreaker of `created_at`: a batch writes many objects in the
-    // same transaction, so their timestamps collide and an unordered page boundary
-    // is not stable — a paging client (the complete MEF export) would then skip or
-    // repeat rows.
-    let sql = format!(
-        "SELECT {projection} FROM object{where_clause} ORDER BY created_at DESC, id LIMIT $limit START $start"
-    );
-
-    let mut query = state.db.inner().query(sql);
-    if let Some(object_type) = &params.object_type {
-        query = query.bind(("type", object_type.clone()));
-    }
-    if let Some(definition) = &category_definition {
-        query = query.bind(("category_definition", definition.clone()));
-    }
-    if params.uncategorized {
-        let mut taxonomy_types = crate::api::object_types::taxonomy_types(&state.db).await?;
-        taxonomy_types.push("root".to_owned());
-        query = query.bind(("taxonomy_types", taxonomy_types));
-    }
-    if let Some(released_for) = &params.released_for {
-        query = query.bind((
-            "released_for",
-            crate::api::channels::channel_code(released_for),
-        ));
-        query = query.bind((
-            "release_status",
-            params
-                .release_status
-                .as_deref()
-                .map(str::trim)
-                .filter(|status| !status.is_empty())
-                .unwrap_or("published")
-                .to_owned(),
-        ));
-    }
-    for (key, value) in &filter_params {
-        query = query.bind((key.as_str(), value.clone()));
-    }
-    let mut response = query
-        .bind(("limit", scan_limit))
-        .bind(("start", scan_start))
-        .await?
-        .check()?;
-    let mut objects: Vec<Value> = response.take(0)?;
+    let mut objects: Vec<Value> = if completeness_filter {
+        // A completeness-filtered view is **not** paged by SurrealQL: only the walk in
+        // `completeness_view_keys` can tell its members, and that walk returns the
+        // whole view in the requested order (cached). The page is therefore
+        // `[start, start + limit)` of those keys and its rows are fetched **by id** —
+        // the answer stays complete (`status`, timestamps, `version`) without
+        // transferring the payload of every candidate.
+        let keys = completeness_view_keys(&state, &filter, locale.as_deref(), &order).await?;
+        let page_keys: Vec<&str> = keys
+            .iter()
+            .skip(start.max(0) as usize)
+            .take(limit.max(0) as usize)
+            .map(String::as_str)
+            .collect();
+        if page_keys.is_empty() {
+            Vec::new()
+        } else {
+            // The id literal drives the id index (1000 keys → 0,18 s,
+            // `keys::record_list_literal`), and the order is the requested one, so
+            // the page comes back exactly as the walk ordered it.
+            let literal =
+                crate::api::keys::record_list_literal("object", page_keys.iter().copied());
+            let sql = format!("SELECT * FROM object WHERE id IN {literal} ORDER BY {order};");
+            let mut response = state.db.inner().query(sql).await?.check()?;
+            let rows: Vec<Value> = response.take(0)?;
+            rows
+        }
+    } else {
+        let sql = format!(
+            "SELECT * FROM object{} ORDER BY {order} LIMIT $limit START $start",
+            filter.where_clause()
+        );
+        let mut response = bind_filter(state.db.inner().query(sql), &filter)
+            .bind(("limit", limit))
+            .bind(("start", start))
+            .await?
+            .check()?;
+        response.take(0)?
+    };
 
     // Channel releases of the page: `releases: [{channel, status}]` per object, in
-    // one query for the whole page (see the `projection` comment above).
+    // one query for the whole page (see the comment above `render_order`).
     if params.releases && !objects.is_empty() {
         attach_releases(&state.db, &mut objects).await?;
     }
 
-    let locale = params
-        .locale
-        .as_deref()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_owned);
     // Completeness (with inheritance) is only computed when the caller needs it:
     // for the `completeness` field of the response and/or for the completeness
     // filters. `locale` may be absent — the filter then uses the default values.
@@ -2230,21 +2482,16 @@ pub async fn list_objects(
     // **One batch for the whole page**, not one computation per row: the per-row
     // variant issued ~6 queries per object (~25 ms with a classification standard
     // installed), so a 1000-row page spent 18 s in it and the `missing_required`
-    // filter (which scans up to 1000 rows) made the grid unusable.
-    // `compute_batch` resolves the required names per type (cached) and walks the
-    // chains in memory — the same result, without the round-trips.
+    // filter made the grid unusable. `compute_batch` resolves the required names per
+    // type (cached) and walks the chains in memory — the same result, without the
+    // round-trips.
     //
     // Completeness and inheritance describe the **same** page, so the composition
     // (the `depends_on` map plus the ancestors' attributes) is prepared once and
     // handed to both — loading it twice cost two extra queries per page.
     let needs_completeness = locale.is_some() || completeness_filter;
-    let needs_inheritance = params.resolve_inheritance == Some(true);
     if (needs_completeness || needs_inheritance) && !objects.is_empty() {
-        let keys: Vec<&str> = objects
-            .iter()
-            .filter_map(|object| object.get("id").and_then(Value::as_str))
-            .filter_map(|object_id| object_id.split_once(':').map(|(_, key)| key))
-            .collect();
+        let keys = object_keys(&objects);
         let composition_started = std::time::Instant::now();
         let composition =
             crate::inheritance::Composition::load(&state.cache, &state.db, keys.iter().copied())
@@ -2256,28 +2503,7 @@ pub async fn list_objects(
         );
 
         if needs_completeness {
-            let items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
-                .iter()
-                .map(|object| {
-                    (
-                        object
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                        object
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                        object
-                            .get("attributes")
-                            .and_then(Value::as_object)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )
-                })
-                .collect();
+            let items = batch_items(&objects);
             let results = crate::completeness::compute_batch(
                 &state.cache,
                 &state.db,
@@ -2300,8 +2526,8 @@ pub async fn list_objects(
                 if completeness_filter
                     && !passes_completeness_filter(
                         result,
-                        params.completeness_lt,
-                        params.missing_required,
+                        filter.completeness_lt,
+                        filter.missing_required,
                     )
                 {
                     continue;
@@ -2313,39 +2539,11 @@ pub async fn list_objects(
             }
             objects = kept;
         }
-        if completeness_filter {
-            objects = objects
-                .into_iter()
-                .skip(start.max(0) as usize)
-                .take(limit.max(0) as usize)
-                .collect();
-        }
 
         // Fill inherited values and mark each object's inherited attributes with
         // their source (in-memory walk over the shared composition).
         if needs_inheritance && !objects.is_empty() {
-            let mut items: Vec<(String, String, serde_json::Map<String, Value>)> = objects
-                .iter()
-                .map(|object| {
-                    (
-                        object
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                        object
-                            .get("type")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_owned(),
-                        object
-                            .get("attributes")
-                            .and_then(Value::as_object)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )
-                })
-                .collect();
+            let mut items = batch_items(&objects);
             let inherited = crate::inheritance::resolve_inheritance_batch(
                 &state.cache,
                 &state.db,
@@ -2367,6 +2565,272 @@ pub async fn list_objects(
     }
 
     Ok(Json(objects))
+}
+
+/// Counts the objects a view contains.
+///
+/// Takes exactly the filters of `GET /objects` (the paging parameters `limit`,
+/// `start`, `sort`, `order` and `sample` are ignored), so a page and its total
+/// can never disagree. Without a completeness filter the answer is one grouped
+/// count in SurrealQL; with one (`?missing_required`/`?completeness_lt`) the
+/// candidates are scanned like `/objects/stats` does, because that filter needs
+/// the inherited required attributes (see
+/// [`ObjectFilter::has_completeness_filter`]).
+#[utoipa::path(
+    get,
+    path = "/objects/count",
+    params(ListObjects),
+    responses(
+        (status = 200, description = "Number of matching objects", body = Value),
+        (status = 400, description = "Invalid filter", body = Value)
+    )
+)]
+pub async fn count_objects(
+    State(state): State<AppState>,
+    Query(params): Query<ListObjects>,
+) -> Result<Json<Value>, ApiError> {
+    let filter = build_object_filter(&state, &params).await?;
+    let count = if filter.has_completeness_filter() {
+        // `order` is validated like on the list and enters the view key, so a count
+        // and a page of the same view share one walk.
+        let order = render_order(&state, &params).await?;
+        completeness_view_keys(&state, &filter, working_locale(&params).as_deref(), &order)
+            .await?
+            .len() as i64
+    } else {
+        let sql = format!(
+            "SELECT count() AS n FROM object{} GROUP ALL;",
+            filter.where_clause()
+        );
+        let mut response = bind_filter(state.db.inner().query(sql), &filter)
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        rows.first()
+            .and_then(|row| row.get("n"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    Ok(Json(json!({ "count": count })))
+}
+
+/// The attribute names a view carries a value for.
+///
+/// The grid derives its columns from the **page it loaded**, which is stable
+/// while the page is: with paging (`grid_query.loaded_chunk`) the loaded rows grow
+/// and a column of an imported classification standard — offered once data for it
+/// exists (`reference_data.py`) — would appear mid-scroll. This endpoint answers
+/// "which attributes carry data in this view" from the core instead, over the
+/// first `?sample=` objects of the view (same order as the list), so the column
+/// set is decided once and stays.
+///
+/// `names` are the attribute names with a non-empty value in at least one of the
+/// inspected objects — the same reading as the grid's `present_attribute_names`
+/// (`reference_data.has_value`), `sampled` is how many objects were inspected
+/// (less than `sample` means the answer covers the whole view).
+#[utoipa::path(
+    get,
+    path = "/objects/attribute-usage",
+    params(ListObjects),
+    responses(
+        (status = 200, description = "Attribute names in use", body = Value),
+        (status = 400, description = "Invalid filter", body = Value)
+    )
+)]
+pub async fn attribute_usage(
+    State(state): State<AppState>,
+    Query(params): Query<ListObjects>,
+) -> Result<Json<Value>, ApiError> {
+    let filter = build_object_filter(&state, &params).await?;
+    let sample = params.sample.clamp(1, MAX_SAMPLE) as i64;
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut sampled: i64 = 0;
+
+    if filter.has_completeness_filter() {
+        // The members of such a view come from the cached walk; the sample is then read
+        // by id — the names of the view's first `sample` objects, without walking the
+        // candidates again for every request.
+        let order = render_order(&state, &params).await?;
+        let keys =
+            completeness_view_keys(&state, &filter, working_locale(&params).as_deref(), &order)
+                .await?;
+        let sample_keys: Vec<&str> = keys
+            .iter()
+            .take(sample as usize)
+            .map(String::as_str)
+            .collect();
+        if !sample_keys.is_empty() {
+            let literal =
+                crate::api::keys::record_list_literal("object", sample_keys.iter().copied());
+            let sql = format!("SELECT attributes FROM object WHERE id IN {literal};");
+            let mut response = state.db.inner().query(sql).await?.check()?;
+            let rows: Vec<Value> = response.take(0)?;
+            for row in &rows {
+                collect_attribute_names(row.get("attributes"), &mut names);
+                sampled += 1;
+            }
+        }
+    } else {
+        let sql = format!(
+            "SELECT attributes, created_at, id FROM object{} ORDER BY {DEFAULT_ORDER} LIMIT $sample;",
+            filter.where_clause()
+        );
+        let mut response = bind_filter(state.db.inner().query(sql), &filter)
+            .bind(("sample", sample))
+            .await?
+            .check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        for row in &rows {
+            collect_attribute_names(row.get("attributes"), &mut names);
+            sampled += 1;
+        }
+    }
+
+    Ok(Json(json!({ "names": names, "sampled": sampled })))
+}
+
+/// Collects the attribute names an `attributes` object carries a value for.
+///
+/// "Carries a value" is the reading the grid uses to decide whether a column of an
+/// imported classification standard has data (`reference_data.has_value` in the
+/// frontend): an absent key, `null`, an empty string, an empty list and a language
+/// map without a single non-empty entry do not count — a key that only ever holds
+/// `null` would offer a column that can never show anything.
+fn collect_attribute_names(attributes: Option<&Value>, names: &mut BTreeSet<String>) {
+    let Some(Value::Object(attributes)) = attributes else {
+        return;
+    };
+    for (name, value) in attributes {
+        if carries_value(value) {
+            names.insert(name.clone());
+        }
+    }
+}
+
+/// Whether a stored attribute value counts as present (see
+/// [`collect_attribute_names`]).
+fn carries_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(entries) => entries.values().any(carries_value),
+        _ => true,
+    }
+}
+
+/// The ordered keys of a **completeness-filtered** view, cached per filter and sort.
+///
+/// Completeness is the one filter SurrealQL cannot express: it needs the required
+/// attribute names per type **and** the values inherited along `depends_on`, both of
+/// which are resolved in Rust (`crate::completeness::compute_batch`). The members of
+/// such a view are therefore only known after walking every candidate — which is why
+/// the **keys** are what gets cached (`MetaCache::store_view_keys`): a page, the total
+/// and the column set of the same view share one walk, and the list fetches its page
+/// **by id** afterwards.
+///
+/// The walk is narrowed to the types that can be incomplete at all
+/// (`completeness::incomplete_candidates`); every other type is complete by
+/// definition, so the filter would drop its objects anyway. `order` must be the order
+/// the view is read in — it is part of the view.
+async fn completeness_view_keys(
+    state: &AppState,
+    filter: &ObjectFilter,
+    locale: Option<&str>,
+    order: &str,
+) -> Result<Arc<Vec<String>>, ApiError> {
+    let key = filter.view_key(order);
+    let version = state.cache.stats_version();
+    if let Some(keys) = state.cache.cached_view_keys(&key, version).await {
+        return Ok(keys);
+    }
+    // Single-flight like `/objects/stats`: a page, its total and its column set
+    // arrive together and must not walk the candidates three times (the walk of the
+    // dev data's "nur unvollständige" view costs 3 s).
+    let lock = state.cache.stats_lock(&key);
+    let _single_flight = lock.lock().await;
+    let version = state.cache.stats_version();
+    if let Some(keys) = state.cache.cached_view_keys(&key, version).await {
+        return Ok(keys);
+    }
+
+    let mut keys: Vec<String> = Vec::new();
+    let candidates = crate::completeness::incomplete_candidates(&state.cache, &state.db).await?;
+    if !candidates.is_empty() {
+        let mut conditions = filter.conditions.clone();
+        conditions.push("type IN $scan_types".to_owned());
+        // Lean rows: `id`, `type` and `attributes` are all the filter needs, and
+        // `created_at` carries the order idiom. A page of 10 000 of them stays in the
+        // megabytes where the full objects would be in the tens (`/objects/stats`
+        // reads the same columns).
+        let sql = format!(
+            "SELECT id, type, attributes, created_at FROM object WHERE {} ORDER BY {order} \
+             LIMIT $limit START $start;",
+            conditions.join(" AND ")
+        );
+        let mut offset: i64 = 0;
+        loop {
+            let mut response = bind_filter(state.db.inner().query(&sql), filter)
+                .bind(("scan_types", json!(candidates)))
+                .bind(("limit", SCAN_PAGE))
+                .bind(("start", offset))
+                .await?
+                .check()?;
+            let page: Vec<Value> = response.take(0)?;
+            if page.is_empty() {
+                break;
+            }
+            let scanned = page.len();
+            let page_keys = object_keys(&page);
+            let composition = crate::inheritance::Composition::load(
+                &state.cache,
+                &state.db,
+                page_keys.iter().copied(),
+            )
+            .await?;
+            let results = crate::completeness::compute_batch(
+                &state.cache,
+                &state.db,
+                &batch_items(&page),
+                locale,
+                &composition,
+            )
+            .await?;
+            for object in &page {
+                let object_id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if object_id.is_empty() {
+                    continue;
+                }
+                let passes = match results.get(&object_id) {
+                    None => true,
+                    Some(result) => passes_completeness_filter(
+                        result,
+                        filter.completeness_lt,
+                        filter.missing_required,
+                    ),
+                };
+                if passes {
+                    keys.push(object_id);
+                }
+            }
+            if scanned < SCAN_PAGE as usize {
+                break;
+            }
+            offset += scanned as i64;
+        }
+    }
+    // Stored with the version read **before** the walk: a write that lands while the
+    // walk runs bumps the version, so the entry is stale at once and never served.
+    let keys = Arc::new(keys);
+    state
+        .cache
+        .store_view_keys(&key, version, keys.clone())
+        .await;
+    Ok(keys)
 }
 
 /// Attaches the channel releases of the page's objects as
@@ -3860,6 +4324,74 @@ mod tests {
         let result = completeness(90, &[]);
         assert!(passes_completeness_filter(&result, Some(95), false));
         assert!(!passes_completeness_filter(&result, Some(95), true));
+    }
+
+    #[test]
+    fn a_view_key_separates_filters_sorts_and_bound_values() {
+        let filter = |conditions: Vec<&str>, binds: Vec<(&str, Value)>| ObjectFilter {
+            conditions: conditions.iter().map(|entry| (*entry).to_owned()).collect(),
+            binds: binds
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value))
+                .collect(),
+            completeness_lt: None,
+            missing_required: true,
+        };
+        let base = filter(vec!["deleted_at IS NONE"], vec![]);
+        // The sort is part of the view: the same filter read in another order is
+        // another list, so the cached keys must not be shared.
+        assert_ne!(base.view_key("created_at DESC, id"), base.view_key("id"));
+        // A bound value is part of the filter even though `conditions` only carries
+        // its `$name` reference.
+        assert_ne!(
+            filter(vec!["deleted_at IS NONE"], vec![("f0", json!("a"))]).view_key("id"),
+            filter(vec!["deleted_at IS NONE"], vec![("f0", json!("b"))]).view_key("id"),
+        );
+        // The same view is the same key (a cached view is found again).
+        assert_eq!(
+            base.view_key("created_at DESC, id"),
+            filter(vec!["deleted_at IS NONE"], vec![]).view_key("created_at DESC, id")
+        );
+    }
+
+    #[test]
+    fn order_accepts_asc_desc_and_rejects_anything_else() {
+        assert_eq!(render_direction(None).expect("default"), "ASC");
+        assert_eq!(render_direction(Some("")).expect("empty"), "ASC");
+        assert_eq!(render_direction(Some(" ASC ")).expect("asc"), "ASC");
+        assert_eq!(render_direction(Some("Desc")).expect("desc"), "DESC");
+        assert!(render_direction(Some("sideways")).is_err());
+    }
+
+    #[test]
+    fn attribute_usage_counts_a_key_only_when_it_carries_a_value() {
+        let mut names = BTreeSet::new();
+        collect_attribute_names(
+            Some(&json!({
+                "name": {"de": "Bremse", "en": ""},
+                "empty_language_map": {"de": "", "en": ""},
+                "blank": "   ",
+                "nothing": Value::Null,
+                "zero": 0,
+                "flag": false,
+                "empty_list": [],
+                "list": ["x"],
+                "range": {"from": 1, "to": 2},
+            })),
+            &mut names,
+        );
+        assert_eq!(
+            names.into_iter().collect::<Vec<_>>(),
+            vec!["flag", "list", "name", "range", "zero"]
+        );
+    }
+
+    #[test]
+    fn attribute_usage_ignores_objects_without_attributes() {
+        let mut names = BTreeSet::new();
+        collect_attribute_names(None, &mut names);
+        collect_attribute_names(Some(&json!("not an object")), &mut names);
+        assert!(names.is_empty());
     }
 
     #[test]

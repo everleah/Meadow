@@ -950,6 +950,12 @@ async def products_page(request: Request) -> None:
         # mirroring the product form.
         active_languages: list[str] = []
         language_labels: dict[str, str] = {}
+        #: Language rows (`GET /languages`) for the create dialog's name editor. Bound
+        #: before the call so a rejected request degrades like every other catalog of
+        #: this page: an unbound name here turned a `401` (session lost after a core
+        #: restart, 2026-09-23) into `500 UnboundLocalError` on the whole grid, hiding
+        #: the session handler's way back to the login page.
+        languages: list[dict] = []
         try:
             languages = await client.list_languages(token)
             for lang in languages:
@@ -960,6 +966,7 @@ async def products_page(request: Request) -> None:
                 language_labels[code] = resolve_value(lang.get("label"), locale) or code
         except CoreError, httpx.HTTPError:  # degrade to a single-language grid
             active_languages = []
+            languages = []
 
         # The user's column set is resolved **before** the columns are built: a
         # restored set decides which standard columns have to exist at all (a

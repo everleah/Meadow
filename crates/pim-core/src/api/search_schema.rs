@@ -510,6 +510,20 @@ pub fn build_catalog(sources: &CatalogSources) -> Catalog {
             .label_key("search_form.field_source")
             .not_sortable(),
     );
+    // The conventional display label. Every object's label is resolved from
+    // `attributes.name` — scalar or multilingual (`language.rs`) — and the grid's
+    // first column is that name, so it belongs to the field vocabulary even though
+    // no `attribute_definition` has to exist for it (a demo product carries a name
+    // without a registered definition, and without this entry neither the search
+    // form nor `GET /objects?sort=` could reach it). `multilingual` is what makes
+    // the per-language variants (`attributes.name.<lang>`) usable — the sort and
+    // filter the per-language columns need.
+    let mut name_field =
+        SearchField::new("attributes.name", "system", ValueType::String, Widget::Text)
+            .label_key("search_form.field_name");
+    name_field.multilingual = true;
+    name_field.languages = Some(language_codes.clone());
+    fields.push(name_field);
 
     // --- Attribute fields --------------------------------------------------
     let mut attributes: Vec<&Value> = sources.attributes.iter().collect();
@@ -1322,11 +1336,20 @@ fn render_filter(
         ),
         "starts_with" => {
             let param = operand(params, counter);
-            format!("string::startsWith(string::lower({field}), string::lower({param}))")
+            // The `present` guard is **load-bearing**: `string::lowercase` throws on a
+            // missing value (`Incorrect arguments for function string::lowercase(): …
+            // Expected `string` but found `NONE`, 2026-09-23) and the `<string>` cast
+            // keeps a non-string value (a number, a language map) from failing it too.
+            // Same shape as the picker's label prefix query (`api::objects`).
+            format!(
+                "{present} AND string::starts_with(string::lowercase(<string>{field}), string::lowercase(<string>{param}))"
+            )
         }
         "ends_with" => {
             let param = operand(params, counter);
-            format!("string::endsWith(string::lower({field}), string::lower({param}))")
+            format!(
+                "{present} AND string::ends_with(string::lowercase(<string>{field}), string::lowercase(<string>{param}))"
+            )
         }
         "not_empty" => present,
         "is_null" => format!("({field} IS NONE OR {field} = NULL)"),
@@ -1889,9 +1912,12 @@ mod tests {
     #[test]
     fn text_operators_and_multilingual_fields_render() {
         let (sql, params) = render(&leaf("attributes.name.de", "starts_with", json!("Edel")));
+        let present = "(attributes.name.de IS NOT NONE AND attributes.name.de != NULL)";
         assert_eq!(
             sql,
-            "string::startsWith(string::lower(attributes.name.de), string::lower($f0))"
+            format!(
+                "{present} AND string::starts_with(string::lowercase(<string>attributes.name.de), string::lowercase(<string>$f0))"
+            )
         );
         assert_eq!(params[0].1, json!("Edel"));
 

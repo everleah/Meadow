@@ -102,6 +102,8 @@ use utoipa::OpenApi;
         objects::create_object,
         objects::get_object,
         objects::list_objects,
+        objects::count_objects,
+        objects::attribute_usage,
         objects::object_stats,
         objects::composition_types,
         objects::update_object,

@@ -30,7 +30,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `meadow.frontend*` from `sys.modules` *before* the boot (otherwise the cached
   `@ui.page` decorators never run and every page answers `404`), the core client and
   the auth middleware are replaced (that is the point of a page test), and modules of
-  the frontend are imported inside the fixture, never at module level. They also carry
+  the frontend are imported inside the fixture, never at module level. `FakeCore.data`
+  takes an **`Exception`** for a method as well: the call then raises it, which is how
+  a failing catalog request is tested (a rejected token must degrade the page instead of
+  answering `500`, `test_a_failing_catalog_call_degrades_instead_of_killing_the_page`).
+  They also carry
   the **shell** contract (`test_shell_drawer_entries_are_plain_links`): the drawer
   entries must stay plain links with an `href` — navigation that travels through the
   websocket dies with the socket (root `AGENTS.md`, `plan/detail/ai-code-quality.md`
