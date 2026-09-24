@@ -11,13 +11,14 @@ Die Liste lädt bewusst nicht alle Objekte auf einmal. Wählen Sie links im Baum
 einen Knoten aus, zeigt die Tabelle dessen Objekte. Ohne Auswahl steht dort ein
 Hinweis, welche Aktion erwartet wird.
 
-Die Tabelle zeigt **eine Seite** von 200 Objekten; unter der Liste steht, welche
-Zeilen von wie vielen Sie sehen („1–200 von 2000 Objekten", „Seite 1 von 10")
-und mit welchen Schaltflächen Sie blättern (erste, vorherige, nächste, letzte).
-Die Zahlen kommen vom Server, nicht aus den geladenen Zeilen: Blättern holt
-genau die nächste Seite, statt die Liste im Browser immer weiter wachsen zu
-lassen. Die Seitenzahl steht in der Adresszeile (`?page=2`), ein Lesezeichen
-öffnet also dieselbe Seite.
+Die Tabelle zeigt **eine Seite** der Objekte (Standard: 200 Zeilen; die Größe
+wählen Sie darunter: 50, 100, 200 oder 500 Objekte je Seite); unter der Liste
+steht, welche Zeilen von wie vielen Sie sehen („1–200 von 2000 Objekten",
+„Seite 1 von 10") und mit welchen Schaltflächen Sie blättern (erste, vorherige,
+nächste, letzte). Die Zahlen kommen vom Server, nicht aus den geladenen Zeilen:
+Blättern holt genau die nächste Seite, statt die Liste im Browser immer weiter
+wachsen zu lassen. Seitenzahl und Seitengröße stehen in der Adresszeile
+(`?page=2`, `?size=50`), ein Lesezeichen öffnet also dieselbe Sicht.
 
 **Sortieren** — ein Klick auf eine Spaltenüberschrift sortiert die **ganze**
 Sicht über den Server (aufsteigend, absteigend, beim dritten Klick wieder in der

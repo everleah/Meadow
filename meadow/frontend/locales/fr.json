@@ -1129,6 +1129,7 @@
   "grid.no_objects": "Aucun objet trouvé.",
   "grid.page_range": "{first}–{last} sur {total} objets",
   "grid.page_label": "Page {page} sur {pages}",
+  "grid.page_size": "Objets par page",
   "grid.page_first": "Première page",
   "grid.page_prev": "Page précédente",
   "grid.page_next": "Page suivante",

@@ -177,9 +177,9 @@ async def test_the_pager_steps_through_the_view(products_user: User) -> None:
     """`?page=2` loads the second page and the pager says which rows are on screen."""
     from meadow.frontend import grid_query
 
-    total = grid_query.PAGE_SIZE * 3
+    total = grid_query.DEFAULT_PAGE_SIZE * 3
     FakeCore.data["count_objects"] = {"count": total}
-    _stub_objects(*_many_objects(grid_query.PAGE_SIZE))
+    _stub_objects(*_many_objects(grid_query.DEFAULT_PAGE_SIZE))
     await products_user.open("/products?type=product")
 
     await products_user.should_see(marker="grid-pager")
@@ -188,16 +188,18 @@ async def test_the_pager_steps_through_the_view(products_user: User) -> None:
     )
     await products_user.should_see(
         marker="grid-page-range",
-        content=t("grid.page_range", first=1, last=grid_query.PAGE_SIZE, total=total, locale=EN),
+        content=t(
+            "grid.page_range", first=1, last=grid_query.DEFAULT_PAGE_SIZE, total=total, locale=EN
+        ),
     )
 
-    _stub_objects(*_many_objects(5, start=grid_query.PAGE_SIZE))
+    _stub_objects(*_many_objects(5, start=grid_query.DEFAULT_PAGE_SIZE))
     products_user.find(marker="grid-page-next").click()
     await _wait_until(lambda: len(_list_objects_calls()) > 1)
 
     payloads = _list_objects_calls()
-    assert payloads[1]["start"] == grid_query.PAGE_SIZE
-    assert payloads[1]["limit"] == grid_query.PAGE_SIZE
+    assert payloads[1]["start"] == grid_query.DEFAULT_PAGE_SIZE
+    assert payloads[1]["limit"] == grid_query.DEFAULT_PAGE_SIZE
     await products_user.should_see(
         marker="grid-page-label", content=t("grid.page_label", page=2, pages=3, locale=EN)
     )
@@ -205,8 +207,8 @@ async def test_the_pager_steps_through_the_view(products_user: User) -> None:
         marker="grid-page-range",
         content=t(
             "grid.page_range",
-            first=grid_query.PAGE_SIZE + 1,
-            last=grid_query.PAGE_SIZE + 5,
+            first=grid_query.DEFAULT_PAGE_SIZE + 1,
+            last=grid_query.DEFAULT_PAGE_SIZE + 5,
             total=total,
             locale=EN,
         ),
@@ -219,6 +221,27 @@ async def test_a_view_without_a_total_shows_no_pager(products_user: User) -> Non
     await products_user.open("/products?type=product")
 
     await products_user.should_not_see(marker="grid-pager")
+
+
+async def test_the_page_size_is_a_view_setting(products_user: User) -> None:
+    """`?size=` reaches the core, and changing the selection restarts at page 1."""
+    from meadow.frontend import grid_query
+
+    FakeCore.data["count_objects"] = {"count": 2000}
+    _stub_objects(*_many_objects(grid_query.DEFAULT_PAGE_SIZE))
+    await products_user.open("/products?type=product&page=2&size=50")
+
+    payloads = _list_objects_calls()
+    assert payloads[0]["limit"] == 50
+    assert payloads[0]["start"] == 50
+    await products_user.should_see(marker="grid-page-size")
+
+    # A new size is another view: the rows start over at page 1 and the URL carries it.
+    _pick(products_user, "grid-page-size", 500)
+    await _wait_until(lambda: len(_list_objects_calls()) > 1)
+    payloads = _list_objects_calls()
+    assert payloads[1]["limit"] == 500
+    assert payloads[1]["start"] == 0
 
 
 async def test_products_page_reports_an_empty_filter_result(products_user: User) -> None:
@@ -281,7 +304,7 @@ def _search_terms() -> list[Any]:
     ]
 
 
-def _pick(user: User, marker: str, value: str) -> None:
+def _pick(user: User, marker: str, value: str | int) -> None:
     """Chooses an option the way a user does, so the change handlers run.
 
     NiceGUI's interaction helper types into inputs but has no equivalent for selects,

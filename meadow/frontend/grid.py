@@ -883,7 +883,7 @@ async def products_page(request: Request) -> None:
         async def fetch_filtered() -> list[dict]:
             """Loads the current **page** of the objects matching the filters.
 
-            The page is `?page=` of the view (`grid_query.PAGE_SIZE` rows from
+            The page is `?page=` of the view (`grid_query.page_size` rows from
             `page_start`) and comes **ordered** by the core: sorting and paging belong to
             the whole view, not to the loaded rows, so the grid renders what the server
             decided (`grid_query.list_arguments`). The search path stays a single capped
@@ -965,13 +965,22 @@ async def products_page(request: Request) -> None:
         no_objects_label.set_visibility(has_filter() and not objects)
         selection_hint.set_visibility(not has_filter())
 
-        # The grid pages **server-side** (`grid_query.PAGE_SIZE` rows per page): every row
+        # The grid pages **server-side** (`grid_query.page_size` rows per page): every row
         # carries all own attributes plus the language and inheritance cells, so one page
         # of 1000 rows was 5,6 MB of HTML (measured 2026-09-22). The core owns the order
         # and the total, this row only steps through the pages and always says which rows
         # of how many are on screen — nothing is truncated silently.
         loaded_objects: list[dict] = list(objects)
         view_state: dict[str, int | None] = {"total": total}
+
+        async def on_page_size_change(event) -> None:
+            """A new page size is another view: it restarts at page 1."""
+            size = int(event.value or grid_query.DEFAULT_PAGE_SIZE)
+            if size == grid_query.page_size(active):
+                return
+            active["size"] = None if size == grid_query.DEFAULT_PAGE_SIZE else str(size)
+            await reload_grid()
+
         with ui.row().classes("items-center gap-2 pt-1") as pager_row:
             pager_row.mark("grid-pager")
             first_button = (
@@ -1003,7 +1012,11 @@ async def products_page(request: Request) -> None:
             last_button = (
                 ui.button(
                     icon="last_page",
-                    on_click=lambda: load_page(grid_query.page_count(view_state["total"] or 0)),
+                    on_click=lambda: load_page(
+                        grid_query.page_count(
+                            view_state["total"] or 0, grid_query.page_size(active)
+                        )
+                    ),
                 )
                 .props("flat dense round")
                 .mark("grid-page-last")
@@ -1011,6 +1024,19 @@ async def products_page(request: Request) -> None:
             )
             pages_label = ui.label("").classes("text-caption text-gray-600")
             pages_label.mark("grid-page-label")
+            # How many rows a page holds: part of the view like the page itself, so it
+            # travels in the URL and hides with the pager (it needs a total).
+            page_size_select = (
+                ui.select(
+                    {size: str(size) for size in grid_query.PAGE_SIZES},
+                    value=grid_query.page_size(active),
+                    label=t("grid.page_size"),
+                )
+                .props("outline dense")
+                .classes("shrink-0")
+                .mark("grid-page-size")
+            )
+            page_size_select.on_value_change(on_page_size_change)
 
         def update_pager_controls() -> None:
             """Shows the page controls and what they can do (`None` total = no pager)."""
@@ -1022,7 +1048,7 @@ async def products_page(request: Request) -> None:
                 return
             pager_row.set_visibility(True)
             page = grid_query.page_number(active)
-            pages = grid_query.page_count(total)
+            pages = grid_query.page_count(total, grid_query.page_size(active))
             first_row = grid_query.page_start(active) + 1
             last_row = min(total, first_row + len(loaded_objects) - 1) if loaded_objects else 0
             range_label.set_text(t("grid.page_range", first=first_row, last=last_row, total=total))
@@ -1380,13 +1406,13 @@ async def products_page(request: Request) -> None:
             sync_url_query()
 
         async def load_page(page: int) -> None:
-            """Jumps to a page of the current view (`grid_query.PAGE_SIZE` rows each)."""
+            """Jumps to a page of the current view (`grid_query.page_size` rows each)."""
             if not has_filter() or active["q"]:
                 return
             total = view_state["total"]
             target = max(1, page)
             if total is not None:
-                target = min(target, grid_query.page_count(total))
+                target = min(target, grid_query.page_count(total, grid_query.page_size(active)))
             if target == grid_query.page_number(active):
                 return
             active["page"] = None if target == 1 else str(target)

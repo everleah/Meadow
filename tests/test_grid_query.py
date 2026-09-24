@@ -7,9 +7,10 @@ from urllib.parse import parse_qs
 import pytest
 
 from meadow.frontend.grid_query import (
+    DEFAULT_PAGE_SIZE,
     FILTERED_LIMIT,
     FLAG_KEYS,
-    PAGE_SIZE,
+    PAGE_SIZES,
     PLAIN_LIMIT,
     PRIMARY_CATEGORY_DEF,
     VIEW_PAGE,
@@ -20,6 +21,7 @@ from meadow.frontend.grid_query import (
     list_limit,
     page_count,
     page_number,
+    page_size,
     page_start,
     products_url,
     read_filters,
@@ -90,6 +92,7 @@ def test_products_url_round_trips_a_full_filter_state() -> None:
         "sort": "attributes.name",
         "order": "desc",
         "page": "2",
+        "size": "500",
     }
 
     url = products_url(state)
@@ -222,15 +225,35 @@ def test_a_sort_or_page_alone_does_not_make_a_visit_filtered() -> None:
 
 def test_pages_are_counted_and_stepped_from_the_total() -> None:
     assert page_start({"page": "1"}) == 0
-    assert page_start({"page": "3"}) == 2 * PAGE_SIZE
+    assert page_start({"page": "3"}) == 2 * DEFAULT_PAGE_SIZE
     assert page_count(0) == 1
     assert page_count(1) == 1
-    assert page_count(PAGE_SIZE) == 1
-    assert page_count(PAGE_SIZE + 1) == 2
+    assert page_count(DEFAULT_PAGE_SIZE) == 1
+    assert page_count(DEFAULT_PAGE_SIZE + 1) == 2
     # Nonsense (or a missing page) is the first page, never a crash.
     assert page_number({"page": "two"}) == 1
     assert page_number({"page": None}) == 1
     assert page_number({"page": "-4"}) == 1
+
+
+def test_the_page_size_is_part_of_the_view() -> None:
+    """`?size=` sets the page size; anything outside the offers is the default."""
+    assert page_size({}) == DEFAULT_PAGE_SIZE
+    assert page_size({"size": "50"}) == 50
+    assert page_size({"size": "500"}) == 500
+    assert page_size({"size": "999"}) == DEFAULT_PAGE_SIZE
+    assert page_size({"size": "big"}) == DEFAULT_PAGE_SIZE
+    # The page start and the page count follow the size.
+    assert page_start({"page": "2", "size": "50"}) == 50
+    assert page_count(120, 50) == 3
+    arguments = list_arguments(
+        read_filters({"type": "product", "size": "500"}), has_channels=False, locale="de"
+    )
+    assert arguments["limit"] == 500
+    assert PAGE_SIZES[0] == 50
+    # The default size stays out of the URL, a chosen one travels with the view.
+    assert filters_query({"type": "product", "size": str(DEFAULT_PAGE_SIZE)}) == "type=product"
+    assert filters_query({"type": "product", "size": "50"}) == "type=product&size=50"
 
 
 def test_the_list_arguments_carry_the_page_and_the_sort() -> None:
@@ -240,8 +263,8 @@ def test_the_list_arguments_carry_the_page_and_the_sort() -> None:
 
     arguments = list_arguments(filters, has_channels=True, locale="de")
 
-    assert arguments["start"] == PAGE_SIZE
-    assert arguments["limit"] == PAGE_SIZE
+    assert arguments["start"] == DEFAULT_PAGE_SIZE
+    assert arguments["limit"] == DEFAULT_PAGE_SIZE
     assert arguments["sort"] == "attributes.name"
     assert arguments["order"] == "desc"
 

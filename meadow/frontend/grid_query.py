@@ -21,7 +21,7 @@ Two rules are part of the contract:
 they order the view and select its page, travel in the URL so the view is bookmarkable,
 and are ignored by `has_filter` — they describe how a filtered view is read, not which
 objects belong to it. The grid pages server-side: `GET /objects` serves one page
-(`PAGE_SIZE` rows from `page_start`), `GET /objects/count` its total and
+(`page_size` rows from `page_start`), `GET /objects/count` its total and
 `GET /objects/attribute-usage` the attribute names the whole view carries data for (so
 the columns do not depend on the page that happens to be loaded).
 """
@@ -52,6 +52,7 @@ FILTER_KEYS = (
     "sort",
     "order",
     "page",
+    "size",
 )
 
 #: How many rows one request of a **view walk** asks for (the export and bulk scopes
@@ -67,19 +68,20 @@ USAGE_SAMPLE = 1000
 #: Filters that are switches: `1` in the URL means on, everything else is off.
 FLAG_KEYS = ("incomplete", "uncategorized")
 
-#: How many rows a **page** of a filtered view holds. Every row carries every own
-#: attribute plus the language and inheritance cells, so the page size is also the
-#: payload lever: 1000 rows made a single grid page 5,6 MB of HTML (measured 2026-09-22,
-#: 1000 products × ~166 columns), 200 rows keep it instant and still fill a readable
-#: amount of scrolling.
-FILTERED_LIMIT = 200
 #: How many rows a list request would load without a filter (the grid stays empty anyway).
 PLAIN_LIMIT = 100
 
-#: The page size of a filtered view: the list asks for exactly this many rows
-#: (`GET /objects?limit=<PAGE_SIZE>&start=<page start>`) and `page_count` divides the
-#: total of `GET /objects/count` by it.
-PAGE_SIZE = FILTERED_LIMIT
+#: The page sizes the pager offers (`?size=`). Every row carries every own attribute plus
+#: the language and inheritance cells, so the page size is also the payload lever: 1000
+#: rows made a single grid page 5,6 MB of HTML (measured 2026-09-22, 1000 products ×
+#: ~166 columns). 500 is the largest offer — `GET /objects` caps `limit` at 1000.
+PAGE_SIZES = (50, 100, 200, 500)
+
+#: The page size of a filtered view when its URL does not name one. The list asks for
+#: exactly this many rows (`GET /objects?limit=<size>&start=<page start>`) and
+#: `page_count` divides the total of `GET /objects/count` by it.
+FILTERED_LIMIT = 200
+DEFAULT_PAGE_SIZE = FILTERED_LIMIT
 
 #: Filters that make a visit "filtered" (the grid then loads objects by itself).
 #: `definition_id` is missing on purpose: it only belongs to a category filter.
@@ -141,6 +143,8 @@ def filters_query(filters: Mapping[str, object]) -> str:
             parts.append(f"order={quote(str(filters['order']))}")
     if page_number(filters) > 1:
         parts.append(f"page={page_number(filters)}")
+    if page_size(filters) != DEFAULT_PAGE_SIZE:
+        parts.append(f"size={page_size(filters)}")
     return "&".join(parts)
 
 
@@ -153,12 +157,21 @@ def page_number(filters: Mapping[str, object]) -> int:
     return max(page, 1)
 
 
+def page_size(filters: Mapping[str, object]) -> int:
+    """How many rows the view shows per page (`?size=`, one of `PAGE_SIZES`)."""
+    try:
+        size = int(str(filters.get("size") or "").strip())
+    except ValueError:
+        return DEFAULT_PAGE_SIZE
+    return size if size in PAGE_SIZES else DEFAULT_PAGE_SIZE
+
+
 def page_start(filters: Mapping[str, object]) -> int:
     """The offset the view's current page starts at (`?start=` of `GET /objects`)."""
-    return (page_number(filters) - 1) * PAGE_SIZE
+    return (page_number(filters) - 1) * page_size(filters)
 
 
-def page_count(total: int, size: int = PAGE_SIZE) -> int:
+def page_count(total: int, size: int = DEFAULT_PAGE_SIZE) -> int:
     """How many pages `total` rows have (an empty view is page 1 of 1)."""
     return max(1, -(-max(total, 0) // size))
 
@@ -171,7 +184,7 @@ def products_url(filters: Mapping[str, object]) -> str:
 
 def list_limit(filters: Mapping[str, object]) -> int:
     """How many rows a list request asks for (a filtered view asks for a page)."""
-    return PAGE_SIZE if has_filter(filters) else PLAIN_LIMIT
+    return page_size(filters) if has_filter(filters) else PLAIN_LIMIT
 
 
 def filter_arguments(filters: Mapping[str, object], *, locale: str) -> dict[str, Any]:
@@ -219,7 +232,7 @@ def list_arguments(
     """The core arguments of a **filtered object list** (`GET /objects`).
 
     Without `start`/`limit` this is the view's current **page**
-    (`[page_start, page_start + PAGE_SIZE)`); a caller that walks the whole view — the
+    (`[page_start, page_start + `page_size`)`); a caller that walks the whole view — the
     export and the bulk scopes mean the view, not the rows on screen — overrides them
     with an explicit offset and `VIEW_PAGE` rows per request. `releases`/
     `resolve_inheritance` are page rendering, not filters.
