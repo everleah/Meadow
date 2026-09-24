@@ -981,7 +981,7 @@ async def products_page(request: Request) -> None:
             active["size"] = None if size == grid_query.DEFAULT_PAGE_SIZE else str(size)
             await reload_grid()
 
-        with ui.row().classes("items-center gap-2 pt-1") as pager_row:
+        with ui.row().classes("w-full items-center gap-2 pt-1") as pager_row:
             pager_row.mark("grid-pager")
             first_button = (
                 ui.button(icon="first_page", on_click=lambda: load_page(1))
@@ -1025,16 +1025,21 @@ async def products_page(request: Request) -> None:
             pages_label = ui.label("").classes("text-caption text-gray-600")
             pages_label.mark("grid-page-label")
             # How many rows a page holds: part of the view like the page itself, so it
-            # travels in the URL and hides with the pager (it needs a total).
+            # travels in the URL and hides with the pager (it needs a total). No caption
+            # (a label "objects per page" is cut off in the row) — the tooltip says it,
+            # and the row is full width so the control sits on the right edge.
             page_size_select = (
                 ui.select(
                     {size: str(size) for size in grid_query.PAGE_SIZES},
                     value=grid_query.page_size(active),
-                    label=t("grid.page_size"),
                 )
                 .props("outline dense")
                 .classes("shrink-0")
+                # Not `ml-auto`: that Tailwind class is not in NiceGUI's bundled CSS
+                # (measured: computed `margin-left` stays 0px).
+                .style("margin-left: auto")
                 .mark("grid-page-size")
+                .tooltip(t("grid.page_size"))
             )
             page_size_select.on_value_change(on_page_size_change)
 
