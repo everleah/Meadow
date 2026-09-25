@@ -500,6 +500,15 @@ pub fn set_from_keys(keys: &[String]) -> (PermissionSet, Vec<String>) {
     (set, unknown)
 }
 
+/// The keys of a stored list that the catalog does not know.
+///
+/// The write path rejects them: the read path ignores an unknown key (fail-closed), so
+/// accepting one would store a permission that looks granted and does nothing — the typo
+/// would only ever surface as "the group has no effect".
+pub fn unknown_keys(keys: &[String]) -> Vec<String> {
+    set_from_keys(keys).1
+}
+
 /// The areas of the catalog in first-appearance order, with their label keys.
 fn areas() -> Vec<Value> {
     let mut areas: Vec<Value> = Vec::new();

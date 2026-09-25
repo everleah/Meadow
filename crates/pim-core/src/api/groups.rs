@@ -89,6 +89,24 @@ fn require_admin(claims: &crate::auth::Claims) -> Result<(), ApiError> {
     }
 }
 
+/// Rejects permission keys the catalog does not know (`400`).
+///
+/// The core would ignore them on the read path (fail-closed), so a stored typo would be a
+/// permission that looks set and does nothing. The write path is where the catalog
+/// becomes a contract — the same rule as for connector and export-profile parameters.
+fn reject_unknown_permissions(unknown: Vec<String>) -> Result<(), ApiError> {
+    let mut unknown = unknown;
+    unknown.sort();
+    unknown.dedup();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "unknown permission(s): {} — the catalog is at GET /permissions",
+        unknown.join(", ")
+    )))
+}
+
 /// Creates a new group.
 #[utoipa::path(
     post,
@@ -108,6 +126,12 @@ pub async fn create_group(
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
+    reject_unknown_permissions(
+        crate::permissions::unknown_keys(&body.grant_permissions)
+            .into_iter()
+            .chain(crate::permissions::unknown_keys(&body.deny_permissions))
+            .collect(),
+    )?;
     // A group carries permissions: creating one can give a user rights, so every issued
     // session has to be renewed. Bumped after the validation and before the write, so a
     // rejected request does not log anybody out.
@@ -137,6 +161,23 @@ pub async fn create_group(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::internal("created group was not returned"))?;
+    let group_id = group
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "group_created",
+            object_id: Some(&group_id),
+            from: None,
+            to: Some(serde_json::json!({ "name": group.get("name") })),
+            metadata: None,
+        },
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(group)))
 }
 
@@ -222,6 +263,16 @@ pub async fn update_group(
     require_admin(&claims)?;
     let key = parse_key(&id, TABLE)?;
 
+    // Checked before anything is written, so a rejected list does not end any session.
+    let mut unknown: Vec<String> = Vec::new();
+    if let Some(grant) = &body.grant_permissions {
+        unknown.extend(crate::permissions::unknown_keys(grant));
+    }
+    if let Some(deny) = &body.deny_permissions {
+        unknown.extend(crate::permissions::unknown_keys(deny));
+    }
+    reject_unknown_permissions(unknown)?;
+
     let mut changes = serde_json::Map::new();
     if let Some(name) = body.name {
         changes.insert("name".to_owned(), Value::String(name));
@@ -245,6 +296,12 @@ pub async fn update_group(
         changes.insert("branding".to_owned(), branding);
     }
     let changes = Value::Object(changes);
+    // The audit names the changed fields, not their values: a scope document can be large
+    // and the durable history is about *what* moved, not a second copy of the data.
+    let fields: Vec<String> = changes
+        .as_object()
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
 
     rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
@@ -265,6 +322,18 @@ pub async fn update_group(
         .into_iter()
         .next()
         .ok_or_else(|| ApiError::not_found(format!("group `{id}` not found")))?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "group_updated",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: Some(serde_json::json!({ "fields": fields })),
+        },
+    )
+    .await;
     Ok(Json(group))
 }
 
@@ -296,6 +365,18 @@ pub async fn delete_group(
         .bind(("key", key))
         .await?
         .check()?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "group_deleted",
+            object_id: Some(&id),
+            from: None,
+            to: None,
+            metadata: None,
+        },
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
