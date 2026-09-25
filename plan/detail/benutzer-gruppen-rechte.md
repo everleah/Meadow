@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 9 ([Benutzer, Gruppen & Rechte](../meadow-pim-architektur.md#9-benutzer-gruppen--rechte-rbac--abac-scopes))
 - **Relevante Phasen:** Phase 1, 7, 9
-- **Stand:** A1–A5 umgesetzt (Rechte-Katalog, Mitgliedschaft als Graph, effektive Menge in den Claims + `auth_version`, Schreibpfad-Prüfung, Scope-Compiler auf den Lesepfaden; 2026-09-25); A6 (Performanz-Gates im Gate-Lauf) und Stufe B (Durchsetzung), C (UI), D (KI) offen
+- **Stand:** A1–A6 umgesetzt (Rechte-Katalog, Mitgliedschaft als Graph, effektive Menge in den Claims + `auth_version`, Schreibpfad-Prüfung, Scope-Compiler auf den Lesepfaden, Performanz-Zusagen als Tests + Abnahmeskript; 2026-09-25); Stufe B (Durchsetzung), C (UI), D (KI) offen
 
 ## Umsetzungsstand
 
@@ -27,7 +27,16 @@ Ein Rechtesystem kann den Lesepfad erheblich verteuern. Diese Regeln halten die 
 5. **Mitgliedschaft einmal je Sitzung** über die indizierte Graph-Kante (`user -> member_of -> group`, transitiv über `child_of`), mit expliziten Indizes nach der `reference`-Konvention; nicht pro Anfrage.
 6. **`deny` wird beim Auflösen verrechnet**, nicht bei jeder Prüfung.
 7. **Fail-fast vor jedem DB-Zugriff**, und **Stapel prüfen einmal**: ein Bulk-Lauf, ein Import, ein Export kosten einen Rechtecheck, nicht einen je Objekt; das Audit bekommt einen Eintrag pro Lauf.
-8. **Übersetzungsform per Messung entscheiden.** Bekannte SurrealDB-Zahlen als Ausgangspunkt: `id NOT IN (SELECT …)` mit `SELECT *` **159 s**, Record-Literal **1,4 s**, Subquery mit `SELECT id` **0,36 s**, `IN`-Liste pro gescannter Zeile geprüft (1000 Ids ≈ 2,6 s). Deshalb: Record-Literale aus gecachten Schlüsselmengen oder eine `id`-projizierende Subquery — welche günstiger ist, wird je Scope-Art am Bestand gemessen.
+8. **Übersetzungsform per Messung entscheiden.** Bekannte SurrealDB-Zahlen als Ausgangspunkt: `id NOT IN (SELECT …)` mit `SELECT *` **159 s**, Record-Literal **1,4 s**, Subquery mit `SELECT id` **0,36 s**, `IN`-Liste pro gescannter Zeile geprüft (1000 Ids ≈ 2,6 s). Deshalb: Record-Literale aus gecachten Schlüsselmengen oder eine `id`-projizierende Subquery — welche günstiger ist, wird je Scope-Art am Bestand gemessen. **Ergebnis für den Scope (A5):** die Subquery gegen die Relationskante kostet **28 918 ms** gegen **896 ms** für die Literal-Schlüsselliste (ungefiltert 33 ms) — deshalb Literal, siehe „Daten-Scope".
+
+### Was die Gates prüfen — und was bewusst nicht
+
+Die Performanz-Zusagen sind dort verankert, wo sie **ohne laufende Datenbank** prüfbar sind (`scripts/check.*` läuft bei gestopptem Kern):
+
+1. **Rein und getestet** (in `cargo test`, also im Gate): `scope::needs_scope` (Worker und Nutzer ohne Gruppen brauchen keinen Scope ⇒ kein Zugriff), `scope::restricts` (eine Gruppe **ohne** Regeln macht unbeschränkt), `scope::apply(None, …)` (ändert **nichts** an Conditions/Binds — das ist die Byte-Identität der unbeschränkten Abfrage, ausgedrückt an der Stelle, die den SQL-Text bildet) sowie UND je Gruppe / ODER über Gruppen / `id IN []` als Bedingung. `objects::build_object_filter` ist dagegen **nicht** unit-testbar: es hängt an `AppState` (echte DB-Verbindung), und ein Test-Doppel dafür gäbe es nur um des Tests willen.
+2. **Bewusst nicht im Gate: der Zähl-Test „keine zusätzliche Abfrage".** Er bräuchte eine Datenbank und würde eine Messung in den Schnellauf bringen; die Abwesenheit von Zugriffen folgt hier strukturell aus zwei frühen Rücksprüngen **vor** jedem DB-Zugriff (in `needs_scope`/`restricts`), beide oben getestet.
+3. **Manuell, weil sie einen laufenden Kern und Daten brauchen** (wie `load_test.py` und der Deslop-Scan): `scripts/scope_bench.py` — stellt die beiden Zusagen am echten Bestand fest. Es **prüft**, statt nur zu drucken (Exit ≠ 0 bei einem Fehlschlag): der Scope hat Mitglieder, er schränkt ein, er ist nicht weiter als die Kategorien-Ansicht, und ein gezeigtes Objekt trägt **nachweislich** die Kante zum Ziel (Rückwärtssuche über `GET /objects/{id}/references`). Optional `--max-overhead-ms` als Budget. Der erste Check („hat Mitglieder") ist der wichtigste: ohne ihn liefen die übrigen auf einer **leeren** Sicht grün durch — genau das passierte beim ersten Lauf dieses Skripts, weil das automatisch gewählte Taxon ein Wurzelknoten war, dessen Produkte nur am Unterbaum hängen (`?category=` schließt Nachfahren ein). Seitdem wird das Ziel aus einer **echten Kante** gelesen.
+4. **Gemessen (2026-09-25, Dev-Daten, 3 Zeitläufe je Endpunkt):** Scope mit 69 Mitgliedern +5 ms (Count) / −32 ms (Seite) / −126 ms (Spalten) gegen ungefiltert; Scope mit 455 Mitgliedern +93 ms / +97 ms / −101 ms. Ein **enges** Scope ist also *schneller* als gar keiner (weniger Kandidaten zu lesen, sortieren, rendern), ein weites kostet den Literal-Vergleich zusätzlich.
 
 ### Entscheidung: Rechteänderung bricht die laufenden Sitzungen ab (2026-09-25)
 
@@ -40,7 +49,8 @@ Ein globaler Zähler `auth_version` (dasselbe Muster wie `stats_version`) steigt
 - Nebeneffekt: die bisherige Lücke „`token_version` wird beim Request nie geprüft" ist damit geschlossen — schärfer als vorher, weil auch Passwortwechsel sofort greifen.
 - **Bewusst offen bis Stufe B:** Endpunkte, die den Worker-API-Key **oder** ein Bearer-Token annehmen (`auth::api_key_or_role`, u. a. die Worker-Schreibpfade `POST /objects`, `PATCH /objects/{id}`, `POST /references`), prüfen weiterhin nur die Rolle. Ein auf diesem Weg beendetes Token wird dort also noch akzeptiert. Stufe B stellt diese Stellen auf `claims.can(...)` um — dann greift die Versionsprüfung dort mit.
 
-**Offen:** A6 Performanz-Gates (Zähl-Test „keine zusätzliche Abfrage", Clause-Identität im Gate-Lauf, Lastvergleich in `scripts/load_test.py`), Stufe B (Durchsetzung: Rollen-Checks → `claims.can(...)`, Scope auch auf den Schreib- und den übrigen Lesepfaden, Versionsprüfung für den API-Key-Pfad), C (Oberfläche: Matrix, Datenkarte mit Zähler, Mitglieder, Effektiv-Panel), D (KI).
+- **A6 — Die Performanz-Zusagen sind geprüft, nicht behauptet (umgesetzt 2026-09-25).** Die drei frühen Entscheidungen des Scopes sind reine, im Gate getestete Funktionen (`needs_scope`, `restricts`, `apply` — siehe „Was die Gates prüfen\"); die Abnahme am echten Bestand macht `scripts/scope_bench.py`.
+  - **Bewusst offen (bis Stufe B):** Die Lesepfade sind noch nicht alle geschlossen — `/objects`, `/objects/count` und `/objects/attribute-usage` verlangen jetzt eine Identität, aber Einzelobjekt, `/objects/stats`, Picker, Baum und `/search` antworten weiterhin ohne Token; auch greift der Scope dort (und auf den Schreibpfaden) noch nicht. Stufe B schließt das zusammen mit den Rechteprüfungen.
 
 ## Grundprinzip
 

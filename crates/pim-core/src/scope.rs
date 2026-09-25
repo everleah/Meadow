@@ -314,19 +314,52 @@ pub async fn validate(db: &crate::db::Db, rules: &Rules) -> Result<(), ApiError>
     Ok(())
 }
 
+/// Whether a caller can be restricted at all.
+///
+/// The worker ([`Caller::System`]) and a user without groups cannot have a scope. This answers
+/// **before** any lookup, so the normal case costs one comparison and no database access at
+/// all — the first of the three promises A6 guards with a unit test.
+pub fn needs_scope(caller: &Caller) -> bool {
+    matches!(caller, Caller::User(claims) if !claims.groups.is_empty())
+}
+
+/// Whether a set of group scopes restricts anything.
+///
+/// A group **without** rules restricts nothing, and that is enough to make the whole caller
+/// unrestricted: the scope of one group must never narrow what another group leaves open — the
+/// plan's "ohne Scope-Regeln gelten die Standardrechte".
+pub fn restricts(groups: &[Rules]) -> bool {
+    !groups.is_empty() && !groups.iter().any(Rules::is_empty)
+}
+
+/// Appends a compiled clause to a filter's condition chain.
+///
+/// `None` (unrestricted) changes **nothing**: the condition list a caller without a scope builds
+/// is the one that was built before scopes existed. That identity is the second promise A6 guards
+/// — a condition added or reordered here would change every unscoped query in the catalogue.
+pub fn apply(
+    clause: Option<Clause>,
+    conditions: &mut Vec<String>,
+    binds: &mut Vec<(String, Value)>,
+) {
+    if let Some(clause) = clause {
+        conditions.extend(clause.conditions);
+        binds.extend(clause.binds);
+    }
+}
+
 /// Compiles the scopes of the caller's groups into one condition for the object view.
 ///
 /// `None` means **unrestricted**: no condition is added at all, so an unscoped caller runs
 /// exactly the query they ran before scopes existed. The worker (`Caller::System`) is
 /// unrestricted by design — an import must be able to write and read the whole catalogue.
 pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clause>, ApiError> {
+    if !needs_scope(caller) {
+        return Ok(None);
+    }
     let Caller::User(claims) = caller else {
         return Ok(None);
     };
-    if claims.groups.is_empty() {
-        // A user without groups cannot have a scope: no lookup, no clause.
-        return Ok(None);
-    }
     let scopes = crate::rbac::group_scopes(&state.db, &state.cache, &claims.groups).await?;
     compile(state, &scopes).await
 }
@@ -338,7 +371,7 @@ pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clau
 /// sees what any of their groups allows), and a **group without rules makes the whole user
 /// unrestricted** — the plan's "ohne Scope-Regeln gelten die Standardrechte".
 async fn compile(state: &AppState, groups: &[Rules]) -> Result<Option<Clause>, ApiError> {
-    if groups.is_empty() || groups.iter().any(Rules::is_empty) {
+    if !restricts(groups) {
         return Ok(None);
     }
     let mut alternatives: Vec<String> = Vec::new();
@@ -548,6 +581,69 @@ mod tests {
                 .iter()
                 .any(|problem| problem.contains("rules[5]: must be an object"))
         );
+    }
+
+    #[test]
+    fn the_fast_path_decisions_are_pure_and_fail_open_only_for_rules() {
+        // A caller that cannot be restricted: the worker and a user without groups.
+        assert!(!needs_scope(&Caller::System));
+        assert!(!needs_scope(&user_caller(&[])));
+        assert!(needs_scope(&user_caller(&["group:a"])));
+
+        // A set of scopes restricts only when every group has rules: one group without rules
+        // leaves the whole caller unrestricted.
+        assert!(!restricts(&[]));
+        assert!(!restricts(&[Rules::default()]));
+        assert!(restricts(&[Rules {
+            rules: vec![Rule::Field {
+                field: "type".to_owned(),
+                values: vec!["product".to_owned()],
+            }],
+        }]));
+        assert!(!restricts(&[
+            Rules {
+                rules: vec![Rule::Field {
+                    field: "type".to_owned(),
+                    values: vec!["product".to_owned()],
+                }],
+            },
+            Rules::default(),
+        ]));
+    }
+
+    #[test]
+    fn applying_no_clause_leaves_the_filter_untouched() {
+        // The promise behind "the unscoped query stays byte-identical": a conditions/binds
+        // chain that goes through `apply(None)` is the chain a caller without a scope built.
+        let mut conditions = vec!["deleted_at IS NONE".to_owned(), "type = $type".to_owned()];
+        let mut binds = vec![("type".to_owned(), json!("product"))];
+        let before = (conditions.clone(), binds.clone());
+        apply(None, &mut conditions, &mut binds);
+        assert_eq!((conditions.clone(), binds.clone()), before);
+
+        let clause = Clause {
+            conditions: vec!["(id IN [object:a])".to_owned()],
+            binds: vec![("scope_0_0".to_owned(), json!(["product"]))],
+        };
+        apply(Some(clause), &mut conditions, &mut binds);
+        assert_eq!(conditions.len(), 3);
+        assert_eq!(conditions[2], "(id IN [object:a])");
+        assert_eq!(binds.len(), 2);
+    }
+
+    /// A user session with the given groups (for the fast-path decisions).
+    fn user_caller(groups: &[&str]) -> Caller {
+        Caller::User(Box::new(crate::auth::Claims {
+            sub: "user:test".to_owned(),
+            username: "test".to_owned(),
+            roles: vec![crate::auth::ROLE_VIEWER.to_owned()],
+            groups: groups.iter().map(|group| (*group).to_owned()).collect(),
+            perms: Vec::new(),
+            auth_version: 1,
+            token_version: 1,
+            exp: 0,
+            impersonator: None,
+        }))
     }
 
     #[test]

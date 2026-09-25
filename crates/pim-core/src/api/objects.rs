@@ -2266,11 +2266,12 @@ async fn build_object_filter(
     // The ABAC scope last, so it reads as what it is: one more condition on top of the
     // request's own filters. It becomes part of `conditions`, which means it is part of the
     // view cache key (`ObjectFilter::view_key`) — a scoped view can never reuse the rows of
-    // an unscoped one.
-    if let Some(clause) = crate::scope::for_caller(state, caller).await? {
-        conditions.extend(clause.conditions);
-        binds.extend(clause.binds);
-    }
+    // an unscoped one. `apply(None)` (the normal case) changes nothing at all.
+    crate::scope::apply(
+        crate::scope::for_caller(state, caller).await?,
+        &mut conditions,
+        &mut binds,
+    );
     Ok(ObjectFilter {
         conditions,
         binds,
