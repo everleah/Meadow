@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 9 ([Benutzer, Gruppen & Rechte](../meadow-pim-architektur.md#9-benutzer-gruppen--rechte-rbac--abac-scopes))
 - **Relevante Phasen:** Phase 1, 7, 9
-- **Stand:** A1–A3 umgesetzt (Rechte-Katalog, Mitgliedschaft als Graph, effektive Menge in den Claims + `auth_version`; 2026-09-25); A4–A6, B (Durchsetzung), C (UI), D (KI) offen
+- **Stand:** A1–A5 umgesetzt (Rechte-Katalog, Mitgliedschaft als Graph, effektive Menge in den Claims + `auth_version`, Schreibpfad-Prüfung, Scope-Compiler auf den Lesepfaden; 2026-09-25); A6 (Performanz-Gates im Gate-Lauf) und Stufe B (Durchsetzung), C (UI), D (KI) offen
 
 ## Umsetzungsstand
 
@@ -14,6 +14,7 @@ Stufenplan (Nutzerentscheidung 2026-09-25): **A** Kern-Vertrag → **B** Durchse
 - **A2 — Mitgliedschaft als Graph (umgesetzt 2026-09-25).** `member_of` (`in` = Nutzer, `out` = Gruppe) und `child_of` (`in` = Kindgruppe, `out` = Elterngruppe) sind SurrealDB-**RELATION**-Tabellen mit **expliziten Indizes in beide Richtungen** (`idx_member_of_in`/`_out`, `idx_child_of_in`/`_out`) — der Login-Pfad läuft die Kanten einmal je Sitzung entlang, je Ebene eine Abfrage ab einem Index, gefiltert mit Record-List-Literalen (nicht `array::map`, siehe R8). Geschrieben wird über `POST /groups/{id}/members`, `DELETE /groups/{id}/members/{user_id}`, `POST /groups/{id}/children`, `DELETE /groups/{id}/children/{child_id}`: **idempotent** (eine vorhandene Kante antwortet `200 {created: false}`, eine fehlende `204`), **zyklusgeprüft** (`400`, ein Ring machte „wer erbt von wem" unbeantwortbar), **auditiert** (`group_member_added`/`_removed`, `group_child_added`/`_removed`). `GET /memberships` liefert beide Kantenlisten in **einem** Aufruf, damit der Gruppen-Dialog keine N+1-Abfragen braucht.
 - **A3 — Die effektive Menge reist im Token (umgesetzt 2026-09-25).** `Claims` trägt jetzt `groups`, `perms` (die Rechtbits) und `auth_version`; die Auflösung passiert **einmal beim Login** (`rbac::resolve`), `/auth/me` meldet Gruppen und Rechte aus den Claims (ohne Abfrage), und die Prüfung ist ein Bit-Test. Sichtbar wird das erst mit Stufe B — die Durchsetzung hängt noch an Rollen, aber die Daten liegen bereit.
 - **A4 — Der Schreibpfad prüft gegen den Katalog (umgesetzt 2026-09-25).** `POST`/`PATCH /groups` lehnen unbekannte Schlüssel in `grant_permissions`/`deny_permissions` mit **`400`** ab („unknown permission(s): … — the catalog is at GET /permissions"). Der Lesepfad ignoriert einen unbekannten Schlüssel (fail-closed), ein gespeicherter Tippfehler wäre also ein Recht, das **gesetzt aussieht und nichts tut** — genau deshalb prüft der Schreibpfad, wie bei Konnektor- und Exportprofil-Parametern. Die Prüfung läuft **vor** dem Zähler-Sprung: eine abgelehnte Liste meldet niemanden ab. Gruppenänderungen werden auditiert (`group_created`/`_updated`/`_deleted`, beim Update die **geänderten Felder** statt einer zweiten Kopie der Werte).
+- **A5 — Der Scope greift auf den Lesepfaden (umgesetzt 2026-09-25).** `crate::scope` liest und prüft `group.scope`, kompiliert die Regeln zu **einer** Bedingung und hängt sie in dieselbe `WHERE`-Kette wie alle anderen Filter (Details und Messwerte im Abschnitt „Daten-Scope"); die Gruppendokumente sind auf `auth_version` gecacht, die aufgelösten Schlüsselmengen auf `stats_version`. Live geprüft: eine Gruppe mit Scope „Kategorie X" (455 der 2000 Produkte) liefert für die zugeordnete Person **455** Objekte, die Seitenschlüssel sind **id-gleich** mit dem expliziten Kategoriefilter, die Spaltenprobe zählt 455, und unverändert bleibt der unbeschränkte Nutzer bei 2000. Die drei Sicht-Endpunkte verlangen jetzt eine Identität (vorher antworteten sie **ohne Token** mit 200); der Worker kommt weiterhin über den API-Key durch.
 
 ### Performanz-Regeln (verbindlich)
 
@@ -39,7 +40,7 @@ Ein globaler Zähler `auth_version` (dasselbe Muster wie `stats_version`) steigt
 - Nebeneffekt: die bisherige Lücke „`token_version` wird beim Request nie geprüft" ist damit geschlossen — schärfer als vorher, weil auch Passwortwechsel sofort greifen.
 - **Bewusst offen bis Stufe B:** Endpunkte, die den Worker-API-Key **oder** ein Bearer-Token annehmen (`auth::api_key_or_role`, u. a. die Worker-Schreibpfade `POST /objects`, `PATCH /objects/{id}`, `POST /references`), prüfen weiterhin nur die Rolle. Ein auf diesem Weg beendetes Token wird dort also noch akzeptiert. Stufe B stellt diese Stellen auf `claims.can(...)` um — dann greift die Versionsprüfung dort mit.
 
-**Offen:** A5 Scope-Compiler mit `None`-Fast-Path und versionsgebundenem Cache, A6 Performanz-Gates (Zähl-Test „keine zusätzliche Abfrage", Clause-Identität, Lastvergleich in `scripts/load_test.py`). Danach Stufe B (Durchsetzung), C (Oberfläche), D (KI).
+**Offen:** A6 Performanz-Gates (Zähl-Test „keine zusätzliche Abfrage", Clause-Identität im Gate-Lauf, Lastvergleich in `scripts/load_test.py`), Stufe B (Durchsetzung: Rollen-Checks → `claims.can(...)`, Scope auch auf den Schreib- und den übrigen Lesepfaden, Versionsprüfung für den API-Key-Pfad), C (Oberfläche: Matrix, Datenkarte mit Zähler, Mitglieder, Effektiv-Panel), D (KI).
 
 ## Grundprinzip
 
@@ -106,20 +107,25 @@ Zuordnung (Auszug):
 
 ## Daten-Scope (ABAC-light)
 
-Berechtigungen regeln **Operationen**, Scopes regeln **Daten**:
+Berechtigungen regeln **Operationen**, Scopes regeln **Daten**. Der Scope hängt an der **Gruppe** (`group.scope`); die Gruppe ist damit ihr eigenes Subjekt, es gibt keine Hülle mit eigener `id`. Umgesetzt in `crates/pim-core/src/scope.rs` (A5, 2026-09-25):
 
 ```json
 {
-  "id": "scope_group_webshop",
-  "subject": { "type": "group", "id": "group_webshop" },
   "rules": [
     { "field": "type", "operator": "in", "value": ["product"] },
-    { "reference": { "type": "category_member", "out": "category_webshop" } }
+    { "reference": { "type": "rel_category_member", "out": "object:webshop" } }
   ]
 }
 ```
 
-Der Kern übersetzt diese Regeln beim Lesen in SurrealQL-`WHERE`-Bedingungen (serverseitige Filterung). Ohne Scope-Regeln gelten die Standardrechte der Rolle/Gruppe.
+- **Zwei Regelformen.** `field` filtert auf ein Feld des Objekts (`type`, `status` — der Katalog steht in `scope::FIELDS`, bewusst kurz: ein Scope, der jedes Attribut nennen dürfte, wäre ein Query-Baukasten in einem Formularfeld), `reference` verlangt eine **Kante** in einem Relationstyp zu einem der genannten Ziele. `reference.out` darf eine Id **oder eine Liste** sein (mehrere Ziele = „eines davon").
+- **Gespeichert wird der stabile Relations-Schlüssel** (`rel_category_member`), nicht der umbenennbare Name; die Oberfläche zeigt den Namen und speichert den Schlüssel (dieselbe Regel wie bei Kanälen und `definition_id`).
+- **Semantik:** Regeln **innerhalb** einer Gruppe sind **UND**-verknüpft („Typ ist Produkt *und* in einer dieser Kategorien"), Gruppen **mit** Regeln werden **ODER**-verknüpft („was irgendeine meiner Gruppen erlaubt"), und eine Gruppe **ohne** Regeln schränkt **nichts** ein — die Standardrechte der Rolle/Gruppe, wie bisher.
+- **Der Clause geht in dieselbe `WHERE`-Kette wie alle anderen Filter** (`api::objects::ObjectFilter`), also gilt er für Seite, Gesamtzahl und Spaltenprobe gleichzeitig. Kein Nachfiltern in Rust, kein Filtern nach der Seitenscheibe — sonst loge der Pager und die Zahl zählte Unsichtbares. Er ist damit automatisch Teil der View-Cache-Schlüssel (`ObjectFilter::view_key`): eine beschränkte Sicht kann nie die Zeilen einer unbeschränkten wiederverwenden.
+- **Unbeschränkt = kein Clause.** Ohne Gruppen (oder bei einer Gruppe ohne Regeln, oder für den Worker mit API-Key) liefert der Compiler `None` und es wird **keine** Bedingung angehängt: die Abfrage ist byte-identisch zu vorher. Das ist der Normalfall und der Grund, warum das System nichts kostet, wo es niemand nutzt.
+- **Schreibpfad prüft, Lesepfad ist fail-closed.** `POST`/`PATCH /groups` lehnen einen Scope ab, den der Kern nicht nutzen kann (`400`: unbekanntes Feld, unbekannter Operator, unbekannte Relation, unbekanntes Ziel, Regel mit beiden Formen). Ein **gespeicherter** Scope, der nicht mehr parst (alte Datei, Handedit), wird beim Lesen als „keine Regeln" gelesen — er darf niemanden aus dem ganzen Katalog aussperren —, und eine Regel, deren Auflösung **leer** ist, bleibt eine Bedingung (`id IN []`): eine Regel fallen zu lassen würde die Sicht auf alles erweitern, also genau das Gegenteil.
+- **Die Form des Clauses ist gemessen, nicht geraten** (2026-09-25, Dev-Daten: 16 926 Produkte, größte Demo-Kategorie mit 455 Mitgliedern): die naheliegende Subquery `id IN (SELECT VALUE in FROM reference WHERE …)` kostet im Count **28 918 ms**, dieselbe Regel mit gebundener Zielliste 29 911 ms, das Materialisieren der Schlüssel 29 ms und `id IN [<455 Literal-Keys>]` **896 ms** gegen 33 ms ohne Scope. Deshalb: Schlüssel in Rust holen, als **Record-Literal** einsetzen (dieselbe Lehre wie bei `?category`/`?released_for`, siehe `api::keys::record_list_literal`) und die Schlüsselliste datenversionsgebunden cachen. End-to-End gemessen kostet der Scope damit **~90 ms** beim Zählen und **~100–150 ms** bei einer Seite; die Spaltenabfrage bleibt unverändert.
+- **Die Lesepfade brauchen eine Identität.** `/objects`, `/objects/count` und `/objects/attribute-usage` antworteten bis hierher **ohne Token** (200) — ein Scope, der nur greift, wenn zufällig ein Token mitkommt, wäre umgehbar. Sie nehmen jetzt Bearer-Token **oder** den Worker-API-Key (`auth::authenticated`), der Worker bleibt unbeschränkt. **Noch offen (Stufe B):** die übrigen Lesepfade (Einzelobjekt, `/objects/stats`, Picker, Baum, `/search`) sind weiterhin offen und werden dort zusammen mit den Rechteprüfungen geschlossen.
 
 ## Datenmodell
 

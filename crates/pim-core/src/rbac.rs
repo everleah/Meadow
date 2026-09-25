@@ -19,6 +19,9 @@
 //! and subtree walks of `api::references`: a group hierarchy is small, and a bounded
 //! walk cannot be turned into an endless one by bad data.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use crate::api::groups::parse_key;
@@ -390,6 +393,54 @@ pub async fn invalidate_sessions(db: &Db, cache: &MetaCache) -> Result<u64, ApiE
     let version = bump_auth_version(db).await?;
     cache.set_auth_version(version);
     Ok(version)
+}
+
+/// The scopes of the given groups, cached on the access version.
+///
+/// Answers one entry per group id — a group without a stored scope (or one this catalogue
+/// does not know, e.g. a deleted group) counts as *no rules*, which is the truth for a group
+/// that restricts nothing and the safe reading for a group that is gone: it cannot widen a
+/// view. The whole table is loaded in one query and cached, so the read path never asks per
+/// group.
+pub async fn group_scopes(
+    db: &Db,
+    cache: &MetaCache,
+    groups: &[String],
+) -> Result<Vec<crate::scope::Rules>, ApiError> {
+    let version = cache.auth_version();
+    let all = match cache.cached_group_scopes(version).await {
+        Some(all) => all,
+        None => {
+            let mut response = db
+                .inner()
+                .query("SELECT id, scope FROM group;")
+                .await?
+                .check()?;
+            let rows: Vec<Value> = response.take(0)?;
+            let mut map: HashMap<String, crate::scope::Rules> = HashMap::new();
+            for row in rows {
+                let Some(id) = row.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                // A stored scope that does not parse (an old document, a hand-edited row) must
+                // not lock a user out of the whole catalogue: it is read as "no rules". The
+                // write path validates before storing, so this is the path of last resort.
+                let rules = row
+                    .get("scope")
+                    .map(crate::scope::parse)
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                map.insert(id.to_owned(), rules);
+            }
+            let all: Arc<HashMap<String, crate::scope::Rules>> = Arc::new(map);
+            cache.store_group_scopes(version, all.clone()).await;
+            all
+        }
+    };
+    Ok(groups
+        .iter()
+        .map(|id| all.get(id).cloned().unwrap_or_default())
+        .collect())
 }
 
 /// Splits a `table:key` id and answers both parts.

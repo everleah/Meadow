@@ -112,8 +112,21 @@ pub struct MetaCache {
     /// both ends of every composition edge (~190 ms warm, 12 197 edges), which is the
     /// whole cost of the answer.
     composition_types: RwLock<Option<(u64, Arc<Value>)>>,
+    /// The stored scope documents of **all** groups, bound to `auth_version`.
+    ///
+    /// A group's scope changes only when a group is edited, and that raises `auth_version` —
+    /// so the same counter that ends the sessions invalidates this cache. Loading the whole
+    /// table in one query keeps the read path free of a lookup per group: the catalogue has a
+    /// handful of groups, and per request the core must not ask for what it already has.
+    group_scopes: RwLock<Option<(u64, Arc<GroupScopes>)>>,
+    /// The resolved object keys of a scope rule (`relation|targets`), bound to
+    /// `stats_version`: the set changes when an object is categorised, which does not touch
+    /// the access model.
+    scope_keys: RwLock<VersionedMap<Vec<String>>>,
 }
 
+/// The scope documents of all groups, keyed by group record id (`crate::scope::Rules`).
+pub(crate) type GroupScopes = HashMap<String, crate::scope::Rules>;
 /// A `url` attribute: its name and whether it holds one value per language.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UrlAttribute {
@@ -288,6 +301,40 @@ impl MetaCache {
     /// The access version every issued token is compared against.
     pub fn auth_version(&self) -> u64 {
         self.auth_version.load(Ordering::Relaxed)
+    }
+
+    /// The scope documents of all groups, if they were loaded for this access version.
+    pub async fn cached_group_scopes(&self, version: u64) -> Option<Arc<GroupScopes>> {
+        self.group_scopes
+            .read()
+            .await
+            .as_ref()
+            .filter(|(stored, _)| *stored == version)
+            .map(|(_, payload)| payload.clone())
+    }
+
+    /// Stores the scope documents of all groups under the current access version.
+    pub async fn store_group_scopes(&self, version: u64, payload: Arc<GroupScopes>) {
+        *self.group_scopes.write().await = Some((version, payload));
+    }
+
+    /// The resolved keys of a scope rule, if they were resolved for this data version.
+    pub async fn cached_scope_keys(&self, key: &str, version: u64) -> Option<Arc<Vec<String>>> {
+        self.scope_keys
+            .read()
+            .await
+            .get(key)
+            .filter(|(stored, _)| *stored == version)
+            .map(|(_, payload)| payload.clone())
+    }
+
+    /// Stores the resolved keys of a scope rule under the given data version.
+    pub async fn store_scope_keys(&self, key: &str, version: u64, keys: Arc<Vec<String>>) {
+        let mut cache = self.scope_keys.write().await;
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(key.to_owned(), (version, keys));
     }
 
     /// Publishes the stored access version (startup) or the newly stored one (after a

@@ -17,7 +17,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::keys;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::AuthUser;
+use crate::auth::{self, AuthUser, Caller};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -2130,9 +2130,15 @@ impl ObjectFilter {
 }
 
 /// Builds the filter of an object list request.
+///
+/// `caller` decides the **ABAC scope** (`crate::scope`): the scope of the caller's groups is
+/// pushed into this very same condition chain, so the page, the total and the column sample
+/// cannot disagree about which objects the view contains. An unrestricted caller — the
+/// worker, or a user without groups — adds nothing at all.
 async fn build_object_filter(
     state: &AppState,
     params: &ListObjects,
+    caller: &Caller,
 ) -> Result<ObjectFilter, ApiError> {
     // Soft-deleted objects (and their cascade descendants) are hidden.
     let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
@@ -2257,6 +2263,14 @@ async fn build_object_filter(
     if let Some(object_type) = &params.object_type {
         binds.push(("type".to_owned(), Value::String(object_type.clone())));
     }
+    // The ABAC scope last, so it reads as what it is: one more condition on top of the
+    // request's own filters. It becomes part of `conditions`, which means it is part of the
+    // view cache key (`ObjectFilter::view_key`) — a scoped view can never reuse the rows of
+    // an unscoped one.
+    if let Some(clause) = crate::scope::for_caller(state, caller).await? {
+        conditions.extend(clause.conditions);
+        binds.extend(clause.binds);
+    }
     Ok(ObjectFilter {
         conditions,
         binds,
@@ -2264,7 +2278,6 @@ async fn build_object_filter(
         missing_required: params.missing_required,
     })
 }
-
 /// The bare keys of the objects released for a channel with the requested state
 /// (`?released_for=`/`?release_status=`).
 ///
@@ -2413,11 +2426,13 @@ fn object_keys(objects: &[Value]) -> Vec<&str> {
 )]
 pub async fn list_objects(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    let caller = auth::authenticated(&state, &headers)?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
-    let filter = build_object_filter(&state, &params).await?;
+    let filter = build_object_filter(&state, &params, &caller).await?;
     let completeness_filter = filter.has_completeness_filter();
     let locale = working_locale(&params);
     let needs_inheritance = params.resolve_inheritance == Some(true);
@@ -2587,9 +2602,11 @@ pub async fn list_objects(
 )]
 pub async fn count_objects(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Value>, ApiError> {
-    let filter = build_object_filter(&state, &params).await?;
+    let caller = auth::authenticated(&state, &headers)?;
+    let filter = build_object_filter(&state, &params, &caller).await?;
     let count = if filter.has_completeness_filter() {
         // `order` is validated like on the list and enters the view key, so a count
         // and a page of the same view share one walk.
@@ -2639,9 +2656,11 @@ pub async fn count_objects(
 )]
 pub async fn attribute_usage(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Value>, ApiError> {
-    let filter = build_object_filter(&state, &params).await?;
+    let caller = auth::authenticated(&state, &headers)?;
+    let filter = build_object_filter(&state, &params, &caller).await?;
     let sample = params.sample.clamp(1, MAX_SAMPLE) as i64;
     let mut names: BTreeSet<String> = BTreeSet::new();
     let mut sampled: i64 = 0;

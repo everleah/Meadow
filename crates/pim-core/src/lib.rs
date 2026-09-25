@@ -29,6 +29,7 @@ pub mod rbac;
 pub mod rules;
 pub mod scheduler;
 pub mod schema;
+pub mod scope;
 pub mod seed;
 
 /// Starts the `pim-core` HTTP server.

@@ -89,6 +89,20 @@ fn require_admin(claims: &crate::auth::Claims) -> Result<(), ApiError> {
     }
 }
 
+/// Rejects a scope document the core cannot use (`400`).
+///
+/// Two stages, because they answer different mistakes: [`crate::scope::parse`] reads the shape
+/// (unknown field, unknown operator, missing target) and [`crate::scope::validate`] checks the
+/// database (does that relation exist, does that target exist). A scope that names something
+/// nonexistent would silently match nothing — "the group has no effect" is the least
+/// debuggable outcome, so the write path is where it stops.
+async fn check_scope(state: &AppState, scope: &Value) -> Result<(), ApiError> {
+    let rules = crate::scope::parse(scope).map_err(|problems| {
+        ApiError::bad_request(format!("invalid scope: {}", problems.join("; ")))
+    })?;
+    crate::scope::validate(&state.db, &rules).await
+}
+
 /// Rejects permission keys the catalog does not know (`400`).
 ///
 /// The core would ignore them on the read path (fail-closed), so a stored typo would be a
@@ -132,6 +146,7 @@ pub async fn create_group(
             .chain(crate::permissions::unknown_keys(&body.deny_permissions))
             .collect(),
     )?;
+    check_scope(&state, &body.scope).await?;
     // A group carries permissions: creating one can give a user rights, so every issued
     // session has to be renewed. Bumped after the validation and before the write, so a
     // rejected request does not log anybody out.
@@ -272,6 +287,9 @@ pub async fn update_group(
         unknown.extend(crate::permissions::unknown_keys(deny));
     }
     reject_unknown_permissions(unknown)?;
+    if let Some(scope) = &body.scope {
+        check_scope(&state, scope).await?;
+    }
 
     let mut changes = serde_json::Map::new();
     if let Some(name) = body.name {

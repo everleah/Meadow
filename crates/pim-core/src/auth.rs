@@ -155,8 +155,84 @@ pub fn verify(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors:
     Ok(data.claims)
 }
 
+/// Who is asking: the machine-to-machine caller (the worker's API key) or a user session.
+///
+/// The distinction matters where a decision depends on the **person** rather than on the
+/// role — the ABAC scope is the first such case (`crate::scope`): the worker writes and reads
+/// the whole catalogue by design, a user session is restricted by the groups in its token.
+pub enum Caller {
+    /// The worker (or another machine) with the configured API key: no claims, no scope.
+    System,
+    /// A verified user session.
+    User(Box<Claims>),
+}
+
+impl Caller {
+    /// The claims of a user session (`None` for the machine caller).
+    pub fn claims(&self) -> Option<&Claims> {
+        match self {
+            Caller::System => None,
+            Caller::User(claims) => Some(claims),
+        }
+    }
+}
+
+/// Reads the caller of a request from its headers.
+///
+/// The API key wins over a bearer token: a machine call is never a person's session. This is
+/// the one place that turns headers into an identity, so a new endpoint cannot invent its own
+/// rule about which header counts (`api_key_or_role` and the `AuthUser` extractor both build
+/// on it).
+pub fn caller(headers: &HeaderMap, config: &Config) -> Result<Caller, ApiError> {
+    if let Some(expected) = &config.log_ingest_api_key {
+        let provided = headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if provided == expected {
+            return Ok(Caller::System);
+        }
+    }
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
+    let claims = verify(&config.jwt_secret, token)
+        .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
+    Ok(Caller::User(Box::new(claims)))
+}
+
 /// Extracted authenticated user (from the `Authorization: Bearer` header).
 pub struct AuthUser(pub Claims);
+
+/// Rejects a session whose access version is behind the stored one.
+///
+/// Every change to the access model (permissions, groups, memberships, passwords) raises the
+/// counter, so a revoked right cannot survive in an already issued token. `0` never matches
+/// (see [`Claims::auth_version`]). The message is deliberately the one the frontend already
+/// maps to "session expired → log in again" (`meadow/frontend/api.py`), because that is
+/// exactly the action the caller has to take.
+pub fn check_version(claims: &Claims, cache: &crate::cache::MetaCache) -> Result<(), ApiError> {
+    if claims.auth_version != cache.auth_version() {
+        return Err(ApiError::unauthorized("invalid or expired token"));
+    }
+    Ok(())
+}
+
+/// Reads the caller of an authenticated request and rejects a stale session.
+///
+/// The one-liner for handlers that need to know *who* asks: the machine API key
+/// ([`Caller::System`]) or a user session whose access version is still current. Handlers that
+/// only need a role keep using [`api_key_or_role`]; handlers that need the identity itself — the
+/// ABAC scope is the first such case (`crate::scope`) — use this.
+pub fn authenticated(state: &AppState, headers: &HeaderMap) -> Result<Caller, ApiError> {
+    let caller = caller(headers, &state.config)?;
+    if let Some(claims) = caller.claims() {
+        check_version(claims, &state.cache)?;
+    }
+    Ok(caller)
+}
 
 /// Authorizes a request as either a machine-to-machine caller (matching the
 /// `X-Api-Key`) or a JWT bearer carrying at least `required_role`.
@@ -171,22 +247,10 @@ pub fn api_key_or_role(
     config: &Config,
     required_role: &str,
 ) -> Result<String, ApiError> {
-    if let Some(expected) = &config.log_ingest_api_key {
-        let provided = headers
-            .get("x-api-key")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if provided == expected {
-            return Ok("system".to_owned());
-        }
-    }
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?;
-    let claims = verify(&config.jwt_secret, token)
-        .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
+    let claims = match caller(headers, config)? {
+        Caller::System => return Ok("system".to_owned()),
+        Caller::User(claims) => claims,
+    };
     let allowed = match required_role {
         // `viewer` is the base role: any authenticated token qualifies.
         ROLE_VIEWER => true,
@@ -216,16 +280,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let claims = verify(&state.config.jwt_secret, token)
             .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
-
-        // The session is over when the stored access version has moved on: every change
-        // to the access model (permissions, groups, memberships, passwords) raises it, so
-        // a revoked right cannot survive in an already issued token. `0` never matches
-        // (see `Claims::auth_version`). The message is deliberately the one the frontend
-        // already maps to "session expired → log in again" (`meadow/frontend/api.py`),
-        // because that is exactly the action the caller has to take.
-        if claims.auth_version != state.cache.auth_version() {
-            return Err(ApiError::unauthorized("invalid or expired token"));
-        }
+        check_version(&claims, &state.cache)?;
 
         Ok(AuthUser(claims))
     }
