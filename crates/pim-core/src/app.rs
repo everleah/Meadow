@@ -299,6 +299,7 @@ pub fn router(state: AppState) -> Router {
                 .patch(api::groups::update_group)
                 .delete(api::groups::delete_group),
         )
+        .route("/permissions", get(api::permissions::permission_catalog))
         .route(
             "/system/logs",
             get(api::system::list_logs).post(api::system::ingest_logs),

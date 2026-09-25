@@ -2,7 +2,37 @@
 
 - **Hauptdokument:** Abschnitt 9 ([Benutzer, Gruppen & Rechte](../meadow-pim-architektur.md#9-benutzer-gruppen--rechte-rbac--abac-scopes))
 - **Relevante Phasen:** Phase 1, 7, 9
-- **Stand:** Entwurf
+- **Stand:** A1 umgesetzt (Rechte-Katalog + `GET /permissions`, 2026-09-25); A2–A6, B (Durchsetzung), C (UI), D (KI) offen
+
+## Umsetzungsstand
+
+Stufenplan (Nutzerentscheidung 2026-09-25): **A** Kern-Vertrag → **B** Durchsetzung → **C** Oberfläche → **D** KI-Unterstützung (optional). Jede Stufe hält den laufenden Betrieb grün.
+
+- **A1 — Rechte-Katalog (umgesetzt 2026-09-25).** `crates/pim-core/src/permissions.rs` ist die eine Quelle der Wahrheit über die **26** Berechtigungen (Bereich, Aktion, Rollen-Default, Label-Schlüssel, englische Beschreibung); `GET /permissions` liefert daraus das Vertragsdokument (Bereiche in Reihenfolge, vier Rollen, je Recht die **expandierten** Rollen, damit die Matrix „geerbt" ohne Kenntnis der Hierarchie zeichnen kann). Bis dahin waren die Rechte **Prosa** und `grant_permissions`/`deny_permissions` freie Zeichenkettenfelder, die kein Schreibpfad prüfte und kein Leser auswertete.
+- **Bitnummern sind append-only.** Jedes Recht hat eine feste `index`-Position im `PermissionSet` (`[u64; WORDS]`, `Copy`), und die Bitmenge reist im JWT. Ein **entzogenes** Recht behält seinen Platz, eine neue Berechtigung bekommt den **nächsten** — eine Umsortierung gäbe einem alten Token stillschweigend eine andere Bedeutung. Die Prüfung ist deshalb ein **Bit-Test ohne Allokation**; `can()` auf einen unbekannten Schlüssel ist `false` (fail-closed), gemeldet werden unbekannte Schlüssel nur auf dem **Schreibpfad**.
+- **Rollen-Defaults aus `min_role`.** Jede Berechtigung gehört der **niedrigsten** Rolle, die sie hält; jeder höhere Rang erbt sie (`admin` ist eine Sonderform des `editor`). Das ist genau die Hierarchie, die der Kern vorher mit `is_admin()`/`is_editor()` erzwungen hat — Stufe B ersetzt diese Rollen-Checks durch `can(...)`, und diese Zuordnung ist es, die das Verhalten **ohne** Gruppen unverändert hält (jede geänderte Stelle wird dagegen geprüft).
+
+### Performanz-Regeln (verbindlich)
+
+Ein Rechtesystem kann den Lesepfad erheblich verteuern. Diese Regeln halten die Kosten im notwendigen Maß; sie sind Teil der Definition of Done jeder Stufe.
+
+1. **Kein Datenbankzugriff pro Anfrage.** Beim Login wird die effektive Menge **einmal** aufgelöst (Rollen-Defaults + Gruppen-Grants − Denies) und reist in den Claims; `can()` bleibt ein Speicher-Test wie `is_admin()` heute. Der Ist-Zustand ist die Messlatte: die Authentifizierung kostet heute **null** Zugriffe (nur Signaturprüfung).
+2. **Der Scope wird zur `WHERE`-Bedingung, nie zum Nachfilter** — und fließt in **dieselbe** Bedingung wie `count` und die Seite (sonst lügt der Pager: „1–200 von 9633", während die nächste Seite etwas anderes zeigt).
+3. **Für unbeschränkte Nutzer entsteht kein Clause.** Der Compiler gibt `None` zurück; die Abfrage bleibt byte-identisch zum heutigen Zustand. Das ist die messbare Form von „nur im notwendigen Maß".
+4. **Clause einmal kompilieren, versionsgebunden cachen.** Schlüssel `(Scope-Identität, stats_version)`; die Übersetzung passiert bei einer Änderung, nicht pro Anfrage und nicht pro Zeile. **Jeder Cache, der aus einer gefilterten Sicht entsteht, trägt die Scope-Identität im Schlüssel** (`cached_view_keys(filter, order)` heute nicht — ohne Scope im Schlüssel bekäme ein Nutzer die Schlüsselliste eines anderen).
+5. **Mitgliedschaft einmal je Sitzung** über die indizierte Graph-Kante (`user -> member_of -> group`, transitiv über `child_of`), mit expliziten Indizes nach der `reference`-Konvention; nicht pro Anfrage.
+6. **`deny` wird beim Auflösen verrechnet**, nicht bei jeder Prüfung.
+7. **Fail-fast vor jedem DB-Zugriff**, und **Stapel prüfen einmal**: ein Bulk-Lauf, ein Import, ein Export kosten einen Rechtecheck, nicht einen je Objekt; das Audit bekommt einen Eintrag pro Lauf.
+8. **Übersetzungsform per Messung entscheiden.** Bekannte SurrealDB-Zahlen als Ausgangspunkt: `id NOT IN (SELECT …)` mit `SELECT *` **159 s**, Record-Literal **1,4 s**, Subquery mit `SELECT id` **0,36 s**, `IN`-Liste pro gescannter Zeile geprüft (1000 Ids ≈ 2,6 s). Deshalb: Record-Literale aus gecachten Schlüsselmengen oder eine `id`-projizierende Subquery — welche günstiger ist, wird je Scope-Art am Bestand gemessen.
+
+### Entscheidung: Rechteänderung bricht die laufenden Sitzungen ab (2026-09-25)
+
+Ein globaler Zähler `auth_version` (dasselbe Muster wie `stats_version`) steigt bei **jeder** Änderung an Rechten, Gruppen, Mitgliedschaften und Passwörtern; das Token trägt den Stand beim Ausstellen, ein abweichender Wert ergibt `401` und die Anmeldeseite. Damit wirkt ein **entzogenes** Recht sofort (fail-closed) statt erst nach der Tokenlaufzeit, und die Prüfung kostet weiterhin **keinen** Zugriff.
+
+- Preis: eine Rechteänderung meldet die **laufenden** Sitzungen ab (nicht die Person selbst — `POST /auth/password` antwortet mit einem frischen Token). Bei einer KMU-Instanz mit wenigen Admins ist das vertretbar; die Alternative wäre ein bis zu einstündiges Fenster, in dem ein entzogenes Recht noch wirkt.
+- Nebeneffekt: die bisherige Lücke „`token_version` wird beim Request nie geprüft" ist damit geschlossen — schärfer als vorher, weil auch Passwortwechsel sofort greifen.
+
+**Offen:** A2 Mitgliedschaft (`member_of`/`child_of`, `POST /groups/{id}/members`, `groups` am Nutzer), A3 effektive Menge in den Claims + `auth_version`, A4 Schreibpfad-Prüfung gegen den Katalog + Audit, A5 Scope-Compiler mit `None`-Fast-Path und versionsgebundenem Cache, A6 Performanz-Gates (Zähl-Test „keine zusätzliche Abfrage", Clause-Identität, Lastvergleich in `scripts/load_test.py`).
 
 ## Grundprinzip
 

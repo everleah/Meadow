@@ -23,6 +23,7 @@ pub mod jobqueue;
 pub mod key_lock;
 pub mod language;
 pub mod log_cleanup;
+pub mod permissions;
 pub mod rate_limit;
 pub mod rules;
 pub mod scheduler;

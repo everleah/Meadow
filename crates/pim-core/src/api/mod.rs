@@ -22,6 +22,7 @@ pub mod keys;
 pub mod languages;
 pub mod object_types;
 pub mod objects;
+pub mod permissions;
 pub mod references;
 pub mod rules;
 pub mod saved_searches;
@@ -167,6 +168,7 @@ use utoipa::OpenApi;
         groups::get_group,
         groups::update_group,
         groups::delete_group,
+        permissions::permission_catalog,
         system::ingest_logs,
         system::list_logs,
         system::list_settings,
