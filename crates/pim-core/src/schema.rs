@@ -292,6 +292,27 @@ DEFINE FIELD IF NOT EXISTS scope ON TABLE group TYPE object;
 DEFINE FIELD IF NOT EXISTS branding ON TABLE group TYPE object;
 DEFINE INDEX IF NOT EXISTS idx_group_name ON TABLE group FIELDS name UNIQUE;
 
+-- Membership and hierarchy of groups (plan section 9) as graph edges: both directions
+-- start at an index instead of a scan. `member_of` (`in` = user, `out` = group) answers
+-- "which groups does this user belong to" for the login path; `child_of` (`in` = child
+-- group, `out` = parent group) carries the inheritance of the hierarchy. The endpoints
+-- are validated in the handlers (like `reference`), not by the table definitions.
+DEFINE TABLE IF NOT EXISTS member_of TYPE RELATION;
+DEFINE INDEX IF NOT EXISTS idx_member_of_in ON TABLE member_of FIELDS in;
+DEFINE INDEX IF NOT EXISTS idx_member_of_out ON TABLE member_of FIELDS out;
+DEFINE TABLE IF NOT EXISTS child_of TYPE RELATION;
+DEFINE INDEX IF NOT EXISTS idx_child_of_in ON TABLE child_of FIELDS in;
+DEFINE INDEX IF NOT EXISTS idx_child_of_out ON TABLE child_of FIELDS out;
+
+-- The access version: a single-row counter (record `access_state:state`) bumped by every
+-- change that invalidates issued tokens — permissions, groups, memberships, passwords.
+-- A token carries the version it was issued with and is rejected when the two differ, so
+-- a revoked right takes effect at once instead of after the token's TTL. **Persisted**
+-- on purpose: an in-memory counter would restart at its initial value and log every
+-- session out on each deployment.
+DEFINE TABLE IF NOT EXISTS access_state;
+DEFINE FIELD IF NOT EXISTS auth_version ON TABLE access_state TYPE int DEFAULT 1;
+
 -- Audit log: durable, domain-level change history (plan section 13).
 -- `from`/`to` carry optional old/new values; the `timestamp` defaults to the
 -- write time in UTC.

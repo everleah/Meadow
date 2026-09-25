@@ -27,12 +27,33 @@ pub struct Impersonator {
     pub username: String,
 }
 
-/// JWT claims (plan: `sub`, `username`, `roles[]`, `token_version`, `exp`).
+/// JWT claims (plan: `sub`, `username`, `roles[]`, `groups[]`, `perms[]`,
+/// `auth_version`, `token_version`, `exp`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub username: String,
     pub roles: Vec<String>,
+    /// Group record ids the user belongs to (direct memberships and their parents).
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// The effective permissions as bit words ([`crate::permissions::PermissionSet`]).
+    ///
+    /// They are resolved **once** at login (`crate::rbac::resolve`) and travel with the
+    /// token, so a permission check costs a bit test instead of a query — the request
+    /// path must not pay for authorization (see the performance rules in
+    /// `plan/detail/benutzer-gruppen-rechte.md`).
+    #[serde(default)]
+    pub perms: Vec<u64>,
+    /// The access version the token was issued with.
+    ///
+    /// A token whose version differs from [`crate::cache::MetaCache::auth_version`] is
+    /// rejected: every change to permissions, groups, memberships or passwords raises the
+    /// stored counter, so a revoked right takes effect at once instead of after the
+    /// token's TTL. **`0` is never a valid version** — a token without this claim is
+    /// answered with `401` and the session logs in again.
+    #[serde(default)]
+    pub auth_version: u64,
     pub token_version: u64,
     pub exp: usize,
     /// Set when a superadmin impersonates another user (see plan section 9).
@@ -54,6 +75,19 @@ impl Claims {
     /// Whether the token has `editor` privileges or above.
     pub fn is_editor(&self) -> bool {
         self.has_role(ROLE_EDITOR) || self.is_admin()
+    }
+
+    /// The effective permissions of this token (a bit test, no I/O).
+    pub fn permissions(&self) -> crate::permissions::PermissionSet {
+        crate::permissions::PermissionSet::from_words(&self.perms)
+    }
+
+    /// Whether the token carries this permission.
+    ///
+    /// Stage B moves the call sites onto this check; the role checks above stay until
+    /// then, which keeps the behaviour of users without groups identical.
+    pub fn can(&self, permission: &str) -> bool {
+        self.permissions().can(permission)
     }
 }
 
@@ -183,6 +217,16 @@ impl FromRequestParts<AppState> for AuthUser {
         let claims = verify(&state.config.jwt_secret, token)
             .map_err(|_| ApiError::unauthorized("invalid or expired token"))?;
 
+        // The session is over when the stored access version has moved on: every change
+        // to the access model (permissions, groups, memberships, passwords) raises it, so
+        // a revoked right cannot survive in an already issued token. `0` never matches
+        // (see `Claims::auth_version`). The message is deliberately the one the frontend
+        // already maps to "session expired → log in again" (`meadow/frontend/api.py`),
+        // because that is exactly the action the caller has to take.
+        if claims.auth_version != state.cache.auth_version() {
+            return Err(ApiError::unauthorized("invalid or expired token"));
+        }
+
         Ok(AuthUser(claims))
     }
 }
@@ -196,6 +240,11 @@ mod tests {
             sub: "user:admin".to_owned(),
             username: "admin".to_owned(),
             roles: vec![ROLE_SUPERADMIN.to_owned()],
+            groups: vec!["group:webshop".to_owned()],
+            perms: crate::permissions::role_defaults(crate::permissions::Role::Superadmin)
+                .words()
+                .to_vec(),
+            auth_version: 1,
             token_version: 1,
             exp: 0,
             impersonator: None,
@@ -217,10 +266,15 @@ mod tests {
         assert_eq!(decoded.sub, claims.sub);
         assert_eq!(decoded.username, claims.username);
         assert_eq!(decoded.roles, claims.roles);
+        assert_eq!(decoded.groups, claims.groups);
+        assert_eq!(decoded.auth_version, claims.auth_version);
         assert_eq!(decoded.token_version, claims.token_version);
         assert!(decoded.exp > 0);
         assert!(decoded.has_role(ROLE_SUPERADMIN));
         assert!(decoded.is_admin());
+        // The permissions travel with the token and are read back as a bit set.
+        assert!(decoded.can("system.manage"));
+        assert!(decoded.can("object.read"));
     }
 
     #[test]

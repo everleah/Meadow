@@ -10,6 +10,7 @@ use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::{self, AuthUser, Claims, Impersonator};
 use crate::error::ApiError;
+use crate::rbac;
 
 /// Login payload.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -38,6 +39,15 @@ pub struct MeResponse {
     pub sub: String,
     pub username: String,
     pub roles: Vec<String>,
+    /// The groups of this session (direct memberships and their parent groups).
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// The effective permissions as keys — the UI hides menus and actions with them.
+    ///
+    /// Resolved once at login and carried by the token, so this answer costs no query and
+    /// cannot drift from what the core enforces.
+    #[serde(default)]
+    pub permissions: Vec<String>,
     /// Whether the user still has to set their own password (the UI shows a
     /// hint/banner then). Absent `must_change_password` counts as `true`.
     pub must_change_password: bool,
@@ -48,6 +58,35 @@ pub struct MeResponse {
     /// Present when the session impersonates another user (superadmin).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub impersonator: Option<Impersonator>,
+}
+
+/// Builds the claims of one session: the roles plus the **resolved** access.
+///
+/// The permission set and the group list are computed here — **once per login** — and
+/// travel with the token, so the request path never repeats the resolution (the
+/// performance rules of `plan/detail/benutzer-gruppen-rechte.md`). `impersonator` is set
+/// for an impersonation session (the acting superadmin); the access is that of the
+/// impersonated user.
+async fn claims_for(
+    state: &AppState,
+    sub: String,
+    username: String,
+    roles: Vec<String>,
+    token_version: u64,
+    impersonator: Option<Impersonator>,
+) -> Result<Claims, ApiError> {
+    let access = rbac::resolve(&state.db, &sub, &roles).await?;
+    Ok(Claims {
+        sub,
+        username,
+        roles,
+        groups: access.groups,
+        perms: access.permissions.words().to_vec(),
+        auth_version: state.cache.auth_version(),
+        token_version,
+        exp: 0,
+        impersonator,
+    })
 }
 
 /// Exchanges username/password for a JWT.
@@ -119,17 +158,19 @@ pub async fn login(
         return Err(ApiError::unauthorized("invalid credentials"));
     }
 
+    let claims = claims_for(
+        &state,
+        id,
+        body.username.clone(),
+        roles,
+        token_version,
+        None,
+    )
+    .await?;
     let token = auth::issue(
         &state.config.jwt_secret,
         state.config.jwt_ttl_seconds,
-        Claims {
-            sub: id,
-            username: body.username.clone(),
-            roles,
-            token_version,
-            exp: 0,
-            impersonator: None,
-        },
+        claims,
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;
 
@@ -157,10 +198,19 @@ pub async fn me(
         .await?
         .ok_or_else(|| ApiError::unauthorized("invalid session"))?;
 
+    // Computed before the response moves the claim fields out of `claims`.
+    let permissions: Vec<String> = claims
+        .permissions()
+        .keys()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
     Ok(Json(MeResponse {
         sub: claims.sub,
         username: claims.username,
         roles: claims.roles,
+        groups: claims.groups,
+        permissions,
         must_change_password: must_change_password(&user),
         password_changed_at: user
             .get("password_changed_at")
@@ -248,6 +298,10 @@ pub async fn change_password(
         .map_err(ApiError::bad_request)?;
     let new_hash = auth::hash_password(&body.new_password)
         .map_err(|error| ApiError::internal(error.to_string()))?;
+    // A new password ends every session issued before it — the session of the caller
+    // included, which is why the fresh token below is built **after** this bump (it must
+    // carry the new version, otherwise it would be rejected by its own rule).
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
         LET $u = type::record('user', $key);
         UPDATE $u SET password_hash = $hash,
@@ -295,14 +349,15 @@ pub async fn change_password(
     let token = auth::issue(
         &state.config.jwt_secret,
         state.config.jwt_ttl_seconds,
-        Claims {
-            sub: claims.sub.clone(),
+        claims_for(
+            &state,
+            claims.sub.clone(),
             username,
             roles,
             token_version,
-            exp: 0,
-            impersonator: None,
-        },
+            None,
+        )
+        .await?,
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;
 
@@ -414,17 +469,18 @@ pub async fn impersonate_user(
     let token = auth::issue(
         &state.config.jwt_secret,
         state.config.jwt_ttl_seconds,
-        Claims {
-            sub: target_id.clone(),
-            username: username.clone(),
+        claims_for(
+            &state,
+            target_id.clone(),
+            username.clone(),
             roles,
             token_version,
-            exp: 0,
-            impersonator: Some(Impersonator {
+            Some(Impersonator {
                 sub: claims.sub.clone(),
                 username: claims.username.clone(),
             }),
-        },
+        )
+        .await?,
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;
 

@@ -96,6 +96,16 @@ pub struct MetaCache {
     stats_locks: std::sync::Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// Bumped by every write that can change the aggregation.
     stats_version: AtomicU64,
+    /// The access version (`auth_version`): every change to permissions, groups,
+    /// memberships or passwords raises it, which ends the sessions issued before.
+    ///
+    /// Held in memory because the **request path** reads it: the extractor compares the
+    /// claim of every token against this counter, and a value read from the database per
+    /// request would undo the whole point of carrying the permissions in the token
+    /// (`plan/detail/benutzer-gruppen-rechte.md`, performance rules). The stored counter
+    /// is the source of truth; this field only mirrors it (loaded at startup, published
+    /// after each bump).
+    auth_version: AtomicU64,
     /// `GET /objects/composition-types` payload, bound to `stats_version`.
     ///
     /// The picker asks for it every time it opens and the grouped query dereferences
@@ -273,6 +283,17 @@ impl MetaCache {
     /// Current data version of the dashboard aggregation.
     pub fn stats_version(&self) -> u64 {
         self.stats_version.load(Ordering::Relaxed)
+    }
+
+    /// The access version every issued token is compared against.
+    pub fn auth_version(&self) -> u64 {
+        self.auth_version.load(Ordering::Relaxed)
+    }
+
+    /// Publishes the stored access version (startup) or the newly stored one (after a
+    /// bump).
+    pub fn set_auth_version(&self, version: u64) {
+        self.auth_version.store(version, Ordering::Relaxed);
     }
 
     /// Invalidates every cached `GET /objects/stats` payload.

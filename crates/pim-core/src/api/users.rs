@@ -11,6 +11,7 @@ use crate::app::AppState;
 use crate::auth::{self, AuthUser, ROLE_SUPERADMIN};
 use crate::db::Db;
 use crate::error::ApiError;
+use crate::rbac;
 
 const TABLE: &str = "user";
 const VALID_ROLES: [&str; 4] = ["superadmin", "admin", "editor", "viewer"];
@@ -343,6 +344,11 @@ pub async fn update_user(
     }
     let changes = Value::Object(changes);
 
+    // Roles, status and password are the access of a user: the sessions issued before
+    // this change have to be renewed (fail-closed). Bumped before the write — a failed
+    // write then costs an unnecessary login, the other order would keep a revoked right
+    // alive in an issued token.
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     // `password_changed_at` is an `option<datetime>`: MERGE cannot write a null
     // there, so an admin reset unsets the field in an extra statement.
     let mut sql = String::from(
@@ -423,6 +429,8 @@ pub async fn delete_user(
         ));
     }
 
+    // A deleted user's token must not survive.
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
         LET $u = type::record('user', $key);
         DELETE $u;

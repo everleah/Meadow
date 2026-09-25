@@ -8,8 +8,10 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
+use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
 use crate::error::ApiError;
+use crate::rbac;
 
 const TABLE: &str = "group";
 
@@ -65,7 +67,9 @@ fn default_limit() -> u32 {
 }
 
 /// Splits a `table:key` path segment and verifies the expected table.
-fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
+///
+/// Shared with [`crate::rbac`], which resolves user ids and group ids the same way.
+pub(crate) fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     let (actual_table, key) = id
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request(format!("invalid id `{id}`")))?;
@@ -104,6 +108,10 @@ pub async fn create_group(
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
+    // A group carries permissions: creating one can give a user rights, so every issued
+    // session has to be renewed. Bumped after the validation and before the write, so a
+    // rejected request does not log anybody out.
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let content = serde_json::json!({
         "name": body.name,
         "grant_permissions": body.grant_permissions,
@@ -238,6 +246,7 @@ pub async fn update_group(
     }
     let changes = Value::Object(changes);
 
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
         LET $g = type::record('group', $key);
         UPDATE $g MERGE $changes;
@@ -275,6 +284,7 @@ pub async fn delete_group(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
     let key = parse_key(&id, TABLE)?;
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
         LET $g = type::record('group', $key);
         DELETE $g;
@@ -287,4 +297,373 @@ pub async fn delete_group(
         .await?
         .check()?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// -- membership & hierarchy --------------------------------------------------
+//
+// The access model is two graph edges (`plan/detail/benutzer-gruppen-rechte.md`):
+// `member_of` (user → group) and `child_of` (group → group, `in` = child). Both are
+// written here and resolved by `crate::rbac`; the edges are indexed (`idx_member_of_in`/
+// `_out`, `idx_child_of_in`/`_out`), so the login path starts at an index instead of a
+// scan. The requests carry record ids (`user:42`, `group:team`) — the same form the rest
+// of the core uses.
+
+/// Payload for adding a member to a group.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct GroupMember {
+    /// User record id (`user:42`).
+    pub user_id: String,
+}
+
+/// Payload for linking a child group to the group in the path.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct GroupChild {
+    /// Child group record id (`group:team`).
+    pub group_id: String,
+}
+
+/// Verifies that a record exists (answers `404` with table and key otherwise).
+async fn require_record(state: &AppState, table: &str, key: &str) -> Result<(), ApiError> {
+    let sql = format!("LET $r = type::record('{table}', $key); SELECT id FROM $r;");
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    if rows.is_empty() {
+        return Err(ApiError::not_found(format!("{table} `{key}` not found")));
+    }
+    Ok(())
+}
+
+/// Creates one edge of the access model.
+///
+/// `RELATE type::record(…) -> edge -> type::record(…)` does **not** parse here
+/// ("Unexpected token `::`", see `api::references`), so both endpoints are bound first —
+/// the form every other edge write in the core uses.
+async fn relate(
+    state: &AppState,
+    edge: rbac::Edge,
+    from: (&str, &str),
+    to: (&str, &str),
+) -> Result<(), ApiError> {
+    let sql = format!(
+        "LET $src = type::record('{}', $from); \
+         LET $tgt = type::record('{}', $to); \
+         RELATE $src->{}->$tgt;",
+        from.0,
+        to.0,
+        edge.table()
+    );
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("from", from.1.to_owned()))
+        .bind(("to", to.1.to_owned()))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+/// Deletes one edge of the access model.
+///
+/// Idempotent on purpose: removing a membership that is not there answers `204` as well,
+/// so a double click or a retried request is not an error.
+async fn unrelate(
+    state: &AppState,
+    edge: rbac::Edge,
+    from: (&str, &str),
+    to: (&str, &str),
+) -> Result<(), ApiError> {
+    let sql = format!(
+        "DELETE {} WHERE in = type::record('{}', $from) AND out = type::record('{}', $to);",
+        edge.table(),
+        from.0,
+        to.0
+    );
+    state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("from", from.1.to_owned()))
+        .bind(("to", to.1.to_owned()))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+/// Adds a user to a group (`member_of`).
+///
+/// Idempotent: an existing membership answers `200 {created: false}` instead of writing a
+/// second edge — `RELATE` alone would happily create duplicates, and a user in the same
+/// group twice would be counted twice by every later resolution.
+#[utoipa::path(
+    post,
+    path = "/groups/{id}/members",
+    request_body = GroupMember,
+    responses(
+        (status = 201, description = "Member added", body = Value),
+        (status = 200, description = "Already a member", body = Value),
+        (status = 404, description = "Unknown group or user", body = Value)
+    )
+)]
+pub async fn add_group_member(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GroupMember>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    require_admin(&claims)?;
+    let group_key = parse_key(&id, TABLE)?;
+    let user_key = parse_key(&body.user_id, "user")?;
+    require_record(&state, TABLE, group_key).await?;
+    require_record(&state, "user", user_key).await?;
+    let group = format!("{TABLE}:{group_key}");
+    let user = format!("user:{user_key}");
+
+    if rbac::edge_exists(&state.db, rbac::Edge::MemberOf, &user, &group).await? {
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "created": false,
+                "user": user,
+                "group": group,
+            })),
+        ));
+    }
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
+    relate(
+        &state,
+        rbac::Edge::MemberOf,
+        ("user", user_key),
+        (TABLE, group_key),
+    )
+    .await?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "group_member_added",
+            object_id: Some(&group),
+            from: None,
+            to: Some(serde_json::json!({ "user": user })),
+            metadata: None,
+        },
+    )
+    .await;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "created": true,
+            "user": user,
+            "group": group,
+        })),
+    ))
+}
+
+/// Removes a user from a group (`member_of`).
+#[utoipa::path(
+    delete,
+    path = "/groups/{id}/members/{user_id}",
+    responses(
+        (status = 204, description = "Member removed"),
+        (status = 404, description = "Unknown group", body = Value)
+    )
+)]
+pub async fn remove_group_member(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path((id, user_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&claims)?;
+    let group_key = parse_key(&id, TABLE)?;
+    let user_key = parse_key(&user_id, "user")?;
+    require_record(&state, TABLE, group_key).await?;
+    let group = format!("{TABLE}:{group_key}");
+    let user = format!("user:{user_key}");
+    // A removal that finds no membership changed nothing, so it must not end the
+    // sessions of the whole instance either.
+    if rbac::edge_exists(&state.db, rbac::Edge::MemberOf, &user, &group).await? {
+        rbac::invalidate_sessions(&state.db, &state.cache).await?;
+        unrelate(
+            &state,
+            rbac::Edge::MemberOf,
+            ("user", user_key),
+            (TABLE, group_key),
+        )
+        .await?;
+        audit::record_best_effort(
+            &state.db,
+            AuditEntry {
+                user_id: &claims.sub,
+                action: "group_member_removed",
+                object_id: Some(&group),
+                from: Some(serde_json::json!({ "user": user })),
+                to: None,
+                metadata: None,
+            },
+        )
+        .await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Links a child group below the group in the path (`child_of`).
+///
+/// Refuses a link that would close a **cycle** in the hierarchy (`400`): a loop would
+/// make "who inherits from whom" unanswerable and every later resolution walk longer
+/// than the data deserves.
+#[utoipa::path(
+    post,
+    path = "/groups/{id}/children",
+    request_body = GroupChild,
+    responses(
+        (status = 201, description = "Child linked", body = Value),
+        (status = 200, description = "Already linked", body = Value),
+        (status = 400, description = "Cycle", body = Value),
+        (status = 404, description = "Unknown group", body = Value)
+    )
+)]
+pub async fn add_group_child(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GroupChild>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    require_admin(&claims)?;
+    let parent_key = parse_key(&id, TABLE)?;
+    let child_key = parse_key(&body.group_id, TABLE)?;
+    require_record(&state, TABLE, parent_key).await?;
+    require_record(&state, TABLE, child_key).await?;
+    let parent = format!("{TABLE}:{parent_key}");
+    let child = format!("{TABLE}:{child_key}");
+
+    if rbac::would_cycle(&state.db, &child, &parent).await? {
+        return Err(ApiError::bad_request(format!(
+            "linking `{child}` below `{parent}` would close a cycle in the group hierarchy"
+        )));
+    }
+    if rbac::edge_exists(&state.db, rbac::Edge::ChildOf, &child, &parent).await? {
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "created": false,
+                "child": child,
+                "parent": parent,
+            })),
+        ));
+    }
+    rbac::invalidate_sessions(&state.db, &state.cache).await?;
+    relate(
+        &state,
+        rbac::Edge::ChildOf,
+        (TABLE, child_key),
+        (TABLE, parent_key),
+    )
+    .await?;
+    audit::record_best_effort(
+        &state.db,
+        AuditEntry {
+            user_id: &claims.sub,
+            action: "group_child_added",
+            object_id: Some(&parent),
+            from: None,
+            to: Some(serde_json::json!({ "child": child })),
+            metadata: None,
+        },
+    )
+    .await;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "created": true,
+            "child": child,
+            "parent": parent,
+        })),
+    ))
+}
+
+/// Removes a child group from the group in the path (`child_of`).
+#[utoipa::path(
+    delete,
+    path = "/groups/{id}/children/{child_id}",
+    responses(
+        (status = 204, description = "Child unlinked"),
+        (status = 404, description = "Unknown group", body = Value)
+    )
+)]
+pub async fn remove_group_child(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path((id, child_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&claims)?;
+    let parent_key = parse_key(&id, TABLE)?;
+    let child_key = parse_key(&child_id, TABLE)?;
+    require_record(&state, TABLE, parent_key).await?;
+    let parent = format!("{TABLE}:{parent_key}");
+    let child = format!("{TABLE}:{child_key}");
+    // Like the member removal: no edge, no change, no logout.
+    if rbac::edge_exists(&state.db, rbac::Edge::ChildOf, &child, &parent).await? {
+        rbac::invalidate_sessions(&state.db, &state.cache).await?;
+        unrelate(
+            &state,
+            rbac::Edge::ChildOf,
+            (TABLE, child_key),
+            (TABLE, parent_key),
+        )
+        .await?;
+        audit::record_best_effort(
+            &state.db,
+            AuditEntry {
+                user_id: &claims.sub,
+                action: "group_child_removed",
+                object_id: Some(&parent),
+                from: Some(serde_json::json!({ "child": child })),
+                to: None,
+                metadata: None,
+            },
+        )
+        .await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Every edge of the access model in one answer, for the group dialog.
+///
+/// The UI builds both directions from this instead of asking per group (`N+1`): which
+/// users are in a group and which groups a user belongs to come from the same two lists.
+/// Both queries read the whole edge tables — they hold one row per membership, not one
+/// per object, so this is a few rows even on a large catalogue.
+#[utoipa::path(
+    get,
+    path = "/memberships",
+    responses(
+        (status = 200, description = "Memberships and group hierarchy", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn list_memberships(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&claims)?;
+    let (memberships, parents) = rbac::edges(&state.db).await?;
+    let members: Vec<Value> = memberships
+        .into_iter()
+        .map(|(user, group)| serde_json::json!({ "user": user, "group": group }))
+        .collect();
+    let parents: Vec<Value> = parents
+        .into_iter()
+        .map(|(child, parent)| serde_json::json!({ "child": child, "parent": parent }))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "members": members,
+        "parents": parents,
+    })))
 }

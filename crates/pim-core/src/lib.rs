@@ -25,6 +25,7 @@ pub mod language;
 pub mod log_cleanup;
 pub mod permissions;
 pub mod rate_limit;
+pub mod rbac;
 pub mod rules;
 pub mod scheduler;
 pub mod schema;
@@ -82,6 +83,15 @@ pub async fn run() {
         config,
         settings,
     };
+    // The access version decides which issued tokens are still valid. The stored counter
+    // is the source of truth, the cache mirrors it for the request path (a database read
+    // per request would defeat the point of carrying the permissions in the token). A
+    // failure here would leave every session invalid, so it is fatal like the schema and
+    // the seed above.
+    let auth_version = rbac::auth_version(&state.db)
+        .await
+        .expect("failed to load the access version");
+    state.cache.set_auth_version(auth_version);
     // Load DB overrides into the settings snapshot so runtime consumers (the
     // rule client) honour persisted settings immediately.
     if let Err(error) = crate::api::system::refresh_settings_snapshot(&state).await {
