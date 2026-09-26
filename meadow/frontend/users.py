@@ -373,6 +373,28 @@ async def users_page() -> None:
             .classes("w-full mt-4")
             .props("header-class=bg-green-2 text-green-9")
         ):
+            # The catalog drives the permission matrix: its areas, their order and the role
+            # defaults come from the core, so the editor cannot offer a key the write path
+            # would reject. Without it (a failed load) the matrix stays empty and a save
+            # **omits** the permission lists instead of sending empty ones — the danger is not
+            # a missing label, it is a group silently losing its rights.
+            try:
+                catalog = await client.list_permissions(token)
+            except CoreError, httpx.HTTPError:
+                catalog = {}
+                ui.notify(t("groups.catalog_failed"), color="warning")
+
+            def _roles_label(permission: dict) -> str:
+                """The lowest role that holds the permission by default (`Viewer`).
+
+                The matrix shows the role default next to the switch: the empty state means
+                "as the roles say", and this is what they say. The catalog carries the
+                **expanded** roles, so the first one is the lowest.
+                """
+                roles = permission.get("roles") or []
+                if not isinstance(roles, list) or not roles:
+                    return ""
+                return t(f"role.{roles[0]}")
 
             def _group_rows() -> list[dict]:
                 return [
@@ -411,19 +433,53 @@ async def users_page() -> None:
             group_dialog = ui.dialog()
             with (
                 group_dialog,
-                ui.card().classes("w-[40rem] max-w-[94vw] max-h-[85vh] overflow-y-auto"),
+                ui.card().classes("w-[56rem] max-w-[94vw] max-h-[85vh] overflow-y-auto"),
             ):
                 group_title = ui.label("").classes("text-h6")
                 with ui.column().classes("w-full mt-2 gap-2"):
                     name_input = (
                         ui.input(t("groups.field_name")).props("filled dense").classes("w-full")
                     )
-                    grant_input = (
-                        ui.input(t("groups.field_grant")).props("filled dense").classes("w-full")
-                    )
-                    deny_input = (
-                        ui.input(t("groups.field_deny")).props("filled dense").classes("w-full")
-                    )
+                    permission_toggles: dict[str, ui.toggle] = {}
+                    with ui.column().classes("w-full gap-1"):
+                        ui.label(t("groups.perm_title")).classes("text-subtitle2")
+                        ui.label(t("groups.perm_hint")).classes("text-caption text-grey-7")
+                        for area in catalog.get("areas") or []:
+                            area_key = str(area.get("key") or "")
+                            area_permissions = [
+                                permission
+                                for permission in catalog.get("permissions") or []
+                                if permission.get("area") == area_key
+                            ]
+                            if not area_permissions:
+                                continue
+                            ui.label(t(str(area.get("label_key") or area_key))).classes(
+                                "text-caption text-grey-7 mt-2"
+                            )
+                            for permission in area_permissions:
+                                key = str(permission.get("key") or "")
+                                action = str(permission.get("action") or key)
+                                label_key = str(permission.get("label_key") or key)
+                                label = t(label_key)
+                                if label == label_key:
+                                    # No translation for the full key yet: the action under the
+                                    # area header reads the same ("Object · read").
+                                    label = t(f"perm.action.{action}")
+                                with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                                    ui.label(label).classes("flex-1").tooltip(
+                                        str(permission.get("description") or "")
+                                    )
+                                    ui.label(_roles_label(permission)).classes(
+                                        "text-caption text-grey-6"
+                                    )
+                                    permission_toggles[key] = ui.toggle(
+                                        {
+                                            "inherit": t("groups.perm_inherit"),
+                                            "grant": t("groups.perm_grant"),
+                                            "deny": t("groups.perm_deny"),
+                                        },
+                                        value="inherit",
+                                    ).props("dense unelevated")
                     scope_area = (
                         ui.textarea(t("groups.field_scope")).props("filled dense").classes("w-full")
                     )
@@ -444,19 +500,21 @@ async def users_page() -> None:
                             t("groups.save"), icon="save", on_click=lambda: save_group()
                         ).props("flat")
 
-            def _split(value: str) -> list[str]:
-                return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
-
             def _fill_group_form(group: dict | None) -> None:
                 editing = group is not None
                 group = group or {}  # the reads below only run while editing
                 group_title.set_text(t("groups.edit") if editing else t("groups.new"))
                 group_delete_btn.visible = editing
                 name_input.set_value(str(group.get("name") or "") if editing else "")
-                grant_input.set_value(
-                    _split_join(group.get("grant_permissions")) if editing else ""
-                )
-                deny_input.set_value(_split_join(group.get("deny_permissions")) if editing else "")
+                granted = set(group.get("grant_permissions") or []) if editing else set()
+                denied = set(group.get("deny_permissions") or []) if editing else set()
+                for key, toggle in permission_toggles.items():
+                    if key in granted:
+                        toggle.value = "grant"
+                    elif key in denied:
+                        toggle.value = "deny"
+                    else:
+                        toggle.value = "inherit"
                 scope_area.set_value(
                     _json.dumps(group.get("scope") or {}, indent=2, ensure_ascii=False)
                     if editing
@@ -497,8 +555,18 @@ async def users_page() -> None:
                 if not name:
                     ui.notify(t("groups.name_required"), color="warning")
                     return
-                grant = _split(grant_input.value or "")
-                deny = _split(deny_input.value or "")
+                # An empty matrix means the catalog never arrived: omit the lists (an update
+                # keeps what is stored) rather than sending empty ones.
+                grant = (
+                    [key for key, toggle in permission_toggles.items() if toggle.value == "grant"]
+                    if permission_toggles
+                    else None
+                )
+                deny = (
+                    [key for key, toggle in permission_toggles.items() if toggle.value == "deny"]
+                    if permission_toggles
+                    else None
+                )
                 scope = _parse_json(scope_area.value or "", t("groups.field_scope"))
                 branding = _parse_json(branding_area.value or "", t("groups.field_branding"))
                 if scope is None or branding is None:
@@ -555,10 +623,16 @@ async def users_page() -> None:
                 confirm.open()
 
             def _group_for(data: object) -> dict | None:
-                """Resolves a double-click payload to a group row."""
-                if isinstance(data, dict):
-                    return data
-                return next((g for g in groups if str(g.get("id")) == str(data)), None)
+                """Resolves a double-click payload to the **raw** group.
+
+                The grid hands over the row it built — permissions joined into strings — so a
+                dict is resolved back by id: the form needs the lists themselves, not their
+                rendering. (Reading the row as if it were the group made the matrix start empty
+                and a save send empty lists, which wiped the group's rights; found 2026-09-26 by
+                saving the seeded `webshop` group and reading it back.)
+                """
+                group_id = data.get("id") if isinstance(data, dict) else data
+                return next((g for g in groups if str(g.get("id")) == str(group_id)), None)
 
             groups_grid.on(
                 "cellDoubleClicked",

@@ -1559,6 +1559,21 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def list_permissions(self, token: str) -> dict:
+        """The permission catalog: areas, roles and one entry per permission.
+
+        It is the input of the group editor (the core asks for `group.read`): the
+        matrix renders exactly the keys the write path accepts, so a typo cannot
+        reach the database and `deny` becomes visible instead of a second list.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/permissions",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def create_group(
         self,
         token: str,
