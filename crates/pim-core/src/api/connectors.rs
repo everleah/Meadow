@@ -15,7 +15,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::{AuthUser, ROLE_ADMIN};
+use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -192,9 +192,9 @@ pub async fn validate_connector(
     headers: HeaderMap,
     Json(body): Json<ValidateConnector>,
 ) -> Result<Json<Value>, ApiError> {
-    // Machine API key or admin JWT: the **worker** uses it to check AI
-    // suggestions, and the connector form is admin-only anyway.
-    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    // The catalog check keeps the worker's machine path (it validates AI suggestions) and
+    // the admin form on one rule.
+    crate::auth::require_permission(&state, &headers, "integration.manage")?;
     if !crate::api::connector_schema::is_known_type(&body.connector_type) {
         return Err(ApiError::bad_request(format!(
             "unknown connector type `{}`",
@@ -232,9 +232,7 @@ pub async fn create_connector(
     State(state): State<AppState>,
     Json(body): Json<CreateConnector>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("integration.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -323,7 +321,7 @@ pub async fn list_connectors(
     headers: HeaderMap,
     Query(params): Query<ListConnectors>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -378,9 +376,7 @@ pub async fn test_connector(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("integration.manage")?;
     let key = parse_key(&id)?;
     let connector = fetch_connector(&state.db, key)
         .await?
@@ -443,7 +439,7 @@ pub async fn get_connector(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let key = parse_key(&id)?;
     let connector = fetch_connector(&state.db, key)
         .await?
@@ -469,9 +465,7 @@ pub async fn update_connector(
     Path(id): Path<String>,
     Json(body): Json<UpdateConnector>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("integration.manage")?;
     let key = parse_key(&id)?;
     let current = fetch_connector(&state.db, key)
         .await?
@@ -684,7 +678,7 @@ pub async fn list_connector_types(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    crate::auth::require_permission(&state, &headers, "integration.manage")?;
     Ok(Json(crate::api::connector_schema::schema_document()))
 }
 
@@ -702,9 +696,7 @@ pub async fn delete_connector(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("integration.manage")?;
     let key = parse_key(&id)?;
     fetch_connector(&state.db, key)
         .await?

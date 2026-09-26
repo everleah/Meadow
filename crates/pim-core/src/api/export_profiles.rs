@@ -21,7 +21,6 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::{ROLE_EDITOR, api_key_or_role};
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -92,7 +91,7 @@ pub async fn export_profile_schema(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.run")?;
     let parameters: Vec<Value> = PARAMETER_KEYS
         .iter()
         .map(|key| {
@@ -125,7 +124,7 @@ pub async fn validate_export_profile(
     headers: HeaderMap,
     Json(body): Json<ValidateExportProfile>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.run")?;
     let mut errors: Vec<String> = Vec::new();
     if let Err(error) = validate_format(&body.format) {
         errors.push(error.message().to_owned());
@@ -339,7 +338,7 @@ pub async fn list_export_profiles(
     State(state): State<AppState>,
     Query(params): Query<ListExportProfiles>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.run")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let mut sql = String::from("SELECT * FROM export_profile");
@@ -374,7 +373,7 @@ pub async fn get_export_profile(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.run")?;
     let profile = find_profile(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("export profile `{id}` not found")))?;
@@ -398,7 +397,7 @@ pub async fn create_export_profile(
     State(state): State<AppState>,
     Json(body): Json<CreateExportProfile>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, "admin")?;
+    let user_id = crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let name = validate_name(&body.name)?;
     let format = validate_format(&body.format)?;
     let key = record_key(&name);
@@ -476,7 +475,7 @@ pub async fn update_export_profile(
     Path(id): Path<String>,
     Json(body): Json<UpdateExportProfile>,
 ) -> Result<Json<Value>, ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, "admin")?;
+    let user_id = crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let profile = find_profile(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("export profile `{id}` not found")))?;
@@ -556,7 +555,7 @@ pub async fn delete_export_profile(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, "admin")?;
+    let user_id = crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let profile = find_profile(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("export profile `{id}` not found")))?;

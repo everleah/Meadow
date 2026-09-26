@@ -15,7 +15,6 @@ use axum::http::HeaderMap;
 use serde_json::Value;
 
 use crate::app::AppState;
-use crate::auth::{ROLE_VIEWER, api_key_or_role};
 use crate::error::ApiError;
 use crate::permissions;
 
@@ -34,6 +33,8 @@ pub async fn permission_catalog(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_VIEWER)?;
+    // The catalog is the input of the group editor: whoever may read groups may read it.
+    // A session's **own** rights are in `/auth/me` and need no catalog.
+    crate::auth::require_permission(&state, &headers, "group.read")?;
     Ok(Json(permissions::document()))
 }

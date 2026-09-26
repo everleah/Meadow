@@ -196,9 +196,7 @@ pub async fn create_rule(
     State(state): State<AppState>,
     Json(body): Json<CreateRule>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -315,7 +313,7 @@ pub async fn list_rules(
 ) -> Result<Json<Vec<Value>>, ApiError> {
     // Any authenticated role may read rules; the import worker reads active
     // `normalization` rules via the machine-to-machine API key.
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_VIEWER)?;
+    crate::auth::require_permission(&state, &headers, "business_rule.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -376,9 +374,7 @@ pub async fn update_rule(
     Path(id): Path<String>,
     Json(body): Json<UpdateRule>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     let current = fetch_rule(&state.db, key)
         .await?
@@ -491,9 +487,7 @@ pub async fn activate_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     let current = fetch_rule(&state.db, key)
         .await?
@@ -561,9 +555,7 @@ pub async fn disable_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     let current = fetch_rule(&state.db, key)
         .await?
@@ -625,9 +617,7 @@ pub async fn delete_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     if fetch_rule(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("rule `{id}` not found")));
@@ -682,9 +672,7 @@ pub async fn dry_run_rule(
     Path(id): Path<String>,
     Json(body): Json<DryRunRule>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     let rule = fetch_rule(&state.db, key)
         .await?
@@ -828,9 +816,7 @@ pub async fn test_batch_rule(
     Path(id): Path<String>,
     Json(body): Json<TestBatch>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     if body.object_ids.is_empty() {
         return Err(ApiError::bad_request("`object_ids` must not be empty"));
     }
@@ -938,9 +924,7 @@ pub async fn recompute_rule(
     Path(id): Path<String>,
     Query(params): Query<RecomputeRule>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("business_rule.manage")?;
     let key = parse_key(&id, TABLE)?;
     let rule = fetch_rule(&state.db, key)
         .await?

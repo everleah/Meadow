@@ -50,7 +50,7 @@ Ein Attribut wird **nur** hochgeschoben, wenn **alle** Bedingungen gelten:
 ## API
 
 - Ausführung als **Bulk-Operation `consolidate_inheritance`** (`POST /objects/bulk`, `object_ids = [root]`, `parameters = {dry_run, attributes?, min_children?}`), damit **Fortschritt, Polling und Report** der bestehenden Bulk-/Job-Infrastruktur unverändert genutzt werden (`bulk_operation`-Job, `job_run.result`). Umsetzung im Worker (`meadow/worker/bulk.py`), der die vorhandenen Endpunkte nutzt: `GET /objects/{id}` (eigene Werte), `GET /objects/{id}/children` (Kinder inkl. `hasChildren`) und `PATCH /objects/{id}` (`attributes` bzw. `remove_attributes`).
-- `GET /objects/{id}/children` akzeptiert dafür wie die anderen Worker-Endpunkte den `X-Api-Key` (Service-Account, `api_key_or_role` in `crates/pim-core/src/api/references.rs`).
+- `GET /objects/{id}/children` akzeptiert dafür wie die anderen Worker-Endpunkte den `X-Api-Key` (Service-Account, `reference.read` in `crates/pim-core/src/api/references.rs`).
 - Der Dry-Run läuft ebenfalls als Job (`dry_run: true`), damit auch große Teilbäume nicht in den Request-Pfad geraten.
 
 ## UI

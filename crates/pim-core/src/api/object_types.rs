@@ -25,7 +25,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
+use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -203,7 +203,7 @@ pub async fn list_object_types(
     // Readable with the machine key too: the worker needs the business keys and the
     // label attribute for the import-mapping check, exactly like it reads `/rules`,
     // `/languages` and `/connector-types`.
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let mut response = state
@@ -229,9 +229,7 @@ pub async fn get_object_type(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let object_type = fetch_type(&state.db, &name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("object type `{name}` not found")))?;
@@ -250,9 +248,7 @@ pub async fn create_object_type(
     State(state): State<AppState>,
     Json(body): Json<CreateObjectType>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -373,9 +369,7 @@ pub async fn update_object_type(
     Path(name): Path<String>,
     Json(body): Json<UpdateObjectType>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let current = fetch_type(&state.db, &name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("object type `{name}` not found")))?;
@@ -491,9 +485,7 @@ pub async fn delete_object_type(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let current = fetch_type(&state.db, &name)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("object type `{name}` not found")))?;

@@ -18,7 +18,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::api::jobs::queue_run;
 use crate::app::AppState;
-use crate::auth::{AuthUser, ROLE_ADMIN, api_key_or_role};
+use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 // The class-feature section lives in its own file (ConfigReport/Mode and the
@@ -470,9 +470,7 @@ pub async fn export_config(
     State(state): State<AppState>,
     Query(params): Query<ConfigExportQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("integration.manage")?;
     let sections = parse_sections(params.sections.as_deref())?;
     let include_system = params.include_system;
 
@@ -2186,7 +2184,7 @@ pub async fn import_config(
     Query(params): Query<ConfigImportQuery>,
     Json(doc): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, ROLE_ADMIN)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "integration.manage")?;
     let mode = parse_mode(&params)?;
 
     // Validate the document envelope.

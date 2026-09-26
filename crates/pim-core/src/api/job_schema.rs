@@ -33,7 +33,6 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 
 use crate::app::AppState;
-use crate::auth::{ROLE_EDITOR, api_key_or_role};
 use crate::error::ApiError;
 use crate::scheduler;
 
@@ -883,7 +882,7 @@ pub async fn job_schema(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.read")?;
     Ok(Json(schema_document()))
 }
 
@@ -910,7 +909,7 @@ pub async fn validate_job_definition(
     headers: HeaderMap,
     Json(body): Json<ValidateJobDefinition>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.read")?;
     let mut errors = validate(&body.job_type, &body.parameters);
     // An empty schedule means "only on demand" — the same as omitting it.
     if let Some(schedule) = body.schedule.as_deref().map(str::trim)

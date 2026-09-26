@@ -128,7 +128,7 @@ pub async fn create_import(
     Query(params): Query<ImportParams>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "job.run")?;
     let document = extract_mef_document(&headers, body).await?;
     validate_mef(&document)?;
 
@@ -249,7 +249,7 @@ pub async fn get_import_document(
     headers: HeaderMap,
     Path(document_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_ADMIN)?;
+    crate::auth::require_permission(&state, &headers, "job.manage")?;
     let key = parse_key(&document_id, TABLE)?;
     let sql = "
         LET $d = type::record('import_document', $key);
@@ -313,7 +313,7 @@ pub async fn complete_import(
     Path(document_id): Path<String>,
     Json(body): Json<CompleteImport>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_ADMIN)?;
+    crate::auth::require_permission(&state, &headers, "job.manage")?;
     parse_key(&document_id, TABLE)?;
 
     let outbox = crate::event::content(&crate::event::OutboxEvent {

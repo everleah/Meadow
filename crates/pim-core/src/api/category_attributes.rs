@@ -137,9 +137,7 @@ pub async fn list_category_attributes(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let node_key = key_of(crate::api::objects::parse_object_key(&id)?).to_owned();
     let chain = ancestor_chain_live(&state.db, &node_key).await?;
     let mut out: Vec<Value> = Vec::new();
@@ -191,9 +189,7 @@ pub async fn create_category_attribute(
     Path(id): Path<String>,
     Json(body): Json<CreateCategoryAttribute>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let attribute = body.attribute.trim().to_owned();
     if attribute.is_empty() {
         return Err(ApiError::bad_request("`attribute` must not be empty"));
@@ -261,9 +257,7 @@ pub async fn update_category_attribute(
     Path((id, attribute)): Path<(String, String)>,
     Json(body): Json<UpdateCategoryAttribute>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let node_key = key_of(crate::api::objects::parse_object_key(&id)?).to_owned();
     let attribute = attribute.trim().to_owned();
     let current = fetch_row(&state.db, &node_key, &attribute)
@@ -331,9 +325,7 @@ pub async fn delete_category_attribute(
     State(state): State<AppState>,
     Path((id, attribute)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let node_key = key_of(crate::api::objects::parse_object_key(&id)?).to_owned();
     let attribute = attribute.trim().to_owned();
     if fetch_row(&state.db, &node_key, &attribute).await?.is_none() {
@@ -397,7 +389,7 @@ pub async fn list_object_category_attributes(
     Path(id): Path<String>,
     Query(params): Query<ObjectFeaturesParams>,
 ) -> Result<Json<Value>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let key = crate::api::objects::parse_object_key(&id)?;
     let object = fetch_object(&state.db, key)
         .await?

@@ -8,7 +8,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
-use crate::auth::{AuthUser, Claims};
+use crate::auth::AuthUser;
 use crate::error::ApiError;
 
 const TABLE: &str = "attribute_group";
@@ -72,14 +72,6 @@ fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiError> {
     Ok(key)
 }
 
-fn require_admin(claims: &Claims) -> Result<(), ApiError> {
-    if claims.is_admin() {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden("requires admin role"))
-    }
-}
-
 /// Creates a new attribute group.
 #[utoipa::path(
     post,
@@ -96,7 +88,7 @@ pub async fn create_attribute_group(
     State(state): State<AppState>,
     Json(body): Json<CreateAttributeGroup>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_admin(&claims)?;
+    claims.require("attribute_group.manage")?;
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
@@ -129,9 +121,9 @@ pub async fn create_attribute_group(
 
 /// Lists attribute groups.
 ///
-/// Read access is `editor+`, not admin-only: the groups are display metadata —
-/// the product form renders one section per group and the export wizard groups
-/// its attribute selection by them (mirrors `/channels`). Writes stay admin-only.
+/// Read access is `attribute_definition.read` (viewer+), not admin-only: the groups are
+/// display metadata — the product form renders one section per group and the export
+/// wizard groups its attribute selection by them. Writes need `attribute_group.manage`.
 #[utoipa::path(
     get,
     path = "/attribute-groups",
@@ -146,9 +138,7 @@ pub async fn list_attribute_groups(
     State(state): State<AppState>,
     Query(params): Query<ListAttributeGroups>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let sql = "SELECT * FROM attribute_group ORDER BY position ASC LIMIT $limit START $start";
@@ -178,7 +168,7 @@ pub async fn get_attribute_group(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("attribute_definition.read")?;
     let key = parse_key(&id, TABLE)?;
     let sql = "
         LET $g = type::record('attribute_group', $key);
@@ -215,7 +205,7 @@ pub async fn update_attribute_group(
     Path(id): Path<String>,
     Json(body): Json<UpdateAttributeGroup>,
 ) -> Result<Json<Value>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("attribute_group.manage")?;
     let key = parse_key(&id, TABLE)?;
 
     let mut changes = serde_json::Map::new();
@@ -271,7 +261,7 @@ pub async fn delete_attribute_group(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&claims)?;
+    claims.require("attribute_group.manage")?;
     let key = parse_key(&id, TABLE)?;
     let gid_full = format!("{TABLE}:{key}");
     let sql = "

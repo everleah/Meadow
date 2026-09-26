@@ -188,9 +188,7 @@ pub async fn generate(
     State(state): State<AppState>,
     Json(body): Json<GenerateRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("ai.use")?;
     validate(&body)?;
 
     let request = json!({
@@ -256,9 +254,7 @@ pub async fn test(
     State(state): State<AppState>,
     Json(_body): Json<TestRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("ai.use")?;
     let reply = state.ai.test().await.map_err(|error| {
         tracing::warn!(error = %error, "AI connection test failed");
         unavailable(&error)

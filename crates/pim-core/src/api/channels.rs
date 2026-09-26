@@ -256,9 +256,7 @@ pub async fn list_channels(
     State(state): State<AppState>,
     Query(params): Query<ListChannels>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let mut sql = String::from("SELECT * FROM channel");
@@ -290,9 +288,7 @@ pub async fn get_channel(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let channel = find_channel(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("channel `{id}` not found")))?;
@@ -316,9 +312,7 @@ pub async fn create_channel(
     State(state): State<AppState>,
     Json(body): Json<CreateChannel>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("channel.manage")?;
     let code = channel_code(&body.code);
     validate_code(&code)?;
     if find_channel(&state.db, &code).await?.is_some() {
@@ -401,9 +395,7 @@ pub async fn update_channel(
     Path(id): Path<String>,
     Json(body): Json<UpdateChannel>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("channel.manage")?;
     let code = channel_code(&id);
     let channel = find_channel(&state.db, &code)
         .await?
@@ -488,9 +480,7 @@ pub async fn delete_channel(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("channel.manage")?;
     let code = channel_code(&id);
     let channel = find_channel(&state.db, &code)
         .await?
@@ -559,7 +549,7 @@ pub async fn list_object_releases(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let key = crate::api::objects::parse_object_key(&id)?;
     // A deleted (or unknown) object has no releases: answering `404` instead of a
     // stale list keeps callers honest.
@@ -606,7 +596,7 @@ pub async fn set_object_release(
     Path(id): Path<String>,
     Json(body): Json<SetRelease>,
 ) -> Result<Json<Value>, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.publish")?;
     let key = crate::api::objects::parse_object_key(&id)?;
     let status = body.status.trim().to_owned();
     if status.is_empty() {
@@ -704,7 +694,7 @@ pub async fn delete_object_release(
     headers: HeaderMap,
     Path((id, channel)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.publish")?;
     let key = crate::api::objects::parse_object_key(&id)?;
     let code = channel_code(&channel);
     let previous = release_status_of(&state.db, key, &code).await?;

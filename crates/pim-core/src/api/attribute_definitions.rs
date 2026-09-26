@@ -207,9 +207,7 @@ pub async fn create_attribute_definition(
     State(state): State<AppState>,
     Json(body): Json<CreateAttributeDefinition>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
@@ -488,9 +486,7 @@ pub async fn update_attribute_definition(
     Path(id): Path<String>,
     Json(body): Json<UpdateAttributeDefinition>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     // A type change migrates every existing value, so it has its own endpoint;
     // silently ignoring `type` in a PATCH would look like a successful change.
     if body.definition_type.is_some() {
@@ -1149,9 +1145,7 @@ pub async fn change_attribute_type(
     Query(params): Query<TypeChangeParams>,
     Json(body): Json<ChangeAttributeType>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = parse_key(&id, TABLE)?;
     let user_id = claims.sub.clone();
     let target = body.definition_type.trim().to_owned();
@@ -1442,9 +1436,7 @@ pub async fn enum_value_usage(
     Path(id): Path<String>,
     Query(params): Query<EnumUsageParams>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let key = parse_key(&id, TABLE)?;
     let definition = fetch_definition(&state.db, key).await?;
     let Some(definition) = definition else {
@@ -1513,9 +1505,7 @@ pub async fn delete_attribute_definition(
     Path(id): Path<String>,
     Query(params): Query<DeleteAttributeDefinition>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = parse_key(&id, TABLE)?;
     let user_id = claims.sub.clone();
 

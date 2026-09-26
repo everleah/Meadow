@@ -81,14 +81,6 @@ pub(crate) fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiErro
     Ok(key)
 }
 
-fn require_admin(claims: &crate::auth::Claims) -> Result<(), ApiError> {
-    if claims.is_admin() {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden("requires admin role"))
-    }
-}
-
 /// Rejects a scope document the core cannot use (`400`).
 ///
 /// Two stages, because they answer different mistakes: [`crate::scope::parse`] reads the shape
@@ -136,7 +128,7 @@ pub async fn create_group(
     State(state): State<AppState>,
     Json(body): Json<CreateGroup>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     if body.name.trim().is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
@@ -208,7 +200,7 @@ pub async fn list_groups(
     State(state): State<AppState>,
     Query(params): Query<ListGroups>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let sql = "SELECT * FROM group ORDER BY name ASC LIMIT $limit START $start";
@@ -238,7 +230,7 @@ pub async fn get_group(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.read")?;
     let key = parse_key(&id, TABLE)?;
     let sql = "
         LET $g = type::record('group', $key);
@@ -275,7 +267,7 @@ pub async fn update_group(
     Path(id): Path<String>,
     Json(body): Json<UpdateGroup>,
 ) -> Result<Json<Value>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let key = parse_key(&id, TABLE)?;
 
     // Checked before anything is written, so a rejected list does not end any session.
@@ -369,7 +361,7 @@ pub async fn delete_group(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let key = parse_key(&id, TABLE)?;
     rbac::invalidate_sessions(&state.db, &state.cache).await?;
     let sql = "
@@ -516,7 +508,7 @@ pub async fn add_group_member(
     Path(id): Path<String>,
     Json(body): Json<GroupMember>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let group_key = parse_key(&id, TABLE)?;
     let user_key = parse_key(&body.user_id, "user")?;
     require_record(&state, TABLE, group_key).await?;
@@ -578,7 +570,7 @@ pub async fn remove_group_member(
     State(state): State<AppState>,
     Path((id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let group_key = parse_key(&id, TABLE)?;
     let user_key = parse_key(&user_id, "user")?;
     require_record(&state, TABLE, group_key).await?;
@@ -633,7 +625,7 @@ pub async fn add_group_child(
     Path(id): Path<String>,
     Json(body): Json<GroupChild>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let parent_key = parse_key(&id, TABLE)?;
     let child_key = parse_key(&body.group_id, TABLE)?;
     require_record(&state, TABLE, parent_key).await?;
@@ -700,7 +692,7 @@ pub async fn remove_group_child(
     State(state): State<AppState>,
     Path((id, child_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.manage")?;
     let parent_key = parse_key(&id, TABLE)?;
     let child_key = parse_key(&child_id, TABLE)?;
     require_record(&state, TABLE, parent_key).await?;
@@ -751,7 +743,7 @@ pub async fn list_memberships(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
-    require_admin(&claims)?;
+    claims.require("group.read")?;
     let (memberships, parents) = rbac::edges(&state.db).await?;
     let members: Vec<Value> = memberships
         .into_iter()

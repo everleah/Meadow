@@ -503,7 +503,7 @@ pub async fn create_reference(
     Query(params): Query<ReferenceWriteQuery>,
     Json(body): Json<CreateReference>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "reference.create")?;
     let emit_events = params.emit_events.unwrap_or(true);
     let source_key = parse_object_key(&body.source)?;
     let target_key = parse_object_key(&body.target)?;
@@ -690,7 +690,7 @@ pub async fn list_relation_definitions(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let sql = "SELECT * FROM relation_definition ORDER BY name;";
     let mut response = state.db.inner().query(sql).await?.check()?;
     let definitions: Vec<Value> = response.take(0)?;
@@ -716,9 +716,7 @@ pub async fn create_relation_definition(
     State(state): State<AppState>,
     Json(body): Json<CreateRelationDefinition>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -830,9 +828,7 @@ pub async fn update_relation_definition(
     Path(id): Path<String>,
     Json(body): Json<UpdateRelationDefinition>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let current = fetch_relation_definition(&state.db, &key)
         .await?
@@ -959,9 +955,7 @@ pub async fn delete_relation_definition(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let current = fetch_relation_definition(&state.db, &key)
         .await?
@@ -1035,9 +1029,7 @@ pub async fn update_reference(
     Path(id): Path<String>,
     Json(body): Json<UpdateReferenceBody>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("reference.create")?;
     let (table, key) = id
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request(format!("invalid reference id `{id}`")))?;
@@ -1117,7 +1109,7 @@ pub async fn list_object_references(
     Path(id): Path<String>,
     Query(params): Query<ReferenceListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "reference.read")?;
     let key = parse_object_key(&id)?;
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
@@ -1209,7 +1201,7 @@ pub async fn delete_reference(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "reference.delete")?;
     let (table, key) = id
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request(format!("invalid reference id `{id}`")))?;
@@ -1338,7 +1330,7 @@ pub async fn list_object_children(
     Path(id): Path<String>,
     Query(params): Query<ChildrenListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "reference.read")?;
     let key = parse_object_key(&id)?;
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
@@ -1519,7 +1511,7 @@ pub async fn list_object_ancestors(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "reference.read")?;
     let key = parse_object_key(&id)?;
     if fetch_object(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("object `{id}` not found")));
@@ -1598,9 +1590,7 @@ pub async fn get_object_tree(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("reference.read")?;
     let sql =
         "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
     let mut response = state.db.inner().query(sql).await?.check()?;
@@ -1947,10 +1937,10 @@ pub async fn reparent_object(
     Query(params): Query<ReferenceWriteQuery>,
     Json(body): Json<ReparentObject>,
 ) -> Result<Json<Value>, ApiError> {
-    // `api_key_or_role`, not `AuthUser`: the worker re-parents objects for the
-    // bulk operation `change_parent` and for `depends_on` references in a MEF
-    // import (service account, `X-Api-Key`).
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    // The catalog check keeps the worker's machine path: it re-parents objects for the
+    // bulk operation `change_parent` and for `depends_on` references in a MEF import
+    // (service account, `X-Api-Key`).
+    let user_id = crate::auth::require_permission(&state, &headers, "reference.create")?;
     let child_key = parse_object_key(&id)?;
     let new_parent_key = parse_object_key(&body.parent)?;
     if child_key == new_parent_key {
@@ -2195,7 +2185,7 @@ pub async fn batch_create_references(
     Query(params): Query<ReferenceWriteQuery>,
     Json(body): Json<BatchReferenceRequest>,
 ) -> Result<Json<BatchReferenceResponse>, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "reference.create")?;
     let total = body.references.len() + body.reparents.len();
     if total == 0 {
         return Err(ApiError::bad_request(
@@ -3128,7 +3118,7 @@ pub async fn query_references(
     headers: HeaderMap,
     Json(body): Json<ReferenceQueryRequest>,
 ) -> Result<Json<ReferenceQueryResponse>, ApiError> {
-    crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "reference.read")?;
     if body.ids.is_empty() {
         return Err(ApiError::bad_request("`ids` must not be empty"));
     }

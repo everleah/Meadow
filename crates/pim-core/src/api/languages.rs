@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use utoipa::ToSchema;
 
 use crate::app::AppState;
-use crate::auth::{AuthUser, ROLE_VIEWER, api_key_or_role};
+use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -182,7 +182,7 @@ pub async fn list_languages(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_VIEWER)?;
+    crate::auth::require_permission(&state, &headers, "language_tree.read")?;
     let mut response = state
         .db
         .inner()
@@ -211,9 +211,7 @@ pub async fn create_language(
     State(state): State<AppState>,
     Json(body): Json<CreateLanguage>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("language_tree.manage")?;
     let code = body.code.trim();
     if code.is_empty() {
         return Err(ApiError::bad_request("`code` must not be empty"));
@@ -285,9 +283,7 @@ pub async fn update_language(
     Path(code): Path<String>,
     Json(body): Json<UpdateLanguage>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("language_tree.manage")?;
     let key = record_key(&code);
     let mut current = state
         .db
@@ -401,9 +397,7 @@ pub async fn delete_language(
     State(state): State<AppState>,
     Path(code): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("language_tree.manage")?;
     if code == "root" {
         return Err(ApiError::bad_request(
             "the universal root cannot be deleted",

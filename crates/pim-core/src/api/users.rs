@@ -150,9 +150,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(body): Json<CreateUser>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("user.manage")?;
     if body.username.trim().is_empty() || body.email.trim().is_empty() || body.password.is_empty() {
         return Err(ApiError::bad_request(
             "username, email and password are required",
@@ -211,9 +209,7 @@ pub async fn list_users(
     State(state): State<AppState>,
     Query(params): Query<ListUsers>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("user.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let sql =
@@ -244,9 +240,7 @@ pub async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("user.read")?;
     let key = parse_key(&id, TABLE)?;
     let user = fetch_user(&state.db, key)
         .await?
@@ -270,9 +264,7 @@ pub async fn update_user(
     Path(id): Path<String>,
     Json(body): Json<UpdateUser>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("user.manage")?;
     let key = parse_key(&id, TABLE)?;
     let existing = fetch_user(&state.db, key)
         .await?
@@ -415,9 +407,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("user.manage")?;
     let key = parse_key(&id, TABLE)?;
     let existing = fetch_user(&state.db, key)
         .await?

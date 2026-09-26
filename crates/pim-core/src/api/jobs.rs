@@ -266,9 +266,7 @@ pub async fn create_job_definition(
     State(state): State<AppState>,
     Json(body): Json<CreateJobDefinition>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -346,9 +344,7 @@ pub async fn list_job_definitions(
     State(state): State<AppState>,
     Query(params): Query<ListJobs>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -396,9 +392,7 @@ pub async fn get_job_definition(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.read")?;
     let key = parse_key(&id, TABLE)?;
     let definition = fetch_definition(&state.db, key)
         .await?
@@ -424,9 +418,7 @@ pub async fn update_job_definition(
     Path(id): Path<String>,
     Json(body): Json<UpdateJobDefinition>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.manage")?;
     let key = parse_key(&id, TABLE)?;
     let current = fetch_definition(&state.db, key)
         .await?
@@ -528,9 +520,7 @@ pub async fn delete_job_definition(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.manage")?;
     let key = parse_key(&id, TABLE)?;
     if fetch_definition(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!(
@@ -580,9 +570,7 @@ pub async fn list_definition_runs(
     Path(id): Path<String>,
     Query(params): Query<ListJobRuns>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("job.read")?;
     parse_key(&id, TABLE)?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
@@ -625,9 +613,7 @@ pub async fn list_job_runs(
     State(state): State<AppState>,
     Query(params): Query<ListJobRuns>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("job.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -695,23 +681,9 @@ pub async fn update_job_run(
     Path(run_id): Path<String>,
     Json(body): Json<UpdateJobRun>,
 ) -> Result<Json<Value>, ApiError> {
-    // Machine-to-machine API key or admin JWT (same policy as log ingestion).
-    let api_key_ok = match &state.config.log_ingest_api_key {
-        Some(expected) => headers
-            .get("x-api-key")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|provided| provided == expected),
-        None => false,
-    };
-    let jwt_ok = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
-        .is_some_and(|claims| claims.is_admin());
-    if !api_key_ok && !jwt_ok {
-        return Err(ApiError::forbidden("requires API key or admin role"));
-    }
+    // The machine path (the worker reports run results) and the admin fallback are one
+    // catalog check.
+    crate::auth::require_permission(&state, &headers, "job.manage")?;
     if !VALID_RUN_STATUSES.contains(&body.status.as_str()) {
         return Err(ApiError::bad_request(format!(
             "invalid job-run status `{}`",
@@ -805,9 +777,7 @@ pub async fn delete_job_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("job.manage")?;
     let key = parse_key(&run_id, RUN_TABLE)?;
     if fetch_run(&state.db, key).await?.is_none() {
         return Err(ApiError::not_found(format!("job run `{run_id}` not found")));
@@ -959,9 +929,7 @@ pub async fn run_job(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("job.run")?;
     let key = parse_key(&id, TABLE)?;
     let definition = fetch_definition(&state.db, key)
         .await?

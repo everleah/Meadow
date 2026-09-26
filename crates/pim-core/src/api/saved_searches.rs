@@ -24,7 +24,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::{AuthUser, ROLE_EDITOR, api_key_or_role};
+use crate::auth::AuthUser;
 use crate::cache::MetaCache;
 use crate::db::Db;
 use crate::error::ApiError;
@@ -415,9 +415,7 @@ pub async fn list_saved_searches(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let source = params.source.as_deref().map(str::trim);
@@ -447,9 +445,7 @@ pub async fn get_saved_search(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let key = parse_key(&id, "object")?;
     let object = fetch_object(&state.db, key)
         .await?
@@ -472,9 +468,7 @@ pub async fn create_saved_search(
     State(state): State<AppState>,
     Json(body): Json<CreateSavedSearch>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -561,9 +555,7 @@ pub async fn update_saved_search(
     Path(id): Path<String>,
     Json(body): Json<UpdateSavedSearch>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let key = parse_key(&id, "object")?;
     let current = fetch_object(&state.db, key)
         .await?
@@ -657,9 +649,7 @@ pub async fn delete_saved_search(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let key = parse_key(&id, "object")?;
     let current = fetch_object(&state.db, key)
         .await?
@@ -720,7 +710,7 @@ pub async fn execute_saved_search(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let key = parse_key(&id, "object")?;
     let object = fetch_object(&state.db, key)
         .await?
@@ -758,7 +748,7 @@ pub async fn list_search_fields(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let document = state.cache.search_fields_json(&state.db).await?;
     let parsed: Value = serde_json::from_str(&document)
         .map_err(|error| ApiError::internal(format!("catalog is not serializable: {error}")))?;
@@ -785,7 +775,7 @@ pub async fn preview_saved_search(
     headers: HeaderMap,
     Json(body): Json<SavedSearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let mut query = body;
     let catalog = check_query(&state.cache, &state.db, &mut query).await?;
     let ids = execute_query(&state.db, &query, &catalog).await?;
@@ -836,9 +826,7 @@ pub async fn list_collections(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let source = params.source.as_deref().map(str::trim);
@@ -869,9 +857,7 @@ pub async fn get_collection(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.read")?;
     let key = parse_key(&id, "object")?;
     let object = fetch_object(&state.db, key)
         .await?
@@ -972,9 +958,7 @@ pub async fn create_collection(
     State(state): State<AppState>,
     Json(body): Json<CreateCollection>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -1060,9 +1044,7 @@ pub async fn update_collection(
     Path(id): Path<String>,
     Json(body): Json<UpdateCollection>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let key = parse_key(&id, "object")?;
     let current = fetch_object(&state.db, key)
         .await?
@@ -1158,9 +1140,7 @@ pub async fn delete_collection(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("search.manage")?;
     let key = parse_key(&id, "object")?;
     let current = fetch_object(&state.db, key)
         .await?
@@ -1211,7 +1191,7 @@ pub async fn refresh_collection(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let _user_id = crate::auth::require_permission(&state, &headers, "object.update")?;
     let key = parse_key(&id, "object")?;
     let collection = fetch_object(&state.db, key)
         .await?
@@ -1318,7 +1298,7 @@ pub async fn add_collection_members(
     Path(id): Path<String>,
     Json(req): Json<CollectionMembersRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.update")?;
     let key = parse_key(&id, "object")?;
     let collection = fetch_object(&state.db, key)
         .await?
@@ -1428,7 +1408,7 @@ pub async fn list_collection_members(
     Path(id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let key = parse_key(&id, "object")?;
     let collection = fetch_object(&state.db, key)
         .await?

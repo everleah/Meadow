@@ -67,16 +67,6 @@ impl Claims {
         self.roles.iter().any(|r| r == role)
     }
 
-    /// Whether the token has `admin` or `superadmin` privileges.
-    pub fn is_admin(&self) -> bool {
-        self.has_role(ROLE_ADMIN) || self.has_role(ROLE_SUPERADMIN)
-    }
-
-    /// Whether the token has `editor` privileges or above.
-    pub fn is_editor(&self) -> bool {
-        self.has_role(ROLE_EDITOR) || self.is_admin()
-    }
-
     /// The effective permissions of this token (a bit test, no I/O).
     pub fn permissions(&self) -> crate::permissions::PermissionSet {
         crate::permissions::PermissionSet::from_words(&self.perms)
@@ -203,7 +193,7 @@ impl Caller {
 ///
 /// The API key wins over a bearer token: a machine call is never a person's session. This is
 /// the one place that turns headers into an identity, so a new endpoint cannot invent its own
-/// rule about which header counts (`api_key_or_role` and the `AuthUser` extractor both build
+/// rule about which header counts (the `AuthUser` extractor and every `require_*` helper build
 /// on it).
 pub fn caller(headers: &HeaderMap, config: &Config) -> Result<Caller, ApiError> {
     if let Some(expected) = &config.log_ingest_api_key {
@@ -242,28 +232,15 @@ pub fn check_version(claims: &Claims, cache: &crate::cache::MetaCache) -> Result
     Ok(())
 }
 
-/// Reads the caller of an authenticated request and rejects a stale session.
-///
-/// The one-liner for handlers that need to know *who* asks: the machine API key
-/// ([`Caller::System`]) or a user session whose access version is still current. Handlers that
-/// only need a role keep using [`api_key_or_role`]; handlers that need the identity itself — the
-/// ABAC scope is the first such case (`crate::scope`) — use this.
-pub fn authenticated(state: &AppState, headers: &HeaderMap) -> Result<Caller, ApiError> {
-    let caller = caller(headers, &state.config)?;
-    if let Some(claims) = caller.claims() {
-        check_version(claims, &state.cache)?;
-    }
-    Ok(caller)
-}
-
 /// Authorizes a request as a machine call (the configured API key, which holds every right) or
 /// as a user session carrying `permission`, and answers the acting user id (`system` for the
 /// machine).
 ///
-/// This is the replacement for the role-based `api_key_or_role` (stage B): the requirement comes
-/// from the **catalog** (`crate::permissions`), so an endpoint cannot invent its own rule, and a
-/// session whose access version has moved on is rejected here as well — the API-key/bearer gap
-/// the stage-A docs listed. The API key needs no version check: a machine has no session.
+/// This replaced the role-based helper the core carried until stage B (`api_key_or_role`,
+/// which read an endpoint's own role requirement and never checked the access version): the
+/// requirement comes from the **catalog** (`crate::permissions`), so an endpoint cannot invent
+/// its own rule, and a session whose access version has moved on is rejected here as well. The
+/// API key needs no version check: a machine has no session.
 pub fn require_permission(
     state: &AppState,
     headers: &HeaderMap,
@@ -290,36 +267,6 @@ pub fn require_caller(
         claims.require(permission)?;
     }
     Ok(caller)
-}
-
-/// Authorizes a request as either a machine-to-machine caller (matching the
-/// `X-Api-Key`) or a JWT bearer carrying at least `required_role`.
-///
-/// Returns the acting user id: `system` for the API-key path (workers such as
-/// the MEF import connector write without a person login) or the JWT `sub`.
-/// This is used by worker-facing write endpoints (`POST /objects`,
-/// `PATCH /objects/{id}`, `POST /references`) so the import connector can
-/// persist objects through the core with the same privileges as an editor.
-pub fn api_key_or_role(
-    headers: &HeaderMap,
-    config: &Config,
-    required_role: &str,
-) -> Result<String, ApiError> {
-    let claims = match caller(headers, config)? {
-        Caller::System => return Ok("system".to_owned()),
-        Caller::User(claims) => claims,
-    };
-    let allowed = match required_role {
-        // `viewer` is the base role: any authenticated token qualifies.
-        ROLE_VIEWER => true,
-        ROLE_EDITOR => claims.is_editor(),
-        ROLE_ADMIN | ROLE_SUPERADMIN => claims.is_admin(),
-        other => claims.has_role(other),
-    };
-    if !allowed {
-        return Err(ApiError::forbidden("insufficient role"));
-    }
-    Ok(claims.sub)
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -384,7 +331,6 @@ mod tests {
         assert_eq!(decoded.token_version, claims.token_version);
         assert!(decoded.exp > 0);
         assert!(decoded.has_role(ROLE_SUPERADMIN));
-        assert!(decoded.is_admin());
         // The permissions travel with the token and are read back as a bit set.
         assert!(decoded.can("system.manage"));
         assert!(decoded.can("object.read"));

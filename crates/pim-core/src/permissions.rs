@@ -25,9 +25,9 @@
 //! **Role defaults are the `min_role`.** `admin` is a special form of `editor`, so a
 //! permission belongs to the lowest role that holds it and every higher role inherits
 //! it — the same hierarchy the core enforced before this catalog existed
-//! (`auth::Claims::is_admin`/`is_editor`). Stage B replaces those role checks with
-//! `can(...)` calls; the mapping here is what keeps the behaviour identical for users
-//! without groups, so every changed call site must be checked against it.
+//! (`auth::Claims::is_admin`/`is_editor`). Stage B replaced every one of those call sites with
+//! `can(...)`/`require(...)`; the mapping here is what kept the behaviour of users without groups
+//! identical.
 
 use serde_json::{Value, json};
 

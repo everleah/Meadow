@@ -36,7 +36,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::{AuthUser, ROLE_VIEWER, api_key_or_role};
+use crate::auth::AuthUser;
 use crate::db::Db;
 use crate::error::ApiError;
 
@@ -317,7 +317,7 @@ pub async fn list_classification_standards(
     State(state): State<AppState>,
     Query(params): Query<ListStandards>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_VIEWER)?;
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let all =
         crate::api::config::query_rows(&state.db, "SELECT * FROM classification_standard;").await?;
 
@@ -397,7 +397,7 @@ pub async fn get_classification_standard(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_VIEWER)?;
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let standard = resolve_standard(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("classification standard `{id}` not found")))?;
@@ -439,9 +439,7 @@ pub async fn create_classification_standard(
     State(state): State<AppState>,
     Json(body): Json<CreateStandard>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let code = body.code.trim().to_lowercase();
     let version = body.version.trim().to_owned();
     validate_code(&code)?;
@@ -529,9 +527,7 @@ pub async fn update_classification_standard(
     Path(id): Path<String>,
     Json(body): Json<UpdateStandard>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let existing = resolve_standard(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("classification standard `{id}` not found")))?;
@@ -616,9 +612,7 @@ pub async fn delete_classification_standard(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let existing = resolve_standard(&state.db, &id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("classification standard `{id}` not found")))?;

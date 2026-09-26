@@ -347,9 +347,7 @@ pub async fn create_unit(
     State(state): State<AppState>,
     Json(body): Json<CreateUnit>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let symbol = body.symbol.trim().to_owned();
     if symbol.is_empty() {
         return Err(ApiError::bad_request("`symbol` must not be empty"));
@@ -431,9 +429,7 @@ pub async fn update_unit(
     Path(id): Path<String>,
     Json(body): Json<UpdateUnit>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = parse_key(&id, "unit")?;
     let current = fetch_unit_by_key(&state.db, key)
         .await?
@@ -525,9 +521,7 @@ pub async fn delete_unit(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = parse_key(&id, "unit")?;
     let current = fetch_unit_by_key(&state.db, key)
         .await?

@@ -24,7 +24,6 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::api::jobs::queue_run;
 use crate::app::AppState;
-use crate::auth::{ROLE_EDITOR, api_key_or_role};
 use crate::error::ApiError;
 
 /// The object source for an export.
@@ -244,7 +243,7 @@ pub async fn create_export(
     headers: HeaderMap,
     Json(req): Json<ExportRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "job.run")?;
 
     let mut source = req.source.clone();
     let kind = source.kind.as_str();
@@ -397,7 +396,7 @@ pub async fn get_export_file(
     Path(run_id): Path<String>,
     Query(params): Query<ExportFileQuery>,
 ) -> Result<Response, ApiError> {
-    api_key_or_role(&headers, &state.config, ROLE_EDITOR)?;
+    crate::auth::require_permission(&state, &headers, "job.run")?;
     let key = strip_prefix(&run_id, "job_run").to_owned();
     let Some(run) = fetch_run(&state.db, &key).await? else {
         return Err(ApiError::not_found(format!("job run `{run_id}` not found")));

@@ -160,9 +160,7 @@ pub async fn list_enum_sets(
     AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let mut response = state
         .db
         .inner()
@@ -195,9 +193,7 @@ pub async fn create_enum_set(
     State(state): State<AppState>,
     Json(body): Json<CreateEnumSet>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
@@ -286,9 +282,7 @@ pub async fn get_enum_set(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     let key = key_of(&id);
     let mut set = fetch_enum_set(&state.db, &key)
         .await?
@@ -316,9 +310,7 @@ pub async fn update_enum_set(
     Path(id): Path<String>,
     Json(body): Json<UpdateEnumSet>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let current = fetch_enum_set(&state.db, &key)
         .await?
@@ -514,9 +506,7 @@ pub async fn delete_enum_set(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let set = fetch_enum_set(&state.db, &key)
         .await?
@@ -572,9 +562,7 @@ pub async fn list_enum_options(
     State(state): State<AppState>,
     Query(params): Query<ListEnumOptions>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("attribute_definition.read")?;
     if let Some(set_id) = params.set_id {
         let key = key_of(&set_id);
         let set = fetch_enum_set(&state.db, &key)
@@ -609,9 +597,7 @@ pub async fn create_enum_option(
     State(state): State<AppState>,
     Json(body): Json<CreateEnumOption>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let code = body.code.trim().to_owned();
     if code.is_empty() {
         return Err(ApiError::bad_request("`code` must not be empty"));
@@ -690,9 +676,7 @@ pub async fn update_enum_option(
     Path(id): Path<String>,
     Json(body): Json<UpdateEnumOption>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let current = fetch_enum_option(&state.db, &key)
         .await?
@@ -753,9 +737,7 @@ pub async fn delete_enum_option(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("attribute_definition.manage")?;
     let key = key_of(&id);
     let option = fetch_enum_option(&state.db, &key)
         .await?

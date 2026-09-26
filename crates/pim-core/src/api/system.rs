@@ -388,24 +388,8 @@ pub async fn ingest_logs(
     headers: HeaderMap,
     Json(batch): Json<Vec<IngestLogEntry>>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    // Machine-to-machine API key takes precedence; admin JWT is a fallback
-    // for development when no API key is configured.
-    let api_key_ok = match &state.config.log_ingest_api_key {
-        Some(expected) => headers
-            .get("x-api-key")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|provided| provided == expected),
-        None => false,
-    };
-    let jwt_ok = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
-        .is_some_and(|claims| claims.is_admin());
-    if !api_key_ok && !jwt_ok {
-        return Err(ApiError::forbidden("requires API key or admin role"));
-    }
+    // The machine path (the worker ingests logs) and the admin fallback are one catalog check.
+    crate::auth::require_permission(&state, &headers, "log.manage")?;
     if batch.is_empty() || batch.len() > MAX_BATCH_SIZE {
         return Err(ApiError::bad_request(format!(
             "batch must contain between 1 and {MAX_BATCH_SIZE} entries"
@@ -447,9 +431,7 @@ pub async fn list_logs(
     State(state): State<AppState>,
     Query(params): Query<ListLogs>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("log.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -524,23 +506,8 @@ pub async fn list_settings(
     headers: HeaderMap,
     Query(params): Query<SettingsQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    // Machine-to-machine API key or admin JWT (same policy as log ingestion).
-    let api_key_ok = match &state.config.log_ingest_api_key {
-        Some(expected) => headers
-            .get("x-api-key")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|provided| provided == expected),
-        None => false,
-    };
-    let jwt_ok = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
-        .is_some_and(|claims| claims.is_admin());
-    if !api_key_ok && !jwt_ok {
-        return Err(ApiError::forbidden("requires API key or admin role"));
-    }
+    // The machine path (the worker reads the runtime settings) and the admin UI share one check.
+    crate::auth::require_permission(&state, &headers, "log.read")?;
     if params.include_source.unwrap_or(false) {
         resolve_settings_detailed(&state.db).await.map(Json)
     } else {
@@ -571,9 +538,7 @@ pub async fn put_setting(
     Path(key): Path<String>,
     Json(body): Json<PutSetting>,
 ) -> Result<Json<Value>, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("log.manage")?;
     if !is_known_setting(&key) {
         return Err(ApiError::bad_request(format!("unknown setting `{key}`")));
     }
@@ -638,9 +603,7 @@ pub async fn delete_setting(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.is_admin() {
-        return Err(ApiError::forbidden("requires admin role"));
-    }
+    claims.require("log.manage")?;
     if !is_known_setting(&key) {
         return Err(ApiError::bad_request(format!("unknown setting `{key}`")));
     }
