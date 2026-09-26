@@ -562,7 +562,8 @@ pub async fn delete_object(
     Path(id): Path<String>,
     Query(params): Query<WriteObjectQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = crate::auth::require_permission(&state, &headers, "object.delete")?;
+    let caller = crate::auth::require_caller(&state, &headers, "object.delete")?;
+    let user_id = caller.user_id().to_owned();
     let key = parse_key(&id, TABLE)?;
     if key == "object_root" {
         return Err(ApiError::bad_request(
@@ -571,14 +572,24 @@ pub async fn delete_object(
     }
     let emit_events = params.emit_events.unwrap_or(true);
 
-    // Ensure the object exists and is not already soft-deleted.
-    let mut existing = state
-        .db
-        .inner()
-        .query("SELECT * FROM type::record('object', $key) WHERE deleted_at IS NONE;")
-        .bind(("key", key))
-        .await?
-        .check()?;
+    // Ensure the object exists and is not already soft-deleted — and that it is **inside the
+    // caller's scope**: a foreign object is not found, so the cascade below never runs.
+    let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut scope_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(&state, &caller).await?,
+        &mut conditions,
+        &mut scope_binds,
+    );
+    let existing_sql = format!(
+        "SELECT * FROM type::record('object', $key) WHERE {};",
+        conditions.join(" AND ")
+    );
+    let mut request = state.db.inner().query(existing_sql).bind(("key", key));
+    for (name, value) in scope_binds {
+        request = request.bind((name, value));
+    }
+    let mut existing = request.await?.check()?;
     let existing_rows: Vec<Value> = existing.take(0)?;
     let object_type = existing_rows
         .first()
@@ -751,9 +762,11 @@ pub async fn batch_delete_objects(
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<BatchDeleteRequest>,
 ) -> Result<Json<BatchDeleteResult>, ApiError> {
-    let user_id = crate::auth::require_permission(&state, &headers, "object.delete")?;
+    let caller = crate::auth::require_caller(&state, &headers, "object.delete")?;
+    let user_id = caller.user_id().to_owned();
     let keys = normalize_delete_ids(&body.ids)?;
     let emit_events = params.emit_events.unwrap_or(true);
+    reject_out_of_scope_objects(&state, &caller, &keys).await?;
 
     // Which of the requested objects exist? One index-backed id-list query (the
     // literal list, never `array::map` — that form is per-row and quadratic).
@@ -1016,7 +1029,8 @@ pub async fn batch_upsert_objects(
     Json(body): Json<BatchUpsertRequest>,
 ) -> Result<Json<BatchUpsertResponse>, ApiError> {
     // An upsert needs `create`: it may bring objects that do not exist yet.
-    let user_id = crate::auth::require_permission(&state, &headers, "object.create")?;
+    let caller = crate::auth::require_caller(&state, &headers, "object.create")?;
+    let user_id = caller.user_id().to_owned();
     if body.objects.is_empty() {
         return Err(ApiError::bad_request("`objects` must not be empty"));
     }
@@ -1349,6 +1363,19 @@ pub async fn batch_upsert_objects(
             }
         }
     }
+
+    // A scope covers the matched objects as well: the upsert is the import path and normally
+    // runs as the machine (unrestricted), but a *user* with a scope must not have a foreign
+    // object overwritten through a business key they happen to know. One query for the batch.
+    let matched: Vec<String> = existing
+        .iter()
+        .flatten()
+        .map(|id| {
+            id.rsplit_once(':')
+                .map_or_else(|| id.clone(), |(_, key)| key.to_owned())
+        })
+        .collect();
+    reject_out_of_scope_objects(&state, &caller, &matched).await?;
 
     // Composition parents of the entries that will be **created** (one query for
     // the whole batch): a missing parent must fail the entry instead of parking the
@@ -2374,6 +2401,52 @@ pub(crate) fn bind_scope<'r>(
         }
     }
     query
+}
+
+/// Rejects a batch that names objects outside the caller's scope (`403`).
+///
+/// **One query for the whole batch** (rule R7: a bulk run costs one scope check, not one per
+/// object) and **none** for an unrestricted caller — the worker, a user without groups and a
+/// superadmin keep writing the whole catalogue. A refusal beats a partial run: deleting or
+/// overwriting fewer objects than the request named is the answer that hides a mistake.
+pub(crate) async fn reject_out_of_scope_objects(
+    state: &AppState,
+    caller: &crate::auth::Caller,
+    keys: &[String],
+) -> Result<(), ApiError> {
+    let Some(clause) = crate::scope::for_caller(state, caller).await? else {
+        return Ok(());
+    };
+    let unique: HashSet<&str> = keys.iter().map(String::as_str).collect();
+    if unique.is_empty() {
+        return Ok(());
+    }
+    let literal = crate::api::keys::record_list_literal(TABLE, unique.iter().copied());
+    let mut conditions = clause.conditions;
+    conditions.push(format!("id IN {literal}"));
+    let sql = format!(
+        "SELECT count() AS n FROM object WHERE {} GROUP ALL;",
+        conditions.join(" AND ")
+    );
+    let mut request = state.db.inner().query(sql);
+    for (name, value) in &clause.binds {
+        request = request.bind((name.as_str(), value.clone()));
+    }
+    let mut response = request.await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    let visible = rows
+        .first()
+        .and_then(|row| row.get("n"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if visible < unique.len() as i64 {
+        return Err(ApiError::forbidden(format!(
+            "{} of the {} named objects are outside your data scope",
+            unique.len() as i64 - visible,
+            unique.len()
+        )));
+    }
+    Ok(())
 }
 
 /// The identity of a compiled scope, for caches that hold a **filtered** view.
@@ -3618,20 +3691,31 @@ async fn apply_object_update(
     let mut last;
     let mut phases: Vec<(&'static str, f64)> = Vec::new();
     let key = parse_key(id, TABLE)?;
-    let user_id = crate::auth::require_permission(state, headers, "object.update")?;
+    let caller = crate::auth::require_caller(state, headers, "object.update")?;
+    let user_id = caller.user_id().to_owned();
 
-    // Load the current object: type for uniqueness checks, status for audit.
-    let current_sql = "
-        LET $obj = type::record('object', $key);
-        SELECT * FROM $obj;
-    ";
-    let mut current_response = state
-        .db
-        .inner()
-        .query(current_sql)
-        .bind(("key", key))
-        .await?
-        .check()?;
+    // Load the current object: type for uniqueness checks, status for audit. The scope is part
+    // of the load, so an object outside it is not found and the write below never runs.
+    let mut conditions: Vec<String> = Vec::new();
+    let mut scope_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(state, &caller).await?,
+        &mut conditions,
+        &mut scope_binds,
+    );
+    let current_sql = if conditions.is_empty() {
+        "LET $obj = type::record('object', $key);\n        SELECT * FROM $obj;\n    ".to_owned()
+    } else {
+        format!(
+            "LET $obj = type::record('object', $key);\n        SELECT * FROM $obj WHERE {};\n    ",
+            conditions.join(" AND ")
+        )
+    };
+    let mut request = state.db.inner().query(current_sql).bind(("key", key));
+    for (name, value) in scope_binds {
+        request = request.bind((name, value));
+    }
+    let mut current_response = request.await?.check()?;
     let current_rows: Vec<Value> = current_response.take(1)?;
     let current = current_rows
         .into_iter()
@@ -4104,6 +4188,18 @@ pub async fn bulk_objects(
     Json(body): Json<BulkObjectRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     claims.require("object.update")?;
+    // The run executes in the worker (a machine call, unrestricted), so the scope has to be
+    // checked here, at queue time: a selection that names foreign objects is refused as a whole.
+    let caller = crate::auth::Caller::User(Box::new(claims.clone()));
+    let selected: Vec<String> = body
+        .object_ids
+        .iter()
+        .map(|id| {
+            id.rsplit_once(':')
+                .map_or_else(|| id.clone(), |(_, key)| key.to_owned())
+        })
+        .collect();
+    reject_out_of_scope_objects(&state, &caller, &selected).await?;
     if !BULK_OPS.contains(&body.op.as_str()) {
         return Err(ApiError::bad_request(format!(
             "unknown bulk operation `{}`",
@@ -4166,7 +4262,7 @@ pub async fn update_computed(
     // The worker's API key or a session that may change objects: recomputing writes object
     // values, so it is `object.update` — and the hand-rolled "API key or admin JWT" block that
     // stood here was exactly the kind of duplicate a catalog check replaces.
-    crate::auth::require_permission(&state, &headers, "object.update")?;
+    let caller = crate::auth::require_caller(&state, &headers, "object.update")?;
 
     let key = parse_key(&id, TABLE)?;
     let Value::Object(values) = body.values else {
@@ -4178,18 +4274,28 @@ pub async fn update_computed(
         return Err(ApiError::bad_request("`values` must not be empty"));
     }
 
-    // Load current attributes and merge the computed values.
-    let current_sql = "
-        LET $obj = type::record('object', $key);
-        SELECT * FROM $obj;
-    ";
-    let mut current_response = state
-        .db
-        .inner()
-        .query(current_sql)
-        .bind(("key", key))
-        .await?
-        .check()?;
+    // Load current attributes and merge the computed values — inside the caller's scope, so a
+    // foreign object is not found and the write below never runs.
+    let mut conditions: Vec<String> = Vec::new();
+    let mut scope_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(&state, &caller).await?,
+        &mut conditions,
+        &mut scope_binds,
+    );
+    let current_sql = if conditions.is_empty() {
+        "LET $obj = type::record('object', $key);\n        SELECT * FROM $obj;\n    ".to_owned()
+    } else {
+        format!(
+            "LET $obj = type::record('object', $key);\n        SELECT * FROM $obj WHERE {};\n    ",
+            conditions.join(" AND ")
+        )
+    };
+    let mut request = state.db.inner().query(current_sql).bind(("key", key));
+    for (name, value) in scope_binds {
+        request = request.bind((name, value));
+    }
+    let mut current_response = request.await?.check()?;
     let current_rows: Vec<Value> = current_response.take(1)?;
     let current = current_rows
         .into_iter()

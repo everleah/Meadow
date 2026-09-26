@@ -150,6 +150,18 @@ class Core:
         return list(rows)
 
 
+def scoped_editor(core: Core) -> str | None:
+    """An editor to write with, if the instance has one.
+
+    The write check needs a session that may change objects at all: a viewer is refused by the
+    **permission** (`object.update`), which says nothing about the scope.
+    """
+    for user in core.users():
+        if "editor" in (user.get("roles") or []):
+            return str(user["id"])
+    return None
+
+
 def scope_user(core: Core, requested: str | None) -> str:
     """The user the scoped group gets: requested, or the first one who is not an admin."""
     if requested:
@@ -308,6 +320,30 @@ def main() -> None:
             inside_status == 200 and outside_status == 404,
             f"inside {inside_status}, outside {outside_status}",
         )
+        # A write follows it too. The body is an empty attribute map, so the successful case
+        # rewrites the object with what it already carries (no value changes).
+        writer = scoped_editor(core)
+        if writer:
+            core.call("POST", f"/groups/{group_id}/members", {"user_id": writer})
+            status, answer = core.call("POST", f"/auth/impersonate/{writer}")
+            assert status == 200, (status, answer)
+            writing = core.as_(str(answer["token"]))
+            inside_patch = writing.call("PATCH", f"/objects/{sample_ids[0]}", {"attributes": {}})[0]
+            outside_patch = writing.call("PATCH", f"/objects/{outside_id}", {"attributes": {}})[0]
+            ok &= check(
+                "a foreign object cannot be changed",
+                inside_patch == 200 and outside_patch == 404,
+                f"inside {inside_patch}, outside {outside_patch}",
+            )
+            # Batches are refused **as a whole**: deleting the objects it may see and silently
+            # skipping the rest would be the answer that hides a mistake. One query for the
+            # batch (rule R7). The foreign id cannot be deleted either way, so nothing is lost.
+            batch_status = writing.call("POST", "/objects/batch-delete", {"ids": [outside_id]})[0]
+            ok &= check(
+                "a batch naming a foreign object is refused",
+                batch_status == 403,
+                f"{batch_status}",
+            )
     if args.max_overhead_ms is not None:
         overhead = scoped_times[VIEW_CALLS[0][0]].warm_ms - unscoped[VIEW_CALLS[0][0]].warm_ms
         ok &= check(
