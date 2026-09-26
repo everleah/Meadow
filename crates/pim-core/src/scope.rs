@@ -360,12 +360,18 @@ pub fn apply(
     }
 }
 
-/// Compiles the scopes of the caller's groups into one condition for the object view.
+/// The scope of the caller, compiled for a query that reads an **edge**.
 ///
-/// `None` means **unrestricted**: no condition is added at all, so an unscoped caller runs
-/// exactly the query they ran before scopes existed. The worker (`Caller::System`) is
-/// unrestricted by design — an import must be able to write and read the whole catalogue.
-pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clause>, ApiError> {
+/// The conditions a scope compiles to name the fields of an object (`type`, `status`, `id`). A
+/// query over `reference` carries its objects on the two ends, so the same conditions have to be
+/// rendered against one of them — `prefix` is that side (`in.` for the child, `out.` for the
+/// parent). Nothing else changes, so the scope is not re-implemented for edges; without a prefix
+/// the conditions are exactly the ones the object views use (byte-identical, rule R3).
+pub async fn for_caller_on(
+    state: &AppState,
+    caller: &Caller,
+    prefix: &str,
+) -> Result<Option<Clause>, ApiError> {
     if !needs_scope(caller) {
         return Ok(None);
     }
@@ -373,7 +379,12 @@ pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clau
         return Ok(None);
     };
     let scopes = crate::rbac::group_scopes(&state.db, &state.cache, &claims.groups).await?;
-    compile(state, &scopes).await
+    compile(state, &scopes, prefix).await
+}
+
+/// The scope of the caller for the object views themselves.
+pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clause>, ApiError> {
+    for_caller_on(state, caller, "").await
 }
 
 /// The condition of a set of group scopes.
@@ -382,7 +393,11 @@ pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clau
 /// *and* the object is in one of these categories"), **groups with rules are ORed** (a user
 /// sees what any of their groups allows), and a **group without rules makes the whole user
 /// unrestricted** — the plan's "ohne Scope-Regeln gelten die Standardrechte".
-async fn compile(state: &AppState, groups: &[Rules]) -> Result<Option<Clause>, ApiError> {
+async fn compile(
+    state: &AppState,
+    groups: &[Rules],
+    prefix: &str,
+) -> Result<Option<Clause>, ApiError> {
     if !restricts(groups) {
         return Ok(None);
     }
@@ -397,7 +412,8 @@ async fn compile(state: &AppState, groups: &[Rules]) -> Result<Option<Clause>, A
                 resolved.push(keys_for(state, relation, targets).await?);
             }
         }
-        let (condition, mut group_binds) = group_condition(group_index, &group.rules, &resolved);
+        let (condition, mut group_binds) =
+            group_condition(group_index, &group.rules, &resolved, prefix);
         alternatives.push(condition);
         binds.append(&mut group_binds);
     }
@@ -412,11 +428,13 @@ async fn compile(state: &AppState, groups: &[Rules]) -> Result<Option<Clause>, A
 /// `keys` carries the resolved member keys of the reference rules in their order; a missing
 /// entry counts as an empty list. An empty list must stay a condition (`id IN []`): dropping the
 /// rule would widen the view to the whole catalogue, the opposite of what was asked — the same
-/// fail-closed reading a malformed scope gets.
+/// fail-closed reading a malformed scope gets. `prefix` renders the conditions against one end of
+/// an edge (`in.`/`out.`), empty for the object views themselves.
 fn group_condition(
     group_index: usize,
     rules: &[Rule],
     keys: &[Arc<Vec<String>>],
+    prefix: &str,
 ) -> (String, Vec<(String, Value)>) {
     let mut resolved = keys.iter();
     let mut parts: Vec<String> = Vec::new();
@@ -425,7 +443,7 @@ fn group_condition(
         match rule {
             Rule::Field { field, values } => {
                 let name = format!("scope_{group_index}_{rule_index}");
-                parts.push(format!("{field} IN ${name}"));
+                parts.push(format!("{prefix}{field} IN ${name}"));
                 binds.push((
                     name,
                     Value::Array(values.iter().cloned().map(Value::String).collect()),
@@ -437,7 +455,7 @@ fn group_condition(
                     "object",
                     member_keys.iter().map(String::as_str),
                 );
-                parts.push(format!("id IN {literal}"));
+                parts.push(format!("{prefix}id IN {literal}"));
             }
         }
     }
@@ -680,7 +698,7 @@ mod tests {
         }))
         .expect("valid scope");
         let keys = vec![Arc::new(vec!["a".to_owned(), "b".to_owned()])];
-        let (condition, binds) = group_condition(0, &rules.rules, &keys);
+        let (condition, binds) = group_condition(0, &rules.rules, &keys, "");
         assert_eq!(
             condition,
             "(type IN $scope_0_0 AND id IN [object:a, object:b])"
@@ -689,6 +707,28 @@ mod tests {
             binds,
             vec![("scope_0_0".to_owned(), json!(["product", "variant"]))]
         );
+    }
+
+    #[test]
+    fn a_prefixed_condition_names_the_edge_side() {
+        // The structural views (`/objects/{id}/children`, the tree) read `reference`, so the same
+        // rules have to be rendered against the object on that edge — `in.` for the child.
+        let rules = parse(&json!({
+            "rules": [
+                {"field": "type", "value": ["product"]},
+                {"reference": {"type": "rel_category_member", "out": "object:webshop"}},
+            ]
+        }))
+        .expect("valid scope");
+        let keys = vec![Arc::new(vec!["a".to_owned()])];
+        let (condition, binds) = group_condition(0, &rules.rules, &keys, "in.");
+        assert_eq!(condition, "(in.type IN $scope_0_0 AND in.id IN [object:a])");
+        assert_eq!(binds, vec![("scope_0_0".to_owned(), json!(["product"]))]);
+        // Only the field references move to the edge side: the clause is the same one, so the
+        // bind names (and therefore the bindings) are unchanged.
+        let (unprefixed, same_binds) = group_condition(0, &rules.rules, &keys, "");
+        assert_ne!(condition, unprefixed);
+        assert_eq!(binds, same_binds);
     }
 
     #[test]
@@ -711,11 +751,11 @@ mod tests {
                 targets: vec!["object:gone".to_owned()],
             }],
         };
-        let (condition, binds) = group_condition(0, &rules.rules, &[Arc::new(Vec::new())]);
+        let (condition, binds) = group_condition(0, &rules.rules, &[Arc::new(Vec::new())], "");
         assert_eq!(condition, "(id IN [])");
         assert!(binds.is_empty());
         // A missing resolution counts as empty as well (fail-closed, never "everything").
-        let (condition, _) = group_condition(0, &rules.rules, &[]);
+        let (condition, _) = group_condition(0, &rules.rules, &[], "");
         assert_eq!(condition, "(id IN [])");
     }
 }

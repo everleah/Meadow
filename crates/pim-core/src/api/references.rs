@@ -1330,11 +1330,9 @@ pub async fn list_object_children(
     Path(id): Path<String>,
     Query(params): Query<ChildrenListParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::require_permission(&state, &headers, "reference.read")?;
+    let caller = crate::auth::require_caller(&state, &headers, "reference.read")?;
     let key = parse_object_key(&id)?;
-    if fetch_object(&state.db, key).await?.is_none() {
-        return Err(ApiError::not_found(format!("object `{id}` not found")));
-    }
+    require_visible_object(&state, &caller, &id, key).await?;
 
     let scope = ChildScope::parse(params.scope.as_deref())?;
     let node_type = params
@@ -1511,11 +1509,9 @@ pub async fn list_object_ancestors(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::require_permission(&state, &headers, "reference.read")?;
+    let caller = crate::auth::require_caller(&state, &headers, "reference.read")?;
     let key = parse_object_key(&id)?;
-    if fetch_object(&state.db, key).await?.is_none() {
-        return Err(ApiError::not_found(format!("object `{id}` not found")));
-    }
+    require_visible_object(&state, &caller, &id, key).await?;
 
     // Walk up the `depends_on` chain (one query per level; taxonomy depth is
     // small). A repeated key means broken data, so the walk stops instead of
@@ -1591,17 +1587,67 @@ pub async fn get_object_tree(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
     claims.require("reference.read")?;
+    let caller = crate::auth::Caller::User(Box::new(claims));
+    // The tree carries the **ids** of the whole composition structure, so a scoped caller sees
+    // the nodes inside their scope — and the paths to them: the ancestors of a visible object are
+    // part of that object (the taxonomy above a product is not in the scope, and without the path
+    // the caller would look at an empty tree). `in.` renders the scope against the edge's child,
+    // since this query reads `reference` and not `object`. An unrestricted caller runs the query
+    // without a condition and without the second lookup.
+    let scope = crate::scope::for_caller_on(&state, &caller, "in.").await?;
     let sql =
         "SELECT in AS child, out AS parent FROM reference WHERE definition_id = 'rel_depends_on';";
     let mut response = state.db.inner().query(sql).await?.check()?;
     let rows: Vec<Value> = response.take(0)?;
 
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    let mut parents: HashMap<String, String> = HashMap::new();
     for row in &rows {
         let child = row.get("child").and_then(Value::as_str).map(str::to_owned);
         let parent = row.get("parent").and_then(Value::as_str).map(str::to_owned);
         if let (Some(child), Some(parent)) = (child, parent) {
-            children.entry(parent).or_default().push(child);
+            children
+                .entry(parent.clone())
+                .or_default()
+                .push(child.clone());
+            parents.insert(child, parent);
+        }
+    }
+
+    if let Some(clause) = &scope {
+        // Which of the composition nodes are inside the scope? One query on the child side of
+        // the edge, so it returns the visible nodes and not the catalogue.
+        let sql = format!(
+            "SELECT in AS child FROM reference \
+                 WHERE definition_id = 'rel_depends_on' AND {};",
+            clause.conditions.join(" AND ")
+        );
+        let mut request = state.db.inner().query(sql);
+        for (name, value) in &clause.binds {
+            request = request.bind((name.as_str(), value.clone()));
+        }
+        let mut response = request.await?.check()?;
+        let rows: Vec<Value> = response.take(0)?;
+        let visible: HashSet<String> = rows
+            .iter()
+            .filter_map(|row| row.get("child").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        // The visible nodes plus every step on the way to them. A parent already kept needs
+        // no second walk: its own path is in the set as well.
+        let mut keep = visible.clone();
+        for node in &visible {
+            let mut current = node.clone();
+            while let Some(parent) = parents.get(&current) {
+                if !keep.insert(parent.clone()) {
+                    break;
+                }
+                current = parent.clone();
+            }
+        }
+        // Edges outside that set disappear, so the walk below never reaches them.
+        for kids in children.values_mut() {
+            kids.retain(|child| keep.contains(child));
         }
     }
 
@@ -1625,6 +1671,40 @@ pub async fn get_object_tree(
     let mut visited = HashSet::new();
     let tree = build("object:object_root", &children, &mut visited);
     Ok(Json(Value::Array(vec![tree])))
+}
+
+/// Rejects an object the caller may not read (`404`), for the structural views.
+///
+/// The anchor check of `GET /objects/{id}/children` and `…/ancestors`: a caller may read the
+/// structure of an object they may read and learns nothing about one they may not — the same
+/// `404` `GET /objects/{id}` answers, so the id does not become an oracle. An unrestricted caller
+/// adds no condition at all (rule R3).
+async fn require_visible_object(
+    state: &AppState,
+    caller: &crate::auth::Caller,
+    id: &str,
+    key: &str,
+) -> Result<Value, ApiError> {
+    let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(state, caller).await?,
+        &mut conditions,
+        &mut binds,
+    );
+    let sql = format!(
+        "SELECT * FROM type::record('object', $key) WHERE {};",
+        conditions.join(" AND ")
+    );
+    let mut request = state.db.inner().query(sql).bind(("key", key.to_owned()));
+    for (name, value) in binds {
+        request = request.bind((name, value));
+    }
+    let mut response = request.await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    rows.into_iter()
+        .next()
+        .ok_or_else(|| ApiError::not_found(format!("object `{id}` not found")))
 }
 
 /// Returns every descendant (and itself) of a composition node as bare object

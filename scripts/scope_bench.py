@@ -162,6 +162,24 @@ def scoped_editor(core: Core) -> str | None:
     return None
 
 
+def tree_nodes(value: Any) -> set[str]:
+    """Every id in a `{id, children}` tree."""
+    nodes: set[str] = set()
+
+    def walk(node: dict[str, Any]) -> None:
+        node_id = node.get("id")
+        if isinstance(node_id, str):
+            nodes.add(node_id)
+        for child in node.get("children") or []:
+            if isinstance(child, dict):
+                walk(child)
+
+    for entry in value if isinstance(value, list) else [value]:
+        if isinstance(entry, dict):
+            walk(entry)
+    return nodes
+
+
 def scope_user(core: Core, requested: str | None) -> str:
     """The user the scoped group gets: requested, or the first one who is not an admin."""
     if requested:
@@ -343,6 +361,28 @@ def main() -> None:
                 "a batch naming a foreign object is refused",
                 batch_status == 403,
                 f"{batch_status}",
+            )
+            # The structural views. The anchor follows the scope (option (a): the structure
+            # *below* a visible object is part of that object), and the tree keeps the visible
+            # nodes **plus the path to them** — the taxonomy above a product is not in the scope,
+            # so without the path the caller would look at an empty tree. Like the checks above,
+            # these run with the **writer** session: the membership change ended the read session
+            # of the scoped user (`core` would relogin as the unscoped admin).
+            inside_children = writing.call("GET", f"/objects/{sample_ids[0]}/children")[0]
+            outside_children = writing.call("GET", f"/objects/{outside_id}/children")[0]
+            ok &= check(
+                "the structure of a foreign object is not readable",
+                inside_children == 200 and outside_children == 404,
+                f"inside {inside_children}, outside {outside_children}",
+            )
+            scoped_nodes = tree_nodes(writing.call("GET", "/objects/tree")[1])
+            unscoped_nodes = tree_nodes(core.call("GET", "/objects/tree")[1])
+            ok &= check(
+                "the tree keeps the scope and the path to it",
+                bool(scoped_nodes)
+                and scoped_nodes < unscoped_nodes
+                and all(object_id in scoped_nodes for object_id in sample_ids),
+                f"{len(scoped_nodes)} of {len(unscoped_nodes)} nodes",
             )
     if args.max_overhead_ms is not None:
         overhead = scoped_times[VIEW_CALLS[0][0]].warm_ms - unscoped[VIEW_CALLS[0][0]].warm_ms
