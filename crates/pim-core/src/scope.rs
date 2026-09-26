@@ -36,7 +36,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::app::AppState;
-use crate::auth::Caller;
+use crate::auth::{Caller, ROLE_SUPERADMIN};
 use crate::error::ApiError;
 
 /// The fields a scope rule may filter on.
@@ -316,11 +316,23 @@ pub async fn validate(db: &crate::db::Db, rules: &Rules) -> Result<(), ApiError>
 
 /// Whether a caller can be restricted at all.
 ///
-/// The worker ([`Caller::System`]) and a user without groups cannot have a scope. This answers
-/// **before** any lookup, so the normal case costs one comparison and no database access at
-/// all — the first of the three promises A6 guards with a unit test.
+/// The worker ([`Caller::System`]), a user without groups and a **superadmin** cannot be
+/// restricted. This answers **before** any lookup, so the normal case costs one comparison and no
+/// database access at all — the first of the three promises A6 guards with a unit test.
+///
+/// **A superadmin is never scoped**, even when it belongs to a group that carries rules: the plan
+/// says the role bypasses *every* check, and a scope is a check on data. Found by measurement
+/// (2026-09-25): before this branch the seeded superadmin, put into a group scoped to a category
+/// with 69 members, saw 69 of 2000 products while its permission set stayed complete — a role that
+/// can neither be denied a permission nor excused from one must not lose sight of its catalogue
+/// either. The membership itself stays possible and simply has no effect (forbidding it would mean
+/// cleaning up memberships whenever somebody is promoted to superadmin); `GET /auth/me` still
+/// reports the groups, and the group editor can point the contradiction out.
 pub fn needs_scope(caller: &Caller) -> bool {
-    matches!(caller, Caller::User(claims) if !claims.groups.is_empty())
+    match caller {
+        Caller::System => false,
+        Caller::User(claims) => !claims.groups.is_empty() && !claims.has_role(ROLE_SUPERADMIN),
+    }
 }
 
 /// Whether a set of group scopes restricts anything.
@@ -587,8 +599,14 @@ mod tests {
     fn the_fast_path_decisions_are_pure_and_fail_open_only_for_rules() {
         // A caller that cannot be restricted: the worker and a user without groups.
         assert!(!needs_scope(&Caller::System));
-        assert!(!needs_scope(&user_caller(&[])));
-        assert!(needs_scope(&user_caller(&["group:a"])));
+        assert!(!needs_scope(&user_caller(&[], "viewer")));
+        assert!(needs_scope(&user_caller(&["group:a"], "viewer")));
+        // A superadmin is never scoped — not even with a group that carries rules: the role
+        // bypasses every check, and a scope is a check on data.
+        assert!(!needs_scope(&user_caller(&["group:a"], "superadmin")));
+        // An `admin` still is: the plan exempts the superadmin, not the admin. The group editor
+        // should point that out, because it restricts a powerful role.
+        assert!(needs_scope(&user_caller(&["group:a"], "admin")));
 
         // A set of scopes restricts only when every group has rules: one group without rules
         // leaves the whole caller unrestricted.
@@ -631,12 +649,12 @@ mod tests {
         assert_eq!(binds.len(), 2);
     }
 
-    /// A user session with the given groups (for the fast-path decisions).
-    fn user_caller(groups: &[&str]) -> Caller {
+    /// A user session with the given groups and role (for the fast-path decisions).
+    fn user_caller(groups: &[&str], role: &str) -> Caller {
         Caller::User(Box::new(crate::auth::Claims {
             sub: "user:test".to_owned(),
             username: "test".to_owned(),
-            roles: vec![crate::auth::ROLE_VIEWER.to_owned()],
+            roles: vec![role.to_owned()],
             groups: groups.iter().map(|group| (*group).to_owned()).collect(),
             perms: Vec::new(),
             auth_version: 1,
