@@ -418,6 +418,18 @@ async def users_page() -> None:
                     resolve_value(entry.get("label"), base_lang(current_locale())) or name
                 )
 
+            # Both edges of the access model in one read (`GET /memberships`): the member list
+            # and the hierarchy of the dialog are built from them, the core documents the
+            # endpoint as the dialog's read path.
+            member_edges: list[dict] = []
+            parent_edges: list[dict] = []
+            try:
+                memberships = await client.memberships(token)
+                member_edges = list(memberships.get("members") or [])
+                parent_edges = list(memberships.get("parents") or [])
+            except CoreError, httpx.HTTPError:  # both sections stay empty and say so
+                ui.notify(t("groups.members_failed"), color="warning")
+
             def _roles_label(permission: dict) -> str:
                 """The lowest role that holds the permission by default (`Viewer`).
 
@@ -552,6 +564,22 @@ async def users_page() -> None:
                         scope_count = (
                             ui.label("").classes("text-caption text-grey-6").mark("scope-count")
                         )
+                    # ----------------------------------------------------- #
+                    # Members and hierarchy (access-model edges)            #
+                    # ----------------------------------------------------- #
+                    # Both are immediate edits, not form fields: each one is an edge of its
+                    # own. Every such write ends **all** sessions, and the core hands the
+                    # caller a re-derived token back (`x-access-token`, adopted by
+                    # `auth.handle_renewed_token`), so the dialog stays usable instead of
+                    # throwing the admin to the login page after every change.
+                    with ui.column().classes("w-full gap-1"):
+                        ui.label(t("groups.members_title")).classes("text-subtitle2")
+                        ui.label(t("groups.members_hint")).classes("text-caption text-grey-7")
+                        member_host = ui.column().classes("w-full gap-1")
+                    with ui.column().classes("w-full gap-1"):
+                        ui.label(t("groups.hierarchy_title")).classes("text-subtitle2")
+                        ui.label(t("groups.hierarchy_hint")).classes("text-caption text-grey-7")
+                        hierarchy_host = ui.column().classes("w-full gap-1")
                     branding_area = (
                         ui.textarea(t("groups.field_branding"))
                         .props("filled dense")
@@ -883,6 +911,268 @@ async def users_page() -> None:
                 await _resolve_target_labels(targets)
                 render_scope()
 
+            # ------------------------------------------------------------ #
+            # Members and hierarchy (access-model edges)                    #
+            # ------------------------------------------------------------ #
+
+            def _user_record(user_id: str) -> dict:
+                return next((u for u in users if str(u.get("id")) == user_id), {})
+
+            def _user_label(user_id: str) -> str:
+                record = _user_record(user_id)
+                name = str(record.get("username") or user_id)
+                roles = ", ".join(str(role) for role in (record.get("roles") or []))
+                return f"{name} · {roles}" if roles else name
+
+            def _group_label(group_id: str) -> str:
+                return next(
+                    (str(g.get("name")) for g in groups if str(g.get("id")) == group_id), group_id
+                )
+
+            def _direct_members(group_id: str) -> list[str]:
+                return sorted(
+                    str(edge.get("user"))
+                    for edge in member_edges
+                    if str(edge.get("group")) == group_id
+                )
+
+            def _children_of(group_id: str) -> list[str]:
+                """Groups that hang **below** this one (`child_of`: child → parent)."""
+                return sorted(
+                    str(edge.get("child"))
+                    for edge in parent_edges
+                    if str(edge.get("parent")) == group_id
+                )
+
+            def _parents_of(group_id: str) -> list[str]:
+                return sorted(
+                    str(edge.get("parent"))
+                    for edge in parent_edges
+                    if str(edge.get("child")) == group_id
+                )
+
+            def _descendants(group_id: str) -> list[str]:
+                """The child groups, transitively — a member of a child is a member here.
+
+                Rights are inherited **upwards** (`rbac::resolve` walks the parents of the
+                user's groups), so the members of this group are its own plus those of every
+                group below it. That is why the member list has to show them: without the
+                inherited rows the dialog would understate who carries these rights.
+                """
+                found: list[str] = []
+                pending = list(_children_of(group_id))
+                while pending:
+                    child = pending.pop()
+                    if child in found:
+                        continue
+                    found.append(child)
+                    pending.extend(_children_of(child))
+                return found
+
+            def _member_rows(group_id: str) -> list[tuple[str, str | None]]:
+                """`(user, via group)` — `None` for a direct membership."""
+                direct = _direct_members(group_id)
+                rows: list[tuple[str, str | None]] = [(user, None) for user in direct]
+                for child in _descendants(group_id):
+                    for user in _direct_members(child):
+                        if user not in direct and all(user != existing for existing, _ in rows):
+                            rows.append((user, child))
+                return rows
+
+            def _is_superadmin(user_id: str) -> bool:
+                return "superadmin" in (
+                    str(role) for role in (_user_record(user_id).get("roles") or [])
+                )
+
+            def _is_admin(user_id: str) -> bool:
+                return "admin" in (str(role) for role in (_user_record(user_id).get("roles") or []))
+
+            def render_members() -> None:
+                """The members of the edited group, direct and inherited."""
+                editing_id = getattr(save_group, "editing_id", None)
+                member_host.clear()
+                with member_host:
+                    if not editing_id:
+                        ui.label(t("groups.members_new")).classes("text-caption text-grey-7")
+                        return
+                    rows = _member_rows(str(editing_id))
+                    if not rows:
+                        ui.label(t("groups.members_none")).classes("text-caption text-grey-7")
+                    for user_id, via in rows:
+                        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                            ui.label(_user_label(user_id)).classes("flex-1").mark("member-label")
+                            if via is not None:
+                                ui.label(
+                                    t("groups.members_inherited").format(group=_group_label(via))
+                                ).classes("text-caption text-grey-6").mark("member-inherited")
+                                continue
+                            ui.button(
+                                icon="close",
+                                on_click=lambda u=user_id: remove_member(u),
+                            ).props("flat dense size=sm").tooltip(t("groups.members_remove"))
+                    candidates = {
+                        str(user.get("id")): str(user.get("username") or user.get("id"))
+                        for user in users
+                        if str(user.get("id")) not in _direct_members(str(editing_id))
+                    }
+                    if candidates:
+                        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                            member_select = (
+                                ui.select(candidates, value=None, label=t("groups.members_add"))
+                                .props("filled dense")
+                                .classes("flex-1")
+                                .mark("member-add-select")
+                            )
+                            ui.button(
+                                icon="add",
+                                on_click=lambda: add_member(member_select.value),
+                            ).props("flat dense").mark("member-add").tooltip(
+                                t("groups.members_add")
+                            )
+                    # The two things an admin cannot see in the list: a superadmin is never
+                    # restricted (their membership is inert), an `admin` **is** restricted by a
+                    # scope (only the superadmin is exempt - user decision 2026-09-26).
+                    if any(_is_superadmin(user) for user, _ in rows):
+                        ui.label(t("groups.members_superadmin_hint")).classes(
+                            "text-caption text-grey-7"
+                        ).mark("members-superadmin-hint")
+                    if _scope_rules() and any(_is_admin(user) for user, _ in rows):
+                        ui.label(t("groups.members_scope_hint")).classes(
+                            "text-caption text-orange-8"
+                        ).mark("members-scope-hint")
+
+            def render_hierarchy() -> None:
+                """The parents of the edited group and the groups below it."""
+                editing_id = getattr(save_group, "editing_id", None)
+                hierarchy_host.clear()
+                with hierarchy_host:
+                    if not editing_id:
+                        ui.label(t("groups.hierarchy_new")).classes("text-caption text-grey-7")
+                        return
+                    names = {
+                        str(group.get("id")): str(group.get("name") or group.get("id"))
+                        for group in groups
+                        if str(group.get("id")) != str(editing_id)
+                    }
+                    for label_key, links, add in (
+                        ("groups.hierarchy_parents", _parents_of(str(editing_id)), "parent"),
+                        ("groups.hierarchy_children", _children_of(str(editing_id)), "child"),
+                    ):
+                        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                            ui.label(t(label_key)).classes("w-32 text-caption text-grey-7")
+                            if not links:
+                                ui.label(t("groups.hierarchy_none")).classes(
+                                    "text-caption text-grey-7"
+                                )
+                            for link in links:
+                                with ui.row().classes("items-center gap-1 no-wrap"):
+                                    ui.label(_group_label(link)).classes(
+                                        "bg-neutral px-2 py-0.5 rounded text-xs"
+                                    ).mark("hierarchy-chip")
+                                    ui.button(
+                                        icon="close",
+                                        on_click=lambda link=link, kind=add: unlink_group(
+                                            kind, link
+                                        ),
+                                    ).props("flat dense size=sm").mark("hierarchy-unlink").tooltip(
+                                        t("groups.hierarchy_remove")
+                                    )
+                            if names:
+                                link_select = (
+                                    ui.select(
+                                        names,
+                                        value=None,
+                                        label=t(
+                                            "groups.hierarchy_add_parent"
+                                            if add == "parent"
+                                            else "groups.hierarchy_add_child"
+                                        ),
+                                    )
+                                    .props("filled dense")
+                                    .classes("flex-1")
+                                    .mark(f"hierarchy-add-{add}")
+                                )
+                                ui.button(
+                                    icon="add",
+                                    on_click=lambda s=link_select, k=add: link_group(k, s.value),
+                                ).props("flat dense").mark(f"hierarchy-link-{add}").tooltip(
+                                    t(
+                                        "groups.hierarchy_add_parent"
+                                        if add == "parent"
+                                        else "groups.hierarchy_add_child"
+                                    )
+                                )
+
+            async def reload_memberships() -> None:
+                """Re-reads both edge lists and re-renders the two sections."""
+                nonlocal member_edges, parent_edges
+                try:
+                    answer = await client.memberships(token)
+                except CoreError, httpx.HTTPError:
+                    ui.notify(t("groups.members_failed"), color="warning")
+                    return
+                member_edges = list(answer.get("members") or [])
+                parent_edges = list(answer.get("parents") or [])
+                render_members()
+                render_hierarchy()
+
+            async def add_member(user_id: object) -> None:
+                editing_id = getattr(save_group, "editing_id", None)
+                if not editing_id or not user_id:
+                    ui.notify(t("groups.members_pick"), color="warning")
+                    return
+                try:
+                    await client.add_group_member(token, str(editing_id), str(user_id))
+                except CoreError as error:
+                    ui.notify(f"{t('groups.members_save_failed')}: {error}", color="negative")
+                    return
+                await reload_memberships()
+                ui.notify(t("groups.members_saved"), color="positive")
+
+            async def remove_member(user_id: str) -> None:
+                editing_id = getattr(save_group, "editing_id", None)
+                if not editing_id:
+                    return
+                try:
+                    await client.remove_group_member(token, str(editing_id), user_id)
+                except CoreError as error:
+                    ui.notify(f"{t('groups.members_save_failed')}: {error}", color="negative")
+                    return
+                await reload_memberships()
+                ui.notify(t("groups.members_saved"), color="positive")
+
+            async def link_group(kind: str, group_id: object) -> None:
+                """Links the edited group to another one (as parent or as child)."""
+                editing_id = getattr(save_group, "editing_id", None)
+                if not editing_id or not group_id:
+                    ui.notify(t("groups.hierarchy_pick"), color="warning")
+                    return
+                try:
+                    if kind == "parent":
+                        await client.add_group_child(token, str(group_id), str(editing_id))
+                    else:
+                        await client.add_group_child(token, str(editing_id), str(group_id))
+                except CoreError as error:  # a cycle answers `400` with the core's message
+                    ui.notify(f"{t('groups.hierarchy_failed')}: {error}", color="negative")
+                    return
+                await reload_memberships()
+                ui.notify(t("groups.hierarchy_saved"), color="positive")
+
+            async def unlink_group(kind: str, group_id: str) -> None:
+                editing_id = getattr(save_group, "editing_id", None)
+                if not editing_id:
+                    return
+                try:
+                    if kind == "parent":
+                        await client.remove_group_child(token, group_id, str(editing_id))
+                    else:
+                        await client.remove_group_child(token, str(editing_id), group_id)
+                except CoreError as error:
+                    ui.notify(f"{t('groups.hierarchy_failed')}: {error}", color="negative")
+                    return
+                await reload_memberships()
+                ui.notify(t("groups.hierarchy_saved"), color="positive")
+
             def _fill_group_form(group: dict | None) -> None:
                 editing = group is not None
                 group = group or {}  # the reads below only run while editing
@@ -908,8 +1198,13 @@ async def users_page() -> None:
                 """Fills the form and renders the stored scope into the card."""
                 _fill_group_form(group)
                 save_group.editing_id = group.get("id") if group else None  # type: ignore[attr-defined]
+                render_hierarchy()
                 group_dialog.open()
                 await _prepare_scope(group)
+                # After the scope: the member card names the admin that a scope restricts, so
+                # it needs the document on screen (found by a page test - the hint was missing
+                # until the next render).
+                render_members()
                 await refresh_scope_count()
 
             def _parse_json(text: str, label: str) -> dict | None:

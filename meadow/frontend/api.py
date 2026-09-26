@@ -16,6 +16,12 @@ SESSION_EXPIRED_MESSAGE = "invalid or expired token"
 #: the frontend registers the redirect to the login page (`auth.register`).
 _session_expired_handler: Callable[[], None] | None = None
 
+#: Header the core uses for the session it re-issues to the caller of an access change
+#: (`crates/pim-core/src/api/auth.rs`); adopted by `auth.handle_renewed_token`.
+RENEWED_TOKEN_HEADER = "x-access-token"
+_renewed_token_handler: Callable[[str], None] | None = None
+_token_provider: Callable[[], str] | None = None
+
 #: Reused across every CoreClient call so the connection pool stays warm and
 #: no new `httpx.AsyncClient` is built per request (which was the main source
 #: of per-call latency). An optional (single-process) singleton.
@@ -43,7 +49,10 @@ async def _api_client() -> AsyncIterator[httpx.AsyncClient]:
         _shared_client = httpx.AsyncClient(
             timeout=_SHARED_CLIENT_TIMEOUT,
             trust_env=False,
-            event_hooks={"response": [_watch_session]},
+            event_hooks={
+                "request": [_send_current_token],
+                "response": [_watch_session],
+            },
         )
     yield _shared_client
 
@@ -55,14 +64,49 @@ def set_session_expired_handler(handler: Callable[[], None] | None) -> None:
     _session_expired_handler = handler
 
 
+def set_renewed_token_handler(handler: Callable[[str], None] | None) -> None:
+    """Registers (or with `None` clears) the callback that adopts a renewed token.
+
+    Every change to the access model ends **every** session, including the one that asked
+    for the change; the core answers that request with a re-derived token for the caller
+    (`x-access-token`). Taking it over keeps the admin dialogs usable — the alternative is
+    a login page after every membership change (`CORE: src/api/auth.rs`).
+    """
+    global _renewed_token_handler
+    _renewed_token_handler = handler
+
+
+def set_token_provider(provider: Callable[[], str] | None) -> None:
+    """Registers the callback that answers the **current** session token."""
+    global _token_provider
+    _token_provider = provider
+
+
+async def _send_current_token(request: httpx.Request) -> None:
+    """Request hook: sends the session token that is valid **now**.
+
+    A page reads its token once while it renders (`token = app.storage.user["token"]`), so
+    a session the core re-issued in the middle of that page (`x-access-token`) would never
+    reach the calls that follow — the admin would still be thrown to the login page after
+    the next click. Resolving the token per request keeps every call on the newest one;
+    without a session (login) the header the caller passed stays as it is.
+    """
+    token = _token_provider() if _token_provider is not None else ""
+    if token:
+        request.headers["Authorization"] = f"Bearer {token}"
+
+
 async def _watch_session(response: httpx.Response) -> None:
-    """Response hook: reports an invalid/expired token to the frontend.
+    """Response hook: adopts a renewed token, reports an invalid/expired one.
 
     A *failed login* also answers with 401 (`invalid credentials`), so the
     message decides: only a lost session triggers the handler. The body is not
     read yet at hook time, so it is awaited explicitly (httpx `aread`); only
     401 responses are inspected, so no other download is buffered here.
     """
+    renewed = response.headers.get(RENEWED_TOKEN_HEADER)
+    if renewed and _renewed_token_handler is not None:
+        _renewed_token_handler(renewed)
     if response.status_code != 401:
         return
     try:
@@ -1591,6 +1635,60 @@ class CoreClient:
             if response.is_error:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
+
+    async def memberships(self, token: str) -> dict:
+        """Both edges of the access model in one answer (``GET /memberships``).
+
+        ``{"members": [{user, group}], "parents": [{child, parent}]}`` — the group editor
+        builds the member list and the hierarchy from it instead of asking per group
+        (the core documents it as the dialog's read path, `group.read`).
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/memberships",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def add_group_member(self, token: str, group_id: str, user_id: str) -> dict:
+        """Adds a user to a group (``POST /groups/{id}/members``)."""
+        return await self._edge(token, "post", f"/groups/{group_id}/members", {"user_id": user_id})
+
+    async def remove_group_member(self, token: str, group_id: str, user_id: str) -> None:
+        """Removes a user from a group (``DELETE /groups/{id}/members/{user_id}``)."""
+        await self._edge(token, "delete", f"/groups/{group_id}/members/{user_id}", None)
+
+    async def add_group_child(self, token: str, parent_id: str, child_id: str) -> dict:
+        """Links a child group below a parent (``POST /groups/{id}/children``).
+
+        A cycle is refused by the core with `400` and its message says so.
+        """
+        return await self._edge(
+            token, "post", f"/groups/{parent_id}/children", {"group_id": child_id}
+        )
+
+    async def remove_group_child(self, token: str, parent_id: str, child_id: str) -> None:
+        """Unlinks a child group (``DELETE /groups/{id}/children/{child_id}``)."""
+        await self._edge(token, "delete", f"/groups/{parent_id}/children/{child_id}", None)
+
+    async def _edge(self, token: str, method: str, path: str, payload: dict | None) -> dict:
+        """One access-model edge call (member or hierarchy).
+
+        These are the writes that end **every** session — including the caller's own. The
+        core answers them with a re-derived token in the `x-access-token` header, which the
+        response hook adopts (`auth.handle_renewed_token`), so the editor keeps working.
+        """
+        async with _api_client() as client:
+            response = await client.request(
+                method,
+                f"{self.base_url}{path}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json() if response.content else {}
 
     async def create_group(
         self,

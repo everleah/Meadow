@@ -39,6 +39,9 @@ pub fn router(state: AppState) -> Router {
     let limiter = std::sync::Arc::new(crate::rate_limit::RateLimiter::new(
         state.config.rate_limit_per_minute,
     ));
+    // The renewal layer needs the state after the routes took it, and it has to wrap every
+    // route: any handler that raises `auth_version` ends the caller's own session too.
+    let renewal_state = state.clone();
 
     Router::new()
         .route("/health", get(api::health::health))
@@ -443,6 +446,10 @@ pub fn router(state: AppState) -> Router {
         )
         .with_state(state)
         .layer(DefaultBodyLimit::max(body_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            renewal_state,
+            api::auth::renew_after_access_change,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             limiter,
             crate::rate_limit::middleware,

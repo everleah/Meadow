@@ -1,7 +1,10 @@
 //! Authentication handlers: login, current-user and impersonation.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderMap, HeaderValue, header};
+use axum::middleware::Next;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
@@ -11,6 +14,9 @@ use crate::audit::{self, AuditEntry};
 use crate::auth::{self, AuthUser, Claims, Impersonator};
 use crate::error::ApiError;
 use crate::rbac;
+
+/// Header carrying the token the core re-issues for the caller of an access change.
+pub const RENEWED_TOKEN_HEADER: &str = "x-access-token";
 
 /// Login payload.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -87,6 +93,110 @@ async fn claims_for(
         exp: 0,
         impersonator,
     })
+}
+
+/// Re-issues the caller's own session when a request changed the access model.
+///
+/// Every access change raises `auth_version` (`rbac::invalidate_sessions`), and that is meant
+/// to end **every** issued session — including the one that asked for the change. For the
+/// other sessions it is exactly right; for this one it is wrong twice: the caller is already
+/// authenticated and just proved they may do what they did, and being sent to the login page
+/// after every membership change makes the admin dialogs unusable
+/// (`plan/detail/benutzer-gruppen-rechte.md`, stage C).
+///
+/// The renewed token is **re-derived**, never copied: the user is read again (roles, status,
+/// token version), the permission set and the group list are resolved again, so the new token
+/// carries exactly what is in force *after* the change — if the change took something from the
+/// caller, the new token says so. It travels in the [`RENEWED_TOKEN_HEADER`] header: a response
+/// body here is a record (a group, a membership), and a session concern does not belong into
+/// it. The frontend adopts the header in one place (`meadow/frontend/api.py`).
+///
+/// Costs one version comparison per request (an atomic load, no query) and — only when the
+/// counter actually moved — one user read plus the resolution the login does anyway.
+pub async fn renew_after_access_change(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let token = bearer_token(request.headers());
+    let before = state.cache.auth_version();
+    let mut response = next.run(request).await;
+    if state.cache.auth_version() == before {
+        return response;
+    }
+    // The machine caller has no session, and neither has an anonymous request.
+    let Some(token) = token else {
+        return response;
+    };
+    if let Some(renewed) = renew_session(&state, &token).await
+        && let Ok(value) = HeaderValue::from_str(&renewed)
+    {
+        response.headers_mut().insert(RENEWED_TOKEN_HEADER, value);
+    }
+    response
+}
+
+/// The bearer token of a request (`None` when there is none).
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned)
+}
+
+/// Re-derives the session of a token whose access version has moved on.
+///
+/// `None` for anything that is not a live, active user session: whoever was deleted,
+/// suspended or had their token version raised in this very request gets no renewal — the
+/// `401` stays, and the next call leads to the login page.
+async fn renew_session(state: &AppState, token: &str) -> Option<String> {
+    let claims = auth::verify(&state.config.jwt_secret, token).ok()?;
+    let mut response = state
+        .db
+        .inner()
+        .query("SELECT * FROM type::record('user', $key);")
+        .bind(("key", rbac::key_of(&claims.sub).to_owned()))
+        .await
+        .ok()?
+        .check()
+        .ok()?;
+    let users: Vec<Value> = response.take(0).ok()?;
+    let user = users.first()?;
+    if user.get("status").and_then(Value::as_str) != Some("active") {
+        return None;
+    }
+    let roles = user
+        .get("roles")
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let token_version = user
+        .get("token_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let claims = claims_for(
+        state,
+        claims.sub.clone(),
+        claims.username.clone(),
+        roles,
+        token_version,
+        claims.impersonator.clone(),
+    )
+    .await
+    .ok()?;
+    auth::issue(
+        &state.config.jwt_secret,
+        state.config.jwt_ttl_seconds,
+        claims,
+    )
+    .ok()
 }
 
 /// Exchanges username/password for a JWT.

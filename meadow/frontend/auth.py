@@ -196,7 +196,39 @@ def handle_session_expired() -> None:
         ui.navigate.to(f"/login?redirect_to={quote(redirect_to)}&expired=1")
 
 
+def handle_renewed_token(token: str) -> None:
+    """Adopts the session the core re-issued after an access change.
+
+    Every change to the access model raises the access version and ends **every** issued
+    session — including the one that asked for the change. The core answers that very
+    request with a re-derived token for the caller (`x-access-token`), and taking it over
+    keeps the editor usable: without it the admin lands on the login page after every
+    membership change, which the members tab would make unbearable
+    (`plan/detail/benutzer-gruppen-rechte.md`, stage C).
+
+    The token is written to the session storage, so the next call (and the next page) uses
+    it. Outside a client context (a background task) there is nothing to adopt.
+    """
+    with contextlib.suppress(RuntimeError):
+        if is_authenticated():
+            app.storage.user["token"] = token
+
+
+def session_token() -> str:
+    """The token of the current session (`""` outside a session).
+
+    Registered as the core client's token provider, so every request sends the token that is
+    valid **now** instead of the one a page captured while it rendered — that is what makes a
+    session the core re-issued after an access change usable (`handle_renewed_token`).
+    """
+    with contextlib.suppress(RuntimeError):  # no client context (background task)
+        return str(app.storage.user.get("token") or "")
+    return ""
+
+
 def register() -> None:
     """Registers the authentication middleware and the expiry callback."""
     app.add_middleware(AuthMiddleware)
     api.set_session_expired_handler(handle_session_expired)
+    api.set_renewed_token_handler(handle_renewed_token)
+    api.set_token_provider(session_token)

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nicegui import ui
 from nicegui.testing import User, user_simulation
 
 from meadow.frontend.i18n import t
@@ -29,7 +30,10 @@ EN = "en"
 MAIN_FILE = Path(__file__).resolve().parents[1] / "meadow" / "frontend" / "__main__.py"
 
 GROUP_ID = "group:webshop"
-#: A group with a right, a scope and a branding — the shape the grid hands back.
+#: A second group below the edited one: its members are inherited.
+CHILD_ID = "group:team-a"
+#: A user to put into a group (viewer).
+USER_ID = "user:dryviewer"
 GROUP: dict[str, Any] = {
     "id": GROUP_ID,
     "name": "webshop",
@@ -107,6 +111,13 @@ class FakeCore:
         assert found, f"`{name}` was never called"
         return found[-1]
 
+    @classmethod
+    def args(cls, name: str) -> tuple[Any, ...]:
+        """The positional arguments of the last call of `name`."""
+        found = [args for method, args, _ in cls.calls if method == name]
+        assert found, f"`{name}` was never called"
+        return found[-1]
+
 
 def _drop_frontend_modules() -> None:
     """Forgets the frontend modules so the simulation imports them fresh."""
@@ -123,7 +134,14 @@ async def users_user(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[User]:
 
         FakeCore.reset(
             {
-                "list_users": [],
+                "list_users": [
+                    {
+                        "id": USER_ID,
+                        "username": "dryviewer",
+                        "roles": ["viewer"],
+                        "status": "active",
+                    }
+                ],
                 "list_groups": [GROUP],
                 "list_permissions": CATALOG,
                 "list_object_types": OBJECT_TYPES,
@@ -173,6 +191,122 @@ async def _open_group_editor(user: User) -> None:
         {"data": {"id": GROUP_ID, "name": "webshop", "grant": "object.publish"}},
     )
     await _wait_until(lambda: any(name == "preview_scope" for name, _, _ in FakeCore.calls))
+
+
+def _texts(user: User, marker: str) -> list[str]:
+    """The rendered texts of every element with that marker (empty when there is none).
+
+    `User.find` raises `AssertionError` instead of returning nothing, so "no member yet" has
+    to be read as an empty list here rather than as a failed lookup.
+    """
+    try:
+        elements = user.find(marker=marker).elements
+    except AssertionError:
+        return []
+    return [str(getattr(element, "text", "")) for element in elements]
+
+
+def _pick(user: User, marker: str, value: str) -> None:
+    """Chooses an option the way a user does, so the change handlers run.
+
+    NiceGUI's interaction helper types into inputs but has no equivalent for selects,
+    so this sets the value inside the client context — exactly what `type()` does.
+    """
+    assert user.client is not None
+    element = next(iter(user.find(marker=marker).elements))
+    assert isinstance(element, ui.select)
+    with user.client:
+        element.value = value
+
+
+async def test_a_member_can_be_added_and_removed(users_user: User) -> None:
+    """The members are edges, not form fields: adding one writes immediately.
+
+    The write ends **every** session (`auth_version`), so the page must survive it — the
+    core hands a re-derived token back and the client sends the token that is current
+    (`api._send_current_token`, `auth.handle_renewed_token`).
+    """
+    await _open_group_editor(users_user)
+    assert _texts(users_user, "member-label") == []
+
+    # The core answers with the membership after the write; the card re-reads the edges.
+    FakeCore.data["memberships"] = {
+        "members": [{"user": USER_ID, "group": GROUP_ID}],
+        "parents": [],
+    }
+    _pick(users_user, "member-add-select", USER_ID)
+    users_user.find(marker="member-add").click()
+    await _wait_until(lambda: any(name == "add_group_member" for name, _, _ in FakeCore.calls))
+    called = FakeCore.args("add_group_member")
+    assert called[1] == GROUP_ID and called[2] == USER_ID
+    await _wait_until(lambda: _texts(users_user, "member-label") == ["dryviewer · viewer"])
+    # The list comes back from the core, not from the local state.
+    assert [name for name, _, _ in FakeCore.calls].count("memberships") == 2
+
+
+async def test_a_member_of_a_child_group_is_shown_as_inherited(users_user: User) -> None:
+    """Rights are inherited upwards, so the member list has to name the child group.
+
+    Without the inherited rows the dialog would understate who carries these rights.
+    """
+    FakeCore.data["memberships"] = {
+        "members": [{"user": USER_ID, "group": CHILD_ID}],
+        "parents": [{"child": CHILD_ID, "parent": GROUP_ID}],
+    }
+    FakeCore.data["list_groups"] = [GROUP, {"id": CHILD_ID, "name": "team-a"}]
+    await _open_group_editor(users_user)
+
+    assert _texts(users_user, "member-label") == ["dryviewer · viewer"]
+    assert _texts(users_user, "member-inherited") == [t("groups.members_inherited", group="team-a")]
+    # An inherited membership is not removable here — it belongs to the other group.
+    assert _texts(users_user, "hierarchy-chip") == ["team-a"]
+
+
+async def test_a_cycle_in_the_hierarchy_is_reported_from_the_core(users_user: User) -> None:
+    """The core refuses a cycle with `400`; the dialog shows why instead of failing."""
+    from meadow.frontend.api import CoreError
+
+    FakeCore.data["add_group_child"] = CoreError(
+        "linking `group:team-a` below `group:webshop` would close a cycle", status=400
+    )
+    FakeCore.data["list_groups"] = [GROUP, {"id": CHILD_ID, "name": "team-a"}]
+    await _open_group_editor(users_user)
+
+    _pick(users_user, "hierarchy-add-child", CHILD_ID)
+    users_user.find(marker="hierarchy-link-child").click()
+    await _wait_until(lambda: users_user.notify.contains(t("groups.hierarchy_failed", locale=EN)))
+    assert users_user.notify.contains(t("groups.hierarchy_failed", locale=EN)), (
+        users_user.notify.messages
+    )
+
+
+async def test_the_two_special_cases_are_named(users_user: User) -> None:
+    """The dialog says what the list cannot show.
+
+    User decision 2026-09-26: **only a superadmin** is exempt from every check, so their
+    membership is inert — while an `admin` **is** restricted by the group's scope. Both are
+    invisible in a plain member list and both are what an admin needs to know before
+    handing out rights.
+    """
+    FakeCore.data["list_users"] = [
+        {"id": "user:root", "username": "root", "roles": ["superadmin"]},
+        {"id": "user:boss", "username": "boss", "roles": ["admin"]},
+    ]
+    FakeCore.data["memberships"] = {
+        "members": [
+            {"user": "user:root", "group": GROUP_ID},
+            {"user": "user:boss", "group": GROUP_ID},
+        ],
+        "parents": [],
+    }
+    await _open_group_editor(users_user)
+
+    assert sorted(_texts(users_user, "member-label")) == ["boss · admin", "root · superadmin"]
+    assert _texts(users_user, "members-superadmin-hint") == [
+        t("groups.members_superadmin_hint", locale=EN)
+    ]
+    # `GROUP` carries a scope, so the admin in it is restricted by that scope.
+    assert _texts(users_user, "members-scope-hint") == [t("groups.members_scope_hint", locale=EN)]
 
 
 async def test_the_editor_shows_the_rights_of_the_group(users_user: User) -> None:
