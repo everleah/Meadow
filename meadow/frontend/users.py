@@ -21,13 +21,32 @@ from nicegui import app, ui
 from meadow.frontend import auth
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.display import OBJECT_STATUSES, resolve_value
 from meadow.frontend.filters import filter_select
-from meadow.frontend.i18n import t
+from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
+from meadow.frontend.multilang import base_lang
+from meadow.frontend.object_picker import open_object_picker
+from meadow.frontend.relation_roles import (
+    COLLECTION_MEMBER_DEF,
+    COLLECTION_TYPE,
+    PRIMARY_CATEGORY_DEF,
+    PRIMARY_CATEGORY_TYPE,
+)
 
 ROLES = ("superadmin", "admin", "editor", "viewer")
 STATUSES = ("active", "suspended")
 LOCALES = ("en", "de", "fr")
+
+#: The scope blocks the assistant offers: block key -> (label key, relation key).
+#: A field rule carries its own field name, a reference rule the built-in relation it
+#: walks - the two relations are the only ones the scope language knows a meaning for.
+SCOPE_BLOCKS: dict[str, tuple[str, str | None]] = {
+    "type": ("groups.scope_field_type", None),
+    "status": ("groups.scope_field_status", None),
+    "category": ("groups.scope_category", PRIMARY_CATEGORY_DEF),
+    "collection": ("groups.scope_collection", COLLECTION_MEMBER_DEF),
+}
 
 
 def _split_join(value: object) -> str:
@@ -384,6 +403,21 @@ async def users_page() -> None:
                 catalog = {}
                 ui.notify(t("groups.catalog_failed"), color="warning")
 
+            # Labels for the scope card: a rule stores the bare type name, the row and the
+            # sentence show the catalogue's label.
+            type_labels: dict[str, str] = {}
+            try:
+                object_types = await client.list_object_types(token, limit=1000)
+            except CoreError, httpx.HTTPError:  # the rows fall back to the type name
+                object_types = []
+            for entry in object_types:
+                if not isinstance(entry, dict) or not entry.get("name"):
+                    continue
+                name = str(entry["name"])
+                type_labels[name] = (
+                    resolve_value(entry.get("label"), base_lang(current_locale())) or name
+                )
+
             def _roles_label(permission: dict) -> str:
                 """The lowest role that holds the permission by default (`Viewer`).
 
@@ -409,19 +443,27 @@ async def users_page() -> None:
                     for g in groups
                 ]
 
-            groups_grid = ui.aggrid(
-                {
-                    "columnDefs": [
-                        {"headerName": t("groups.col_name"), "field": "name", "width": 200},
-                        {"headerName": t("groups.col_grant"), "field": "grant", "width": 220},
-                        {"headerName": t("groups.col_deny"), "field": "deny", "width": 180},
-                        {"headerName": t("groups.col_scope"), "field": "scope", "width": 200},
-                        {"headerName": t("groups.col_branding"), "field": "branding", "width": 200},
-                    ],
-                    "rowData": _group_rows(),
-                    "rowSelection": {"mode": "singleRow"},
-                }
-            ).classes("w-full")
+            groups_grid = (
+                ui.aggrid(
+                    {
+                        "columnDefs": [
+                            {"headerName": t("groups.col_name"), "field": "name", "width": 200},
+                            {"headerName": t("groups.col_grant"), "field": "grant", "width": 220},
+                            {"headerName": t("groups.col_deny"), "field": "deny", "width": 180},
+                            {"headerName": t("groups.col_scope"), "field": "scope", "width": 200},
+                            {
+                                "headerName": t("groups.col_branding"),
+                                "field": "branding",
+                                "width": 200,
+                            },
+                        ],
+                        "rowData": _group_rows(),
+                        "rowSelection": {"mode": "singleRow"},
+                    }
+                )
+                .classes("w-full")
+                .mark("groups-grid")
+            )
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 ui.button(
                     t("groups.new"), icon="add", on_click=lambda: open_group_editor(None)
@@ -472,17 +514,44 @@ async def users_page() -> None:
                                     ui.label(_roles_label(permission)).classes(
                                         "text-caption text-grey-6"
                                     )
-                                    permission_toggles[key] = ui.toggle(
-                                        {
-                                            "inherit": t("groups.perm_inherit"),
-                                            "grant": t("groups.perm_grant"),
-                                            "deny": t("groups.perm_deny"),
-                                        },
-                                        value="inherit",
-                                    ).props("dense unelevated")
-                    scope_area = (
-                        ui.textarea(t("groups.field_scope")).props("filled dense").classes("w-full")
-                    )
+                                    permission_toggles[key] = (
+                                        ui.toggle(
+                                            {
+                                                "inherit": t("groups.perm_inherit"),
+                                                "grant": t("groups.perm_grant"),
+                                                "deny": t("groups.perm_deny"),
+                                            },
+                                            value="inherit",
+                                        )
+                                        .props("dense unelevated")
+                                        .props(f"data-key={key}")
+                                        .mark("permission-toggle")
+                                    )
+                    # ----------------------------------------------------- #
+                    # Data scope (ABAC)                                     #
+                    # ----------------------------------------------------- #
+                    # Building blocks instead of a JSON textarea: the scope decides
+                    # *which data* the group sees, and nobody writes that document on
+                    # the first try. The counter answers what the blocks mean before
+                    # anything is saved - the editing admin is normally not a member
+                    # of the group, so only the core can count it
+                    # (`POST /groups/preview-scope`).
+                    scope_state: dict[str, object] = {
+                        "rules": [],
+                        "original": {},
+                        "unreadable": False,
+                    }
+                    #: Labels of the picked targets: a rule stores ids, a row shows names.
+                    scope_labels: dict[str, str] = {}
+                    with ui.column().classes("w-full gap-1"):
+                        ui.label(t("groups.scope_title")).classes("text-subtitle2")
+                        ui.label(t("groups.scope_hint")).classes("text-caption text-grey-7")
+                        scope_sentence = ui.label("").classes("text-body2").mark("scope-sentence")
+                        scope_host = ui.column().classes("w-full gap-1")
+                        scope_buttons = ui.row().classes("w-full items-center gap-2")
+                        scope_count = (
+                            ui.label("").classes("text-caption text-grey-6").mark("scope-count")
+                        )
                     branding_area = (
                         ui.textarea(t("groups.field_branding"))
                         .props("filled dense")
@@ -498,7 +567,321 @@ async def users_page() -> None:
                         ui.button(t("grid.close"), on_click=group_dialog.close).props("flat")
                         ui.button(
                             t("groups.save"), icon="save", on_click=lambda: save_group()
-                        ).props("flat")
+                        ).props("flat").mark("group-save")
+
+            def _scope_rules() -> list[dict]:
+                """The rules of the document on screen, in the shape the core stores."""
+                rules = scope_state["rules"]
+                if not isinstance(rules, list):
+                    return []
+                return [rule for rule in rules if isinstance(rule, dict)]
+
+            def _rule_block(rule: dict) -> str | None:
+                """Which assistant block a rule is (`None`: not one of the four).
+
+                An unknown rule is not a mistake to repair but a rule to keep: a scope
+                written by an import or an earlier version carries one, and the card shows
+                it verbatim rather than dropping what it cannot render.
+                """
+                field = rule.get("field")
+                if isinstance(field, str):
+                    return field if field in ("type", "status") else None
+                reference = rule.get("reference")
+                relation = reference.get("type") if isinstance(reference, dict) else None
+                for block, (_label_key, relation_key) in SCOPE_BLOCKS.items():
+                    if relation_key is not None and relation_key == relation:
+                        return block
+                return None
+
+            def _rule_values(rule: dict) -> list[str]:
+                """The values a rule names (a field list or a target list)."""
+                value = rule.get("value")
+                if isinstance(value, list):
+                    return [str(entry) for entry in value]
+                reference = rule.get("reference")
+                if isinstance(reference, dict):
+                    out = reference.get("out")
+                    if isinstance(out, str):
+                        return [out]
+                    if isinstance(out, list):
+                        return [str(entry) for entry in out]
+                return []
+
+            def _type_options(values: list[str]) -> dict[str, str]:
+                """Select options of the object-type block.
+
+                A stored type the catalogue does not list stays selectable: a `ui.select`
+                whose value is not among its options raises and takes the whole page down
+                with it (the trap `display.status_options` documents for statuses).
+                """
+                options = dict(type_labels)
+                for value in values:
+                    options.setdefault(value, value)
+                return options
+
+            def _target_labels(values: list[str]) -> str:
+                return ", ".join(scope_labels.get(value, value) for value in values)
+
+            def _type_values(values: list[str]) -> str:
+                return ", ".join(type_labels.get(value, value) for value in values)
+
+            def _apply_rule_values(index: int, values: list[str]) -> None:
+                """Stores the values of one block (no rendering: see the callers)."""
+                rules = _scope_rules()
+                if index >= len(rules):
+                    return
+                rule = dict(rules[index])
+                reference = rule.get("reference")
+                if isinstance(reference, dict):
+                    reference = dict(reference)
+                    reference["out"] = values
+                    rule["reference"] = reference
+                else:
+                    rule["value"] = values
+                rules[index] = rule
+                scope_state["rules"] = rules
+
+            def _set_count(text: str, *, error: bool = False) -> None:
+                scope_count.set_text(text)
+                scope_count.classes(
+                    replace="text-caption text-negative" if error else "text-caption text-grey-6"
+                )
+
+            def _scope_sentence() -> str:
+                """The document in words: the blocks as one sentence, ANDed."""
+                rules = _scope_rules()
+                if scope_state["unreadable"]:
+                    return ""
+                if any(not _rule_values(rule) for rule in rules):
+                    return t("groups.scope_incomplete")
+                parts: list[str] = []
+                for rule in rules:
+                    block = _rule_block(rule)
+                    values = _rule_values(rule)
+                    if block is None or not values:
+                        continue
+                    shown = _type_values(values) if block == "type" else _target_labels(values)
+                    parts.append(t(f"groups.scope_phrase_{block}").format(values=shown))
+                if not parts:
+                    return t("groups.scope_sentence_all")
+                return t("groups.scope_sentence").format(
+                    parts=f" {t('groups.scope_and')} ".join(parts)
+                )
+
+            async def refresh_scope_count() -> None:
+                """Asks the core what the document on screen would show.
+
+                A block without values is not a scope yet — and a document the core would
+                refuse is not worth a round trip, so the counter says what is missing
+                instead. The core's own message shows when it rejects the document anyway
+                (an unknown relation, a target that no longer exists).
+                """
+                if scope_state["unreadable"] or any(
+                    not _rule_values(rule) for rule in _scope_rules()
+                ):
+                    _set_count(t("groups.scope_count_incomplete"))
+                    return
+                rules = _scope_rules()
+                try:
+                    result = await client.preview_scope(token, {"rules": rules} if rules else {})
+                except CoreError as error:
+                    _set_count(t("groups.scope_count_failed").format(error=error), error=True)
+                    return
+                except httpx.HTTPError:
+                    _set_count(
+                        t("groups.scope_count_failed").format(
+                            error=t("groups.scope_count_offline")
+                        ),
+                        error=True,
+                    )
+                    return
+                _set_count(
+                    t("groups.scope_count").format(
+                        count=result.get("count"), total=result.get("total")
+                    )
+                )
+
+            def _render_block_row(index: int, rule: dict) -> None:
+                """One block: its own control plus the remove button.
+
+                The row leads with its own add order, so a field block keeps its select —
+                rebuilding it inside its own change event would close the dropdown
+                mid-selection.
+                """
+                block = _rule_block(rule)
+                values = _rule_values(rule)
+                with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                    ui.label(
+                        t(SCOPE_BLOCKS[block][0]) if block else t("groups.scope_other")
+                    ).classes("w-32 text-caption text-grey-7")
+                    if block in ("type", "status"):
+                        options = (
+                            _type_options(values)
+                            if block == "type"
+                            else {status: status for status in OBJECT_STATUSES}
+                        )
+                        select = (
+                            ui.select(options, value=values, multiple=True)
+                            .props("filled dense")
+                            .classes("flex-1")
+                        )
+                        select.on_value_change(
+                            lambda event, i=index: _set_field_values(i, event.value)
+                        )
+                    elif block:
+                        ui.label(_target_labels(values) or t("groups.scope_no_values")).classes(
+                            "flex-1 text-caption"
+                        )
+                        ui.button(
+                            t("groups.scope_pick"),
+                            icon="search",
+                            on_click=lambda i=index: pick_targets(i),
+                        ).props("flat dense size=sm")
+                    else:
+                        ui.label(_json.dumps(rule, ensure_ascii=False)).classes(
+                            "flex-1 text-caption font-mono break-all"
+                        ).tooltip(t("groups.scope_other_hint"))
+                    ui.button(icon="close", on_click=lambda i=index: remove_block(i)).props(
+                        "flat dense size=sm"
+                    ).tooltip(t("groups.scope_remove"))
+
+            def render_scope() -> None:
+                """Renders the rows, the add buttons and the sentence (not the counter)."""
+                rules = _scope_rules()
+                scope_host.clear()
+                with scope_host:
+                    if scope_state["unreadable"]:
+                        ui.label(t("groups.scope_unreadable")).classes("text-caption text-negative")
+                    elif not rules:
+                        ui.label(t("groups.scope_empty")).classes("text-caption text-grey-7")
+                    for index, rule in enumerate(rules):
+                        _render_block_row(index, rule)
+                scope_buttons.clear()
+                taken = {_rule_block(rule) for rule in rules}
+                with scope_buttons:
+                    for block, (label_key, _relation) in SCOPE_BLOCKS.items():
+                        if block in taken:
+                            continue
+                        ui.button(
+                            t("groups.scope_add").format(block=t(label_key)),
+                            icon="add",
+                            on_click=lambda b=block: add_block(b),
+                        ).props("flat dense").mark(f"scope-add-{block}")
+                scope_sentence.set_text(_scope_sentence())
+
+            async def add_block(block: str) -> None:
+                """Adds a block, empty: it carries values with the first pick."""
+                _label_key, relation = SCOPE_BLOCKS[block]
+                rule: dict = (
+                    {"field": block, "operator": "in", "value": []}
+                    if relation is None
+                    else {"reference": {"type": relation, "out": []}}
+                )
+                scope_state["rules"] = [*_scope_rules(), rule]
+                render_scope()
+                await refresh_scope_count()
+
+            async def remove_block(index: int) -> None:
+                rules = _scope_rules()
+                if index < len(rules):
+                    del rules[index]
+                scope_state["rules"] = rules
+                render_scope()
+                await refresh_scope_count()
+
+            async def _set_field_values(index: int, values: object) -> None:
+                """Stores a select's values and refreshes the preview.
+
+                No rebuild on purpose: the select on screen already shows the choice.
+                """
+                chosen = [str(entry) for entry in values] if isinstance(values, list) else []
+                _apply_rule_values(index, chosen)
+                scope_sentence.set_text(_scope_sentence())
+                await refresh_scope_count()
+
+            async def pick_targets(index: int) -> None:
+                """Opens the picker for a categorisation or a collection block."""
+                rules = _scope_rules()
+                if index >= len(rules):
+                    return
+                block = _rule_block(rules[index])
+                if block not in ("category", "collection"):
+                    return
+
+                async def on_pick(hits: object) -> None:
+                    """Merges the picked targets into the block.
+
+                    The picker starts empty on every open, so a second pick adds to the
+                    first: the chips are the selection, removal happens on the row.
+                    """
+                    picked = hits if isinstance(hits, list) else [hits]
+                    chosen = _rule_values(_scope_rules()[index])
+                    for hit in picked:
+                        if not isinstance(hit, dict):
+                            continue
+                        target = str(hit.get("id") or "")
+                        if not target:
+                            continue
+                        scope_labels.setdefault(target, str(hit.get("label") or target))
+                        if target not in chosen:
+                            chosen.append(target)
+                    _apply_rule_values(index, chosen)
+                    render_scope()
+                    await refresh_scope_count()
+
+                taxonomy = PRIMARY_CATEGORY_TYPE if block == "category" else None
+                await open_object_picker(
+                    client=client,
+                    token=token,
+                    locale=current_locale(),
+                    title=t(SCOPE_BLOCKS[block][0]),
+                    on_pick=on_pick,
+                    target_types=[taxonomy or COLLECTION_TYPE],
+                    multi=True,
+                    taxonomy=taxonomy,
+                )
+
+            async def _resolve_target_labels(targets: list[str]) -> None:
+                """Fills the label cache for targets a stored document already names.
+
+                A rule stores record ids, the rows and the sentence show names; the picker
+                fills the cache for what it hands over, this covers a document written
+                earlier (one bulk read, ids the core cannot resolve stay ids).
+                """
+                missing = sorted({target for target in targets if target not in scope_labels})
+                if not missing:
+                    return
+                try:
+                    objects = await client.list_objects(
+                        token, ids=missing, limit=len(missing), locale=current_locale()
+                    )
+                except CoreError, httpx.HTTPError:  # rows fall back to the ids
+                    return
+                for object_ in objects:
+                    attributes = object_.get("attributes") or {}
+                    key = str(object_.get("id") or "")
+                    label = resolve_value(attributes.get("name"), base_lang(current_locale()))
+                    scope_labels[key] = label or str(attributes.get("code") or key)
+
+            async def _prepare_scope(group: dict | None) -> None:
+                """Reads the stored scope into the card."""
+                document = (group or {}).get("scope")
+                rules = document.get("rules") if isinstance(document, dict) else None
+                known = isinstance(rules, list) and all(isinstance(rule, dict) for rule in rules)
+                if isinstance(document, dict) and (document == {} or known):
+                    scope_state["rules"] = list(rules or [])
+                    scope_state["unreadable"] = False
+                else:
+                    # Not a document the card can show: it is kept untouched (`save_group`
+                    # writes the original back) instead of being reduced to nothing.
+                    scope_state["rules"] = []
+                    scope_state["unreadable"] = True
+                scope_state["original"] = document if isinstance(document, dict) else {}
+                targets = [
+                    value for rule in _scope_rules() for value in _rule_values(rule) if ":" in value
+                ]
+                await _resolve_target_labels(targets)
+                render_scope()
 
             def _fill_group_form(group: dict | None) -> None:
                 editing = group is not None
@@ -515,21 +898,19 @@ async def users_page() -> None:
                         toggle.value = "deny"
                     else:
                         toggle.value = "inherit"
-                scope_area.set_value(
-                    _json.dumps(group.get("scope") or {}, indent=2, ensure_ascii=False)
-                    if editing
-                    else ""
-                )
                 branding_area.set_value(
                     _json.dumps(group.get("branding") or {}, indent=2, ensure_ascii=False)
                     if editing
                     else ""
                 )
 
-            def open_group_editor(group: dict | None) -> None:
+            async def open_group_editor(group: dict | None) -> None:
+                """Fills the form and renders the stored scope into the card."""
                 _fill_group_form(group)
                 save_group.editing_id = group.get("id") if group else None  # type: ignore[attr-defined]
                 group_dialog.open()
+                await _prepare_scope(group)
+                await refresh_scope_count()
 
             def _parse_json(text: str, label: str) -> dict | None:
                 if not text.strip():
@@ -567,9 +948,18 @@ async def users_page() -> None:
                     if permission_toggles
                     else None
                 )
-                scope = _parse_json(scope_area.value or "", t("groups.field_scope"))
+                # The scope comes from the card: the blocks are the document. A document
+                # the card could not show is written back **unchanged** - dropping rules
+                # nobody rendered would silently widen the group to the whole catalogue.
+                rules = _scope_rules()
+                original = scope_state["original"]
+                scope = (
+                    dict(original)
+                    if scope_state["unreadable"] and isinstance(original, dict)
+                    else ({"rules": rules} if rules else {})
+                )
                 branding = _parse_json(branding_area.value or "", t("groups.field_branding"))
-                if scope is None or branding is None:
+                if branding is None:
                     return
                 try:
                     if editing_id:

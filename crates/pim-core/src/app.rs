@@ -293,6 +293,7 @@ pub fn router(state: AppState) -> Router {
             "/groups",
             get(api::groups::list_groups).post(api::groups::create_group),
         )
+        .route("/groups/preview-scope", post(api::groups::preview_scope))
         .route(
             "/groups/{id}",
             get(api::groups::get_group)

@@ -379,12 +379,29 @@ pub async fn for_caller_on(
         return Ok(None);
     };
     let scopes = crate::rbac::group_scopes(&state.db, &state.cache, &claims.groups).await?;
-    compile(state, &scopes, prefix).await
+    compile(state, &scopes, prefix, 0).await
 }
 
 /// The scope of the caller for the object views themselves.
 pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clause>, ApiError> {
     for_caller_on(state, caller, "").await
+}
+
+/// The condition of **one** scope document, without a caller.
+///
+/// For the group editor's preview (`POST /groups/preview-scope`): the admin edits a scope
+/// that belongs to somebody else, so the caller's own groups are not the input — the
+/// document on screen is. Everything else is the same compiler, deliberately: a preview
+/// that answered with a different condition than the read path would be worse than none.
+///
+/// `base_index` keeps the bind names apart from a second clause in the same query (see
+/// [`compile`]); the caller passes the number of groups its own clause was compiled with.
+pub(crate) async fn clause_of(
+    state: &AppState,
+    rules: &Rules,
+    base_index: usize,
+) -> Result<Option<Clause>, ApiError> {
+    compile(state, std::slice::from_ref(rules), "", base_index).await
 }
 
 /// The condition of a set of group scopes.
@@ -393,10 +410,16 @@ pub async fn for_caller(state: &AppState, caller: &Caller) -> Result<Option<Clau
 /// *and* the object is in one of these categories"), **groups with rules are ORed** (a user
 /// sees what any of their groups allows), and a **group without rules makes the whole user
 /// unrestricted** — the plan's "ohne Scope-Regeln gelten die Standardrechte".
+///
+/// `base_index` is added to the index of every group, and it is the only reason it exists:
+/// the bind name of a field rule is `scope_<group>_<rule>`, so two clauses compiled
+/// independently into one query would share names and SurrealDB would answer with one set of
+/// values for both conditions. The preview combines two clauses for exactly this reason.
 async fn compile(
     state: &AppState,
     groups: &[Rules],
     prefix: &str,
+    base_index: usize,
 ) -> Result<Option<Clause>, ApiError> {
     if !restricts(groups) {
         return Ok(None);
@@ -413,7 +436,7 @@ async fn compile(
             }
         }
         let (condition, mut group_binds) =
-            group_condition(group_index, &group.rules, &resolved, prefix);
+            group_condition(base_index + group_index, &group.rules, &resolved, prefix);
         alternatives.push(condition);
         binds.append(&mut group_binds);
     }
@@ -729,6 +752,23 @@ mod tests {
         let (unprefixed, same_binds) = group_condition(0, &rules.rules, &keys, "");
         assert_ne!(condition, unprefixed);
         assert_eq!(binds, same_binds);
+    }
+
+    #[test]
+    fn a_base_index_keeps_the_bind_names_of_two_clauses_apart() {
+        // `POST /groups/preview-scope` combines the caller's clause with the scope document on
+        // screen. Bind names are `scope_<group>_<rule>` and SurrealDB binds by name, so two
+        // clauses compiled independently would hand one set of values to both conditions - a
+        // wrong number that looks like a right one.
+        let rules = parse(&json!({
+            "rules": [{"field": "type", "value": ["product"]}]
+        }))
+        .expect("valid scope");
+        let (own, own_binds) = group_condition(0, &rules.rules, &[], "");
+        let (preview, preview_binds) = group_condition(1, &rules.rules, &[], "");
+        assert_ne!(own_binds[0].0, preview_binds[0].0);
+        assert_eq!(own_binds[0].1, preview_binds[0].1);
+        assert_ne!(own, preview);
     }
 
     #[test]

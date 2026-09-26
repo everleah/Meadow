@@ -1574,6 +1574,24 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def preview_scope(self, token: str, scope: dict) -> dict:
+        """Validates a scope document and counts the objects it shows.
+
+        The group editor builds a scope from blocks and cannot count it itself: the
+        editing admin is normally not a member of the group, and the core is the only
+        place that knows the rules. ``{"count", "total"}`` comes back; a scope the
+        write path would refuse is a `CoreError` here too, with the same message.
+        """
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/groups/preview-scope",
+                json={"scope": scope},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def create_group(
         self,
         token: str,

@@ -31,6 +31,13 @@ DEFAULT_ROLE = ROLE_LINK
 #: Record key of the built-in primary categorisation.
 PRIMARY_CATEGORY_DEF = "rel_category_member"
 
+#: Record key of the built-in collection membership (a collection's members hang on
+#: the `out` side, like a category's).
+COLLECTION_MEMBER_DEF = "rel_collection_member"
+
+#: Built-in object type of a materialized collection.
+COLLECTION_TYPE = "collection"
+
 #: Built-in **taxonomy** object type: the single system taxonomy (product
 #: categories). Additional taxonomy types are custom object types flagged with
 #: `taxonomy: true` (e.g. a classification standard's class hierarchy).

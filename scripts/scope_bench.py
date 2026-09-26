@@ -5,7 +5,9 @@ promises checked against a running core instead of a unit test:
 
 1. **It means what it says.** A group whose scope names a category must show exactly the
    objects of that category — the count and the page of the scoped session are compared with
-   the same view filtered by `?category=` explicitly.
+   the same view filtered by `?category=` explicitly. The single-object read, the write paths
+   and the structural views are checked the same way, and the editor's counter
+   (`POST /groups/preview-scope`) has to agree with what the scoped session reads.
 2. **It costs in the necessary measure.** The three view calls of the grid are timed for an
    unscoped and for a scoped session; the first scoped call of each endpoint is reported
    separately, because it is the one that resolves the member keys (later calls are cached).
@@ -384,6 +386,31 @@ def main() -> None:
                 and all(object_id in scoped_nodes for object_id in sample_ids),
                 f"{len(scoped_nodes)} of {len(unscoped_nodes)} nodes",
             )
+    # The group editor's counter (`POST /groups/preview-scope`) must answer what the read path
+    # shows: it compiles the document that is on screen with the **same** compiler and counts
+    # the whole catalogue (the editing admin is normally not a member of the group). Read with
+    # a **fresh** impersonated session: the first one ended with the write checks above, and a
+    # 401 makes the client relogin as the unscoped admin — the trap the tree check names.
+    status, answer = core.call("POST", f"/auth/impersonate/{user}")
+    assert status == 200, (status, answer)
+    reading = core.as_(str(answer["token"]))
+    read_back = reading.count("")
+    status, answer = core.call("POST", "/groups/preview-scope", {"scope": scope})
+    ok &= check(
+        "the scope preview counts what the scope shows",
+        status == 200 and answer.get("count") == read_back,
+        f"{answer.get('count')} previewed, {read_back} read",
+    )
+    # `{}` is the documented "no restriction" — and it has to **replace** the stored document.
+    # Found 2026-09-26: SurrealDB's `MERGE` merges nested objects, so the old rules stayed in
+    # force while the editor, the API answer and the group document all looked cleared.
+    status, _ = core.call("PATCH", f"/groups/{group_id}", {"scope": {}})
+    stored = next((g for g in core.groups() if g["id"] == group_id), {})
+    ok &= check(
+        "an emptied scope really clears",
+        status == 200 and not (stored.get("scope") or {}).get("rules"),
+        f"{stored.get('scope')!r}",
+    )
     if args.max_overhead_ms is not None:
         overhead = scoped_times[VIEW_CALLS[0][0]].warm_ms - unscoped[VIEW_CALLS[0][0]].warm_ms
         ok &= check(

@@ -2,6 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::Value;
@@ -9,7 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
-use crate::auth::AuthUser;
+use crate::auth::{self, AuthUser};
 use crate::error::ApiError;
 use crate::rbac;
 
@@ -66,6 +67,14 @@ fn default_limit() -> u32 {
     100
 }
 
+/// Payload for previewing a scope document.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PreviewScope {
+    /// The scope document to try out, in the shape `POST /groups` stores.
+    #[serde(default = "default_object")]
+    pub scope: Value,
+}
+
 /// Splits a `table:key` path segment and verifies the expected table.
 ///
 /// Shared with [`crate::rbac`], which resolves user ids and group ids the same way.
@@ -81,6 +90,16 @@ pub(crate) fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiErro
     Ok(key)
 }
 
+/// Reads a scope document, turning the problems into one `400`.
+///
+/// Separate from [`check_scope`] because the preview needs the rules afterwards: the same
+/// verdict as the write path, kept in one place.
+fn scope_rules(scope: &Value) -> Result<crate::scope::Rules, ApiError> {
+    crate::scope::parse(scope).map_err(|problems| {
+        ApiError::bad_request(format!("invalid scope: {}", problems.join("; ")))
+    })
+}
+
 /// Rejects a scope document the core cannot use (`400`).
 ///
 /// Two stages, because they answer different mistakes: [`crate::scope::parse`] reads the shape
@@ -89,9 +108,7 @@ pub(crate) fn parse_key<'a>(id: &'a str, table: &str) -> Result<&'a str, ApiErro
 /// nonexistent would silently match nothing — "the group has no effect" is the least
 /// debuggable outcome, so the write path is where it stops.
 async fn check_scope(state: &AppState, scope: &Value) -> Result<(), ApiError> {
-    let rules = crate::scope::parse(scope).map_err(|problems| {
-        ApiError::bad_request(format!("invalid scope: {}", problems.join("; ")))
-    })?;
+    let rules = scope_rules(scope)?;
     crate::scope::validate(&state.db, &rules).await
 }
 
@@ -216,6 +233,89 @@ pub async fn list_groups(
     Ok(Json(groups))
 }
 
+/// Validates a scope document and counts the objects it shows.
+///
+/// The group editor builds a scope from blocks and has to answer "what would this mean"
+/// while it is being edited — a scope nobody can test is a scope nobody dares to use. The
+/// editing admin is normally **not** a member of the group, so the number cannot come from
+/// their own session: this endpoint compiles the document on screen, with the same parser,
+/// the same validation and the same compiler the read path uses, so a preview cannot
+/// promise what a save refuses.
+///
+/// It answers **numbers, not objects**: `count` is what the document shows, `total` is what
+/// the caller sees without it — for the usual unscoped admin the whole catalogue. Both
+/// exclude deleted objects, like every other count. The caller's own scope is ANDed in, so
+/// a restricted admin measures inside their own view and learns nothing beyond it; the two
+/// clauses are compiled with different base indices for exactly that reason
+/// ([`crate::scope::clause_of`]).
+#[utoipa::path(
+    post,
+    path = "/groups/preview-scope",
+    request_body = PreviewScope,
+    responses(
+        (status = 200, description = "Objects the scope shows", body = Value),
+        (status = 400, description = "Invalid scope", body = Value)
+    )
+)]
+pub async fn preview_scope(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PreviewScope>,
+) -> Result<Json<Value>, ApiError> {
+    // The same key the permission catalog needs: this is the second input of the group
+    // editor, not a catalogue view.
+    let caller = auth::require_caller(&state, &headers, "group.read")?;
+    let rules = scope_rules(&body.scope)?;
+    crate::scope::validate(&state.db, &rules).await?;
+    let own = crate::scope::for_caller(&state, &caller).await?;
+    let own_groups = caller_group_count(&caller);
+    let preview = crate::scope::clause_of(&state, &rules, own_groups).await?;
+    let count = count_objects_with(&state, &[&own, &preview]).await?;
+    let total = count_objects_with(&state, &[&own]).await?;
+    Ok(Json(serde_json::json!({ "count": count, "total": total })))
+}
+
+/// The number of groups the caller's own scope was compiled from.
+///
+/// The preview needs it as the base index of the document's clause: bind names carry the
+/// group index, and two clauses in one query must not share a name. A caller without groups
+/// is unrestricted ([`crate::scope::for_caller`] answers `None`), so nothing is added.
+fn caller_group_count(caller: &crate::auth::Caller) -> usize {
+    match caller {
+        crate::auth::Caller::System => 0,
+        crate::auth::Caller::User(claims) => claims.groups.len(),
+    }
+}
+
+/// Counts the objects a list of scope clauses describes.
+///
+/// `None` entries add nothing (an unrestricted caller), which is the same identity rule the
+/// read paths follow: a clause that is not there changes no query.
+async fn count_objects_with(
+    state: &AppState,
+    clauses: &[&Option<crate::scope::Clause>],
+) -> Result<i64, ApiError> {
+    let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut binds: Vec<(String, Value)> = Vec::new();
+    for clause in clauses {
+        crate::scope::apply((*clause).clone(), &mut conditions, &mut binds);
+    }
+    let mut query = state.db.inner().query(format!(
+        "SELECT count() AS n FROM object WHERE {} GROUP ALL;",
+        conditions.join(" AND ")
+    ));
+    for (name, value) in &binds {
+        query = query.bind((name.as_str(), value.clone()));
+    }
+    let mut response = query.await?.check()?;
+    let rows: Vec<Value> = response.take(0)?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("n"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0))
+}
+
 /// Loads a single group by id.
 #[utoipa::path(
     get,
@@ -283,51 +383,59 @@ pub async fn update_group(
         check_scope(&state, scope).await?;
     }
 
-    let mut changes = serde_json::Map::new();
+    // Explicit assignments instead of `MERGE`: SurrealDB merges **nested objects** field by
+    // field, so `MERGE {"scope": {}}` leaves the stored rules in place. That is exactly the
+    // write the group editor sends when the last block is removed — the scope looked cleared
+    // and stayed in force (found 2026-09-26). `SET scope = $scope` replaces the document;
+    // `{}` and `{"rules": []}` both mean "no restriction" ([`crate::scope::parse`]).
+    let mut assignments: Vec<String> = Vec::new();
+    let mut binds: Vec<(&'static str, Value)> = Vec::new();
     if let Some(name) = body.name {
-        changes.insert("name".to_owned(), Value::String(name));
+        assignments.push("name = $name".to_owned());
+        binds.push(("name", Value::String(name)));
     }
     if let Some(grant_permissions) = body.grant_permissions {
-        changes.insert(
-            "grant_permissions".to_owned(),
+        assignments.push("grant_permissions = $grant_permissions".to_owned());
+        binds.push((
+            "grant_permissions",
             Value::Array(grant_permissions.into_iter().map(Value::String).collect()),
-        );
+        ));
     }
     if let Some(deny_permissions) = body.deny_permissions {
-        changes.insert(
-            "deny_permissions".to_owned(),
+        assignments.push("deny_permissions = $deny_permissions".to_owned());
+        binds.push((
+            "deny_permissions",
             Value::Array(deny_permissions.into_iter().map(Value::String).collect()),
-        );
+        ));
     }
     if let Some(scope) = body.scope {
-        changes.insert("scope".to_owned(), scope);
+        assignments.push("scope = $scope".to_owned());
+        binds.push(("scope", scope));
     }
     if let Some(branding) = body.branding {
-        changes.insert("branding".to_owned(), branding);
+        assignments.push("branding = $branding".to_owned());
+        binds.push(("branding", branding));
     }
-    let changes = Value::Object(changes);
     // The audit names the changed fields, not their values: a scope document can be large
     // and the durable history is about *what* moved, not a second copy of the data.
-    let fields: Vec<String> = changes
-        .as_object()
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default();
+    let fields: Vec<String> = binds.iter().map(|(name, _)| (*name).to_owned()).collect();
 
     rbac::invalidate_sessions(&state.db, &state.cache).await?;
-    let sql = "
-        LET $g = type::record('group', $key);
-        UPDATE $g MERGE $changes;
-        SELECT * FROM $g;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(sql)
-        .bind(("key", key))
-        .bind(("changes", changes))
-        .await?
-        .check()?;
-    let groups: Vec<Value> = response.take(2)?;
+    // Without a field to write the record is only read; the result sits one statement
+    // further back then.
+    let update = if assignments.is_empty() {
+        String::new()
+    } else {
+        format!("UPDATE $g SET {};\n", assignments.join(", "))
+    };
+    let result_index = if update.is_empty() { 1 } else { 2 };
+    let sql = format!("LET $g = type::record('group', $key);\n{update}SELECT * FROM $g;");
+    let mut query = state.db.inner().query(sql).bind(("key", key));
+    for (name, value) in binds {
+        query = query.bind((name, value));
+    }
+    let mut response = query.await?.check()?;
+    let groups: Vec<Value> = response.take(result_index)?;
     let group = groups
         .into_iter()
         .next()
