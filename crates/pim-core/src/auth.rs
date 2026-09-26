@@ -89,6 +89,20 @@ impl Claims {
     pub fn can(&self, permission: &str) -> bool {
         self.permissions().can(permission)
     }
+
+    /// Rejects the request unless the token carries this permission.
+    ///
+    /// The message names the missing permission instead of "insufficient role": the matrix in
+    /// the admin UI and this answer then speak about the same thing, and a support question
+    /// ("why can't I?") is answered by the group editor rather than by reading the role list.
+    pub fn require(&self, permission: &str) -> Result<(), ApiError> {
+        if self.can(permission) {
+            return Ok(());
+        }
+        Err(ApiError::forbidden(format!(
+            "missing permission `{permission}`"
+        )))
+    }
 }
 
 /// Hashes a password with argon2id.
@@ -175,6 +189,14 @@ impl Caller {
             Caller::User(claims) => Some(claims),
         }
     }
+
+    /// The acting user id, for audit entries (`system` for the machine caller).
+    pub fn user_id(&self) -> &str {
+        match self {
+            Caller::System => "system",
+            Caller::User(claims) => &claims.sub,
+        }
+    }
 }
 
 /// Reads the caller of a request from its headers.
@@ -230,6 +252,42 @@ pub fn authenticated(state: &AppState, headers: &HeaderMap) -> Result<Caller, Ap
     let caller = caller(headers, &state.config)?;
     if let Some(claims) = caller.claims() {
         check_version(claims, &state.cache)?;
+    }
+    Ok(caller)
+}
+
+/// Authorizes a request as a machine call (the configured API key, which holds every right) or
+/// as a user session carrying `permission`, and answers the acting user id (`system` for the
+/// machine).
+///
+/// This is the replacement for the role-based `api_key_or_role` (stage B): the requirement comes
+/// from the **catalog** (`crate::permissions`), so an endpoint cannot invent its own rule, and a
+/// session whose access version has moved on is rejected here as well — the API-key/bearer gap
+/// the stage-A docs listed. The API key needs no version check: a machine has no session.
+pub fn require_permission(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: &str,
+) -> Result<String, ApiError> {
+    Ok(require_caller(state, headers, permission)?
+        .user_id()
+        .to_owned())
+}
+
+/// The same check, answering **who** asks.
+///
+/// Handlers that need the identity itself — the ABAC scope of a view (`crate::scope`) — use this
+/// instead of [`require_permission`]; both go through one rule, so an endpoint cannot end up with
+/// a weaker check than its neighbour.
+pub fn require_caller(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: &str,
+) -> Result<Caller, ApiError> {
+    let caller = caller(headers, &state.config)?;
+    if let Caller::User(claims) = &caller {
+        check_version(claims, &state.cache)?;
+        claims.require(permission)?;
     }
     Ok(caller)
 }

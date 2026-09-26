@@ -361,7 +361,7 @@ pub async fn create_object(
     let started = std::time::Instant::now();
     let mut last;
     let mut phases: Vec<(&'static str, f64)> = Vec::new();
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.create")?;
     let locale = params
         .locale
         .as_deref()
@@ -562,7 +562,7 @@ pub async fn delete_object(
     Path(id): Path<String>,
     Query(params): Query<WriteObjectQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.delete")?;
     let key = parse_key(&id, TABLE)?;
     if key == "object_root" {
         return Err(ApiError::bad_request(
@@ -751,7 +751,7 @@ pub async fn batch_delete_objects(
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<BatchDeleteRequest>,
 ) -> Result<Json<BatchDeleteResult>, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(&state, &headers, "object.delete")?;
     let keys = normalize_delete_ids(&body.ids)?;
     let emit_events = params.emit_events.unwrap_or(true);
 
@@ -1015,7 +1015,8 @@ pub async fn batch_upsert_objects(
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<BatchUpsertRequest>,
 ) -> Result<Json<BatchUpsertResponse>, ApiError> {
-    let user_id = crate::auth::api_key_or_role(&headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    // An upsert needs `create`: it may bring objects that do not exist yet.
+    let user_id = crate::auth::require_permission(&state, &headers, "object.create")?;
     if body.objects.is_empty() {
         return Err(ApiError::bad_request("`objects` must not be empty"));
     }
@@ -2430,7 +2431,7 @@ pub async fn list_objects(
     headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let caller = auth::authenticated(&state, &headers)?;
+    let caller = auth::require_caller(&state, &headers, "object.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
     let filter = build_object_filter(&state, &params, &caller).await?;
@@ -2606,7 +2607,7 @@ pub async fn count_objects(
     headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Value>, ApiError> {
-    let caller = auth::authenticated(&state, &headers)?;
+    let caller = auth::require_caller(&state, &headers, "object.read")?;
     let filter = build_object_filter(&state, &params, &caller).await?;
     let count = if filter.has_completeness_filter() {
         // `order` is validated like on the list and enters the view key, so a count
@@ -2660,7 +2661,7 @@ pub async fn attribute_usage(
     headers: HeaderMap,
     Query(params): Query<ListObjects>,
 ) -> Result<Json<Value>, ApiError> {
-    let caller = auth::authenticated(&state, &headers)?;
+    let caller = auth::require_caller(&state, &headers, "object.read")?;
     let filter = build_object_filter(&state, &params, &caller).await?;
     let sample = params.sample.clamp(1, MAX_SAMPLE) as i64;
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -3510,7 +3511,7 @@ async fn apply_object_update(
     let mut last;
     let mut phases: Vec<(&'static str, f64)> = Vec::new();
     let key = parse_key(id, TABLE)?;
-    let user_id = crate::auth::api_key_or_role(headers, &state.config, crate::auth::ROLE_EDITOR)?;
+    let user_id = crate::auth::require_permission(state, headers, "object.update")?;
 
     // Load the current object: type for uniqueness checks, status for audit.
     let current_sql = "
@@ -3995,9 +3996,7 @@ pub async fn bulk_objects(
     State(state): State<AppState>,
     Json(body): Json<BulkObjectRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !claims.is_editor() {
-        return Err(ApiError::forbidden("requires editor role"));
-    }
+    claims.require("object.update")?;
     if !BULK_OPS.contains(&body.op.as_str()) {
         return Err(ApiError::bad_request(format!(
             "unknown bulk operation `{}`",
@@ -4057,23 +4056,10 @@ pub async fn update_computed(
     Path(id): Path<String>,
     Json(body): Json<UpdateComputed>,
 ) -> Result<Json<Value>, ApiError> {
-    // Machine-to-machine API key or admin JWT (same policy as job-run updates).
-    let api_key_ok = match &state.config.log_ingest_api_key {
-        Some(expected) => headers
-            .get("x-api-key")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|provided| provided == expected),
-        None => false,
-    };
-    let jwt_ok = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| crate::auth::verify(&state.config.jwt_secret, token).ok())
-        .is_some_and(|claims| claims.is_admin());
-    if !api_key_ok && !jwt_ok {
-        return Err(ApiError::forbidden("requires API key or admin role"));
-    }
+    // The worker's API key or a session that may change objects: recomputing writes object
+    // values, so it is `object.update` — and the hand-rolled "API key or admin JWT" block that
+    // stood here was exactly the kind of duplicate a catalog check replaces.
+    crate::auth::require_permission(&state, &headers, "object.update")?;
 
     let key = parse_key(&id, TABLE)?;
     let Value::Object(values) = body.values else {

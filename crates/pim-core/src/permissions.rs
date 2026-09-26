@@ -244,7 +244,11 @@ pub const PERMISSIONS: &[Permission] = &[
         index: 16,
         label_key: "perm.job.run",
         description: "Start, rerun and cancel a job run.",
-        min_role: Role::Admin,
+        // **Editor, not admin** (decision 2026-09-26): the code let every editor start a run,
+        // and the plan's table said `admin`. Running a job is a data operation on the catalogue
+        // (export, import, bulk, recompute), not administration — and a group can still take it
+        // away from an editor with `deny_permissions`.
+        min_role: Role::Editor,
     },
     Permission {
         key: "job.manage",
@@ -326,6 +330,46 @@ pub const PERMISSIONS: &[Permission] = &[
         label_key: "perm.system.manage",
         description: "Change system-wide configuration reserved for the superadmin.",
         min_role: Role::Superadmin,
+    },
+    // The areas below were discovered while the enforcement was built (stage B, 2026-09-26):
+    // the plan's list did not name them, the code guarded them with an admin check. They keep
+    // the admin default so the change stays behaviour-preserving — and because a grant can add
+    // them to any role, a group can still hand one to an editor.
+    Permission {
+        key: "channel.manage",
+        area: "channel",
+        action: "manage",
+        index: 26,
+        label_key: "perm.channel.manage",
+        description: "Create, change and delete channels.",
+        min_role: Role::Admin,
+    },
+    Permission {
+        key: "integration.manage",
+        area: "integration",
+        action: "manage",
+        index: 27,
+        label_key: "perm.integration.manage",
+        description: "Manage connectors, export profiles and the configuration import.",
+        min_role: Role::Admin,
+    },
+    Permission {
+        key: "search.manage",
+        area: "search",
+        action: "manage",
+        index: 28,
+        label_key: "perm.search.manage",
+        description: "Create, change and delete saved searches and collections.",
+        min_role: Role::Admin,
+    },
+    Permission {
+        key: "ai.use",
+        area: "ai",
+        action: "use",
+        index: 29,
+        label_key: "perm.ai.use",
+        description: "Ask the AI assistance for a suggestion.",
+        min_role: Role::Admin,
     },
 ];
 
@@ -642,7 +686,15 @@ mod tests {
         assert!(!editor.can("log.read"));
         assert!(admin.can("attribute_definition.manage"));
         assert!(admin.can("user.manage"));
+        // `job.run` is editor since the enforcement was built (decision 1b, 2026-09-26).
         assert!(admin.can("job.run"));
+        assert!(editor.can("job.run"));
+        // The areas the plan did not name keep the admin default.
+        assert!(!editor.can("channel.manage"));
+        assert!(!editor.can("integration.manage"));
+        assert!(!editor.can("search.manage"));
+        assert!(!editor.can("ai.use"));
+        assert!(admin.can("channel.manage"));
         // `system.manage` stays with the superadmin alone.
         assert!(!admin.can("system.manage"));
         assert!(role_defaults(Role::Superadmin).can("system.manage"));
