@@ -7,7 +7,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -126,8 +126,10 @@ fn convert_value(
 )]
 pub async fn list_units(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListUnits>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let limit = params.limit.clamp(1, 10_000) as i64;
     let start = params.start as i64;
 
@@ -174,8 +176,10 @@ pub async fn list_units(
 )]
 pub async fn convert(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ConvertQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let from = find_unit(&state.db, params.from.trim())
         .await?
         .ok_or_else(|| ApiError::not_found(format!("unknown unit `{}`", params.from)))?;

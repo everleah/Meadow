@@ -1785,22 +1785,32 @@ fn key_conflict(
 )]
 pub async fn get_object(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(params): Query<GetObjectQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let caller = crate::auth::require_caller(&state, &headers, "object.read")?;
     let key = parse_key(&id, TABLE)?;
-    // Statements: LET(0), SELECT(1). A soft-deleted object reads as not found.
-    let sql = "
-        LET $obj = type::record('object', $key);
-        SELECT * FROM $obj WHERE deleted_at IS NONE;
-    ";
-    let mut response = state
-        .db
-        .inner()
-        .query(sql)
-        .bind(("key", key))
-        .await?
-        .check()?;
+    // Statements: LET(0), SELECT(1). A soft-deleted object reads as not found, and so does one
+    // outside the caller's scope: the scope is one more condition on this read, which is cheaper
+    // and more honest than loading the object and hiding it afterwards (`404` instead of foreign
+    // data — the id does not become an oracle).
+    let mut conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(&state, &caller).await?,
+        &mut conditions,
+        &mut binds,
+    );
+    let sql = format!(
+        "LET $obj = type::record('object', $key);\n        SELECT * FROM $obj WHERE {};",
+        conditions.join(" AND ")
+    );
+    let mut request = state.db.inner().query(sql).bind(("key", key));
+    for (name, value) in binds {
+        request = request.bind((name, value));
+    }
+    let mut response = request.await?.check()?;
     let objects: Vec<Value> = response.take(1)?;
     let mut object = objects
         .into_iter()
@@ -1883,10 +1893,11 @@ pub struct ObjectStatsQuery {
     )
 )]
 pub async fn object_stats(
-    AuthUser(_claims): AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ObjectStatsQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let caller = crate::auth::require_caller(&state, &headers, "object.read")?;
     let locale = params
         .locale
         .as_deref()
@@ -1897,7 +1908,13 @@ pub async fn object_stats(
     // class features (~1 s at demo scale in a release build). It is cached per
     // working language and bound to the data version that every write path bumps, so
     // a stale payload is never returned.
-    let cache_key = locale.unwrap_or_default().to_owned();
+    // The payload depends on the caller's scope, so the cache key carries it (`scope_key`): a
+    // scoped caller must never be answered with the counts of the unscoped view (rule R4).
+    let scope = crate::scope::for_caller(&state, &caller).await?;
+    let mut scoped_conditions: Vec<String> = vec!["deleted_at IS NONE".to_owned()];
+    let mut scoped_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(scope.clone(), &mut scoped_conditions, &mut scoped_binds);
+    let cache_key = format!("{}|{}", locale.unwrap_or_default(), scope_key(&scope));
     let version = state.cache.stats_version();
     if let Some(cached) = state.cache.cached_stats(&cache_key, version).await {
         return Ok(Json((*cached).clone()));
@@ -1918,15 +1935,15 @@ pub async fn object_stats(
     // Counts come from a SQL aggregation (one small row per type/status pair): the
     // handler used to load **every** object with all its attributes just to count
     // them, which transferred ~5 MB and parsed it in the core.
-    let mut response = state
-        .db
-        .inner()
-        .query(
-            "SELECT type, status, count() AS n FROM object WHERE deleted_at IS NONE \
-             GROUP BY type, status;",
-        )
-        .await?
-        .check()?;
+    let counts_sql = format!(
+        "SELECT type, status, count() AS n FROM object WHERE {} GROUP BY type, status;",
+        scoped_conditions.join(" AND ")
+    );
+    let mut counts = state.db.inner().query(counts_sql);
+    for (name, value) in &scoped_binds {
+        counts = counts.bind((name.as_str(), value.clone()));
+    }
+    let mut response = counts.await?.check()?;
     let rows: Vec<Value> = response.take(0)?;
 
     let mut total: i64 = 0;
@@ -1976,19 +1993,23 @@ pub async fn object_stats(
     if !candidates.is_empty() {
         let mut offset: i64 = 0;
         loop {
-            let mut response = state
+            let missing_sql = format!(
+                "SELECT id, type, attributes FROM object \
+                 WHERE {} AND type IN $types \
+                 ORDER BY id LIMIT $limit START $start;",
+                scoped_conditions.join(" AND ")
+            );
+            let mut pages = state
                 .db
                 .inner()
-                .query(
-                    "SELECT id, type, attributes FROM object \
-                     WHERE deleted_at IS NONE AND type IN $types \
-                     ORDER BY id LIMIT $limit START $start;",
-                )
+                .query(missing_sql)
                 .bind(("types", candidates.clone()))
                 .bind(("limit", STATS_PAGE))
-                .bind(("start", offset))
-                .await?
-                .check()?;
+                .bind(("start", offset));
+            for (name, value) in &scoped_binds {
+                pages = pages.bind((name.as_str(), value.clone()));
+            }
+            let mut response = pages.await?.check()?;
             let objects: Vec<Value> = response.take(0)?;
             if objects.is_empty() {
                 break;
@@ -2326,6 +2347,54 @@ fn bind_filter<'r>(
         query = query.bind((key.as_str(), value.clone()));
     }
     query
+}
+
+/// Appends a compiled scope to a query text (one ` AND ` per condition).
+///
+/// The counterpart of [`crate::scope::apply`] for the handlers that build their SQL as a string
+/// rather than as a condition list. An unrestricted caller (`None`) changes nothing, so those
+/// queries stay byte-identical to the ones they were before scopes existed.
+pub(crate) fn push_scope(sql: &mut String, scope: &Option<crate::scope::Clause>) {
+    if let Some(clause) = scope {
+        for condition in &clause.conditions {
+            sql.push_str(" AND ");
+            sql.push_str(condition);
+        }
+    }
+}
+
+/// Binds a compiled scope's bindings on a query (the companion of [`push_scope`]).
+pub(crate) fn bind_scope<'r>(
+    mut query: surrealdb::method::Query<'r, surrealdb::engine::remote::ws::Client>,
+    scope: &Option<crate::scope::Clause>,
+) -> surrealdb::method::Query<'r, surrealdb::engine::remote::ws::Client> {
+    if let Some(clause) = scope {
+        for (name, value) in &clause.binds {
+            query = query.bind((name.as_str(), value.clone()));
+        }
+    }
+    query
+}
+
+/// The identity of a compiled scope, for caches that hold a **filtered** view.
+///
+/// Rule R4 of the plan: every cache that grows out of a filtered view carries the scope identity
+/// in its key, or one caller is served another caller's rows. The conditions alone are not enough
+/// — two different groups compile to the same bind *names* (`$scope_group_0_keys`) and differ only
+/// in the bound value — so the values are part of the key. `None` (unrestricted) is `all`, which
+/// is what an unscoped caller's key was before scopes existed.
+pub(crate) fn scope_key(scope: &Option<crate::scope::Clause>) -> String {
+    let Some(clause) = scope else {
+        return "all".to_owned();
+    };
+    let mut key = clause.conditions.join(" AND ");
+    for (name, value) in &clause.binds {
+        key.push('|');
+        key.push_str(name);
+        key.push('=');
+        key.push_str(&value.to_string());
+    }
+    key
 }
 
 /// The working locale of a list request (`?locale=`, trimmed, empty = unset).
@@ -2969,25 +3038,40 @@ pub struct BySourceParams {
 )]
 pub async fn get_by_source(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<BySourceParams>,
 ) -> Result<Json<Value>, ApiError> {
+    let caller = crate::auth::require_caller(&state, &headers, "object.read")?;
     let source = params.source.trim();
     let source_id = params.source_id.trim();
     if source_id.is_empty() {
         return Err(ApiError::bad_request("`source_id` must not be empty"));
     }
-    let sql = "
-        SELECT * FROM object WHERE source_id = $source_id AND source = $source
-        AND deleted_at IS NONE LIMIT 1;
-    ";
-    let mut response = state
+    let mut conditions: Vec<String> = vec![
+        "source_id = $source_id".to_owned(),
+        "source = $source".to_owned(),
+        "deleted_at IS NONE".to_owned(),
+    ];
+    let mut scope_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(
+        crate::scope::for_caller(&state, &caller).await?,
+        &mut conditions,
+        &mut scope_binds,
+    );
+    let sql = format!(
+        "SELECT * FROM object WHERE {} LIMIT 1;",
+        conditions.join(" AND ")
+    );
+    let mut request = state
         .db
         .inner()
         .query(sql)
         .bind(("source_id", source_id.to_owned()))
-        .bind(("source", source.to_owned()))
-        .await?
-        .check()?;
+        .bind(("source", source.to_owned()));
+    for (name, value) in scope_binds {
+        request = request.bind((name, value));
+    }
+    let mut response = request.await?.check()?;
     let rows: Vec<Value> = response.take(0)?;
     let object = rows
         .into_iter()
@@ -3020,9 +3104,10 @@ pub async fn get_by_source(
     )
 )]
 pub async fn composition_types(
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
+    claims.require("object.read")?;
     let version = state.cache.stats_version();
     if let Some(cached) = state.cache.cached_composition_types(version).await {
         return Ok(Json((*cached).clone()));
@@ -3194,6 +3279,7 @@ async fn label_prefix_hits(
     types: &[String],
     languages: &[String],
     limit: i64,
+    scope: &Option<crate::scope::Clause>,
 ) -> Result<Vec<Value>, ApiError> {
     let term = query.to_lowercase();
     if term.is_empty() {
@@ -3219,6 +3305,7 @@ async fn label_prefix_hits(
         if !types.is_empty() {
             sql.push_str(" AND type IN $types");
         }
+        push_scope(&mut sql, scope);
         // Sorted by the label so the same query yields the same list; the sort costs
         // nothing measurable next to the scan (median 423 ms sorted vs 596 ms
         // unsorted over three runs, `LIMIT 20`, dev core — the measurement that
@@ -3234,7 +3321,7 @@ async fn label_prefix_hits(
         if !types.is_empty() {
             request = request.bind(("types", types.to_vec()));
         }
-        let mut response = request.await?.check()?;
+        let mut response = bind_scope(request, scope).await?.check()?;
         let rows: Vec<Value> = response.take(0)?;
         for row in rows {
             let key = row
@@ -3272,6 +3359,7 @@ async fn code_prefix_hits(
     query: &str,
     types: &[String],
     limit: i64,
+    scope: &Option<crate::scope::Clause>,
 ) -> Result<Vec<Value>, ApiError> {
     let mut terms = vec![query.to_owned()];
     let upper = query.to_uppercase();
@@ -3292,6 +3380,7 @@ async fn code_prefix_hits(
         if !types.is_empty() {
             sql.push_str(" AND type IN $types");
         }
+        push_scope(&mut sql, scope);
         sql.push_str(" ORDER BY attributes.code LIMIT $limit");
         let mut request = state
             .db
@@ -3302,7 +3391,10 @@ async fn code_prefix_hits(
         if !types.is_empty() {
             request = request.bind(("types", types.to_vec()));
         }
-        let mut response = request.bind(("limit", limit)).await?.check()?;
+        let mut response = bind_scope(request, scope)
+            .bind(("limit", limit))
+            .await?
+            .check()?;
         let rows: Vec<Value> = response.take(0)?;
         for row in rows {
             let key = row
@@ -3372,8 +3464,10 @@ fn append_unique(objects: &mut Vec<Value>, extra: Vec<Value>) {
 )]
 pub async fn picker(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ObjectPickerParams>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    let caller = crate::auth::require_caller(&state, &headers, "reference.read")?;
     let query = params.q.trim();
     if query.is_empty() {
         return Err(ApiError::bad_request("`q` must not be empty"));
@@ -3403,6 +3497,9 @@ pub async fn picker(
         None => None,
     };
 
+    // The scope of the caller runs through all three queries of the picker: offering an object
+    // the caller may not read would be the first step of an edit that the core refuses anyway.
+    let scope = crate::scope::for_caller(&state, &caller).await?;
     let mut sql = String::from(
         "SELECT *, search::score(1) AS score FROM object \
          WHERE attributes @@ $q AND deleted_at IS NONE",
@@ -3410,10 +3507,20 @@ pub async fn picker(
     if !types.is_empty() {
         sql.push_str(" AND type IN $types");
     }
+    let mut scope_conditions: Vec<String> = Vec::new();
+    let mut scope_binds: Vec<(String, Value)> = Vec::new();
+    crate::scope::apply(scope.clone(), &mut scope_conditions, &mut scope_binds);
+    for condition in &scope_conditions {
+        sql.push_str(" AND ");
+        sql.push_str(condition);
+    }
     sql.push_str(" ORDER BY score DESC LIMIT $limit");
     let mut request = state.db.inner().query(sql).bind(("q", query.to_owned()));
     if !types.is_empty() {
         request = request.bind(("types", types.clone()));
+    }
+    for (name, value) in scope_binds {
+        request = request.bind((name, value));
     }
     let mut response = request.bind(("limit", limit)).await?.check()?;
     let text_objects: Vec<Value> = response.take(0)?;
@@ -3425,7 +3532,7 @@ pub async fn picker(
     // an `OR` with another condition (see `code_prefix_hits`).
     let full = usize::try_from(limit).unwrap_or(usize::MAX);
     if objects.len() < full && params.code_prefix {
-        let hits = code_prefix_hits(&state, query, &types, limit).await?;
+        let hits = code_prefix_hits(&state, query, &types, limit, &scope).await?;
         append_unique(&mut objects, hits);
     }
     if objects.len() < full && params.label_prefix {
@@ -3433,7 +3540,7 @@ pub async fn picker(
             locale.as_deref(),
             chain.as_deref().map(Vec::as_slice).unwrap_or_default(),
         );
-        let hits = label_prefix_hits(&state, query, &types, &languages, limit).await?;
+        let hits = label_prefix_hits(&state, query, &types, &languages, limit, &scope).await?;
         append_unique(&mut objects, hits);
     }
     objects.truncate(full);
@@ -4357,6 +4464,27 @@ mod tests {
         assert_eq!(
             base.view_key("created_at DESC, id"),
             filter(vec!["deleted_at IS NONE"], vec![]).view_key("created_at DESC, id")
+        );
+    }
+
+    #[test]
+    fn the_scope_key_separates_two_scopes_with_the_same_condition_text() {
+        let scope = |keys: Value| {
+            Some(crate::scope::Clause {
+                conditions: vec!["type = $scope_type AND id IN $scope_group_0_keys".to_owned()],
+                binds: vec![("scope_group_0_keys".to_owned(), keys)],
+            })
+        };
+        assert_eq!(scope_key(&None), "all");
+        // Two groups compile to the same condition text and differ only in the bound values:
+        // without the values in the key, one group would be served the other's cached view.
+        assert_ne!(
+            scope_key(&scope(json!(["object:a"]))),
+            scope_key(&scope(json!(["object:b"]))),
+        );
+        assert_eq!(
+            scope_key(&scope(json!(["object:a"]))),
+            scope_key(&scope(json!(["object:a"])))
         );
     }
 

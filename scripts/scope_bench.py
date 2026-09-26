@@ -289,6 +289,25 @@ def main() -> None:
         len(proven) == len(sample_ids) and bool(sample_ids),
         f"{len(proven)} of {len(sample_ids)} checked",
     )
+    # The single-object read follows the scope too, and its refusal is a `404`: the id of a
+    # foreign object must not even be confirmed. The outside candidate is picked by the same
+    # criterion the scope uses (no edge to the target), not by "not on the first page".
+    outside_id = next(
+        (
+            str(row["id"])
+            for row in core.call("GET", "/objects?type=product&limit=200")[1]
+            if not carries_edge(core, str(row["id"]), args.relation, target)
+        ),
+        None,
+    )
+    if sample_ids and outside_id:
+        inside_status = scoped.call("GET", f"/objects/{sample_ids[0]}")[0]
+        outside_status = scoped.call("GET", f"/objects/{outside_id}")[0]
+        ok &= check(
+            "the single-object read follows the scope",
+            inside_status == 200 and outside_status == 404,
+            f"inside {inside_status}, outside {outside_status}",
+        )
     if args.max_overhead_ms is not None:
         overhead = scoped_times[VIEW_CALLS[0][0]].warm_ms - unscoped[VIEW_CALLS[0][0]].warm_ms
         ok &= check(

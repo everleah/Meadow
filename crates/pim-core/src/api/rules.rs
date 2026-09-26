@@ -288,10 +288,11 @@ pub async fn create_rule(
     )
 )]
 pub async fn get_rule(
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    claims.require("business_rule.read")?;
     let key = parse_key(&id, TABLE)?;
     let rule = fetch_rule(&state.db, key)
         .await?

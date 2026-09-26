@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -380,8 +380,10 @@ pub async fn create_attribute_definition(
 )]
 pub async fn get_attribute_definition(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let key = parse_key(&id, TABLE)?;
     // Statements: LET(0), SELECT(1).
     let sql = "
@@ -412,8 +414,10 @@ pub async fn get_attribute_definition(
 )]
 pub async fn list_attribute_definitions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ListAttributeDefinitions>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -457,7 +461,9 @@ pub async fn list_attribute_definitions(
 )]
 pub async fn list_attribute_vocabulary(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::require_permission(&state, &headers, "attribute_definition.read")?;
     // Served from the cached body: this payload is megabytes, so serialising the
     // whole vocabulary per request would cost more than the query it saves.
     let json = state.cache.attribute_vocabulary_json(&state.db).await?;

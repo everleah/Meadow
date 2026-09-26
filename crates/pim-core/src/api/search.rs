@@ -6,6 +6,7 @@
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -45,8 +46,10 @@ fn default_limit() -> u32 {
 )]
 pub async fn search(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<SearchRequest>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
+    crate::auth::require_permission(&state, &headers, "object.read")?;
     let query = body.q.trim();
     if query.is_empty() {
         return Err(ApiError::bad_request("`q` must not be empty"));
@@ -54,18 +57,22 @@ pub async fn search(
     let limit = body.limit.clamp(1, 1000) as i64;
     let start = body.start as i64;
 
+    // The ABAC scope, like in the object list: a hit the caller may not read is not a hit.
+    let caller = crate::auth::caller(&headers, &state.config)?;
+    let scope = crate::scope::for_caller(&state, &caller).await?;
     let mut sql =
         String::from("SELECT *, search::score(1) AS score FROM object WHERE attributes @@ $q");
     if body.types.is_some() {
         sql.push_str(" AND type IN $types");
     }
+    crate::api::objects::push_scope(&mut sql, &scope);
     sql.push_str(" ORDER BY score DESC LIMIT $limit START $start");
 
     let mut request = state.db.inner().query(sql).bind(("q", query.to_owned()));
     if let Some(types) = &body.types {
         request = request.bind(("types", types.clone()));
     }
-    let mut response = request
+    let mut response = crate::api::objects::bind_scope(request, &scope)
         .bind(("limit", limit))
         .bind(("start", start))
         .await?

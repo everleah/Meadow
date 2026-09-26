@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use utoipa::{IntoParams, ToSchema};
@@ -430,8 +431,10 @@ pub struct ByKeyParams {
 )]
 pub async fn get_by_key(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<ByKeyParams>,
 ) -> Result<Json<Value>, ApiError> {
+    let caller = crate::auth::require_caller(&state, &headers, "object.read")?;
     let object_type = params.object_type.trim();
     let key = params.key.trim();
     if object_type.is_empty() {
@@ -442,17 +445,25 @@ pub async fn get_by_key(
     }
     let value = params.value.trim();
 
-    let sql = "
-        SELECT * FROM object WHERE type = $type AND attributes[$key] = $value
-        AND deleted_at IS NONE LIMIT 1;
-    ";
-    let mut response = state
+    // A key lookup is a single-object read: an object outside the caller's scope does not exist
+    // here either (`404` instead of foreign data, same as `GET /objects/{id}`).
+    let scope = crate::scope::for_caller(&state, &caller).await?;
+    let mut scope_sql = String::new();
+    crate::api::objects::push_scope(&mut scope_sql, &scope);
+
+    let sql = format!(
+        "SELECT * FROM object WHERE type = $type AND attributes[$key] = $value \
+         AND deleted_at IS NONE{} LIMIT 1;",
+        scope_sql
+    );
+    let request = state
         .db
         .inner()
         .query(sql)
         .bind(("type", object_type.to_owned()))
         .bind(("key", key.to_owned()))
-        .bind(("value", value.to_owned()))
+        .bind(("value", value.to_owned()));
+    let mut response = crate::api::objects::bind_scope(request, &scope)
         .await?
         .check()?;
     let rows: Vec<Value> = response.take(0)?;
