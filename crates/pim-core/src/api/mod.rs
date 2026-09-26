@@ -161,6 +161,7 @@ use utoipa::OpenApi;
         users::create_user,
         users::list_users,
         users::get_user,
+        users::effective_permissions,
         users::update_user,
         users::delete_user,
         groups::create_group,

@@ -293,6 +293,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(api::users::delete_user),
         )
         .route(
+            "/users/{id}/effective",
+            get(api::users::effective_permissions),
+        )
+        .route(
             "/groups",
             get(api::groups::list_groups).post(api::groups::create_group),
         )

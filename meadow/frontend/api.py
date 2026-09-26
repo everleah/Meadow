@@ -1636,6 +1636,22 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    async def effective_permissions(self, token: str, user_id: str) -> dict:
+        """The effective rights of a user and where each one comes from.
+
+        ``GET /users/{id}/effective`` (admin, `user.read`) runs the same resolution the
+        login performs and names the source per permission: the role default, the groups
+        that grant it and the groups that deny it (a deny wins). It is what the user
+        editor shows, so "why may this person do that?" needs no SQL.
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/users/{user_id}/effective",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def memberships(self, token: str) -> dict:
         """Both edges of the access model in one answer (``GET /memberships``).
 

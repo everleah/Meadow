@@ -92,6 +92,9 @@ async def users_page() -> None:
         ui.label(t("users.title")).classes("text-h4")
         ui.label(t("users.subtitle")).classes("text-subtitle1")
 
+        #: The rights panel of the opened user (one entry at a time, keyed by user id).
+        _effective_rights: dict[str, dict] = {}
+
         # --------------------------------------------------------------- #
         # Users                                                           #
         # --------------------------------------------------------------- #
@@ -232,6 +235,17 @@ async def users_page() -> None:
                     )
                 must_change_switch = ui.switch(t("users.must_change_password"), value=True)
                 ui.label(t("users.must_change_password_hint")).classes("text-caption text-gray-500")
+                # ----------------------------------------------------------- #
+                # Effective rights ("why may this person do that?")           #
+                # ----------------------------------------------------------- #
+                # Read from the core (`GET /users/{id}/effective`): the same
+                # resolution the login performs, plus the source of every
+                # permission. Nothing here is computed in the browser - a panel
+                # that explains rights must not have its own opinion about them.
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    ui.label(t("users.effective_title")).classes("text-subtitle2")
+                    effective_summary = ui.label("").classes("text-body2").mark("effective-summary")
+                    effective_host = ui.column().classes("w-full gap-1")
             with ui.row().classes("w-full justify-between mt-2 gap-2"):
                 user_delete_btn = ui.button(
                     t("attr_def.delete"), icon="delete", on_click=lambda: delete_user_selected()
@@ -264,10 +278,115 @@ async def users_page() -> None:
             # Absent counts as "must change" (mirrors the core).
             must_change_switch.set_value(bool(record.get("must_change_password", True)))
 
-        def open_user_editor(user: dict | None) -> None:
+        async def open_user_editor(user: dict | None) -> None:
+            """Fills the form and reads the rights panel from the core."""
             _fill_user_form(user)
             save_user.editing_id = user.get("id") if user else None  # type: ignore[attr-defined]
             user_dialog.open()
+            await load_effective_rights(user)
+
+        async def load_effective_rights(user: dict | None) -> None:
+            """Reads the effective rights of the opened user (`GET /users/{id}/effective`).
+
+            One panel at a time: the cache belongs to the record the dialog shows, so a
+            stale answer from the user before it can never be rendered.
+            """
+            _effective_rights.clear()
+            render_effective_rights(user)
+            if not user or not user.get("id"):
+                return
+            try:
+                answer = await client.effective_permissions(token, str(user["id"]))
+            except CoreError as error:
+                ui.notify(f"{t('users.effective_failed')}: {error}", color="warning")
+                return
+            except httpx.HTTPError:
+                ui.notify(t("users.effective_failed"), color="warning")
+                return
+            _effective_rights[str(user["id"])] = answer
+            render_effective_rights(user)
+
+        def render_effective_rights(user: dict | None) -> None:
+            """Renders the rights panel from the **core's** answer (or the create hint).
+
+            The delta rows come first (what the groups add or take away — the part that is
+            not obvious) and the full catalog sits behind an expansion, so the panel answers
+            the question without becoming a second matrix.
+            """
+            effective_host.clear()
+            effective_summary.set_text("")
+            if not user or not user.get("id"):
+                with effective_host:
+                    ui.label(t("users.effective_new")).classes("text-caption text-grey-7")
+                return
+            rights = _effective_rights.get(str(user.get("id")))
+            if rights is None:
+                with effective_host:
+                    ui.label(t("users.effective_loading")).classes("text-caption text-grey-7")
+                return
+            reasons = rights.get("reasons") or {}
+            granted = [key for key, reason in reasons.items() if reason.get("state") == "granted"]
+            denied = [key for key, reason in reasons.items() if reason.get("state") == "denied"]
+            superadmin = any(reason.get("state") == "superadmin" for reason in reasons.values())
+            groups = rights.get("groups") or []
+            counted = len(rights.get("permissions") or [])
+            effective_summary.set_text(
+                t("users.effective_summary").format(
+                    roles=", ".join(rights.get("user", {}).get("roles") or []),
+                    groups=", ".join(str(group.get("name")) for group in groups)
+                    or t("users.effective_no_group"),
+                    count=counted,
+                    total=len(reasons),
+                )
+            )
+            with effective_host:
+                if superadmin:
+                    ui.label(t("users.effective_superadmin")).classes("text-caption text-grey-7")
+                if not rights.get("permissions"):
+                    ui.label(t("users.effective_none")).classes("text-caption text-grey-7")
+                for key in granted:
+                    _effective_row(key, reasons[key], "granted")
+                for key in denied:
+                    _effective_row(key, reasons[key], "denied")
+                if groups:
+                    ui.label(
+                        t("users.effective_groups").format(
+                            groups=", ".join(
+                                f"{group.get('name')}" + ("" if group.get("direct") else " ↳")
+                                for group in groups
+                            )
+                        )
+                    ).classes("text-caption text-grey-7").tooltip(t("users.effective_groups_hint"))
+                with ui.expansion(t("users.effective_all")).classes("w-full"):
+                    for key, reason in sorted(reasons.items()):
+                        _effective_row(key, reason, str(reason.get("state")))
+                unknown = rights.get("unknown") or []
+                if unknown:
+                    ui.label(t("users.effective_unknown").format(keys=", ".join(unknown))).classes(
+                        "text-caption text-negative"
+                    )
+
+        def _effective_row(key: str, reason: dict, state: str) -> None:
+            """One permission line: what it is, its state and who decided it."""
+            sources = [
+                str(entry.get("name"))
+                for entry in (reason.get("denied_by") or []) or (reason.get("granted_by") or [])
+            ]
+            label = t(f"perm.{key}")
+            if label == f"perm.{key}":  # no full key yet: the action alone reads fine
+                label = t(f"perm.action.{key.split('.')[-1]}")
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                ui.label(label).classes("flex-1 text-caption")
+                if sources:
+                    ui.label(", ".join(sources)).classes("text-caption text-grey-6")
+                ui.badge(
+                    t(f"users.effective_state_{state}"),
+                    color={
+                        "granted": "positive",
+                        "denied": "negative",
+                        "superadmin": "purple",
+                    }.get(state, "grey"),
+                ).props("dense")
 
         async def reload_users() -> None:
             nonlocal users
@@ -1126,8 +1245,8 @@ async def users_page() -> None:
                 except CoreError as error:
                     ui.notify(f"{t('groups.members_save_failed')}: {error}", color="negative")
                     return
+                _announce_then_reload(t("groups.members_saved"))
                 await reload_memberships()
-                ui.notify(t("groups.members_saved"), color="positive")
 
             async def remove_member(user_id: str) -> None:
                 editing_id = getattr(save_group, "editing_id", None)
@@ -1138,8 +1257,8 @@ async def users_page() -> None:
                 except CoreError as error:
                     ui.notify(f"{t('groups.members_save_failed')}: {error}", color="negative")
                     return
+                _announce_then_reload(t("groups.members_saved"))
                 await reload_memberships()
-                ui.notify(t("groups.members_saved"), color="positive")
 
             async def link_group(kind: str, group_id: object) -> None:
                 """Links the edited group to another one (as parent or as child)."""
@@ -1155,8 +1274,8 @@ async def users_page() -> None:
                 except CoreError as error:  # a cycle answers `400` with the core's message
                     ui.notify(f"{t('groups.hierarchy_failed')}: {error}", color="negative")
                     return
+                _announce_then_reload(t("groups.hierarchy_saved"))
                 await reload_memberships()
-                ui.notify(t("groups.hierarchy_saved"), color="positive")
 
             async def unlink_group(kind: str, group_id: str) -> None:
                 editing_id = getattr(save_group, "editing_id", None)
@@ -1170,8 +1289,19 @@ async def users_page() -> None:
                 except CoreError as error:
                     ui.notify(f"{t('groups.hierarchy_failed')}: {error}", color="negative")
                     return
+                _announce_then_reload(t("groups.hierarchy_saved"))
                 await reload_memberships()
-                ui.notify(t("groups.hierarchy_saved"), color="positive")
+
+            def _announce_then_reload(message: str) -> None:
+                """Shows the result **before** the section re-renders itself.
+
+                Both sections rebuild their own container, which deletes the very button the
+                handler belongs to — afterwards there is no slot left to notify into, and
+                NiceGUI raises "the parent element this slot belongs to has been deleted"
+                (found live 2026-09-26: every member change logged that error and the
+                confirmation never showed).
+                """
+                ui.notify(message, color="positive")
 
             def _fill_group_form(group: dict | None) -> None:
                 editing = group is not None

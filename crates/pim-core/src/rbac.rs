@@ -60,6 +60,8 @@ impl Edge {
 pub struct GroupGrants {
     /// Group record id (`group:webshop`).
     pub id: String,
+    /// Group name, so an answer that names a source does not need a second lookup.
+    pub name: String,
     /// Permissions the group grants.
     pub grant: Vec<String>,
     /// Permissions the group denies.
@@ -200,7 +202,7 @@ pub async fn grants_of(db: &Db, groups: &[String]) -> Result<Vec<GroupGrants>, A
     let mut response = db
         .inner()
         .query(format!(
-            "SELECT id, grant_permissions, deny_permissions FROM group WHERE id IN {literal};"
+            "SELECT id, name, grant_permissions, deny_permissions FROM group WHERE id IN {literal};"
         ))
         .await?
         .check()?;
@@ -210,6 +212,11 @@ pub async fn grants_of(db: &Db, groups: &[String]) -> Result<Vec<GroupGrants>, A
         .map(|row| GroupGrants {
             id: row
                 .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            name: row
+                .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
@@ -461,6 +468,7 @@ mod tests {
     fn grants(id: &str, grant: &[&str], deny: &[&str]) -> GroupGrants {
         GroupGrants {
             id: id.to_owned(),
+            name: id.to_owned(),
             grant: grant.iter().map(|key| (*key).to_owned()).collect(),
             deny: deny.iter().map(|key| (*key).to_owned()).collect(),
         }

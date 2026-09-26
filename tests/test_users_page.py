@@ -240,6 +240,12 @@ async def test_a_member_can_be_added_and_removed(users_user: User) -> None:
     called = FakeCore.args("add_group_member")
     assert called[1] == GROUP_ID and called[2] == USER_ID
     await _wait_until(lambda: _texts(users_user, "member-label") == ["dryviewer · viewer"])
+    # The confirmation has to arrive **before** the section re-renders itself: the re-render
+    # deletes the button this handler belongs to, and a notify afterwards raises (found live
+    # 2026-09-26 - every member change logged "parent element ... has been deleted").
+    assert users_user.notify.contains(t("groups.members_saved", locale=EN)), (
+        users_user.notify.messages
+    )
     # The list comes back from the core, not from the local state.
     assert [name for name, _, _ in FakeCore.calls].count("memberships") == 2
 

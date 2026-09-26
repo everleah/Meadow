@@ -248,6 +248,152 @@ pub async fn get_user(
     Ok(Json(user))
 }
 
+/// Effective rights of a user, with the reason for each one.
+///
+/// The admin's "why may this person do that?" without SQL: the same resolution the login
+/// performs (`rbac::resolve`) answers the effective set, and the grants and denies of each
+/// group it walked (`rbac::grants_of`) answer **where** every permission comes from. A
+/// permission can be granted by one group and denied by another, so the reason names both
+/// sides and the state says which one won — a deny always wins. Roles stay the baseline: a
+/// permission the role carries is `role`, and a group that does not mention it changes
+/// nothing (a missing `granted_by`/`denied_by` is not a "no", it is "not mentioned").
+///
+/// A **superadmin** holds everything by role — its state is `superadmin`, not `role`, because
+/// only that role is exempt from every check (user decision 2026-09-26).
+#[utoipa::path(
+    get,
+    path = "/users/{id}/effective",
+    responses(
+        (status = 200, description = "Effective permissions and their sources", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn effective_permissions(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    claims.require("user.read")?;
+    let key = parse_key(&id, TABLE)?;
+    let user = fetch_user(&state.db, key)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("user `{id}` not found")))?;
+    let roles: Vec<String> = user
+        .get("roles")
+        .and_then(Value::as_array)
+        .map(|array| string_list(Some(array)))
+        .unwrap_or_default();
+
+    // The groups the resolution walks (direct memberships plus the parent groups they
+    // inherit from) and the ones the user is **directly** in, so the answer can say which
+    // membership came through the hierarchy.
+    let groups = rbac::groups_of(&state.db, &id).await?;
+    let direct = direct_groups(&state.db, key).await?;
+    let grants = rbac::grants_of(&state.db, &groups).await?;
+    let (permissions, unknown) = rbac::effective(&roles, &grants);
+
+    let group_entries: Vec<Value> = groups
+        .iter()
+        .map(|group| {
+            json!({
+                "id": group,
+                "name": group_name(group, &grants),
+                "direct": direct.contains(group),
+            })
+        })
+        .collect();
+
+    let superadmin = roles.iter().any(|role| role == ROLE_SUPERADMIN);
+    let reasons: serde_json::Map<String, Value> = crate::permissions::PERMISSIONS
+        .iter()
+        .map(|permission| {
+            let granted_by: Vec<Value> = grants
+                .iter()
+                .filter(|grant| grant.grant.iter().any(|key| key == permission.key))
+                .map(|grant| json!({ "id": grant.id, "name": group_name(&grant.id, &grants) }))
+                .collect();
+            let denied_by: Vec<Value> = grants
+                .iter()
+                .filter(|grant| grant.deny.iter().any(|key| key == permission.key))
+                .map(|grant| json!({ "id": grant.id, "name": group_name(&grant.id, &grants) }))
+                .collect();
+            let state = if superadmin {
+                "superadmin"
+            } else if !denied_by.is_empty() {
+                "denied"
+            } else if !granted_by.is_empty() {
+                "granted"
+            } else {
+                "role"
+            };
+            (
+                permission.key.to_owned(),
+                json!({
+                    "state": state,
+                    "effective": permissions.contains(permission),
+                    "granted_by": granted_by,
+                    "denied_by": denied_by,
+                }),
+            )
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "user": {
+            "id": user.get("id"),
+            "username": user.get("username"),
+            "status": user.get("status"),
+            "roles": roles,
+        },
+        "groups": group_entries,
+        "permissions": permissions.keys(),
+        "reasons": Value::Object(reasons),
+        "unknown": unknown,
+    })))
+}
+
+/// The groups a user is **directly** a member of (no hierarchy walk).
+async fn direct_groups(db: &Db, user_key: &str) -> Result<Vec<String>, ApiError> {
+    let mut response = db
+        .inner()
+        .query(
+            "SELECT VALUE type::string(out) FROM member_of WHERE in = type::record('user', $key);",
+        )
+        .bind(("key", user_key.to_owned()))
+        .await?
+        .check()?;
+    let mut groups: Vec<String> = response
+        .take::<Vec<Value>>(0)?
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect();
+    groups.sort();
+    groups.dedup();
+    Ok(groups)
+}
+
+/// The name of a group from the grants that were loaded anyway (`id` when unknown).
+fn group_name(group_id: &str, grants: &[rbac::GroupGrants]) -> String {
+    grants
+        .iter()
+        .find(|grant| grant.id == group_id)
+        .map(|grant| grant.name.clone())
+        .unwrap_or_else(|| group_id.to_owned())
+}
+
+/// Reads a list of strings out of a JSON array.
+fn string_list(value: Option<&Vec<Value>>) -> Vec<String> {
+    value
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Partially updates a user.
 #[utoipa::path(
     patch,
