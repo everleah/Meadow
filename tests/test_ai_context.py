@@ -42,9 +42,13 @@ from meadow.ai.context import (  # noqa: E402 - after the path fix
     language_codes,
     mapping_columns_text,
     mapping_targets_text,
+    object_type_keys,
     parameter_facts,
     parameters_text,
+    permission_facts,
+    permissions_text,
     policy_block,
+    scope_schema_text,
     search_field_facts,
     search_fields_text,
     search_limits_text,
@@ -538,6 +542,71 @@ def test_the_language_codes_ignore_anything_that_is_not_a_node() -> None:
     )
     assert language_codes(None) == ()
     assert language_codes("de") == ()
+
+
+# --- group permissions and scope (stage 3) ---------------------------------------
+
+
+def _permission_catalog() -> dict[str, object]:
+    return {
+        "permissions": [
+            {
+                "key": "object.read",
+                "area": "object",
+                "action": "read",
+                "roles": ["viewer", "editor", "admin"],
+                "description": "Read objects and their values.",
+            },
+            {
+                "key": "object.publish",
+                "area": "object",
+                "action": "publish",
+                "roles": ["admin"],
+                "description": "Publish objects to a channel.",
+            },
+            {"key": "object.delete", "area": "object", "action": "delete"},
+        ]
+    }
+
+
+def test_the_permission_projection_keeps_the_keys_and_their_role_defaults() -> None:
+    facts = permission_facts(_permission_catalog())
+    assert [fact.key for fact in facts] == ["object.read", "object.publish", "object.delete"]
+    assert facts[0].roles == ("viewer", "editor", "admin")
+    assert facts[2].roles == ()
+    text = permissions_text(facts)
+    assert "object.read (object · read; by default: viewer, editor, admin)" in text
+    assert "object.publish (object · publish; by default: admin)" in text
+    # Without a role list the parenthesis stays clean, and a missing description is fine.
+    assert "object.delete (object · delete)" in text
+    # Anything that is not the catalog document yields nothing instead of raising.
+    assert permission_facts(None) == ()
+    assert permission_facts({"permissions": "object.read"}) == ()
+    assert permission_facts({"permissions": [{"area": "object"}, "object.read"]}) == ()
+
+
+def test_the_scope_schema_names_the_two_rules_and_the_allowed_values() -> None:
+    text = scope_schema_text(_object_types(), ("draft", "published"))
+    assert '{"field": "type", "operator": "in", "value": ["<object type>", …]}' in text
+    assert '{"field": "status", "operator": "in", "value": ["<workflow state>", …]}' in text
+    assert "Object types: product, variant" in text
+    assert "Workflow states: draft, published" in text
+    # Both limits are spelled out: an empty list matches nothing, no rule means everything.
+    assert "empty `value` list matches nothing" in text
+    assert "does not restrict at all" in text
+    # A reference rule is out of reach for the assistant and the text says so.
+    assert "record ids you cannot know" in text
+    # Without a state list the line says `unknown` instead of pretending.
+    assert "Workflow states: (unknown)" in scope_schema_text(_object_types(), None)
+    assert "Object types: (unknown)" in scope_schema_text(None, ("draft",))
+
+
+def test_the_object_type_keys_come_from_the_registry() -> None:
+    assert object_type_keys(_object_types()) == ("product", "variant")
+    assert object_type_keys([{"name": "product"}, {}, "product", {"id": "object_type:x"}]) == (
+        "product",
+    )
+    assert object_type_keys(None) == ()
 
 
 def _load_script(name: str):

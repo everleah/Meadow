@@ -21,8 +21,9 @@ Two properties of the server side show up here:
 
 from __future__ import annotations
 
+import inspect
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from nicegui import ui
 
@@ -58,7 +59,7 @@ def open_suggestion_dialog(
     client: CoreClient,
     token: str,
     area: str,
-    on_apply: Callable[[dict], None],
+    on_apply: Callable[[dict], Awaitable[None] | None],
     title_key: str = "ai.title",
     hint_key: str = "ai.hint",
     object_type: Callable[[], str] | None = None,
@@ -68,11 +69,15 @@ def open_suggestion_dialog(
     declared_computed: Callable[[], list[str]] | None = None,
     config_kind: Callable[[], str] | None = None,
     columns: Callable[[], list[dict]] | None = None,
+    statuses: Callable[[], list[str]] | None = None,
+    modes: tuple[str, ...] = MODES,
 ) -> None:
     """Opens the suggestion dialog; `on_apply` receives the accepted reply.
 
     The callables read the *current* editor state when a suggestion is requested,
-    so a dialog opened once always works with the latest values.
+    so a dialog opened once always works with the latest values. `modes` restricts
+    the mode list for an area without an explain target (a group document has no
+    prose field to fill).
     """
     with ui.dialog() as dialog, ui.card().classes("w-[46rem] max-w-[95vw]"):
         ui.label(t(title_key)).classes("text-h6")
@@ -80,41 +85,51 @@ def open_suggestion_dialog(
         with ui.row().classes("w-full gap-2 mt-2"):
             mode_select = (
                 ui.select(
-                    {mode: t(f"ai.mode_{mode}") for mode in MODES},
+                    {mode: t(f"ai.mode_{mode}") for mode in modes},
                     label=t("ai.mode"),
-                    value="create",
+                    value=modes[0],
                 )
                 .props("filled dense")
                 .classes("w-48")
             )
             description_input = (
-                ui.input(label=t("ai.description")).props("filled dense").classes("grow")
+                ui.input(label=t("ai.description"))
+                .props("filled dense")
+                .classes("grow")
+                .mark("ai-description")
             )
         preview = (
             ui.codemirror("", language="Python")
             .classes("w-full h-64 font-mono text-sm")
             .props("readonly")
+            .mark("ai-preview")
         )
-        status = ui.label(t("ai.idle")).classes("text-caption text-gray-500")
+        status = ui.label(t("ai.idle")).classes("text-caption text-gray-500").mark("ai-status")
+        note_label = ui.label("").classes("text-caption text-gray-500").mark("ai-note")
         errors_box = ui.column().classes("w-full gap-1")
         with ui.row().classes("w-full justify-end mt-2 gap-2"):
             ui.button(t("grid.close"), on_click=dialog.close).props("flat")
-            apply_button = ui.button(t("ai.apply"), icon="check").props("flat")
-            generate_button = ui.button(t("ai.generate"), icon="auto_awesome").props("flat")
+            apply_button = ui.button(t("ai.apply"), icon="check").props("flat").mark("ai-apply")
+            generate_button = (
+                ui.button(t("ai.generate"), icon="auto_awesome").props("flat").mark("ai-generate")
+            )
 
     #: The last successful reply — what `apply` hands to the caller.
     state: dict[str, object] = {"reply": None}
 
-    def apply() -> None:
+    async def apply() -> None:
         reply = state.get("reply")
         if not isinstance(reply, dict):
             return
-        on_apply(reply)
+        outcome = on_apply(reply)
+        if inspect.isawaitable(outcome):  # a caller that has to reload something awaits
+            await outcome
         dialog.close()
 
     async def run() -> None:
         status.text = t("ai.running")
         status.classes(remove="text-negative text-positive")
+        note_label.set_text("")
         errors_box.clear()
         apply_button.set_enabled(False)
         state["reply"] = None
@@ -130,6 +145,7 @@ def open_suggestion_dialog(
             "declared_computed": declared_computed() if declared_computed else None,
             "config_kind": config_kind() if config_kind else None,
             "columns": columns() if columns else None,
+            "statuses": statuses() if statuses else None,
             "language": current_locale(),
         }
         try:
@@ -158,6 +174,8 @@ def open_suggestion_dialog(
             preview.value = json.dumps(reply.get("job") or {}, indent=2, ensure_ascii=False)
         elif area == "import_mapping":
             preview.value = json.dumps(reply.get("mapping") or {}, indent=2, ensure_ascii=False)
+        elif area == "group_permissions":
+            preview.value = json.dumps(reply.get("permissions") or {}, indent=2, ensure_ascii=False)
         else:
             preview.value = str(reply.get("script") or "")
         status.text = t("ai.ok").format(
@@ -166,6 +184,8 @@ def open_suggestion_dialog(
             model=reply.get("model") or "?",
         )
         status.classes("text-positive")
+        if reply.get("note"):
+            note_label.set_text(f"{t('ai.note')}: {reply['note']}")
         state["reply"] = reply
         apply_button.set_enabled(True)
 

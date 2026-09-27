@@ -75,6 +75,20 @@ pub struct PreviewScope {
     pub scope: Value,
 }
 
+/// Payload for validating a group document.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ValidateGroup {
+    /// The permissions the group would grant (same shape as on create/update).
+    #[serde(default)]
+    pub grant_permissions: Vec<String>,
+    /// The permissions the group would deny.
+    #[serde(default)]
+    pub deny_permissions: Vec<String>,
+    /// The scope document (same shape as on create/update).
+    #[serde(default = "default_object")]
+    pub scope: Value,
+}
+
 /// Splits a `table:key` path segment and verifies the expected table.
 ///
 /// Shared with [`crate::rbac`], which resolves user ids and group ids the same way.
@@ -314,6 +328,53 @@ async fn count_objects_with(
         .and_then(|row| row.get("n"))
         .and_then(Value::as_i64)
         .unwrap_or(0))
+}
+
+/// Checks a group document — **without saving**.
+///
+/// The same two checks the write path runs (`reject_unknown_permissions` and `check_scope`),
+/// with the same messages, so a caller gets exactly the verdict a save would produce: the
+/// group editor before it submits an unusual document, and the AI assistant, which has to
+/// judge a suggestion against the catalog and `scope::parse`/`validate`
+/// (`plan/detail/ki-assistenz.md`). Nothing is written and nothing has to exist yet.
+///
+/// A wrong request shape is a `400`; a document the core would refuse is a `200` with
+/// `{"ok": false, "errors": [...]}`, like `POST /connectors/validate` — the caller is asking
+/// a question, not making a change.
+#[utoipa::path(
+    post,
+    path = "/groups/validate",
+    request_body = ValidateGroup,
+    responses(
+        (status = 200, description = "Validation result", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn validate_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ValidateGroup>,
+) -> Result<Json<Value>, ApiError> {
+    // The write path's key, reachable with the machine key: the worker checks AI
+    // suggestions with it, and whoever may not manage a group may not dry-run one either.
+    auth::require_caller(&state, &headers, "group.manage")?;
+    let mut errors: Vec<String> = Vec::new();
+    let unknown = crate::permissions::unknown_keys(&body.grant_permissions)
+        .into_iter()
+        .chain(crate::permissions::unknown_keys(&body.deny_permissions))
+        .collect();
+    if let Err(error) = reject_unknown_permissions(unknown) {
+        errors.push(error.message().to_owned());
+    }
+    if let Err(error) = check_scope(&state, &body.scope).await {
+        errors.push(error.message().to_owned());
+    }
+    Ok(Json(serde_json::json!({
+        "ok": errors.is_empty(),
+        "errors": errors,
+    })))
 }
 
 /// Loads a single group by id.

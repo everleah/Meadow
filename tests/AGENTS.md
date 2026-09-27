@@ -40,6 +40,13 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   entries must stay plain links with an `href` — navigation that travels through the
   websocket dies with the socket (root `AGENTS.md`, `plan/detail/ai-code-quality.md`
   §4.11).
+- The **shared AI dialog** (`frontend/ai_assist.py`) carries markers for every part
+  (`ai-description`, `ai-generate`, `ai-apply`, `ai-preview`, `ai-status`, `ai-note`),
+  because it is built *by* the click that opens it — a page test waits for the dialog by
+  a marker it contains, and a running assistant needs the availability settings in
+  `FakeCore.data["list_system_settings"]` (`ai_enabled`/`ai_api_key`/`ai_endpoint`/
+  `ai_model`; without them `ai_state` says "unavailable" and the button does not exist,
+  which is itself worth a test). `test_users_page.py::test_an_ai_suggestion_fills_the_form_and_saves_nothing` drives it end to end and asserts that `POST`/`PATCH /groups` is **not** called.
 - Widgets a page test has to *find* carry a marker (`ui.button(...).mark("bulk-start")`,
   NiceGUI 3.x; the old `marker()` name is gone). Four rules learned the hard way: a click on
   an **async** handler only schedules it (wait for the effect, e.g. with a small

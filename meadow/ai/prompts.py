@@ -30,6 +30,7 @@ AREAS = (
     "export_profile",
     "job",
     "import_mapping",
+    "group_permissions",
 )
 #: Modes the assistant knows.
 MODES = ("create", "edit", "explain")
@@ -42,6 +43,7 @@ _AREA_TITLES = {
     "export_profile": "export profile (an export format plus its `parameters`)",
     "job": "job definition (a `type`, an optional `schedule` and its `parameters`)",
     "import_mapping": "import column mapping (which file column fills which field)",
+    "group_permissions": "group document (the permission lists and the data scope)",
 }
 
 _RULE_SYSTEM = """\
@@ -174,6 +176,32 @@ Non-negotiable:
   the description field if a decision rests on a guess.
 """
 
+_GROUP_PERMISSIONS_SYSTEM = """\
+You are the access assistant of Meadow PIM, a product information management system.
+You write the permission lists and the data scope of a user group: one JSON object.
+
+Non-negotiable:
+- Answer with the JSON object only: no explanation, no markdown fence, with exactly
+  these keys: {"grant_permissions": [...], "deny_permissions": [...],
+  "scope": {"rules": [...]}}
+- The permission lists use only the permission keys listed below; never invent one.
+  A key must not appear in both lists.
+- Every permission a role holds by default is already available to the group's
+  members, so the lists are **deviations**: `deny` takes one away, `grant` adds one
+  the default does not have. A group that should behave like the plain role of its
+  members gets both lists empty.
+- `scope.rules` uses only the two rule shapes below, with the listed values, and a
+  rule's `value` list is never empty. No rules means no restriction.
+- Return the **complete** state, not a diff: in the `edit` mode you are given the
+  current state, and every permission and every rule the description does not ask to
+  change must appear again **unchanged** — what you leave out is removed (a permission
+  falls back to its role default, a missing type/status rule no longer restricts).
+- If a wish cannot be expressed with permissions and a type/status scope ("only the
+  objects this user created", "only the category X"), leave it out and name it in
+  `note` — one sentence, never a guess.
+- English identifiers; answer with the JSON object only.
+"""
+
 _EXPLAIN_SYSTEM = """\
 You are the documentation assistant of Meadow PIM, a product information management
 system. You explain an existing business rule to a colleague who maintains product data.
@@ -241,6 +269,8 @@ def system_prompt(area: str, mode: str) -> str:
         return _JOB_SYSTEM
     if area == "import_mapping":
         return _IMPORT_MAPPING_SYSTEM
+    if area == "group_permissions":
+        return _GROUP_PERMISSIONS_SYSTEM
     return _SYSTEM_PROMPTS.get(area, _RULE_SYSTEM)
 
 
@@ -441,12 +471,53 @@ def mapping_user_prompt(
     return "\n\n".join(sections)
 
 
+def group_permissions_user_prompt(
+    *,
+    mode: str,
+    description: str,
+    permissions: str,
+    scope_schema: str,
+    current_state: str | None = None,
+    language: str | None = None,
+) -> str:
+    """The user message for a group document (permission lists and scope).
+
+    `permissions` is the catalog projection — the keys the write path accepts, each with
+    the roles that hold it by default; `scope_schema` describes the two rule shapes the
+    assistant may write. The current state arrives as JSON (the editor serialises its
+    matrix and its scope card), so the `edit` mode has a baseline to keep.
+    """
+    sections: list[str] = []
+    heading = "Explain this" if mode == "explain" else "Write this"
+    sections.append(f"{heading}: {_AREA_TITLES['group_permissions']}")
+    if description.strip():
+        sections.append(f"Description from the user:\n{description.strip()}")
+    if current_state and current_state.strip():
+        label = (
+            "The group document to explain" if mode == "explain" else "The current state to change"
+        )
+        sections.append(f"{label} (JSON, as the editor shows it):\n{current_state.strip()}")
+    if mode == "edit":
+        sections.append("Keep everything the description does not ask to change.")
+    if mode != "explain":
+        sections.append("Permissions available (nothing else may be named):\n" + permissions)
+        sections.append("Scope:\n" + scope_schema)
+        sections.append(
+            'Answer shape: {"grant_permissions": [...], "deny_permissions": [...], '
+            '"scope": {"rules": [...]}}'
+        )
+    if language:
+        sections.append(f"Write any prose you add in the language `{language}`.")
+    return "\n\n".join(sections)
+
+
 def retry_prompt(message: str) -> str:
     """The correction message of the single self-correction attempt.
 
     The failure is quoted verbatim: the model gets one chance to fix exactly what
     the check rejected (`plan/detail/ki-assistenz.md` §6.5) — the sandbox policy
-    for a script, the core's query validation for a search.
+    for a script, the core's query validation for a search, the catalog and the
+    scope validation for a group document.
     """
     return (
         "The answer was rejected with this message:\n"

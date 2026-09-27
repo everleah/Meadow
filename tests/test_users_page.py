@@ -145,6 +145,14 @@ async def users_user(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[User]:
                 "list_groups": [GROUP],
                 "list_permissions": CATALOG,
                 "list_object_types": OBJECT_TYPES,
+                # The assistant is switched on and configured, so the group form offers the
+                # button (`ai_state` reads exactly these fields).
+                "list_system_settings": {
+                    "ai_enabled": {"value": True, "source": "db"},
+                    "ai_api_key": {"value": None, "configured": True, "secret": True},
+                    "ai_endpoint": {"value": "https://api.example.com/v1"},
+                    "ai_model": {"value": "some-model"},
+                },
                 # The scope card resolves its stored target ids to labels with one read.
                 "list_objects": [
                     {
@@ -386,3 +394,91 @@ async def test_an_added_block_is_not_counted_before_it_has_values(users_user: Us
     )
 
     assert [name for name, _, _ in FakeCore.calls].count("preview_scope") == before
+
+
+#: What the assistant proposes: deny a right the group shows, add one, restrict by status.
+SUGGESTION: dict[str, Any] = {
+    "ok": True,
+    "attempts": 1,
+    "model": "some-model",
+    "latency_ms": 12,
+    "note": "The category restriction cannot be guessed.",
+    "permissions": {
+        "grant_permissions": ["object.read"],
+        "deny_permissions": ["object.publish"],
+        "scope": {
+            "rules": [
+                {"field": "type", "operator": "in", "value": ["product"]},
+                {"field": "status", "operator": "in", "value": ["published"]},
+            ]
+        },
+    },
+}
+
+
+def _toggle_values(user: User) -> dict[str, object]:
+    return {
+        str(element.props.get("data-key")): getattr(element, "value", None)
+        for element in user.find(marker="permission-toggle").elements
+    }
+
+
+async def test_an_ai_suggestion_fills_the_form_and_saves_nothing(users_user: User) -> None:
+    """The suggestion lands in the matrix and the scope card — the admin still saves.
+
+    Three properties matter: the toggles become the proposed state (the suggestion is the
+    complete state, not a diff), the scope gains the suggested field rule, and the stored
+    category rule survives — a reference rule names record ids the model cannot know.
+    Nothing reaches `POST`/`PATCH /groups` on its own (`plan/detail/ki-assistenz.md` §6.1).
+    """
+    await _open_group_editor(users_user)
+    FakeCore.data["ai_generate"] = SUGGESTION
+
+    users_user.find(marker="group-ai-suggest").click()
+    await _wait_until(lambda: bool(_texts(users_user, "ai-status")))
+    # The current state travels with the request, so the `edit` mode has a baseline.
+    users_user.find(marker="ai-description").type("deny publishing, only published objects")
+    users_user.find(marker="ai-generate").click()
+    await _wait_until(lambda: any(name == "ai_generate" for name, _, _ in FakeCore.calls))
+    payload = FakeCore.args("ai_generate")[1]
+    assert payload["area"] == "group_permissions"
+    assert payload["description"] == "deny publishing, only published objects"
+    # The editor's own workflow states, so a suggestion cannot name a state the card
+    # cannot show.
+    assert payload["statuses"] == ["draft", "in_review", "approved", "published", "archived"]
+    assert "object.publish" in str(payload["current_script"])
+
+    # The dialog reports the run and offers the suggestion for take-over.
+    await _wait_until(
+        lambda: any(
+            getattr(element, "text", "")
+            == t("ai.ok", attempts=1, ms=12, model="some-model", locale=EN)
+            for element in users_user.find(marker="ai-status").elements
+        )
+    )
+    note = f"{t('ai.note', locale=EN)}: {SUGGESTION['note']}"
+    assert _texts(users_user, "ai-note") == [note]
+    users_user.find(marker="ai-apply").click()
+    await _wait_until(
+        lambda: _toggle_values(users_user) == {"object.read": "grant", "object.publish": "deny"}
+    )
+
+    # The scope: the suggested status rule is there, the stored category rule is untouched.
+    sentence = t(
+        "groups.scope_sentence",
+        parts=f"{t('groups.scope_phrase_type', values='Product')} "
+        f"{t('groups.scope_and')} "
+        f"{t('groups.scope_phrase_status', values='published')} "
+        f"{t('groups.scope_and')} "
+        f"{t('groups.scope_phrase_category', values='Webshop')}",
+        locale=EN,
+    )
+    await _wait_until(
+        lambda: any(
+            getattr(element, "text", None) == sentence
+            for element in users_user.find(marker="scope-sentence").elements
+        )
+    )
+    # Nothing was written, and the counter was asked again for the new document.
+    assert [name for name, _, _ in FakeCore.calls].count("preview_scope") == 2
+    assert not [name for name, _, _ in FakeCore.calls if name in ("update_group", "create_group")]

@@ -127,6 +127,11 @@ def languages_uri(core_url: str) -> str:
     return f"{loopback_host(core_url).rstrip('/')}/languages"
 
 
+def permission_catalog_uri(core_url: str) -> str:
+    """URL of the permission catalog (keys, areas, role defaults)."""
+    return f"{loopback_host(core_url).rstrip('/')}/permissions"
+
+
 def ui_labels() -> dict[str, str]:
     """The English UI texts, keyed by i18n key (for the schema's `label_key`).
 
@@ -278,6 +283,33 @@ async def validate_job_definition(
     return ok, message, preview
 
 
+async def validate_group_document(
+    core_url: str, api_key: str | None, group: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Validates a group document with the core (``POST /groups/validate``).
+
+    The **write path's own checks**: the permission keys against the catalog
+    `POST /groups` uses, and the scope through `scope::parse` + `scope::validate`.
+    Nothing is stored — a green answer means the same document would save.
+    """
+    response = await post_core(
+        core_url,
+        api_key,
+        "/groups/validate",
+        {
+            "grant_permissions": group.get("grant_permissions") or [],
+            "deny_permissions": group.get("deny_permissions") or [],
+            "scope": group.get("scope") or {},
+        },
+    )
+    ok, message, preview = _verdict(response)
+    if ok:
+        # Name what was checked: the plain "accepted by the core schema" would let the
+        # message read like a save.
+        message = "accepted by the permission catalog and the scope validation"
+    return ok, message, preview
+
+
 async def preview_query(
     core_url: str, api_key: str | None, query: dict[str, Any]
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -314,6 +346,7 @@ async def handle_generate(
     job_schema: JsonCache,
     object_types: JsonCache,
     languages: JsonCache,
+    permission_catalog: JsonCache,
     state: ServiceState,
 ) -> dict[str, Any]:
     """Runs one generation request and returns the reply payload."""
@@ -369,6 +402,14 @@ async def handle_generate(
                 ],
                 "object_types": await object_types.get(),
                 "languages": await languages.get(),
+            }
+        elif request.area == "group_permissions":
+            # The catalog is metadata (keys, areas, one sentence, role defaults) and the
+            # object types name the values a scope may filter on. No object value is in
+            # either, and the prompt gets exactly these two (data minimisation, §6.8).
+            json_context = {
+                "permission_catalog": await permission_catalog.get(),
+                "object_types": await object_types.get(),
             }
         else:
             payload = await vocabulary.get()
@@ -435,6 +476,14 @@ async def handle_generate(
             )
 
         config_validator = validate_mapping
+    elif request.area == "group_permissions":
+
+        async def validate_group(
+            group: dict[str, Any],
+        ) -> tuple[bool, str, dict[str, Any] | None]:
+            return await validate_group_document(core_url, api_key, group)
+
+        config_validator = validate_group
 
     try:
         return await generate(
@@ -520,6 +569,9 @@ async def serve(
     job_schema = JsonCache(job_schema_uri(core_url), api_key, label="the job schema")
     object_types = JsonCache(object_types_uri(core_url), api_key, label="the object type registry")
     languages = JsonCache(languages_uri(core_url), api_key, label="the language tree")
+    permission_catalog = JsonCache(
+        permission_catalog_uri(core_url), api_key, label="the permission catalog"
+    )
     state = ServiceState()
 
     async def on_generate(data: bytes) -> dict[str, Any]:
@@ -535,6 +587,7 @@ async def serve(
             job_schema=job_schema,
             object_types=object_types,
             languages=languages,
+            permission_catalog=permission_catalog,
             state=state,
         )
 

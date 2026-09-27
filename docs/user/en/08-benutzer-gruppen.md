@@ -84,6 +84,21 @@ Two things worth knowing:
 Rules that do not come from the assistant (an import, an older document) are kept:
 the editor shows them verbatim and stores them unchanged.
 
+## Asking for a suggestion (optional)
+
+If the AI assistance is switched on and configured in the system settings, a
+**Create suggestion** button appears next to **Permissions**. It opens a dialog:
+describe in your own words what the group may do and which data it should see
+("may not delete anything and only sees published objects"), choose **Write new**
+or **Improve an existing one**, and generate the suggestion.
+
+The suggestion fills the permission matrix and the **object type** and **status**
+blocks — it is the complete state it proposes, so everything it does not name
+falls back to "as the role". **Category and collection blocks stay unchanged**,
+because they name individual objects the suggestion cannot know; if a wish cannot
+be expressed that way, the dialog says so as a note. **Nothing is saved
+automatically:** review the matrix, the scope and the counter, then press **Save**.
+
 ## Members
 
 Members are written immediately, not saved — the **Members** section of the group

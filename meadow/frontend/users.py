@@ -19,6 +19,7 @@ import httpx
 from nicegui import app, ui
 
 from meadow.frontend import auth
+from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.display import OBJECT_STATUSES, resolve_value
@@ -554,6 +555,11 @@ async def users_page() -> None:
             except CoreError, httpx.HTTPError:  # both sections stay empty and say so
                 ui.notify(t("groups.members_failed"), color="warning")
 
+            # Whether the optional AI assistance can be used, and why not when it cannot:
+            # the button appears only when the instance has it switched on *and* configured
+            # (`plan/detail/ki-assistenz.md` §7). Everything it produces lands in the form.
+            ai = await ai_state(client, token)
+
             def _roles_label(permission: dict) -> str:
                 """The lowest role that holds the permission by default (`Viewer`).
 
@@ -620,7 +626,24 @@ async def users_page() -> None:
                     )
                     permission_toggles: dict[str, ui.toggle] = {}
                     with ui.column().classes("w-full gap-1"):
-                        ui.label(t("groups.perm_title")).classes("text-subtitle2")
+                        with ui.row().classes("w-full items-center gap-2"):
+                            ui.label(t("groups.perm_title")).classes("text-subtitle2")
+                            if ai.get("available"):
+                                # The suggestion fills the matrix and the scope card and is
+                                # never saved: the admin reviews it and presses Save
+                                # (`plan/detail/ki-assistenz.md` §6.1).
+                                ui.button(
+                                    t("groups.ai_suggest"),
+                                    icon="auto_awesome",
+                                    on_click=lambda: open_group_suggestion(),
+                                ).props("flat dense").mark("group-ai-suggest")
+                                ui.label(t("groups.ai_suggest_hint")).classes(
+                                    "text-caption text-grey-7"
+                                )
+                            else:
+                                ui.label(t(str(ai.get("reason") or "ai.unavailable"))).classes(
+                                    "text-caption text-grey-7"
+                                )
                         ui.label(t("groups.perm_hint")).classes("text-caption text-grey-7")
                         for area in catalog.get("areas") or []:
                             area_key = str(area.get("key") or "")
@@ -1034,6 +1057,94 @@ async def users_page() -> None:
                 ]
                 await _resolve_target_labels(targets)
                 render_scope()
+
+            # ------------------------------------------------------------ #
+            # AI suggestion (optional, `plan/detail/ki-assistenz.md`)        #
+            # ------------------------------------------------------------ #
+            # The assistant proposes the permission lists and the type/status rules; the
+            # suggestion lands in the matrix and the scope card, exactly like a hand-made
+            # edit, and nothing is written until the admin presses Save. The core checks the
+            # document against the catalog and the scope validation (`POST /groups/validate`),
+            # so a green answer means the same document would save.
+
+            def _current_group_state() -> str:
+                """The matrix and the scope as JSON — the baseline of the `edit` mode."""
+                return _json.dumps(
+                    {
+                        "name": name_input.value or "",
+                        "grant_permissions": [
+                            key
+                            for key, toggle in permission_toggles.items()
+                            if toggle.value == "grant"
+                        ],
+                        "deny_permissions": [
+                            key
+                            for key, toggle in permission_toggles.items()
+                            if toggle.value == "deny"
+                        ],
+                        "scope": {"rules": _scope_rules()},
+                    },
+                    ensure_ascii=False,
+                    indent=1,
+                )
+
+            async def apply_permissions(reply: dict) -> None:
+                """Writes the suggestion into the form (never into the database).
+
+                The scope suggestions are field rules only: a reference rule names record ids
+                the model cannot know, so the category and collection blocks keep their
+                values — the dialog says so next to the button.
+                """
+                suggestion = reply.get("permissions")
+                if not isinstance(suggestion, dict):
+                    return
+                if scope_state["unreadable"]:
+                    # A document the card cannot show: mixing suggested rules into rules
+                    # nobody rendered would change a scope the admin never saw.
+                    ui.notify(t("groups.ai_scope_unreadable"), color="warning")
+                    return
+                granted = {str(key) for key in suggestion.get("grant_permissions") or []}
+                denied = {str(key) for key in suggestion.get("deny_permissions") or []}
+                for key, toggle in permission_toggles.items():
+                    toggle.value = (
+                        "grant" if key in granted else "deny" if key in denied else "inherit"
+                    )
+                scope = suggestion.get("scope")
+                rules = scope.get("rules") if isinstance(scope, dict) else None
+                kept = [
+                    rule for rule in _scope_rules() if _rule_block(rule) not in ("type", "status")
+                ]
+                suggested = [
+                    rule
+                    for rule in (rules or [])
+                    if isinstance(rule, dict) and _rule_block(rule) in ("type", "status")
+                ]
+                # The card's own block order (type, status, category, collection), so the
+                # document reads the way the blocks are offered - the assistant's rules
+                # replace the field rules, a rule it cannot write stays where it was.
+                order = {block: position for position, block in enumerate(SCOPE_BLOCKS)}
+                scope_state["rules"] = sorted(
+                    [*kept, *suggested],
+                    key=lambda rule: order.get(_rule_block(rule) or "", len(order)),
+                )
+                render_scope()
+                await refresh_scope_count()
+                ui.notify(t("groups.ai_applied"), color="positive")
+
+            def open_group_suggestion() -> None:
+                """Opens the suggestion dialog for the group document."""
+                open_suggestion_dialog(
+                    client=client,
+                    token=token,
+                    area="group_permissions",
+                    title_key="groups.ai_title",
+                    hint_key="groups.ai_hint",
+                    current_script=_current_group_state,
+                    statuses=lambda: list(OBJECT_STATUSES),
+                    # No "explain": a group has no prose field to fill.
+                    modes=("create", "edit"),
+                    on_apply=apply_permissions,
+                )
 
             # ------------------------------------------------------------ #
             # Members and hierarchy (access-model edges)                    #

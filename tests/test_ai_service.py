@@ -736,6 +736,172 @@ def test_an_import_mapping_answer_without_the_mapping_object_fails() -> None:
     assert any("`mapping`" in str(message) for message in reply["errors"])
 
 
+PERMISSION_CATALOG: dict[str, Any] = {
+    "roles": [{"key": "viewer"}, {"key": "editor"}],
+    "permissions": [
+        {
+            "key": "object.read",
+            "area": "object",
+            "action": "read",
+            "roles": ["viewer", "editor"],
+            "description": "Read objects, their attribute values, releases and references.",
+        },
+        {
+            "key": "object.publish",
+            "area": "object",
+            "action": "publish",
+            "roles": ["admin"],
+            "description": "Publish objects to a channel.",
+        },
+        {
+            "key": "object.delete",
+            "area": "object",
+            "action": "delete",
+            "roles": ["editor"],
+            "description": "Delete objects, single, in batches and as an import cleanup.",
+        },
+    ],
+}
+
+GROUP_TYPES: list[dict[str, Any]] = [
+    {"name": "product", "label_attribute": "name", "key_attributes": ["article_number"]},
+    {"name": "collection"},
+]
+
+GOOD_GROUP: dict[str, Any] = {
+    "grant_permissions": [],
+    "deny_permissions": ["object.delete"],
+    "scope": {"rules": [{"field": "status", "operator": "in", "value": ["published"]}]},
+    "note": "The category restriction cannot be set from a description.",
+}
+
+
+def _group_request(**overrides: Any) -> GenerationRequest:
+    """A group request: the editor's own workflow states travel with it."""
+    values: dict[str, Any] = {
+        "area": "group_permissions",
+        "mode": "create",
+        "description": "Editors that may not delete anything and only see published objects",
+        "statuses": ("draft", "in_review", "approved", "published", "archived"),
+    }
+    values.update(overrides)
+    return _request(**values)
+
+
+def _group_context() -> dict[str, Any]:
+    return {"permission_catalog": PERMISSION_CATALOG, "object_types": GROUP_TYPES}
+
+
+def test_a_group_suggestion_is_checked_by_the_write_paths_own_check() -> None:
+    recorder = Recorder(json.dumps(GOOD_GROUP))
+    validator = ConfigChecking(
+        (True, "accepted by the permission catalog and the scope validation")
+    )
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _group_request(),
+            json_context=_group_context(),
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["permissions"] == {
+        "grant_permissions": [],
+        "deny_permissions": ["object.delete"],
+        "scope": {"rules": [{"field": "status", "operator": "in", "value": ["published"]}]},
+    }
+    # The note is passed through: it is how the model names what it could not express.
+    assert "category restriction" in reply["note"]
+    # The validator sees exactly the document a save would receive.
+    assert validator.payloads == [
+        {
+            "grant_permissions": [],
+            "deny_permissions": ["object.delete"],
+            "scope": {"rules": [{"field": "status", "operator": "in", "value": ["published"]}]},
+        }
+    ]
+    user = recorder.messages[0][1]["content"]
+    # The catalog arrives with the keys and with who holds them by default ...
+    assert "object.publish (object · publish; by default: admin)" in user
+    assert "object.delete (object · delete; by default: editor)" in user
+    # ... the scope with the values the editor offers ...
+    assert "Object types: product, collection" in user
+    assert "Workflow states: draft, in_review, approved, published, archived" in user
+    # ... and the system prompt names the artefact, not a script.
+    assert "permission lists and the data scope" in recorder.messages[0][0]["content"]
+
+
+def test_a_group_suggestion_keeps_the_current_state_of_an_edit() -> None:
+    recorder = Recorder(json.dumps(GOOD_GROUP))
+    current = json.dumps({"grant_permissions": ["search.manage"], "deny_permissions": []})
+    asyncio.run(
+        generate(
+            CONFIG,
+            _group_request(mode="edit", current_script=current),
+            json_context=_group_context(),
+            chat_fn=recorder,
+        )
+    )
+    user = recorder.messages[0][1]["content"]
+    # The baseline the editor serialises is in the prompt, so "keep the rest" is possible.
+    assert "search.manage" in user
+    assert "Keep everything the description does not ask to change." in user
+
+
+def test_a_rejected_group_suggestion_gets_one_correction_turn() -> None:
+    recorder = Recorder(json.dumps(GOOD_GROUP), json.dumps(GOOD_GROUP))
+    validator = ConfigChecking(
+        (False, "unknown permission(s): object.publsh — the catalog is at GET /permissions"),
+        (True, "accepted by the permission catalog and the scope validation"),
+    )
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _group_request(),
+            json_context=_group_context(),
+            validate_config=validator,
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is True
+    assert reply["attempts"] == 2
+    # The core's message goes back verbatim, so the model can fix exactly that.
+    assert "object.publsh" in recorder.messages[1][-1]["content"]
+
+
+def test_a_group_suggestion_without_a_catalog_never_calls_the_model() -> None:
+    recorder = Recorder(json.dumps(GOOD_GROUP))
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _group_request(),
+            json_context={"permission_catalog": {}, "object_types": GROUP_TYPES},
+            chat_fn=recorder,
+        )
+    )
+    assert reply["ok"] is False
+    assert reply["attempts"] == 0
+    assert "permission catalog" in str(reply["errors"][0])
+    assert recorder.messages == []
+
+
+def test_a_group_answer_without_a_scope_object_fails() -> None:
+    # A list where the scope object belongs is a malformed answer, not an empty scope.
+    broken = json.dumps({"grant_permissions": [], "scope": {"rules": "all"}})
+    reply = asyncio.run(
+        generate(
+            CONFIG,
+            _group_request(),
+            json_context=_group_context(),
+            chat_fn=Recorder(broken, broken),
+        )
+    )
+    assert reply["ok"] is False
+    assert any("`scope.rules`" in str(message) for message in reply["errors"])
+
+
 def test_the_connection_test_reports_success_and_missing_settings() -> None:
     recorder = Recorder("ok")
     reply = asyncio.run(run_connection_test(CONFIG, chat_fn=recorder))

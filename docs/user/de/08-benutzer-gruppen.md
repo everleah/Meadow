@@ -90,6 +90,22 @@ Regeln, die nicht aus dem Assistenten stammen (aus einem Import oder einer
 älteren Datei), bleiben erhalten: Der Editor zeigt sie wörtlich und speichert sie
 unverändert.
 
+## Rechte und Scope vorschlagen lassen (optional)
+
+Ist die KI-Assistenz in den System-Einstellungen eingeschaltet und eingerichtet,
+steht neben **Berechtigungen** der Knopf **Vorschlag erzeugen**. Er öffnet einen
+Dialog: Sie beschreiben in eigenen Worten, was die Gruppe darf und welche Daten
+sie sehen soll („darf nichts löschen und nur freigegebene Objekte sehen"), wählen
+**Neu schreiben** oder **Bestehendes verbessern** und erzeugen den Vorschlag.
+
+Der Vorschlag füllt die Rechte-Matrix und die Bausteine **Objekttyp** und
+**Status** — er ist der vollständige Zustand, den er vorschlägt; alles, was er
+nicht nennt, geht auf „wie Rolle" zurück. **Kategorie- und Collection-Bausteine
+bleiben unverändert**, weil sie einzelne Objekte benennen, die der Vorschlag
+nicht kennen kann; kann ein Wunsch so nicht ausgedrückt werden, sagt der Dialog
+es als Hinweis. **Gespeichert wird nichts automatisch:** Prüfen Sie Matrix, Scope
+und Zähler und drücken Sie dann **Speichern**.
+
 ## Mitglieder
 
 Mitglieder werden sofort geschrieben, nicht gespeichert — der Abschnitt

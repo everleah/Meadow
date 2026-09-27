@@ -681,3 +681,103 @@ def mapping_targets_text(
         suffix = f"{name}|<language>" if languages else name
         lines.append(f"{name} (multilingual by convention — write `{suffix}`)")
     return "\n".join(lines)
+
+
+# --- group permissions and scope (stage 3) ---------------------------------------
+
+
+class PermissionFact(NamedTuple):
+    """One permission of the catalog (`GET /permissions`)."""
+
+    key: str
+    area: str
+    action: str
+    description: str
+    #: The roles that hold it **by default** (the catalog's expanded `roles` list).
+    roles: tuple[str, ...]
+
+
+def permission_facts(catalog: Any) -> tuple[PermissionFact, ...]:
+    """Every permission of the catalog, in the core's order (bit order).
+
+    The catalog is **metadata**: keys, areas, one sentence each and which roles hold
+    them by default. No object value and no user is in here.
+    """
+    if not isinstance(catalog, Mapping):
+        return ()
+    entries = catalog.get("permissions")
+    if not isinstance(entries, list):
+        return ()
+    facts: list[PermissionFact] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        key = str(entry.get("key") or "")
+        if not key:
+            continue
+        roles = entry.get("roles")
+        facts.append(
+            PermissionFact(
+                key=key,
+                area=str(entry.get("area") or ""),
+                action=str(entry.get("action") or ""),
+                description=str(entry.get("description") or ""),
+                roles=tuple(str(role) for role in roles) if isinstance(roles, list) else (),
+            )
+        )
+    return tuple(facts)
+
+
+def permissions_text(facts: tuple[PermissionFact, ...] | list[PermissionFact]) -> str:
+    """One line per permission: the key, who has it by default, what it allows.
+
+    The default matters more than the description: a group's lists are **deviations**
+    from the roles, so the model has to see what a role already grants before it
+    denies or extends anything.
+    """
+    lines: list[str] = []
+    for fact in facts:
+        head = f"{fact.key} ({fact.area} · {fact.action}"
+        head += f"; by default: {', '.join(fact.roles)})" if fact.roles else ")"
+        if fact.description:
+            head += f" — {fact.description}"
+        lines.append(head)
+    return "\n".join(lines)
+
+
+def object_type_keys(object_types: Any) -> tuple[str, ...]:
+    """The keys of the object types (`GET /object-types`), in the core's order."""
+    if not isinstance(object_types, list):
+        return ()
+    names = (
+        str(entry.get("name") or "")
+        for entry in object_types
+        if isinstance(entry, Mapping) and entry.get("name")
+    )
+    return tuple(name for name in names if name)
+
+
+def scope_schema_text(
+    object_types: Any, statuses: tuple[str, ...] | list[str] | None = None
+) -> str:
+    """The scope document in words: the two rules a suggestion may write.
+
+    Only the **field** rules are described. A reference rule names record ids (a
+    category, a collection) that no prompt can know — the editor keeps those rules
+    untouched, and a suggestion that invented ids would be worse than none
+    (`plan/detail/ki-assistenz.md` §6.8).
+    """
+    types = ", ".join(object_type_keys(object_types)) or "(unknown)"
+    states = ", ".join(statuses or ()) or "(unknown)"
+    return (
+        'A scope document looks like {"rules": [<rule>, …]}; every rule must hold at once.\n'
+        "Two rule shapes are yours:\n"
+        '  {"field": "type", "operator": "in", "value": ["<object type>", …]}\n'
+        '  {"field": "status", "operator": "in", "value": ["<workflow state>", …]}\n'
+        f"Object types: {types}\n"
+        f"Workflow states: {states}\n"
+        "An empty `value` list matches nothing — never write one. A scope without rules\n"
+        "does not restrict at all: the group sees the whole catalogue.\n"
+        "Rules that filter by category or collection carry record ids you cannot know:\n"
+        "never write one, the editor keeps those rules as they are."
+    )

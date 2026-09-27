@@ -27,7 +27,7 @@ use crate::error::ApiError;
 #[derive(Debug, serde::Deserialize, ToSchema)]
 pub struct GenerateRequest {
     /// Target area: `rule` | `computed_attribute` | `search` | `connector` |
-    /// `export_profile` | `job` | `import_mapping`.
+    /// `export_profile` | `job` | `import_mapping` | `group_permissions`.
     pub area: String,
     /// `create` (from a description), `edit` (improve an existing script) or
     /// `explain` (prose for the description field).
@@ -64,6 +64,12 @@ pub struct GenerateRequest {
     /// **shape** hint (`text, 6 characters, all values different`), never a value.
     #[serde(default)]
     pub columns: Option<Vec<ColumnSpec>>,
+    /// The workflow states the scope card offers for `area = group_permissions` — the
+    /// editor's own option list (`display.OBJECT_STATUSES`). The suggestion may only name
+    /// a state the card can show, and a scope with an unknown status matches nothing
+    /// silently, so the list travels with the request like `declared_computed` does.
+    #[serde(default)]
+    pub statuses: Option<Vec<String>>,
 }
 
 /// One column of an uploaded file: the header and what its values look like.
@@ -101,10 +107,11 @@ fn validate(request: &GenerateRequest) -> Result<(), ApiError> {
             | "export_profile"
             | "job"
             | "import_mapping"
+            | "group_permissions"
     ) {
         return Err(ApiError::bad_request(format!(
             "unknown area `{}` (expected rule, computed_attribute, search, connector, \
-             export_profile, job or import_mapping)",
+             export_profile, job, import_mapping or group_permissions)",
             request.area
         )));
     }
@@ -203,6 +210,7 @@ pub async fn generate(
         "language": body.language,
         "config_kind": body.config_kind,
         "columns": body.columns,
+        "statuses": body.statuses,
     });
     let reply = state.ai.generate(request).await.map_err(|error| {
         tracing::warn!(error = %error, "AI generation failed");
@@ -279,6 +287,7 @@ mod tests {
             language: None,
             config_kind: config_kind.map(str::to_owned),
             columns: None,
+            statuses: None,
         }
     }
 
@@ -299,6 +308,7 @@ mod tests {
         // The other areas carry their target in `object_type`.
         assert!(validate(&request("rule", None)).is_ok());
         assert!(validate(&request("search", None)).is_ok());
+        assert!(validate(&request("group_permissions", None)).is_ok());
     }
 
     #[test]
@@ -322,6 +332,7 @@ mod tests {
             "export_profile",
             "job",
             "import_mapping",
+            "group_permissions",
         ] {
             assert!(error.contains(area), "`{area}` missing in: {error}");
         }
@@ -342,5 +353,17 @@ mod tests {
         assert!(validate(&mapping).is_ok());
         // The other areas do not need columns.
         assert!(validate(&request("rule", None)).is_ok());
+    }
+
+    #[test]
+    fn the_group_area_works_without_extra_input() {
+        // The area describes a group document: the permission catalog and the scope schema
+        // come from the core, the workflow states from the editor. A description is enough
+        // (the editor sends the current matrix as `current_script` in the `edit` mode).
+        assert!(validate(&request("group_permissions", None)).is_ok());
+
+        let mut edit = request("group_permissions", None);
+        edit.mode = "edit".to_owned();
+        assert!(validate(&edit).is_ok());
     }
 }

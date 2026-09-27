@@ -49,7 +49,10 @@ from meadow.ai.context import (
     mapping_targets_text,
     parameter_facts,
     parameters_text,
+    permission_facts,
+    permissions_text,
     policy_block,
+    scope_schema_text,
     search_field_facts,
     search_fields_text,
     search_limits_text,
@@ -88,6 +91,9 @@ class GenerationRequest:
     config_kind: str | None = None
     #: The columns of the uploaded file (`import_mapping`), in file order.
     columns: tuple[ColumnFact, ...] = ()
+    #: The workflow states the scope card offers (`group_permissions`): the editor's own
+    #: option list, so a suggestion can never name a state the card cannot show.
+    statuses: tuple[str, ...] = ()
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> GenerationRequest:
@@ -98,6 +104,7 @@ class GenerationRequest:
             return value if isinstance(value, str) and value.strip() else None
 
         declared = payload.get("declared_computed")
+        statuses = payload.get("statuses")
         return cls(
             area=str(payload.get("area") or ""),
             mode=str(payload.get("mode") or ""),
@@ -112,6 +119,9 @@ class GenerationRequest:
             language=text("language"),
             config_kind=text("config_kind"),
             columns=column_facts(payload.get("columns")),
+            statuses=tuple(str(state) for state in statuses if isinstance(state, str))
+            if isinstance(statuses, list)
+            else (),
         )
 
 
@@ -167,10 +177,31 @@ def _parse_artefact(area: str, text: str) -> dict[str, Any]:
     A `rule` answer is the script itself; a `computed_attribute` answer is the
     JSON envelope with the script plus its metadata; a `search` answer is the
     query object; a `connector`, `export_profile`, `job` or `import_mapping`
-    answer is the JSON object the editor fills in. A malformed answer is an error,
-    not a silent empty suggestion.
+    answer is the JSON object the editor fills in; a `group_permissions` answer is
+    the group document (both permission lists and the scope) plus an optional
+    `note`. A malformed answer is an error, not a silent empty suggestion.
     """
     cleaned = strip_fences(text)
+    if area == "group_permissions":
+        try:
+            payload = json.loads(cleaned)
+        except ValueError as error:
+            raise ProviderError(f"the model did not answer with JSON: {error}") from error
+        if not isinstance(payload, dict):
+            raise ProviderError("the answer is not a JSON object")
+        scope = payload.get("scope")
+        rules = scope.get("rules") if isinstance(scope, dict) else None
+        if rules is not None and not isinstance(rules, list):
+            raise ProviderError("`scope.rules` must be a list of rules")
+        note = payload.get("note")
+        return {
+            "group": {
+                "grant_permissions": _as_str_list(payload.get("grant_permissions")),
+                "deny_permissions": _as_str_list(payload.get("deny_permissions")),
+                "scope": {"rules": rules} if isinstance(rules, list) else {},
+            },
+            "note": note if isinstance(note, str) else "",
+        }
     if area == "import_mapping":
         try:
             payload = json.loads(cleaned)
@@ -260,8 +291,9 @@ async def generate(
 
     The check differs by area: a script goes through the sandbox policy
     (`check_script`), a search query through the **core's own validator**
-    (`validate_query` → `POST /saved-searches/preview`), which is the component
-    that will execute it later.
+    (`validate_query` → `POST /saved-searches/preview`), a JSON configuration and a
+    group document through the core's matching endpoint (`validate_config`), which is
+    the component that would accept or refuse the save.
     """
     if request.area not in prompts.AREAS:
         return {"ok": False, "errors": [f"unknown area `{request.area}`"], "attempts": 0}
@@ -388,6 +420,24 @@ async def generate(
             targets=mapping_targets_text(facts, conventional=conventional, languages=languages),
             columns=mapping_columns_text(request.columns),
             current_mapping=request.current_script,
+            language=request.language,
+        )
+    elif request.area == "group_permissions":
+        permission_rows = permission_facts((json_context or {}).get("permission_catalog"))
+        if not permission_rows:
+            return {
+                "ok": False,
+                "attempts": 0,
+                "errors": ["the permission catalog could not be loaded from the core"],
+            }
+        task = prompts.group_permissions_user_prompt(
+            mode=request.mode,
+            description=request.description,
+            permissions=permissions_text(permission_rows),
+            scope_schema=scope_schema_text(
+                (json_context or {}).get("object_types"), request.statuses
+            ),
+            current_state=request.current_script,
             language=request.language,
         )
     else:
@@ -517,6 +567,17 @@ async def generate(
                     "latency_ms": latency_ms,
                     "usage": usage,
                 }
+            if request.area == "group_permissions":
+                return {
+                    "ok": True,
+                    "attempts": attempts,
+                    "permissions": artefact["group"],
+                    "note": artefact.get("note") or "",
+                    "check": message,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "usage": usage,
+                }
             return {
                 "ok": True,
                 "attempts": attempts,
@@ -566,20 +627,23 @@ async def _check_artefact(
     own validation** — the worker wires the matching endpoint in
     (`/saved-searches/preview`, `/connectors/validate`, `/export-profiles/validate`,
     `/jobs/validate`). An import mapping passes the check in `meadow.tabular`, the
-    module that builds the MEF document the import writes from.
+    module that builds the MEF document the import writes from. A group document
+    passes `POST /groups/validate`, the write path's own check (catalog + scope).
 
-    Only for connectors, export profiles and imports is that the save path's own
-    check; a job definition survives a mapping the contract rejects (see
+    Only for connectors, export profiles, groups and imports is that the save path's
+    own check; a job definition survives a mapping the contract rejects (see
     `api::job_schema`), so there a green answer means "matches the contract", not
     "the save will succeed".
     """
-    if area in ("connector", "export_profile", "job", "import_mapping"):
+    if area in ("connector", "export_profile", "job", "import_mapping", "group_permissions"):
         if area == "connector":
             payload = artefact["config"]
         elif area == "job":
             payload = artefact["job"]
         elif area == "import_mapping":
             payload = artefact["mapping"]
+        elif area == "group_permissions":
+            payload = artefact["group"]
         else:
             payload = artefact["profile"]
         if validate_config is None:

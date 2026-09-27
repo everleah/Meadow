@@ -167,6 +167,7 @@ use utoipa::OpenApi;
         groups::create_group,
         groups::list_groups,
         groups::preview_scope,
+        groups::validate_group,
         groups::get_group,
         groups::update_group,
         groups::delete_group,
@@ -280,6 +281,7 @@ use utoipa::OpenApi;
         groups::UpdateGroup,
         groups::ListGroups,
         groups::PreviewScope,
+        groups::ValidateGroup,
         system::IngestLogEntry,
         system::ListLogs,
         system::PutSetting,
@@ -318,7 +320,12 @@ mod tests {
             "suspiciously small: {} bytes",
             json.len()
         );
-        for path in ["/jobs/schema", "/jobs/validate", "/saved-searches/preview"] {
+        for path in [
+            "/jobs/schema",
+            "/jobs/validate",
+            "/saved-searches/preview",
+            "/groups/validate",
+        ] {
             assert!(
                 document.paths.paths.contains_key(path),
                 "`{path}` is missing from the document"
