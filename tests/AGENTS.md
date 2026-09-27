@@ -55,6 +55,12 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   (`perm-state-<key>-<state>`), otherwise the test clicks the wrong row. A widget with a
   `value` property behaves like the `ui.toggle` it replaced: `find(marker=...).elements`
   can be read and written by the existing helpers.
+- **Not everything in a page can be driven by the simulation:** the Rule Lab opens from the
+  AG Grid's *selection* (`aggrid.get_selected_rows()` is a JavaScript call the simulation
+  cannot answer), so `tests/test_rules_page.py` covers the **pure** helper it depends on
+  (`display.object_row_label`) and the lab itself is verified in the browser against the
+  running instance. Say so in the test module instead of writing a test that only looks
+  like it exercises the UI.
 - Widgets a page test has to *find* carry a marker (`ui.button(...).mark("bulk-start")`,
   NiceGUI 3.x; the old `marker()` name is gone). Four rules learned the hard way: a click on
   an **async** handler only schedules it (wait for the effect, e.g. with a small
