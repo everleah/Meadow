@@ -30,9 +30,11 @@ from meadow.frontend import auth
 from meadow.frontend.ai_assist import ai_state, open_suggestion_dialog
 from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
+from meadow.frontend.display import object_row_label
 from meadow.frontend.filters import filter_select
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
+from meadow.frontend.multilang import base_lang
 from meadow.frontend.object_picker import open_object_picker
 
 #: Known rule types (matches the core's VALID_RULE_TYPES).
@@ -87,18 +89,6 @@ def _applies_label(applies: object) -> str:
     return "—"
 
 
-def _obj_label(row: dict) -> str:
-    """A human-readable label for an object row (name map or id)."""
-    name = row.get("name")
-    if isinstance(name, str) and name:
-        return name
-    if isinstance(name, dict) and name:
-        for value in name.values():
-            if isinstance(value, str) and value:
-                return value
-    return str(row.get("id") or "")
-
-
 def _json_pretty(value: object) -> str:
     """Pretty-prints a JSON value for the results panel."""
     try:
@@ -133,6 +123,8 @@ async def rules_page() -> None:
     except CoreError, httpx.HTTPError:  # degrade to default types
         object_types = []
     type_names = sorted({str(ot.get("name")) for ot in object_types if ot.get("name")})
+    # The language object labels are resolved in (`GET /objects` returns raw attributes).
+    ui_lang = base_lang(current_locale())
     # Whether the AI assistant can be used (opt-in, configured, admin page) — and
     # why not, so the editor can say it instead of hiding the button silently.
     ai = await ai_state(client, token)
@@ -600,21 +592,31 @@ async def rules_page() -> None:
             with ui.column().classes("w-full mt-2 gap-3"):
                 mode_radio = ui.radio(
                     {
-                        "object": t("rules.lab_mode_object"),
-                        "selection": t("rules.lab_mode_selection"),
+                        "objects": t("rules.lab_mode_objects"),
                         "payload": t("rules.lab_mode_payload"),
                     },
-                    value="object",
+                    value="objects",
                 ).props("inline")
 
-                type_input = (
-                    ui.input(t("rules.lab_object_type")).props("filled dense").classes("w-full")
+                # The object type is a **filter for the list below** (and for the picker):
+                # an input would make the user type a name the registry already knows.
+                object_type_select = (
+                    ui.select(
+                        {"": t("rules.lab_all_types"), **{name: name for name in type_names}},
+                        label=t("rules.lab_object_type"),
+                        value="",
+                        with_input=True,
+                    )
+                    .props("filled dense")
+                    .classes("w-full")
+                    .mark("lab-object-type")
                 )
                 with ui.row().classes("w-full gap-2").style("flex-wrap: nowrap"):
                     object_select = (
                         ui.select({}, label=t("rules.lab_objects"), multiple=True)
                         .props("filled dense outlined")
                         .classes("grow")
+                        .mark("lab-objects")
                     )
                     ui.button(
                         icon="account_tree",
@@ -629,45 +631,78 @@ async def rules_page() -> None:
                     ui.textarea(t("rules.lab_payload"))
                     .props("filled dense")
                     .classes("w-full font-mono text-sm")
+                    .mark("lab-payload")
                 )
                 ui.label(t("rules.lab_payload_hint")).classes("text-caption text-gray-500")
                 with ui.row().classes("w-full justify-end gap-2"):
-                    ui.button(
-                        t("rules.lab_run"),
-                        icon="play_arrow",
-                        on_click=lambda: run_lab(),
-                    ).props("color=secondary")
+                    run_button = (
+                        ui.button(
+                            t("rules.lab_run"),
+                            icon="play_arrow",
+                            on_click=lambda: run_lab(),
+                        )
+                        .props("color=secondary")
+                        .mark("lab-run")
+                    )
 
-                results = ui.column().classes("w-full mt-3 gap-2")
+                results = ui.column().classes("w-full mt-3 gap-2").mark("lab-results")
 
             with ui.row().classes("w-full justify-end mt-2 gap-2"):
                 ui.button(t("grid.close"), on_click=lab_dialog.close).props("flat")
 
         def _sync_lab_visibility() -> None:
             mode = mode_radio.value
-            type_input.set_visibility(mode in ("object", "selection"))
-            object_select.set_visibility(mode in ("object", "selection"))
+            object_type_select.set_visibility(mode == "objects")
+            object_select.set_visibility(mode == "objects")
             payload_area.set_visibility(mode == "payload")
 
+        def _sync_run_label() -> None:
+            """The run button names how many objects it will send (no silent truncation)."""
+            count = len(object_select.value or [])
+            label = t("rules.lab_run")
+            run_button.set_text(label if not count else f"{label} ({count})")
+
         mode_radio.on_value_change(lambda _e: _sync_lab_visibility())
+        object_select.on_value_change(lambda _e: _sync_run_label())
 
         async def load_object_options() -> None:
-            object_type = (type_input.value or "").strip() or None
+            """Fills the object list with the objects of the chosen type (a filter, not a rule).
+
+            An empty type means "any type" — the picker and the search are the tools for a
+            catalogue that does not fit into a list, this one is the convenience for a few.
+            """
+            object_type = str(object_type_select.value or "") or None
             try:
                 rows = await client.list_objects(token, object_type=object_type, limit=200)
             except CoreError, httpx.HTTPError:  # degrade to no options
                 rows = []
-            object_select.set_options({str(r.get("id")): _obj_label(r) for r in rows})
+            options = {str(row.get("id")): object_row_label(row, ui_lang) for row in rows}
+            # A type change must not keep ids that are no longer on offer (a select whose
+            # value is not among its options takes the page down).
+            kept = [value for value in (object_select.value or []) if value in options]
+            object_select.set_options(options, value=kept)
+            _sync_run_label()
+
+        object_type_select.on_value_change(lambda _e: load_object_options())
 
         async def pick_objects() -> None:
             """Picks test objects with the shared picker (search + structure tree)."""
-            object_type = (type_input.value or "").strip() or None
+            object_type = str(object_type_select.value or "") or None
 
             async def on_pick(hits: list[dict]) -> None:
-                object_select.set_options(
-                    {str(hit["id"]): f"{hit.get('label')} · {hit.get('type')}" for hit in hits},
-                    value=[str(hit["id"]) for hit in hits],
-                )
+                """Merges the picked objects into the selection.
+
+                The picker starts empty on every open (like the scope card's), so a second
+                pick **adds** to the first instead of replacing it.
+                """
+                merged = {str(hit["id"]): f"{hit.get('label')} · {hit.get('type')}" for hit in hits}
+                previous = object_select.options
+                if isinstance(previous, dict):  # keep what the list had contributed
+                    for value, label in previous.items():
+                        merged.setdefault(str(value), str(label))
+                chosen = [*(object_select.value or []), *(str(hit["id"]) for hit in hits)]
+                object_select.set_options(merged, value=list(dict.fromkeys(chosen)))
+                _sync_run_label()
 
             await open_object_picker(
                 client=client,
@@ -683,11 +718,16 @@ async def rules_page() -> None:
             nonlocal lab_rule
             lab_rule = rule
             lab_title.set_text(f"{t('rules.lab_title')} — {str(rule.get('name') or '')}")
-            type_input.set_value("")
+            # The rule usually knows which types it is for: prefill the filter when it names
+            # exactly one, so the list is useful without a single click.
+            applies = [str(value) for value in (rule.get("applies_to") or [])]
+            single = applies[0] if len(applies) == 1 and applies[0] in type_names else ""
+            object_type_select.set_value(single)
             object_select.set_options({})
             object_select.set_value([])
             payload_area.set_value("")
             results.clear()
+            _sync_run_label()
             _sync_lab_visibility()
 
         async def open_lab_for_selection() -> None:
@@ -709,6 +749,7 @@ async def rules_page() -> None:
             results.clear()
             with results:
                 ui.spinner().classes("place-self-center my-4")
+            run_button.set_enabled(False)
 
             try:
                 if mode == "payload":
@@ -731,20 +772,22 @@ async def rules_page() -> None:
                     await render_outcomes([(None, parsed, outcome)])
                     return
 
-                chosen = [str(v) for v in (object_select.value or [])]
+                # One object or many: the same call, one outcome card per object. A separate
+                # "single object" mode used to send only the **first** of the chosen ids and
+                # silently dropped the rest.
+                chosen = [str(value) for value in (object_select.value or [])]
                 if not chosen:
                     ui.notify(t("rules.lab_no_objects"), color="warning")
                     results.clear()
                     return
-                # Refresh object rows (for labels) using the current type filter.
-                object_type = (type_input.value or "").strip() or None
+                # Labels for exactly these objects (the type filter is a list filter, not a
+                # statement about which objects may be run).
                 try:
-                    rows = await client.list_objects(token, object_type=object_type, limit=200)
+                    rows = await client.list_objects(token, ids=chosen, limit=len(chosen))
                 except CoreError, httpx.HTTPError:  # degrade to no labels
                     rows = []
-                by_id = {str(r.get("id")): r for r in rows}
-                objects_to_run = chosen[:1] if mode == "object" else chosen
-                batch_outcome = await client.test_batch_rule(token, rule_id, objects_to_run)
+                by_id = {str(row.get("id")): row for row in rows}
+                batch_outcome = await client.test_batch_rule(token, rule_id, chosen)
                 await render_outcomes(
                     [
                         (
@@ -758,6 +801,8 @@ async def rules_page() -> None:
             except CoreError as error:
                 ui.notify(f"{t('rules.lab_run_failed')}: {error}", color="negative")
                 results.clear()
+            finally:
+                run_button.set_enabled(True)
 
         async def render_outcomes(entries: list[tuple]) -> None:
             results.clear()
@@ -769,7 +814,7 @@ async def rules_page() -> None:
                     with ui.card().classes("w-full"):
                         header = ""
                         if candidate:
-                            header = _obj_label(candidate)
+                            header = object_row_label(candidate, ui_lang)
                         if header and object_id:
                             header = f"{header} · {object_id}"
                         ui.label(header or t("rules.lab_object")).classes(

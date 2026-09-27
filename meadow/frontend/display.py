@@ -119,6 +119,26 @@ def channel_label(channel: dict | None, locale: str) -> str:
     return resolve_value(channel.get("label"), locale) or str(channel.get("code") or "")
 
 
+def object_row_label(row: dict, locale: str) -> str:
+    """A human-readable label for an object row from `GET /objects`.
+
+    The endpoint returns the raw `attributes` (multilingual maps and all) and has **no**
+    top-level `name`, so the label attribute is resolved for `locale` first — a list of
+    bare ULIDs is unusable. Then a `code` (a taxonomy node, the same order the object
+    picker uses), the business key `sku`, the source id and finally the id.
+    """
+    raw = row.get("attributes")
+    attributes = raw if isinstance(raw, dict) else {}
+    name = resolve_value(attributes.get("name"), locale)
+    if name:
+        return name
+    for key in ("code", "sku", "source_id"):
+        value = attributes.get(key) or row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return str(row.get("id") or "")
+
+
 def channel_options(channels: list[dict], locale: str) -> dict[str, str]:
     """Select options `code -> label` for channel filters and pickers."""
     return {

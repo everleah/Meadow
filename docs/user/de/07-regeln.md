@@ -99,10 +99,20 @@ unter *System-Einstellungen*.
 
 ## Rule Lab: testen vor dem Speichern
 
-Das **Rule Lab** führt eine Regel aus, ohne etwas zu speichern. Sie wählen, ob
-gegen **ein reales Objekt**, gegen eine **Objektauswahl** oder gegen einen
-selbst gebauten **Payload** (JSON mit `type`, `status`, `attributes`) getestet
-wird. Das Ergebnis zeigt Fehler, Warnungen, berechnete Werte, das Verdict eines
+Das **Rule Lab** führt eine Regel aus, ohne etwas zu speichern. Es gibt zwei
+Quellen:
+
+- **Objekte** — eines oder mehrere aus dem Katalog. Der **Objekttyp** ist ein
+  Filter für die Liste (und für den Baum-Picker); er ist mit dem Typ vorbelegt,
+  für den die Regel gilt. Die Liste selbst ist die Bequemlichkeit für wenige
+  Objekte; für alles andere sind der Picker (Baum-Symbol) und die Suche die
+  Werkzeuge. Der Knopf zeigt mit **Ausführen (2)**, wie viele Objekte er sendet —
+  je Objekt erscheint ein Ergebnis.
+- **Konstruierter Payload** — ein selbst geschriebenes JSON (`type`, `status`,
+  `attributes`) für Fälle, die es im Katalog nicht gibt: ein Wert, den noch
+  niemand gepflegt hat, ein fehlendes Merkmal, ein Statuswechsel.
+
+Das Ergebnis zeigt Fehler, Warnungen, berechnete Werte, das Verdict eines
 Wächters und die Protokollzeilen — für konstruierte Payloads auch *Vorher* und
 *Nachher* im Vergleich.
 

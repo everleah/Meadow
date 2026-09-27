@@ -99,11 +99,19 @@ With the assistance switched off, the same spot says why: it is enabled under
 
 ## Rule Lab: try before you save
 
-The **Rule Lab** runs a rule without storing anything. You choose whether to
-test against **a real object**, against **a selection of objects** or against a
-hand-built **payload** (JSON with `type`, `status`, `attributes`). The result
-shows errors, warnings, computed values, a guard's verdict and the log lines —
-for hand-built payloads also *before* and *after* side by side.
+The **Rule Lab** runs a rule without storing anything. There are two sources:
+
+- **Objects** — one or several from the catalogue. The **object type** is a filter
+  for the list (and for the tree picker) and is prefilled with the type the rule is
+  for. The list itself is the convenience for a few objects; for everything else the
+  picker (tree icon) and the search are the tools. The button shows **Run (2)** — how
+  many objects it will send — and one result appears per object.
+- **Constructed payload** — a hand-built JSON (`type`, `status`, `attributes`) for
+  cases the catalogue does not have: a value nobody has maintained yet, a missing
+  attribute, a status change.
+
+The result shows errors, warnings, computed values, a guard's verdict and the log
+lines — for hand-built payloads also *before* and *after* side by side.
 
 The dry run is the fastest way to understand a rule somebody else wrote.
 

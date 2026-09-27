@@ -169,6 +169,8 @@ Das **Rule Lab** ist die Admin-UI rund um den Dry-Run, angelehnt an das Interact
 - realen Objekt-Payload in den Editor kopieren (deterministische Edge-Case-Tests),
 - **read-only by default, keine Persistenz**; gleiche Sandbox/Timeouts wie die Produktions-Auswertung.
 
+**Umgesetzt (2026-09-27):** Die Oberfläche bietet **zwei Quellen** — **Objekte** (eine beliebige Anzahl, je Objekt eine Ergebniskarte) und einen **konstruierten Payload** (JSON für Fälle, die es im Katalog nicht gibt). Ein früherer dritter Modus „reales Objekt" war keine eigene Quelle, sondern derselbe Aufruf mit nur dem **ersten** gewählten Objekt — die übrigen wurden still verworfen; er ist entfernt, und der Knopf beschriftet sich mit der Anzahl (`Ausführen (3)`). Der **Objekttyp** ist eine Auswahl aus dem Register (kein Eingabefeld) und ein **Filter für die Liste** und den Baum-Picker; er ist mit dem Typ der Regel vorbelegt, wenn die Regel genau einen nennt. Die Objektliste zeigt **Namen** statt Ids: `GET /objects` liefert keine Beschriftung, deshalb löst `display.object_row_label` das Label-Merkmal für die Anzeigesprache auf (`code` → `sku` → `source_id` → Id als Rückfall, dieselbe Reihenfolge wie der Objekt-Picker). Der Baum-Picker **ergänzt** eine bestehende Auswahl, statt sie zu ersetzen (wie in der Scope-Karte).
+
 Lab-Ausführungen werden **auditiert** (wer hat wann welche Regel gegen welche Objekte ausgeführt – Metadaten, nicht die Payloads). Das Rule Lab dient auch als **Debugging-Werkzeug**, nachdem der Circuit Breaker eine Regel deaktiviert hat. **Aktiviert werden kann nur, was gegen reale Daten beobachtet wurde.**
 
 ## Fehlerbehandlung & Betrieb
