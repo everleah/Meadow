@@ -23,6 +23,7 @@ from meadow.frontend.api import CoreClient, CoreError
 from meadow.frontend.config import CORE_URL
 from meadow.frontend.display import OBJECT_STATUSES, resolve_value
 from meadow.frontend.filters import filter_select
+from meadow.frontend.help_page import chapter_button
 from meadow.frontend.i18n import current_locale, t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 from meadow.frontend.multilang import base_lang
@@ -89,7 +90,11 @@ async def users_page() -> None:
         groups = []
 
     with ui.column().classes("w-full p-6"):
-        ui.label(t("users.title")).classes("text-h4")
+        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+            ui.label(t("users.title")).classes("text-h4")
+            # The page's handbook entry point: the page explains what it shows, the chapter
+            # how to work with it (`docs/user/<sprache>/08-benutzer-gruppen.md`).
+            chapter_button("benutzer-gruppen")
         ui.label(t("users.subtitle")).classes("text-subtitle1")
 
         #: The rights panel of the opened user (one entry at a time, keyed by user id).
