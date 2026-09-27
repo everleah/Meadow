@@ -528,7 +528,7 @@
   "groups.deleted": "Groupe supprimé.",
 "groups.catalog_failed": "Le catalogue des permissions n'a pas pu être chargé - les droits restent inchangés.",
 "groups.perm_title": "Permissions",
-"groups.perm_hint": "Selon rôle conserve la valeur par défaut, autoriser ajoute un droit, interdire le retire - une interdiction l'emporte.",
+"groups.perm_hint": "Le bouton rempli est la réponse de ce groupe : gris = selon le rôle, vert = autorisé en plus, rouge = explicitement interdit. Une interdiction l'emporte.",
   "groups.perm_inherit": "selon rôle",
   "groups.perm_grant": "autoriser",
   "groups.perm_deny": "interdire",

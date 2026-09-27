@@ -47,6 +47,14 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `FakeCore.data["list_system_settings"]` (`ai_enabled`/`ai_api_key`/`ai_endpoint`/
   `ai_model`; without them `ai_state` says "unavailable" and the button does not exist,
   which is itself worth a test). `test_users_page.py::test_an_ai_suggestion_fills_the_form_and_saves_nothing` drives it end to end and asserts that `POST`/`PATCH /groups` is **not** called.
+- Two traps of the simulated user, found while testing the permission matrix's state
+  buttons: `UserInteraction.elements` is a **set**, so the order of equal-looking widgets
+  can only come from the element tree (`element.default_slot.children`) — never from the
+  order of `find(...)`; and `click()` picks the element with the lowest id, so a control
+  that appears once per row needs a **unique marker per row**
+  (`perm-state-<key>-<state>`), otherwise the test clicks the wrong row. A widget with a
+  `value` property behaves like the `ui.toggle` it replaced: `find(marker=...).elements`
+  can be read and written by the existing helpers.
 - Widgets a page test has to *find* carry a marker (`ui.button(...).mark("bulk-start")`,
   NiceGUI 3.x; the old `marker()` name is gone). Four rules learned the hard way: a click on
   an **async** handler only schedules it (wait for the effect, e.g. with a small

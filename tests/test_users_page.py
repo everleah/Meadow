@@ -423,6 +423,69 @@ def _toggle_values(user: User) -> dict[str, object]:
     }
 
 
+def _toggle_states(user: User) -> dict[str, list[tuple[str, str, str, bool]]]:
+    """Per permission: icon, accessible name, colour, and whether it is the picked state.
+
+    Read through the row's own children: `User.find` answers with a **set**, so the order
+    of the three states (as role, allow, deny) can only come from the element tree.
+    """
+    states: dict[str, list[tuple[str, str, str, bool]]] = {}
+    for element in user.find(marker="permission-toggle").elements:
+        states[str(element.props.get("data-key"))] = [
+            (
+                str(child.props.get("icon")),
+                str(child.props.get("aria-label")),
+                str(child.props.get("color")),
+                child.props.get("flat") is None,  # filled = the state in force
+            )
+            for child in element.default_slot.children
+            if isinstance(child, ui.button)
+        ]
+    return states
+
+
+async def test_the_matrix_states_are_icons_with_their_name_as_tooltip(users_user: User) -> None:
+    """Three icon buttons per row instead of three text labels 30 times over.
+
+    The words stay where a concept is explained **once** (the hint above the matrix, the
+    handbook chapter) — here they are the tooltip and the accessible name, so the answer is
+    still readable without hovering and for a screen reader. The **colour** of the filled
+    button is the answer itself, the same two colours the effective-rights panel uses.
+    """
+    await _open_group_editor(users_user)
+
+    states = _toggle_states(users_user)
+    assert set(states) == {"object.read", "object.publish"}
+    # The seeded group leaves `object.read` to the role: grey is the filled state there.
+    assert states["object.read"] == [
+        ("settings_backup_restore", t("groups.perm_inherit", locale=EN), "grey-7", True),
+        ("check", t("groups.perm_grant", locale=EN), "grey-7", False),
+        ("block", t("groups.perm_deny", locale=EN), "grey-7", False),
+    ]
+    # …and it grants `object.publish`: there the green state is the filled one.
+    assert states["object.publish"] == [
+        ("settings_backup_restore", t("groups.perm_inherit", locale=EN), "grey-7", False),
+        ("check", t("groups.perm_grant", locale=EN), "positive", True),
+        ("block", t("groups.perm_deny", locale=EN), "grey-7", False),
+    ]
+
+
+async def test_a_state_button_picks_its_answer(users_user: User) -> None:
+    """Clicking a state picks it — the matrix has no save of its own, the group is saved."""
+    await _open_group_editor(users_user)
+    assert _toggle_values(users_user)["object.read"] == "inherit"
+
+    # The click a user makes, not a value assignment: the state button of this one row.
+    users_user.find(marker="perm-state-object.read-deny").click()
+    await _wait_until(lambda: _toggle_values(users_user)["object.read"] == "deny")
+    # Picking a state also repaints the row: red is now the filled one.
+    states = _toggle_states(users_user)["object.read"]
+    assert states[2] == ("block", t("groups.perm_deny", locale=EN), "negative", True)
+    assert states[0][3] is False and states[1][3] is False
+    # …and the row it belongs to is the only one that moved.
+    assert _toggle_values(users_user)["object.publish"] == "grant"
+
+
 async def test_an_ai_suggestion_fills_the_form_and_saves_nothing(users_user: User) -> None:
     """The suggestion lands in the matrix and the scope card — the admin still saves.
 

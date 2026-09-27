@@ -55,11 +55,18 @@ membership.
 
 ## The permission matrix
 
-Every row is a permission, every column one of three answers: **as the role**
-(enter nothing), **allow** (grant additionally) or **deny** (take away
-explicitly). Next to each switch stands the role whose default applies — so "as
-the role" needs no lookup. The matrix offers exactly the permissions the system
-knows; an unknown key is refused on save, so a typo cannot look like a set right.
+Every row is one permission, and every row carries three answers: **as the role**
+(the default, enter nothing), **allow** (grant additionally) or **deny** (take away
+explicitly). The answers are three small icon buttons — the tooltip names them:
+
+- **grey** (a circle with an arrow) — as the role says,
+- **green** (a check) — additionally allowed,
+- **red** (a block sign) — explicitly denied.
+
+The **filled** button is this group's answer, so a glance down the column shows what
+the group changes. Next to it stands the role whose default applies — so "as the
+role" needs no lookup. The matrix offers exactly the permissions the system knows;
+an unknown key is refused on save, so a typo cannot look like a set right.
 
 ## The data scope
 

@@ -528,7 +528,7 @@
   "groups.deleted": "Gruppe gelöscht.",
 "groups.catalog_failed": "Berechtigungskatalog konnte nicht geladen werden — die Rechte bleiben unverändert.",
 "groups.perm_title": "Berechtigungen",
-"groups.perm_hint": "Wie Rolle gilt die Voreinstellung der Rolle, erlauben gibt zusätzlich, verbieten nimmt ausdrücklich weg — Verbote gewinnen.",
+"groups.perm_hint": "Der gefüllte Knopf ist die Antwort dieser Gruppe: grau = wie die Rolle vorgibt, grün = zusätzlich erlaubt, rot = ausdrücklich verboten. Verbote gewinnen.",
   "groups.perm_inherit": "wie Rolle",
   "groups.perm_grant": "erlauben",
   "groups.perm_deny": "verbieten",

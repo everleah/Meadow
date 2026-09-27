@@ -51,6 +51,77 @@ SCOPE_BLOCKS: dict[str, tuple[str, str | None]] = {
 }
 
 
+#: The three states of one permission in the matrix: value, icon, label (tooltip) key,
+#: colour of the picked state. An answer is picked, not typed — and the third state needs
+#: no switch-off.
+PERMISSION_STATES: tuple[tuple[str, str, str, str], ...] = (
+    ("inherit", "settings_backup_restore", "groups.perm_inherit", "grey-7"),
+    ("grant", "check", "groups.perm_grant", "positive"),
+    ("deny", "block", "groups.perm_deny", "negative"),
+)
+
+
+class PermissionToggle(ui.element):
+    """One permission's three states as icon buttons (`value` = `inherit`/`grant`/`deny`).
+
+    Icons instead of the three words: a matrix row with three text labels per permission is
+    30 times the same sentence and every row grows wide. The words stay where a concept is
+    explained **once** — the hint above the matrix and the handbook chapter — while the
+    tooltip here only names the state (tooltip = short answer, handbook = long answer).
+
+    The `value` property is the whole interface: the matrix is saved with the group, so a
+    change here has no side effect, and reading/writing the state looks like the `ui.toggle`
+    it replaced.
+    """
+
+    def __init__(self, key: str, value: str = "inherit") -> None:
+        super().__init__("div")
+        self.classes("flex items-center gap-0 no-wrap")
+        self.props(f"data-key={key}")
+        self._value = value
+        self._buttons: dict[str, ui.button] = {}
+        with self:
+            for state, icon, label_key, _color in PERMISSION_STATES:
+                label = t(label_key)
+                self._buttons[state] = (
+                    ui.button(icon=icon, on_click=lambda _=None, s=state: self.set_value(s))
+                    # The words are the accessible name and the tooltip; the visible part
+                    # stays the icon (`props` needs the quotes for a value with a space).
+                    .props(f'aria-label="{label}"')
+                    .props(f"data-key={key} data-state={state}")
+                    .tooltip(label)
+                    .mark(f"perm-state-{key}-{state}")
+                )
+        self._paint()
+
+    @property
+    def value(self) -> str:
+        return self._value
+
+    @value.setter
+    def value(self, state: str) -> None:
+        self.set_value(state)
+
+    def set_value(self, state: str) -> None:
+        """Selects one state (an unknown one falls back to `inherit`, like an empty toggle)."""
+        self._value = state if state in self._buttons else "inherit"
+        self._paint()
+
+    def _paint(self) -> None:
+        """Shows the picked state: filled in its own colour, flat grey for the other two.
+
+        The colour **is** the answer (`positive` allowed, `negative` denied, `grey-7` as the
+        role says) — the same two colours the effective-rights panel uses, so a glance down
+        the matrix shows what this group changes instead of 30 identical highlights.
+        """
+        colors = {state: color for state, _icon, _label, color in PERMISSION_STATES}
+        for state, button in self._buttons.items():
+            if state == self._value:
+                button.props(f"round dense unelevated color={colors[state]}", remove="flat")
+            else:
+                button.props("round dense flat color=grey-7")
+
+
 def _split_join(value: object) -> str:
     """Joins a string list for display."""
     if isinstance(value, list):
@@ -624,7 +695,7 @@ async def users_page() -> None:
                     name_input = (
                         ui.input(t("groups.field_name")).props("filled dense").classes("w-full")
                     )
-                    permission_toggles: dict[str, ui.toggle] = {}
+                    permission_toggles: dict[str, PermissionToggle] = {}
                     with ui.column().classes("w-full gap-1"):
                         with ui.row().classes("w-full items-center gap-2"):
                             ui.label(t("groups.perm_title")).classes("text-subtitle2")
@@ -673,18 +744,8 @@ async def users_page() -> None:
                                     ui.label(_roles_label(permission)).classes(
                                         "text-caption text-grey-6"
                                     )
-                                    permission_toggles[key] = (
-                                        ui.toggle(
-                                            {
-                                                "inherit": t("groups.perm_inherit"),
-                                                "grant": t("groups.perm_grant"),
-                                                "deny": t("groups.perm_deny"),
-                                            },
-                                            value="inherit",
-                                        )
-                                        .props("dense unelevated")
-                                        .props(f"data-key={key}")
-                                        .mark("permission-toggle")
+                                    permission_toggles[key] = PermissionToggle(key).mark(
+                                        "permission-toggle"
                                     )
                     # ----------------------------------------------------- #
                     # Data scope (ABAC)                                     #

@@ -528,7 +528,7 @@
   "groups.deleted": "Group deleted.",
 "groups.catalog_failed": "The permission catalog could not be loaded - the rights stay unchanged.",
 "groups.perm_title": "Permissions",
-"groups.perm_hint": "As role keeps the role default, allow adds a right, deny takes one away - a deny wins.",
+"groups.perm_hint": "The filled button is this group's answer: grey = as the role says, green = additionally allowed, red = explicitly denied. A deny wins.",
   "groups.perm_inherit": "as role",
   "groups.perm_grant": "allow",
   "groups.perm_deny": "deny",

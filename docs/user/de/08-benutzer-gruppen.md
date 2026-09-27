@@ -57,9 +57,17 @@ bündeln.
 
 ## Die Rechte-Matrix
 
-Jede Zeile ist ein Recht, jede Spalte eine der drei Antworten: **wie Rolle**
-(nichts eintragen), **erlauben** (zusätzlich geben) oder **verbieten**
-(ausdrücklich nehmen). Neben jedem Schalter steht die Rolle, deren Vorgabe gilt —
+Jede Zeile ist ein Recht, jede Zeile trägt drei Antworten: **wie Rolle**
+(Standard, nichts eintragen), **erlauben** (zusätzlich geben) oder **verbieten**
+(ausdrücklich nehmen). Die Antworten sind drei kleine Symbolknöpfe — der
+Tooltip nennt sie beim Namen:
+
+- **grau** (Kreis mit Pfeil) — wie die Rolle vorgibt,
+- **grün** (Haken) — zusätzlich erlaubt,
+- **rot** (Verbotsschild) — ausdrücklich verboten.
+
+Der **gefüllte** Knopf ist die Antwort dieser Gruppe; ein Blick über die Spalte
+zeigt sofort, was sie ändert. Links daneben steht die Rolle, deren Vorgabe gilt —
 so ist ohne Nachschlagen klar, was „wie Rolle" bedeutet. Die Matrix bietet genau
 die Rechte an, die das System kennt; ein unbekannter Schlüssel wird beim Speichern
 abgelehnt, damit ein Tippfehler nicht wie ein gesetztes Recht aussieht.
