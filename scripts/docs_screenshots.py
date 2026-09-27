@@ -22,6 +22,10 @@ What the script does **not** do: seed data. It photographs whatever the instance
 contains, so run it against a dev database that carries demo data — otherwise the
 images show an empty tool and lose their point. The object shown in the form shot
 is discovered through the core API (first object of `--object-type`).
+
+Shots of a **dialog** (`click`/`dblclick`/`wait_for` of a [`Shot`]) open it the way a
+user does — expand the section, double-click the row — and wait for a marker *inside*
+the dialog, because the editors fill themselves asynchronously.
 """
 
 from __future__ import annotations
@@ -48,6 +52,13 @@ class Shot:
     settle_ms: int = 1200
     #: `object` = filled in with the discovered object id at runtime.
     needs_object: bool = False
+    #: Selector to click after the marker appeared (expands a section, e.g. the groups).
+    click: str = ""
+    #: Selector to double-click afterwards (opens a row's dialog). `{user}` is filled in
+    #: with the user the script picked (see [`rights_user`]).
+    dblclick: str = ""
+    #: Second marker waited for after the clicks (the dialog that opened).
+    wait_for: str = ""
 
 
 #: Curated set — few, stable images of the core working areas, in handbook order.
@@ -58,6 +69,25 @@ SHOTS: tuple[Shot, ...] = (
     Shot("import", "/import", ".q-card", settle_ms=1500),
     Shot("export", "/export", ".q-card", settle_ms=1500),
     Shot("rules", "/rules", ".ag-root-wrapper", settle_ms=2500),
+    # The two admin editors: what they show (permissions, scope, members, effective
+    # rights) exists only inside the dialogs, so the shot opens them the way a user does.
+    Shot(
+        "group-permissions",
+        "/users",
+        ".ag-root-wrapper",
+        settle_ms=2000,
+        click=".q-expansion-item__container",
+        dblclick=".q-expansion-item__container .ag-row",
+        wait_for=".q-dialog",
+    ),
+    Shot(
+        "user-rights",
+        "/users",
+        ".ag-root-wrapper",
+        settle_ms=2000,
+        dblclick='.ag-row:has-text("{user}")',
+        wait_for=".q-dialog",
+    ),
     Shot("help", "/help", ".help-body", settle_ms=1500),
 )
 
@@ -74,6 +104,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only", default="", help="Comma-separated shot names.")
     parser.add_argument("--list", action="store_true", help="List the shot names and exit.")
     return parser.parse_args()
+
+
+def rights_user(core_url: str, user: str, password: str) -> str:
+    """Returns a user whose rights panel shows a **deviation** (the point of the shot).
+
+    The panel is only interesting when a group adds or denies something, and whether that
+    is the case depends on the data — so the user is discovered through the core API
+    (read-only, like the object id of the form shot) instead of hard-coding a demo name.
+    Without such a user the first one is used: the panel then explains the role defaults.
+    """
+    with httpx.Client(timeout=10.0) as client:
+        token = client.post(
+            f"{core_url}/auth/login", json={"username": user, "password": password}
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        users = client.get(f"{core_url}/users?limit=200", headers=headers).json()
+        if not isinstance(users, list) or not users:
+            raise SystemExit("No user to photograph — is the core running?")
+        for entry in users:
+            effective = client.get(
+                f"{core_url}/users/{entry['id']}/effective", headers=headers
+            ).json()
+            reasons = effective.get("reasons") or {}
+            if any(
+                reason.get("granted_by") or reason.get("denied_by") for reason in reasons.values()
+            ):
+                return str(entry["username"])
+    return str(users[0]["username"])
 
 
 def object_id(core_url: str, user: str, password: str, object_type: str) -> str:
@@ -110,6 +168,11 @@ def shoot(args: argparse.Namespace, shots: list[Shot]) -> int:
         if any(shot.needs_object for shot in shots)
         else ""
     )
+    panel_user = (
+        rights_user(args.core_url, args.user, args.password)
+        if any("{user}" in shot.dblclick for shot in shots)
+        else ""
+    )
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -144,6 +207,15 @@ def shoot(args: argparse.Namespace, shots: list[Shot]) -> int:
             path = shot.path.format(object=target)
             page.goto(f"{args.base_url}{path}", wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_selector(shot.marker, timeout=30_000)
+            # A dialog is opened the way a user opens it: expand the section, double-click
+            # the row — and only then wait for the content (the editors fill themselves
+            # asynchronously, the marker is therefore inside the dialog).
+            if shot.click:
+                page.locator(shot.click).first.click()
+            if shot.dblclick:
+                page.locator(shot.dblclick.format(user=panel_user)).first.dblclick()
+            if shot.wait_for:
+                page.wait_for_selector(shot.wait_for, timeout=30_000)
             page.wait_for_timeout(shot.settle_ms)
             file = out_dir / f"{shot.name}.png"
             page.screenshot(path=str(file))
