@@ -1,0 +1,51 @@
+# Build context for docker/Dockerfile.{core,frontend,worker}.
+#
+# Each Dockerfile copies exactly what it needs (Cargo.toml/Cargo.lock/crates,
+# pyproject.toml/uv.lock/meadow, and docs/user for the handbook), so everything
+# else only costs time: without this file the context includes target/ and .venv/
+# (gigabytes) and sends them to the daemon on every build.
+
+# Version control & tooling
+.git
+.gitignore
+.gitattributes
+.github
+.forgejo
+.vscode
+.editorconfig
+.ruff_cache
+.mypy_cache
+.pytest_cache
+
+# Build output & local environments
+target
+.venv
+env
+venv
+**/__pycache__
+**/*.py[cod]
+.nicegui
+
+# Scratch, backups, diagnostics, local secrets
+.tmp
+backups
+diagnostics-*
+.env
+.env.vps
+.env.vps.example
+
+# Licensed vendor material (see resources/AGENTS.md): not in Git, not in an image.
+# BMEcat validation in a container therefore needs a bind mount plus BMECAT_XSD.
+resources
+
+# Not part of any image: planning, scripts, tests, migrations (the runner reads
+# them from the host), compose files, documentation other than the handbook.
+plan
+scripts
+tests
+migrations
+docker-compose*.yml
+
+# The handbook is the one documentation the frontend serves (`/help`).
+docs/*
+!docs/user

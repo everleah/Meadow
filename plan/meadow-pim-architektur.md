@@ -152,7 +152,7 @@ Die Architektur bildet die **technische Infrastruktur** ab. Fachliche Strukturen
 Für die lokale Entwicklung wird folgende Toolchain vorausgesetzt:
 
 - **Python:** Python 3.14 mit Projekt-venv (`.venv/`), verwaltet mit **uv** (Python-Paketmanager in Rust).
-- **Rust:** Toolchain über **rustup** (stable), Edition 2024; effektive MSRV ≥ 1.90 (`surrealdb` → `roaring`; `jsonwebtoken` selbst ≥ 1.88). Stand beim Aufsetzen: rustc 1.97.1.
+- **Rust:** Toolchain über **rustup** (stable), Edition 2024; deklarierte MSRV **1.97** (`Cargo.toml`) – die 1.90 aus dem Aufsetzen trägt `diskann` 0.54 (über `surrealdb`) nicht; der erste Produktions-Image-Build brach dort mit 11 × E0311 ab, `docker/Dockerfile.core` pinnt deshalb `rust:1.97-bookworm` (Stand beim Aufsetzen: rustc 1.97.1).
 - **Windows-Linker:** MSVC Build Tools (Visual Studio Community mit Workload „Desktopentwicklung mit C++“) als Linker für `rustc`.
 - **Python-Abhängigkeiten (MVP):** `nicegui`, `pydantic`, `nats-py`, `httpx`, `structlog`, `babel` – Installation in das venv mit `uv pip install --python .venv\Scripts\python.exe nicegui pydantic nats-py httpx structlog babel`.
 

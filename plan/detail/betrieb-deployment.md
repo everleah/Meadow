@@ -3,6 +3,7 @@
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 2, 4–5, 7, 8
 - **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt. **Phase 8:** Request-Limits (Body-/Rate-Limit) und Backup/Monitoring präzisiert – inkl. der **verifizierten SurrealDB-CLI** (`/surreal`, `--namespace`/`--database`, `is-ready`) für diesen Image-Stand und der lokalen Dev-Skripte `scripts/backup-db.ps1`/`restore-db.ps1`. **Deployment-Dateien erstellt:** `docker-compose.vps.yml`, `.env.vps.example`, `docker/Dockerfile.*`, VPS-Bash-Skripte (`scripts/build-images.sh`, `deploy-vps-meadow.sh`, `backup-vps-db.sh`, `restore-vps-db.sh`, `cleanup-backups.sh`, `healthcheck-vps.sh`, `collect-vps-diagnostics.sh`, `tail-vps-errors.sh`, `bootstrap-vps-admin.sh`). *Hinweis: Der Kern sät derzeit `admin`/`admin`; der **Passwort-Änderungs-Flow ist implementiert** (`POST /auth/password`, Schlüssel-Button im UI-Kopf; ein Banner mahnt an, solange das Passwort nie geändert wurde) — die Seed-Zugangsdaten nach dem ersten Deployment ändern.*
+- **Stand 2026-09-29 (Deployment fertiggestellt und geprüft):** Bilder werden **auf dem Entwicklungsrechner gebaut und gepusht** (`build-images.sh`/`build-images.ps1`, unveränderlicher Git-Kurzhash-Tag plus `latest`), der Server pullt nur. Neu dazu: der **Migrations-Runner** `run-migration.sh` samt `migrations/`-Vertrag (Abschnitt 6), der **gestückelte Restore** über `POST /sql` (Abschnitt 10, weil `surreal import` an jeder realistischen Exportgröße scheitert), ein `.dockerignore` (der Kontext enthielt vorher `target/` und `.venv/`), Log-Rotation je Container, `.gitattributes` gegen CRLF in Skripten und Migrationsdateien sowie die Registry `registry.example.com/meadow`. Alle Befunde stammen aus Läufen gegen die laufende Dev-Instanz; die Kern-Gates prüfen zusätzlich `tests/test_deployment.py`.
 
 Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**. Konkretes Ziel für das erste Deployment ist der **VPS unter `example.com`**, auf dem bereits Traefik als Reverse Proxy läuft. Die Deployment-Organisation folgt dabei dem erprobten VPS-Muster von **the predecessor project** (`deploy-vps-*.sh`, `.env.vps`, Traefik-Labels, Healthchecks, Backup/Restore). Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
 
@@ -47,6 +48,8 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 | `redis` (optional) | `redis:7-alpine`                                   | 6379                      | meadow-backend                 | nein                       |
 
 - Container-Namen mit `meadow-`-Präfix (z. B. `meadow-core`, `meadow-frontend`, `meadow-surrealdb`), um auf dem gemeinsamen Server Kollisionen zu vermeiden.
+- **Images:** gebaut wird auf dem Entwicklungsrechner (`scripts/build-images.sh --push`, Windows `scripts/build-images.ps1 -Push`) und zweifach getaggt — unveränderlich (Git-Kurzhash, `-dirty` bei schmutzigem Arbeitsbaum) plus `latest`. Der Server pullt nur; in `.env.vps` wird der unveränderliche Tag gepinnt (Rollback = älteren Tag setzen und erneut deployen).
+- **Loopback-Ports (nicht über Traefik geroutet):** `surrealdb` 8000 (der Migrations-Runner und der Restore sprechen `POST /sql`), NATS-Monitoring 8222, `pim-core` 8080. Die übrigen Dienste sind ausschließlich im internen Netz erreichbar.
 - **Kommunikation (intern):** Frontend → Core: REST (JWT) · Worker → Core: REST (JWT) · Core → NATS: Publish · Worker → NATS: Subscribe · Core ↔ Worker (Rules): NATS Request/Reply (`rules.evaluate`) · Core → SurrealDB: interner Treiber. Alle Dienste nur über das interne `meadow-backend`-Netz, öffentlich erreichbar sind ausschließlich `pim-frontend` und `pim-core` über Traefik.
 
 ### 3.3 Traefik-Labels (pim-core / pim-frontend)
@@ -72,208 +75,111 @@ Für `pim-frontend` entsprechend mit Router-Präfix `meadow-ui` und Server-Port 
 
 ### 3.4 Healthchecks & Restart-Politik
 
-- `pim-core`: `GET /health` → HTTP 200
-- `pim-frontend`: HTTP-Check auf lokalen Port
-- `pim-worker`: Verbindungs-Check zu NATS (bzw. Prozess-Healthcheck)
-- `surrealdb`: `GET /health` (Port 8000)
-- `nats`: `nats server check` (bzw. TCP-Check 4222)
-- `object-storage`: `GET /minio/health/live`
-- `redis`: `redis-cli ping`
-- `restart: unless-stopped`; `depends_on` mit `condition: service_healthy` für Datenbank-abhängige Dienste (Muster wie the predecessor project).
+| Dienst | Check | Anmerkung |
+| ------ | ----- | --------- |
+| `pim-core` | `GET /health` (im Container) | |
+| `pim-frontend` | `urllib` auf `http://127.0.0.1:8081/` **im Container** | Der Port ist nicht veröffentlicht, ein `curl` vom Host läuft ins Leere |
+| `pim-worker` | TCP-Verbindung zu `nats:4222` (Python) | Der Worker hat keinen HTTP-Endpunkt; der Check zeigt Prozess + NATS |
+| `surrealdb` | `/surreal is-ready` | im Image liegt das Binary unter `/surreal` |
+| `object-storage` | `curl /minio/health/live` | das MinIO-Image bringt `curl` mit |
+| `nats` | **kein** Container-Check | Das Image hat keine Shell und kein `curl`/`wget`; geprüft wird stattdessen vom Host über den Monitoring-Port (`/healthz`), siehe `healthcheck-vps.sh` |
+| `redis` (Profil) | `redis-cli ping` | |
+
+- `restart: unless-stopped` für jeden Dienst; `depends_on` mit `condition: service_healthy` (Kern wartet auf SurrealDB, Frontend auf den Kern, Worker auf NATS + SurrealDB).
+- **Log-Rotation:** jeder Dienst `max-size: 10m`, `max-file: 5` (`x-logging` in der Compose-Datei) – ohne das füllt sich die Platte eines kleinen VPS über Monate.
 
 ## 4. Konfiguration (.env.vps)
 
-Eine `.env.vps` auf dem Server (aus `.env.vps.example`, **nicht** in der Versionskontrolle) hält alle Secrets und Parameter:
+Eine `.env.vps` auf dem Server (aus `.env.vps.example`, **nicht** in der Versionskontrolle) hält alle Secrets und Parameter. **Die Liste steht genau einmal: in `.env.vps.example`** — sie hier zu wiederholen hat schon einmal dazu geführt, dass ein Wert (`S3_ENDPOINT` vs. `S3_ENDPOINT_URL`) im Dokument richtig und im Container leer war.
 
-```bash
-# Image-Tags & Registry
-PIM_REGISTRY=registry.example.com/meadow
-PIM_CORE_TAG=latest
-PIM_FRONTEND_TAG=latest
-PIM_WORKER_TAG=latest
+- **Registry:** `registry.example.com/meadow` (Forgejo desselben Servers, wie the reference stack); der Pfad muss kleingeschrieben sein, Forgejo weist Großbuchstaben ab.
+- **Nicht offensichtliche Werte:**
+  - `SURREALDB_URL=surrealdb:8000` (Dienstname, nicht `127.0.0.1`); `SURREALDB_HTTP_URL=http://127.0.0.1:8000` ist die **Host-Sicht** für `run-migration.sh` und `restore-vps-db.sh`.
+  - `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` sind gleichzeitig die MinIO-Root-Zugangsdaten und das, was Frontend **und** Worker lesen (`meadow/frontend/exports.py` importiert das Storage-Modul des Workers).
+  - `LOG_INGEST_API_KEY` muss auf beiden Seiten derselbe Wert sein: ohne ihn antwortet der Kern dem Worker mit `401`, und jeder Worker-Schreibpfad (Bulk, Import, Export, Regeln) läuft ins Leere.
+  - `AUTO_RUN_DB_MIGRATIONS`, `AUTO_BASELINE_DB_MIGRATIONS`, `RUN_POST_DEPLOY_HEALTHCHECK` steuern das Deploy-Skript; `RESTORE_CHUNK_BYTES` die Batch-Größe des Restores.
+  - `DOCKER_REGISTRY_USER`/`DOCKER_REGISTRY_PASSWORD` sind optional und erlauben einen Registry-Login ohne Rückfrage (Cron/Automatisierung).
+- **Bewusst nicht in der Datei:**
+  - **KI-Assistenz:** konfiguriert wird sie in der Oberfläche (`/system-settings`, Gruppe „KI-Assistenz“, Opt-in über `ai_enabled`). Ein `AI_*`-ENV-Wert im Container würde die Einstellung sperren — dafür müssten die Variablen in `docker-compose.vps.yml` ergänzt werden; ein **leerer** Wert wäre falsch (`std::env::var` sieht ihn als gesetzt).
+  - **Webhook-Konnektoren:** liegen als Daten in der Tabelle `connector` und werden über die API/UI gepflegt (Live-Reload). Die `WEBHOOK_*`-ENV-Variablen des Workers sind nur ein Dev-Bootstrap und gehören nicht auf den Server.
+  - **`BOOTSTRAP_*`** gibt es nicht: der Kern sät `admin`/`admin`, das Passwort wird über `POST /auth/password` geändert (`scripts/bootstrap-vps-admin.sh`).
+  - **`DIAGNOSTICS_*`/`ERROR_TAIL_LINES`** gibt es nicht; `collect-vps-diagnostics.sh` und `tail-vps-errors.sh` haben ihre Werte im Skript. Der Diagnose-Bundle lädt `.env.vps` **absichtlich nicht**, damit `compose config` keine Secrets in den Bericht schreibt.
+- **BMEcat-Validierung** braucht ein Artefakt, das nicht in Git und nicht im Image liegt (`resources/`): ohne Bind-Mount plus `BMECAT_XSD` meldet der Export `validated: false` mit Begründung (ehrlich, kein stiller Fehlschlag).
 
-# Traefik-Hostnamen
-PIM_UI_HOST=meadow.pim.example.com
-PIM_API_HOST=meadow.api.example.com
-TRAEFIK_NETWORK=traefik-net
 
-# SurrealDB
-SURREALDB_URL=surrealdb:8000
-SURREALDB_USER=CHANGE_ME
-SURREALDB_PASS=CHANGE_ME
-SURREALDB_NAMESPACE=meadow
-SURREALDB_DATABASE=meadow
+## 5. Deployment-Skripte
 
-# NATS
-NATS_URL=nats://nats:4222
-NATS_USER=CHANGE_ME
-NATS_PASS=CHANGE_ME
+Die Skripte folgen dem VPS-Muster von the reference stack („bauen und pushen auf dem Entwicklungsrechner, auf dem Server nur pullen“) und liegen unter `scripts/`:
 
-# Jobs (JetStream-Publish, Kern)
-JOBS_NATS_URL=nats://nats:4222
+| Skript                        | Aufgabe                                                                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build-images.sh` / `.ps1`    | Baut `pim-core`/`pim-frontend`/`pim-worker` und taggt sie zweifach (Git-Kurzhash + `latest`); `--push` pusht beide Tags und druckt die Tag-Zeilen zum Pinnen aus |
+| `deploy-vps-meadow.sh`        | Preflight → Registry-Login → Compose-Validierung → Netz-Check → Pull → Infrastruktur → Migrationen → Anwendung → Healthcheck                                     |
+| `run-migration.sh`            | Wendet die Migrationen an (Abschnitt 6): `--status`, `--baseline`, `--file`                                                                                     |
+| `healthcheck-vps.sh`          | Wartet auf gesunde Container; prüft Kern `/health`, NATS-Monitoring und das Frontend **im Container**                                                          |
+| `backup-vps-db.sh`            | SurrealDB-Export nach `$BACKUP_DIR` (im Container, per `docker cp` herausgeholt)                                                                                |
+| `restore-vps-db.sh`           | Gestückelter Restore über `POST /sql` (Abschnitt 10), interaktiv / `--force`                                                                                    |
+| `cleanup-backups.sh`          | Löscht Backups älter als `BACKUP_RETENTION_DAYS`                                                                                                               |
+| `bootstrap-vps-admin.sh`      | Ersetzt das Seed-Passwort `admin`/`admin` über `POST /auth/password` und verifiziert den neuen Login                                                             |
+| `collect-vps-diagnostics.sh`  | Zeitgestempeltes Diagnose-Bundle (Compose-Config, Health, Inspect, Logs, Host-Infos); **ohne** Secrets                                                          |
+| `tail-vps-errors.sh`          | Fehlerzeilen-Triage aus den Logs (optional `--follow`)                                                                                                         |
 
-# Events (Transactional Outbox + Relay, Kern)
-EVENTS_NATS_URL=nats://nats:4222
-EVENT_RELAY_INTERVAL_S=5
+**Verträge der Skripte (implementiert und geprüft):**
 
-# NATS Stream-Retention (Streams werden vom Kern/Worker angelegt)
-EVENTS_STREAM_MAX_AGE_DAYS=30
-EVENTS_STREAM_MAX_BYTES=1073741824   # 1 GiB
-JOBS_STREAM_MAX_AGE_MINUTES=1440
-
-# Objektstorage (MinIO)
-S3_ENDPOINT=http://object-storage:9000
-S3_ACCESS_KEY=CHANGE_ME
-S3_SECRET_KEY=CHANGE_ME
-S3_BUCKET=meadow
-
-# JWT
-JWT_SECRET=CHANGE_ME
-JWT_TTL_SECONDS=3600
-
-# Core-URL für Frontend/Worker
-PIM_CORE_URL=http://pim-core:8080
-
-# NiceGUI-Session-Storage
-UI_STORAGE_SECRET=CHANGE_ME
-
-# Logging
-LOG_LEVEL=INFO
-
-# Business Rules (synchroner Write-Pfad, Kern)
-RULES_NATS_URL=nats://nats:4222
-RULES_SUBJECT=rules.evaluate
-RULES_COMPILE_SUBJECT=rules.compile
-RULES_TIMEOUT_MS=2000
-RULES_DEGRADE=false
-RULES_BREAKER_THRESHOLD=3
-
-# Log-Ingestion (Kern) & Worker-Log-Sender
-LOG_INGEST_API_KEY=CHANGE_ME
-LOG_FLUSH_INTERVAL_S=5
-LOG_CONFIG_REFRESH_INTERVAL_S=60
-LOG_PERSIST_LEVEL=WARN
-LOG_PERSIST_CATEGORIES=app,rule
-LOG_RETENTION_DAYS=30
-LOG_RATE_LIMIT=1000
-
-# Log-Retention-Cleanup (Kern, periodischer Job)
-LOG_CLEANUP_INTERVAL_S=3600
-
-# Worker-Jobkonsument (JetStream)
-JOBS_SUBJECT=jobs.*
-JOBS_STREAM=JOBS
-JOBS_CONSUMER_DURABLE=job-worker
-JOBS_ACK_WAIT_S=300
-JOBS_MAX_DELIVER=5
-JOBS_CONCURRENCY=4
-
-# Webhook-Outbound (Worker): Konfiguration persistent in der Tabelle `connector`
-# (Verwaltung über die API/Admin-UI, Live-Reload ohne Neustart). Die folgenden
-# Env-Variablen dienen nur als Bootstrap, wenn kein Konnektor existiert.
-WEBHOOK_URL=
-WEBHOOK_METHOD=POST
-WEBHOOK_HEADERS={}
-WEBHOOK_FILTER_EVENT_TYPES=
-WEBHOOK_FILTER_OBJECT_TYPES=
-WEBHOOK_FILTER_ATTRIBUTES=
-WEBHOOK_COALESCE_ENABLED=false
-WEBHOOK_COALESCE_WINDOW_S=30
-WEBHOOK_ACK_WAIT_S=300
-WEBHOOK_MAX_DELIVER=5
-WEBHOOK_NAK_DELAY_S=5
-WEBHOOK_RELOAD_INTERVAL_S=30
-
-# Scheduler (Kern)
-SCHEDULER_INTERVAL_S=60
-
-# Dead-Letter-Queue (JOBS_DLQ-Stream, Limits-Retention; manuell bereinigen)
-# Stream wird vom Kern/Worker automatisch angelegt.
-
-# Bootstrap (nur beim Erst-Deployment; danach entfernen)
-BOOTSTRAP_SUPERADMIN_USERNAME=superadmin
-BOOTSTRAP_SUPERADMIN_PASSWORD=CHANGE_ME
-BOOTSTRAP_SUPERADMIN_EMAIL=CHANGE_ME
-
-# Backup
-BACKUP_DIR=backups/db
-BACKUP_RETENTION_DAYS=14
-
-# Diagnostics / Log-Triage
-DIAGNOSTICS_OUTPUT_ROOT=diagnostics
-DIAGNOSTICS_LOG_LINES=300
-ERROR_TAIL_LINES=400
-
-# Deploy-Verhalten
-RUN_POST_DEPLOY_HEALTHCHECK=true
-AUTO_RUN_DB_MIGRATIONS=true
-AUTO_BASELINE_DB_MIGRATIONS=true
-```
-
-## 5. Deployment-Skripte (nach Connector-Hub-Muster)
-
-Die Skripte werden in Phase 8 angelegt und spiegeln 1:1 die Connector-Hub-Skripte:
-
-| Skript (Meadow)              | Vorbild (the predecessor project)      | Aufgabe                                                                                                                                  |
-| ---------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy-vps-meadow.sh`       | `deploy-vps-chub.sh`         | Registry-Login, Compose-Validierung, Netz-Check, Pull, Migrationen,`up -d --remove-orphans` (kein `down`), Status + optional Healthcheck |
-| `healthcheck-vps.sh`         | `healthcheck-vps.sh`         | Wartezeit, Container-Health je Dienst, interne Endpoint-Checks                                                                           |
-| `backup-vps-db.sh`           | `backup-vps-db.sh`           | SurrealDB-Export nach`$BACKUP_DIR`                                                                                                       |
-| `restore-vps-db.sh`          | `restore-vps-db.sh`          | SurrealDB-Import aus Backup (interaktiv /`--force`)                                                                                      |
-| `cleanup-backups.sh`         | `cleanup-backups.sh`         | Löscht Backups älter als`BACKUP_RETENTION_DAYS`                                                                                          |
-| `bootstrap-vps-admin.sh`     | `bootstrap-vps-admin.sh`     | Einmaliger Superadmin (Rolle`superadmin`) über `pim-core`                                                                                |
-| `collect-vps-diagnostics.sh` | `collect-vps-diagnostics.sh` | Zeitgestempeltes Diagnose-Bundle (Compose-Config, Health, Inspect, Logs, Host-Infos)                                                     |
-| `tail-vps-errors.sh`         | `tail-vps-errors.sh`         | Fehlerzeilen-Triage aus den Logs (optional`--follow`)                                                                                    |
-
-**Wichtige Verträge des Deploy-Skripts (aus the predecessor project übernommen):**
-
-- `set -e`; `compose()`-Helfer (Docker-Compose-V2-Fallback).
-- Preflight der Traefik-Hostnamen: leere Hosts → Abbruch.
-- Externes Netz prüfen (`docker network inspect $TRAEFIK_NETWORK`), bei Bedarf erzeugen (`docker network create traefik-net`).
-- Erst DB/Abhängigkeiten starten, dann Migrationen, dann restliche Dienste — Volumes bleiben über Redeploys stabil.
-- Übernahmefähigkeit von Env-Overrides (`AUTO_RUN_DB_MIGRATIONS`, `AUTO_BASELINE_DB_MIGRATIONS`, `RUN_POST_DEPLOY_HEALTHCHECK`, …).
+- `set -euo pipefail`, `cd` auf die Repo-Wurzel, Laden von `.env.vps` mit **CRLF-Strip** (`tr -d '\r'`): eine auf Windows geschriebene Datei würde sonst jeden Wert zum Parser-Fehler machen. `.gitattributes` hält Skripte und `.surql` zusätzlich auf LF.
+- Preflight: fehlende oder auf `CHANGE_ME` stehende Secrets → Abbruch, bevor irgendetwas startet.
+- Registry-Login ohne Rückfrage, sobald `DOCKER_REGISTRY_USER`/`DOCKER_REGISTRY_PASSWORD` gesetzt sind.
+- Externes Netz prüfen (`docker network inspect $TRAEFIK_NETWORK`), bei Bedarf erzeugen.
+- Reihenfolge: Infrastruktur (`surrealdb nats object-storage`) → auf `healthy` der Datenbank warten → Migrationen → `up -d --remove-orphans` (kein `down`; benannte Volumes bleiben unberührt) → Status → Healthcheck.
+- Env-Overrides: `AUTO_RUN_DB_MIGRATIONS`, `AUTO_BASELINE_DB_MIGRATIONS`, `RUN_POST_DEPLOY_HEALTHCHECK`.
+- `tests/test_deployment.py` hält die stillen Verträge fest: jede in der Compose gelesene Variable ist in `.env.vps.example` dokumentiert (und umgekehrt), jeder Dienst rotiert seine Logs, die Migrationen laufen **vor** der Anwendung, der Healthcheck fragt keinen unveröffentlichten Port ab.
 
 ## 6. Migration & Schema (SurrealDB)
 
-Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + `applied_migrations`) wird wie folgt abgebildet:
+Das Basisschema gehört dem **Kern**: `crates/pim-core/src/db/schema.rs` definiert alle Tabellen mit `DEFINE … IF NOT EXISTS` und wendet sie beim Start an. `migrations/` ist deshalb **kein zweites Schema**, sondern die Historie der Schritte, die das nicht ausdrücken kann (Daten­nachträge, Umbenennungen, Einmalreparaturen) — Vertrag in `migrations/AGENTS.md`.
 
-- **Migrationsdateien:** nummerierte `.surql`-Dateien unter `migrations/` (z. B. `001_init.surql`, `002_*.surql`, …), lexikografisch sortiert angewendet.
-- **Runner:** `run-migration.sh` führt eine Datei per `surreal sql --file` (bzw. über den SurrealDB-Container) aus; Fortschritt wird in der Tabelle `schema_migrations` (Name, `applied_at`) festgehalten.
-- **Baseline:** Ist `schema_migrations` leer, das Ziel-Schema aber bereits vorhanden (Marker-Prüfung), werden alle vorhandenen Migrationsdateien als angewendet gebucht statt erneut ausgeführt (`AUTO_BASELINE_DB_MIGRATIONS`).
+- **Dateien:** `NNN_snake_case.surql`, lexikografisch angewendet; `001_baseline.surql` ist der Startpunkt (bewusst ohne Statements). Nie eine angewendete Datei ändern, nur ergänzen.
+- **Runner:** `scripts/run-migration.sh` spricht `POST /sql` und wertet die **Antwort je Statement** aus (`{"status":"OK"|"ERR"}`; ein nicht parsebarer Batch beantwortet der Server mit HTTP 400). Deshalb bricht der Lauf beim ersten Fehler ab und bucht die Datei **nicht** — `surreal import` wäre hier falsch: es verlangt `OPTION IMPORT;` als erste Anweisung und schaltet dabei Feldverarbeitung und Events ab.
+- **Buchhaltung:** Tabelle `schema_migrations` (`name`, `applied_at`), vom Runner selbst angelegt; `--status` zeigt angewendet/ausstehend, ohne etwas zu verändern.
+- **Baseline:** ist `schema_migrations` leer, der Kern-Marker (`system_setting`) aber vorhanden, werden alle Dateien als angewendet gebucht statt erneut ausgeführt (`AUTO_BASELINE_DB_MIGRATIONS=false` schaltet das ab) — der Fall „Datenbank lief schon einmal ohne Runner“.
+- **Frische Installation:** Namespace und Datenbank existieren noch nicht, und SurrealDB 3.x verweigert jeden Schreibzugriff auf eine nie definierte Datenbank (`The database 'x' does not exist`). Der Runner legt beides deshalb zuerst an (`DEFINE NAMESPACE/DATABASE IF NOT EXISTS`) — **ohne diesen Schritt scheitert das allererste Deployment** (verifiziert).
 - **Startreihenfolge:** Migrationen laufen im Deploy-Skript vor dem Start von `pim-core`/`pim-frontend`.
+- **Ausführung:** `bash scripts/run-migration.sh --status` (bzw. `--baseline`), gegen eine lokale Datenbank mit `SURREALDB_HTTP_URL=http://127.0.0.1:8000`.
 
 ## 7. Erst-Deployment (Runbook example.com)
 
 1. **DNS:** A-Records `meadow.pim.example.com` und `meadow.api.example.com` → IP des VPS.
-2. **Netz prüfen:** `docker network inspect traefik-net` (existiert, da Traefik/the predecessor project läuft; sonst `docker network create traefik-net`).
-3. **Repo auf den Server bringen** (z. B. `/opt/meadow`), `.env.vps` aus `.env.vps.example` erzeugen und alle Secrets setzen.
-4. **Registry-Login:** `docker login $PIM_REGISTRY`.
-5. **Deploy:** `./deploy-vps-meadow.sh`.
-6. **Bootstrap:** `./bootstrap-vps-admin.sh` (einmalig), danach `BOOTSTRAP_*`-Variablen aus `.env.vps` entfernen.
-7. **Healthcheck:** `./healthcheck-vps.sh`.
-8. **Verifikation:** `https://meadow.pim.example.com` (UI) und `https://meadow.api.example.com` (OpenAPI) im Browser prüfen.
-9. **Cron** für Backup/Cleanup einrichten (siehe Abschnitt 8).
+2. **Images bauen und pushen** (auf dem Entwicklungsrechner): `./scripts/build-images.sh --registry registry.example.com/meadow --push` bzw. unter Windows `powershell -File scripts/build-images.ps1 -Registry registry.example.com/meadow -Push` (der Entwicklungsrechner hat kein `.env.vps`; alternativ `PIM_REGISTRY` in der Umgebung setzen). Vorher einmalig `docker login registry.example.com`. Der Lauf druckt den unveränderlichen Tag aus.
+3. **Repo auf den Server bringen** (z. B. `/opt/meadow`).
+4. **`.env.vps`** aus `.env.vps.example` erzeugen, Secrets setzen und in `PIM_CORE_TAG`/`PIM_FRONTEND_TAG`/`PIM_WORKER_TAG` den **gepushten Tag** eintragen (nicht `latest` — nur so sind Rollback und Reproduzierbarkeit gegeben).
+5. **Netz prüfen:** `docker network inspect traefik-net` (existiert, da Traefik/the reference stack läuft; das Deploy-Skript legt es sonst an).
+6. **Deploy:** `./scripts/deploy-vps-meadow.sh` (Preflight, Login, Pull, Infrastruktur, Migrationen, Anwendung, Healthcheck).
+7. **Bootstrap:** `./scripts/bootstrap-vps-admin.sh` — ersetzt das Seed-Passwort `admin`/`admin` über `POST /auth/password` und prüft den neuen Login. Danach ein persönliches Superadmin-Konto anlegen und `admin` nur als Notzugang behalten.
+8. **Verifikation:** `https://meadow.pim.example.com` (UI) und `https://meadow.api.example.com` (OpenAPI) im Browser; `./scripts/healthcheck-vps.sh`.
+9. **Cron** für Backup/Cleanup einrichten (Abschnitt 8).
 10. **Standardpakete (optional):** Paketordner nach `resources/standards/<name>/` kopieren und `uv run python scripts/install_standard_bundle.py --all --bulk` ausführen (idempotent, mit Einheiten-Vorprüfung). Für den Vollbestand danach **erneut** laufen lassen, damit die Klassen-Merkmale nachgezogen werden; ohne Pakete im Ordner ist der Aufruf ein No-op. Details: [bmecat-export.md](bmecat-export.md) §11.9.
 
 ## 8. Betriebs-Runbook (Day-2)
 
-- **Vor jedem Deployment:** `./backup-vps-db.sh`.
-- **Deployment:** `./deploy-vps-meadow.sh`.
-- **Nach Deployment:** `./tail-vps-errors.sh`; `./collect-vps-diagnostics.sh` nur bei Problemen.
-- **Wöchentlich:** Restore-Test gegen Staging, `./cleanup-backups.sh`.
+- **Vor jedem Deployment:** `./scripts/backup-vps-db.sh`.
+- **Deployment:** `./scripts/deploy-vps-meadow.sh`.
+- **Nach Deployment:** `./scripts/tail-vps-errors.sh`; `./scripts/collect-vps-diagnostics.sh` nur bei Problemen.
+- **Rollback:** den vorherigen unveränderlichen Tag in `.env.vps` setzen und erneut deployen (ein Schema-Rückschritt ist **nicht** enthalten — Migrationen laufen nur vorwärts; für einen echten Rückschritt das Backup von vor dem Deploy zurückspielen).
+- **Wöchentlich:** Restore-Test gegen Staging, `./scripts/cleanup-backups.sh`.
 - **Cron-Beispiel:**
 
 ```cron
-0 2 * * * /opt/meadow/backup-vps-db.sh >> /var/log/meadow-backup.log 2>&1
-30 2 * * 0 /opt/meadow/cleanup-backups.sh >> /var/log/meadow-backup.log 2>&1
+0 2 * * * /opt/meadow/scripts/backup-vps-db.sh >> /var/log/meadow-backup.log 2>&1
+30 2 * * 0 /opt/meadow/scripts/cleanup-backups.sh >> /var/log/meadow-backup.log 2>&1
 ```
 
 ## 9. Persistenz & Volumes
 
 - **SurrealDB:** Datenbank in benanntem Volume (`meadow_surrealdb_data`, Mount `/data`).
 - **NATS JetStream:** Persistenter Store in Volume (`meadow_nats_data`, `/data`).
-- **Objektstorage (MinIO):** Datenverzeichnis in Volume (`meadow_minio_data`, `/data`).
-- **Frontend/Worker:** gemeinsames Storage-Volume (`meadow_storage`) für Logs/Importe/Exporte sowie `meadow_nicegui` für den NiceGUI-Session-Storage.
+- **Objektstorage (MinIO):** Datenverzeichnis in Volume (`meadow_object_storage_data`, `/data`).
+- **Frontend:** `meadow_nicegui` für den NiceGUI-Session-Storage (Pflicht — der Storage liegt sonst im Container-Layer und jede Sitzung wäre nach einem Recreate weg).
+- **`meadow_storage` (`/tmp/meadow`)** ist für Frontend und Worker eingerichtet, aber **reserviert**: heute schreibt dort nichts (Exporte laufen über `job_run.result` bzw. das Bucket), keine Datei hängt von dem Volume ab.
 - **Redis (optional):** Persistenz konfigurierbar (AOF/RDB), Volume `meadow_redis_data`.
 
 ## 10. Backup & Wiederherstellung
@@ -282,16 +188,21 @@ Meadow nutzt SurrealDB; das Migrationsmuster von the predecessor project (SQL + 
   - **CLI-Version beachten (verifiziert):** Im `surrealdb/surrealdb:latest`-Image liegt das Binary unter **`/surreal`** (nicht auf `$PATH`); die Export-/Import-Subcommands heißen **`export`/`import`** und verwenden **`--namespace`/`--database`** (Aliase `--ns`/`--db`) sowie **`-e/--endpoint`** und **`-u/--username`/`-p/--password`** (Aliase `--user`/`--pass`). Die alten Schreibweisen `--conn`, `isready` (statt `is-ready`) und der bloße Befehl `surreal` sind in dieser Version **ungültig**.
   - **Beispiel:** `/surreal export --namespace meadow --database meadow --endpoint http://surrealdb:8000 --username root --password root /tmp/backup.surql`; Wiederherstellung über `/surreal import … /tmp/backup.surql` (Datei-Upload in den Container, da kein Shell/kein stdin-`-`-Support).
   - **Kodierung:** Export **im Container** in eine Datei schreiben und per `docker cp` holen — eine PowerShell-`>`-Umleitung kodiert UTF-16 und erzeugt einen ungültigen Import.
-- **Lokale Dev-Äquivalente (Windows):** `scripts/backup-db.ps1` (Export nach `backups/`, Retention `-RetentionDays`, Default 14) und `scripts/restore-db.ps1` (`-File`); `.gitignore` schließt `backups/` aus.
-- **Objektstorage:** Synchronisation der Buckets auf einen zweiten Speicherort (z. B. `mc mirror`/rclone bei MinIO).
+- **Restore läuft nicht über `surreal import` (gemessen 2026-09-29):** `import` scheitert an jeder realistischen Exportgröße mit `error sending request for url (.../import)` — ein Batch mit 100 Anweisungen geht in 3 s durch, ein 0,6-MB-Batch (9 500 Anweisungen) bricht nach 32 s ab, die produktive Datei kommt nie an. `scripts/restore-vps-db.sh` spielt den Export deshalb in **Stücken über `POST /sql`** ein:
+  - `split -C` stückelt an Zeilengrenzen (ein Export schreibt eine Anweisung je Zeile); jede Charge bekommt `OPTION IMPORT;` vorangestellt. Die Stückgröße wird automatisch auf die **längste Zeile** angehoben, damit keine Anweisung zerschnitten wird; eine Zeile über ~3,5 MiB bricht ab (der Endpunkt weist Körper über ~4 MiB mit `HTTP 413 length limit exceeded` ab — gemessen).
+  - Vorher wird der Scope angelegt (Namespace/Datenbank); jede Charge wird auf `"status":"ERR"` und HTTP 400 geprüft, der Lauf endet mit klarer Meldung in der ersten fehlerhaften Charge (die Datenbank ist dann teilweise geschrieben, der Text sagt das auch).
+  - Der Restore **mischt** über Record-IDs, er leert die Datenbank nicht: vorher ein frisches Backup ziehen.
+  - Verifiziert gegen die Dev-Instanz: Export → Restore in eine **nicht existierende** Datenbank → Zeilen im Ziel vorhanden; eine kaputte Charge bricht mit Exit ≠ 0 ab.
+- **Lokale Dev-Äquivalente (Windows):** `scripts/backup-db.ps1` (Export nach `backups/`, Retention `-RetentionDays`, Default 14) und `scripts/restore-db.ps1` (`-File`). **Offener Punkt:** `restore-db.ps1` nutzt noch `surreal import` und trägt damit dieselbe Schwäche wie oben; für eine Dev-Datenbank ist der Weg über den VPS-Restore (oder ein Neuaufsetzen mit den Demo-Skripten) der verlässliche.
+- **Objektstorage:** die Datenbank ist maßgeblich; Export-/Download-Artefakte im Bucket sind aus ihr reproduzierbar, ein Bucket-Backup ist daher optional (z. B. `mc mirror`).
 - **NATS JetStream:** Stream-Snapshots optional; für den MVP genügt Wiederherstellung aus der Quelle, da Events rekonstruierbar sind.
-- **Wiederherstellungstests:** mindestens vierteljährlich durchführen.
+- **Wiederherstellungstests:** mindestens vierteljährlich durchführen — gegen die laufende Dev-Instanz geht das mit `bash scripts/restore-vps-db.sh <backup> --force` (Namespace/Datenbank dabei auf einen Prüfbestand zeigen lassen).
 
 ## 11. Monitoring & Logging
 
 ### 11.1 Logging (verbindliche Spezifikation)
 
-**Grundprinzip (12-Factor):** Jede Komponente schreibt strukturierte Logs als Event-Stream auf `stdout` – Rust-Kern mit `tracing` (JSON), Python-Dienste mit `structlog`. Sammlung über den Docker-Logging-Treiber (max. 10 MB/5 Dateien je Container, wie the predecessor project) für den Ops-Workflow (Diagnose-Skripte). DEBUG/TRACE bleiben ausschließlich hier.
+**Grundprinzip (12-Factor):** Jede Komponente schreibt strukturierte Logs als Event-Stream auf `stdout` – Rust-Kern mit `tracing` (JSON), Python-Dienste mit `structlog`. Sammlung über den Docker-Logging-Treiber (**umgesetzt:** `max-size: 10m`, `max-file: 5` je Container über `x-logging` in `docker-compose.vps.yml`) für den Ops-Workflow (Diagnose-Skripte). DEBUG/TRACE bleiben ausschließlich hier.
 
 **Kuratierte System-Logs in SurrealDB (`log_entry`):** Für die Admin-UI wird ein kuratierter Teil persistiert:
 
@@ -343,8 +254,14 @@ Diese Werte sind als Ausgangspunkt gedacht; auf dem gemeinsamen Server ist die t
 
 ## 14. Offene Punkte & Annahmen
 
-- **Hostnamen:** Es gelten `meadow.pim.example.com` (UI) und `meadow.api.example.com` (Core); die im Chat genannte Schreibweise `meadow.pim.claudiapss.de` wurde als Tippfehler zu `example.com` korrigiert.
-- **Registry:** Vorgeschlagen wird die bestehende Forgejo-Registry `registry.example.com/meadow` (wie the predecessor project); alternativ GHCR (`ghcr.io`). Festzulegen bei Umsetzung.
+- **Hostnamen:** Es gelten `meadow.pim.example.com` (UI) und `meadow.api.example.com` (Core).
+- **Registry: entschieden** — `registry.example.com/meadow` (Forgejo desselben Servers, wie the reference stack); der Pfad ist kleingeschrieben, Forgejo weist Großbuchstaben ab. GHCR bleibt eine Alternative.
+- **Rust-Toolchain: entschieden** — `rust:1.97-bookworm`; die zuvor deklarierte MSRV 1.90 trägt `diskann` 0.54 (über `surrealdb`) nicht: der erste Produktions-Image-Build brach dort mit 11 × E0311 ab. `Cargo.toml` deklariert jetzt 1.97.
+- **NATS-Healthcheck:** Das `nats`-Image hat keine Shell, also ist kein Container-eigener Check möglich; geprüft wird der Monitoring-Port 8222 vom Host (`healthcheck-vps.sh`). Ein `nats-server`-Check wäre erst mit einem anderen Image möglich.
+- **Dev-Restore:** `scripts/restore-db.ps1` hängt noch an `surreal import` (Abschnitt 10) — für die Dev-Datenbank bewusst offen.
+- **BMEcat-Validierung:** braucht `resources/` (nicht in Git/Image) plus `BMECAT_XSD` und `lxml` im Image; ohne beides meldet der Export `validated: false` mit Begründung.
+- **`meadow_storage`** ist reserviert und heute ungenutzt (Abschnitt 9).
+- **CI:** `.forgejo/workflows/ci.yml` existiert, aber es ist **kein Runner registriert** (bewusst zurückgestellt) — die Pipeline läuft nicht; bis dahin schützen die lokalen Gates plus `tests/test_deployment.py`.
 - **SurrealDB:** Für das MVP als separater Container (nicht embedded) festgelegt.
 - **Objektstorage:** MinIO als separater Container; alternativ Host-Pfad-Mount.
-- **Schema-Migration:** Mechanismus (`.surql` + `schema_migrations`) ist festgelegt; konkreter Runner wird mit dem Core implementiert.
+- **Schema-Migration:** Umgesetzt über `migrations/` + `scripts/run-migration.sh` (Abschnitt 6); das Basisschema bleibt beim Kern.

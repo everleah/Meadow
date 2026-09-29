@@ -1,0 +1,12 @@
+# Line endings matter for what the server executes.
+#
+# A shell script that arrives with CRLF fails on the VPS with
+# `/usr/bin/env: 'bash\r': No such file or directory`, and a `.surql` migration
+# with CRLF is rejected by SurrealDB's parser. `.env.vps.example` is copied on the
+# server, but it is also read by anyone building on Windows, so it is pinned too.
+# (The scripts strip stray carriage returns when they load `.env.vps` as well.)
+
+*.sh text eol=lf
+.env.vps.example text eol=lf
+migrations/*.surql text eol=lf
+.forgejo/workflows/*.yml text eol=lf

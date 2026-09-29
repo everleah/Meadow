@@ -146,8 +146,9 @@ warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 # Libraries without a `py.typed` marker or stubs: their internals are out of our
-# hands, so only our own use of them is checked.
-module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*", "markdown.*", "engineio.*"]
+# hands, so only our own use of them is checked. `yaml` is used by the deployment
+# contracts in `tests/test_deployment.py`.
+module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*", "markdown.*", "engineio.*", "yaml.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

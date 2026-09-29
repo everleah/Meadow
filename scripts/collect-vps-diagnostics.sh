@@ -4,6 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Deliberately no `source .env.vps`: `docker compose config` renders every
+# variable in plaintext, so the bundle would ship the secrets. The blanks in the
+# rendered config are intentional.
 COMPOSE="docker compose -f docker-compose.vps.yml"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="diagnostics-${STAMP}"

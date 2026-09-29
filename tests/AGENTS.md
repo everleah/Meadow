@@ -23,6 +23,14 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   (`plan/detail/ai-code-quality.md`). The directory is excluded from Ruff and from the
   repository's own scan; `test_deslop.py` scans a copy from a neutral path, because the
   scan rules skip paths that look like test code.
+- `test_deployment.py` holds the **silent contracts of the production files** (root
+  `AGENTS.md`, `plan/detail/betrieb-deployment.md`): every variable the compose reads is
+  documented in `.env.vps.example` and every documented one is read, each service rotates
+  its logs, migrations are numbered and applied **before** the application containers,
+  scripts that load `.env.vps` strip carriage returns, and the restore replays chunks
+  through `POST /sql` (never `surreal import` — it fails on real export sizes). The bash
+  scripts themselves are checked with `bash -n` plus a run against the running dev instance
+  (`run-migration.sh --status`, `restore-vps-db.sh <backup> --force`).
 - **Page tests** (`test_products_page.py`, the net for the `products_page` refactor,
   `plan/detail/ai-code-quality.md` §4.11; `test_users_page.py`, the net for the group
   editor's permission matrix and scope card) boot the real frontend app through NiceGUI's

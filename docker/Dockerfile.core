@@ -3,7 +3,11 @@
 # Build:  docker build -f docker/Dockerfile.core -t "${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}" .
 # Run:    docker compose -f docker-compose.vps.yml up -d pim-core
 
-FROM rust:1.90-bookworm AS build
+# The compiler is pinned to the toolchain the workspace is built and verified
+# with (`rust-version` in Cargo.toml). 1.90 — the version the workspace declared
+# before the first image build — does not compile `diskann` 0.54 (11 x E0311),
+# which surrealdb pulls in.
+FROM rust:1.97-bookworm AS build
 WORKDIR /src
 # Cache dependency layers.
 COPY Cargo.toml Cargo.lock ./

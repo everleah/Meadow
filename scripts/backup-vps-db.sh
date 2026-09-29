@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Meadow PIM — export the production SurrealDB into $BACKUP_DIR.
-# Cron:  0 2 * * * /opt/meadow/backup-vps-db.sh >> /var/log/meadow-backup.log 2>&1
+# Cron:  0 2 * * * /opt/meadow/scripts/backup-vps-db.sh >> /var/log/meadow-backup.log 2>&1
+#
+# The database is authoritative; export artefacts in the MinIO bucket can be
+# regenerated from it (plan/detail/betrieb-deployment.md §10).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -f .env.vps ]; then set -a; . ./.env.vps; set +a; fi
+if [ -f .env.vps ]; then set -a; . <(tr -d '\r' <./.env.vps); set +a; else
+  echo ".env.vps not found - this script only runs on the server" >&2
+  exit 1
+fi
 : "${SURREALDB_NAMESPACE:=meadow}"
 : "${SURREALDB_DATABASE:=meadow}"
 : "${SURREALDB_USER:?SURREALDB_USER required}"
