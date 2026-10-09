@@ -75,13 +75,25 @@ fn class_key_value(node: Option<&Value>, key_attribute: Option<&str>) -> String 
         .to_owned()
 }
 
+/// The local id a document offers for a class, when it can be one: `class_id` without the space a
+/// JSON writer may leave around it, and without the empty value. An empty id is not a missing value
+/// but a wrong one — the lookup asks SurrealDB for `type::record('object','')` and the answer is an
+/// error (`Found  for the Record ID but this is not a valid id`), so a document that writes it
+/// answered `500` instead of the report entry that says the taxonomy data has to be imported first
+/// (measured against Meadow 43c83fe6 with the artifact of SketchGround's MCF profile).
+fn local_class_key(entry: &Value) -> Option<&str> {
+    as_str(entry, "class_id")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 /// Report label of one entry: the stable key first, then the local `class_id`,
 /// then a placeholder — so an unresolvable class stays traceable in the report.
 fn class_label(entry: &Value) -> String {
     as_str(entry, "class")
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| as_str(entry, "class_id").map(str::to_owned))
+        .or_else(|| local_class_key(entry).map(str::to_owned))
         .unwrap_or_else(|| "(unnamed class)".to_owned())
 }
 
@@ -191,7 +203,7 @@ async fn resolve_class(
             }
         }
     }
-    let Some(class_id) = as_str(entry, "class_id") else {
+    let Some(class_id) = local_class_key(entry) else {
         return Ok(None);
     };
     let rows = query_rows(
@@ -395,6 +407,32 @@ mod tests {
             "object:01ABC"
         );
         assert_eq!(class_label(&json!({})), "(unnamed class)");
+    }
+
+    #[test]
+    fn local_class_key_ignores_an_empty_id() {
+        assert_eq!(
+            local_class_key(&json!({ "class_id": "object:01ABC" })),
+            Some("object:01ABC")
+        );
+        assert_eq!(
+            local_class_key(&json!({ "class_id": "  01ABC  " })),
+            Some("01ABC"),
+            "surrounding space is not part of the key"
+        );
+        assert_eq!(
+            local_class_key(&json!({ "class_id": "" })),
+            None,
+            "an empty id must not reach `type::record` - SurrealDB answers with an error, and a \
+             document that writes one has to get the report entry about the missing taxonomy data"
+        );
+        assert_eq!(local_class_key(&json!({ "class_id": "   " })), None);
+        assert_eq!(local_class_key(&json!({ "class": "200" })), None);
+        assert_eq!(
+            class_label(&json!({ "class": "200", "class_id": "" })),
+            "200",
+            "and it stays out of the report label too"
+        );
     }
 
     #[test]
