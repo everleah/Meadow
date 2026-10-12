@@ -26,7 +26,9 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
 - `test_deployment.py` holds the **silent contracts of the production files** (root
   `AGENTS.md`, `plan/detail/betrieb-deployment.md`): every variable the compose reads is
   documented in `.env.vps.example` and every documented one is read, each service rotates
-  its logs, migrations are numbered and applied **before** the application containers,
+  its logs, the external Traefik network is reached by its `traefik` alias and named through
+  `TRAEFIK_NETWORK` (so no internal network name sits in the file), migrations are numbered
+  and applied **before** the application containers,
   scripts that load `.env.vps` strip carriage returns, and the restore replays chunks
   through `POST /sql` (never `surreal import` — it fails on real export sizes). The bash
   scripts themselves are checked with `bash -n` plus a run against the running dev instance
@@ -35,7 +37,8 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `plan/detail/ai-code-quality.md` §4.11; `test_users_page.py`, the net for the group
   editor's permission matrix and scope card) boot the real frontend app through NiceGUI's
   user simulation (`user_simulation(main_file=…)`, plugin registered in the root
-  `conftest.py` for a session-temp storage path). Three rules: the fixture must drop
+  `conftest.py` for a session-temp storage path, which also supplies the frontend's required
+  session secret). Three rules: the fixture must drop
   `meadow.frontend*` from `sys.modules` *before* the boot (otherwise the cached
   `@ui.page` decorators never run and every page answers `404`), the core client and
   the auth middleware are replaced (that is the point of a page test), and modules of
