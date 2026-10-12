@@ -241,6 +241,13 @@ def test_the_deploy_script_runs_the_migrations_before_the_application() -> None:
     assert ".env.vps not found" in text
 
 
+def test_the_deploy_script_rejects_a_short_signing_secret() -> None:
+    """The core and the frontend refuse a short secret; a restart loop is the worse report."""
+    text = (SCRIPTS / "deploy-vps-meadow.sh").read_text(encoding="utf-8")
+    assert "for name in JWT_SECRET UI_STORAGE_SECRET; do" in text
+    assert '"${#value}" -lt 32' in text
+
+
 def test_the_healthcheck_does_not_curl_an_unpublished_port() -> None:
     """The frontend has no published port, so it is asked inside its container."""
     text = (SCRIPTS / "healthcheck-vps.sh").read_text(encoding="utf-8")

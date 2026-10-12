@@ -38,6 +38,16 @@ for name in PIM_UI_HOST PIM_API_HOST JWT_SECRET UI_STORAGE_SECRET LOG_INGEST_API
     missing="yes"
   fi
 done
+
+# The core and the frontend refuse to start with a short signing secret (they
+# would come up and restart in a loop), so the length is caught here instead.
+for name in JWT_SECRET UI_STORAGE_SECRET; do
+  value="$(printenv "$name" || true)"
+  if [ -n "$value" ] && [ "${#value}" -lt 32 ]; then
+    echo "preflight: $name is shorter than 32 characters" >&2
+    missing="yes"
+  fi
+done
 [ -z "$missing" ] || exit 1
 
 COMPOSE="docker compose -f docker-compose.vps.yml"
