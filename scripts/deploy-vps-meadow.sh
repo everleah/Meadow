@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Meadow PIM - deploy on the VPS (behind Traefik).
+# Meadow PIM - deploy on a VPS (behind a Traefik reverse proxy).
 #
 # Usage: ./deploy-vps-meadow.sh
 #
@@ -20,7 +20,7 @@ set -a
 set +a
 
 : "${PIM_REGISTRY:?PIM_REGISTRY required}"
-: "${TRAEFIK_NETWORK:=traefik-net}"
+: "${TRAEFIK_NETWORK:?TRAEFIK_NETWORK required}"
 : "${AUTO_RUN_DB_MIGRATIONS:=true}"
 : "${RUN_POST_DEPLOY_HEALTHCHECK:=true}"
 

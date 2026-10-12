@@ -1,7 +1,7 @@
 name: CI
 
 # Verification gates of Meadow PIM (same set as `scripts/check.sh`).
-# Runs on the self-hosted Forgejo (registry.example.com).
+# Runs on the self-hosted Forgejo runner of this project's remote.
 on:
   push:
     branches: [main]

@@ -68,13 +68,13 @@ Begründung (jeweils geprüft):
 | Frontend-Prozess direkt | Weniger Bausteine, aber: der dünne Sicht-Vertrag des Frontends bricht (es müsste `meadow/rules` importieren oder die Politik duplizieren — heute importiert es das Paket **nirgends**), und der Key läge im UI-Prozess. Verworfen. |
 | Kern (Rust) ruft den Provider | Der Kern hat **keinen** HTTP-Client (kein `reqwest` in `crates/pim-core/Cargo.toml`) — das hieße eine neue Abhängigkeit plus Prompt-Bau in Rust und damit eine zweite Quelle der Wahrheit für Vertrag/Politik. Verworfen. |
 
-**Kein LangGraph, keine LangChain.** Der Ablauf ist linear (Kontext → Aufruf → Prüfung → ggf. ein Retry); es gibt keine Werkzeugschleife, keinen Graphen, keinen Zustand zwischen Anfragen. Genau so ist auch im the predecessor project die tragfähige Vorstufe gebaut (OpenAI-kompatibles Chat-Completions-Protokoll per HTTP, bewusst ohne Provider-Bibliothek). Ein Agenten-Framework würde eine schwere Abhängigkeitskette (LangChain-Core, Provider-Adapter) für einen einzelnen POST-Aufruf einführen. Sollte später einmal eine **Graph-Generierung** anstehen (Meadow hat keine Workflow-Graphen, aber die Query-DSL und MCF-Dokumente als strukturierte Artefakte), ist das eine eigene Entscheidung — die Assistenz hier braucht sie nicht.
+**Kein LangGraph, keine LangChain.** Der Ablauf ist linear (Kontext → Aufruf → Prüfung → ggf. ein Retry); es gibt keine Werkzeugschleife, keinen Graphen, keinen Zustand zwischen Anfragen. Genau so ist auch im Vorgängerprojekt die tragfähige Vorstufe gebaut (OpenAI-kompatibles Chat-Completions-Protokoll per HTTP, bewusst ohne Provider-Bibliothek). Ein Agenten-Framework würde eine schwere Abhängigkeitskette (LangChain-Core, Provider-Adapter) für einen einzelnen POST-Aufruf einführen. Sollte später einmal eine **Graph-Generierung** anstehen (Meadow hat keine Workflow-Graphen, aber die Query-DSL und MCF-Dokumente als strukturierte Artefakte), ist das eine eigene Entscheidung — die Assistenz hier braucht sie nicht.
 
 **Provider-neutral:** der Worker spricht das **OpenAI-kompatible Chat-Completions-Protokoll**; damit sind Azure OpenAI, OpenAI, DeepSeek und lokale Ollama-Instanzen ohne Codeänderung nutzbar (nur Endpoint/Modell unterscheiden sich).
 
 ## 4. Konfiguration und Secret-Behandlung
 
-Meadow ist **Einzelmandant** — anders als im the predecessor project (dort `CustomerAIConfig` pro Kunde) genügt **eine** globale Konfiguration in der vorhandenen Settings-Registry (`code default < environment < database`, Admin-Seite `/system-settings` existiert bereits).
+Meadow ist **Einzelmandant** — anders als im Vorgängerprojekt (dort eine Konfiguration pro Kunde) genügt **eine** globale Konfiguration in der vorhandenen Settings-Registry (`code default < environment < database`, Admin-Seite `/system-settings` existiert bereits).
 
 | Schlüssel | Typ | Default | Bedeutung |
 | --- | --- | --- | --- |

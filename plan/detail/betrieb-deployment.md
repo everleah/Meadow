@@ -2,45 +2,45 @@
 
 - **Hauptdokument:** Abschnitt 12 ([Betrieb & Deployment](../meadow-pim-architektur.md#12-betrieb--deployment))
 - **Relevante Phasen:** Phase 2, 4–5, 7, 8
-- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS, example.com); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt. **Phase 8:** Request-Limits (Body-/Rate-Limit) und Backup/Monitoring präzisiert – inkl. der **verifizierten SurrealDB-CLI** (`/surreal`, `--namespace`/`--database`, `is-ready`) für diesen Image-Stand und der lokalen Dev-Skripte `scripts/backup-db.ps1`/`restore-db.ps1`. **Deployment-Dateien erstellt:** `docker-compose.vps.yml`, `.env.vps.example`, `docker/Dockerfile.*`, VPS-Bash-Skripte (`scripts/build-images.sh`, `deploy-vps-meadow.sh`, `backup-vps-db.sh`, `restore-vps-db.sh`, `cleanup-backups.sh`, `healthcheck-vps.sh`, `collect-vps-diagnostics.sh`, `tail-vps-errors.sh`, `bootstrap-vps-admin.sh`). *Hinweis: Der Kern sät derzeit `admin`/`admin`; der **Passwort-Änderungs-Flow ist implementiert** (`POST /auth/password`, Schlüssel-Button im UI-Kopf; ein Banner mahnt an, solange das Passwort nie geändert wurde) — die Seed-Zugangsdaten nach dem ersten Deployment ändern.*
-- **Stand 2026-09-29 (Deployment fertiggestellt und geprüft):** Bilder werden **auf dem Entwicklungsrechner gebaut und gepusht** (`build-images.sh`/`build-images.ps1`, unveränderlicher Git-Kurzhash-Tag plus `latest`), der Server pullt nur. Neu dazu: der **Migrations-Runner** `run-migration.sh` samt `migrations/`-Vertrag (Abschnitt 6), der **gestückelte Restore** über `POST /sql` (Abschnitt 10, weil `surreal import` an jeder realistischen Exportgröße scheitert), ein `.dockerignore` (der Kontext enthielt vorher `target/` und `.venv/`), Log-Rotation je Container, `.gitattributes` gegen CRLF in Skripten und Migrationsdateien sowie die Registry `registry.example.com/meadow`. Alle Befunde stammen aus Läufen gegen die laufende Dev-Instanz; die Kern-Gates prüfen zusätzlich `tests/test_deployment.py`.
+- **Stand:** Konkretisiert für das erste Produktions-Deployment (VPS mit Traefik und eigener Domain); Umsetzung erfolgt in Phase 8. Logging-Spezifikation (kuratierte System-Logs in SurrealDB + Runtime-Konfiguration) ergänzt. **Phase 8:** Request-Limits (Body-/Rate-Limit) und Backup/Monitoring präzisiert – inkl. der **verifizierten SurrealDB-CLI** (`/surreal`, `--namespace`/`--database`, `is-ready`) für diesen Image-Stand und der lokalen Dev-Skripte `scripts/backup-db.ps1`/`restore-db.ps1`. **Deployment-Dateien erstellt:** `docker-compose.vps.yml`, `.env.vps.example`, `docker/Dockerfile.*`, VPS-Bash-Skripte (`scripts/build-images.sh`, `deploy-vps-meadow.sh`, `backup-vps-db.sh`, `restore-vps-db.sh`, `cleanup-backups.sh`, `healthcheck-vps.sh`, `collect-vps-diagnostics.sh`, `tail-vps-errors.sh`, `bootstrap-vps-admin.sh`). *Hinweis: Der Kern sät derzeit `admin`/`admin`; der **Passwort-Änderungs-Flow ist implementiert** (`POST /auth/password`, Schlüssel-Button im UI-Kopf; ein Banner mahnt an, solange das Passwort nie geändert wurde) — die Seed-Zugangsdaten nach dem ersten Deployment ändern.*
+- **Stand 2026-09-29 (Deployment fertiggestellt und geprüft):** Bilder werden **auf dem Entwicklungsrechner gebaut und gepusht** (`build-images.sh`/`build-images.ps1`, unveränderlicher Git-Kurzhash-Tag plus `latest`), der Server pullt nur. Neu dazu: der **Migrations-Runner** `run-migration.sh` samt `migrations/`-Vertrag (Abschnitt 6), der **gestückelte Restore** über `POST /sql` (Abschnitt 10, weil `surreal import` an jeder realistischen Exportgröße scheitert), ein `.dockerignore` (der Kontext enthielt vorher `target/` und `.venv/`), Log-Rotation je Container, `.gitattributes` gegen CRLF in Skripten und Migrationsdateien sowie die Registry aus `PIM_REGISTRY`. Alle Befunde stammen aus Läufen gegen die laufende Dev-Instanz; die Kern-Gates prüfen zusätzlich `tests/test_deployment.py`.
 
-Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**. Konkretes Ziel für das erste Deployment ist der **VPS unter `example.com`**, auf dem bereits Traefik als Reverse Proxy läuft. Die Deployment-Organisation folgt dabei dem erprobten VPS-Muster von **the predecessor project** (`deploy-vps-*.sh`, `.env.vps`, Traefik-Labels, Healthchecks, Backup/Restore). Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
+Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung erfolgt als **Docker-Compose-Setup**. Konkretes Ziel für das erste Deployment ist ein **gemieteter VPS mit Traefik als Reverse Proxy**. Die Deployment-Organisation folgt dabei dem erprobten VPS-Muster vergleichbarer Stacks (`deploy-vps-*.sh`, `.env.vps`, Traefik-Labels, Healthchecks, Backup/Restore). Eine spätere Orchestrierung über Kubernetes (z. B. k3s) ist vorbereitet, aber nicht Bestandteil des MVP.
 
-## 1. Zielumgebung: VPS (example.com)
+## 1. Zielumgebung: VPS mit Traefik
 
-- **Server:** VPS; betreibt bereits mehrere Stacks unter `example.com` (u. a. the predecessor project).
+- **Server:** gemieteter VPS; betreibt bereits mehrere Stacks hinter dem gemeinsamen Traefik.
 - **Traefik:** läuft dort als eigenständiger Stack (Reverse Proxy) mit TLS-Terminierung via Let’s Encrypt (certresolver `letsencrypt`).
-- **Externes Docker-Netz:** `traefik-net` — gemeinsames Netz zwischen Traefik und allen öffentlich gerouteten Stacks (the predecessor project nutzt dasselbe Netz; das Netz existiert daher bereits).
-- **Meadow:** eigener Compose-Stack (`meadow`-Namensraum), der sich über das externe Netz `traefik-net` an Traefik anbindet.
-- **Muster:** Skript-Reihe, Compose-Dateien und Env-Handling analog the predecessor project (`deploy-vps-chub.sh`, `docker-compose.vps.yml`, `.env.vps`).
+- **Externes Docker-Netz:** gemeinsames Netz zwischen Traefik und allen öffentlich gerouteten Stacks. Der Name ist ein Deployment-Wert (`TRAEFIK_NETWORK` in `.env.vps`; die Vorlage nennt `traefik-net`) und existiert auf einem Host mit Traefik meist bereits.
+- **Meadow:** eigener Compose-Stack (`meadow`-Namensraum), der sich über das externe Netz (`TRAEFIK_NETWORK`) an Traefik anbindet.
+- **Muster:** Skript-Reihe, Compose-Dateien und Env-Handling wie bei vergleichbaren VPS-Stacks (`deploy-vps-*.sh`, `docker-compose.vps.yml`, `.env.vps`).
 
 ## 2. DNS & öffentliche Routen (Traefik)
 
 
 | Hostname                   | Compose-Service | Container-Port | Zweck                                  |
 | -------------------------- | --------------- | -------------- | -------------------------------------- |
-| `meadow.pim.example.com` | `pim-frontend`  | 8081           | Web-Oberfläche (NiceGUI)               |
-| `meadow.api.example.com` | `pim-core`      | 8080           | REST-API (inkl. OpenAPI-Dokumentation) |
+| `pim.example.com`          | `pim-frontend`  | 8081           | Web-Oberfläche (NiceGUI)               |
+| `pim-api.example.com`      | `pim-core`      | 8080           | REST-API (inkl. OpenAPI-Dokumentation) |
 
 - **DNS:** A-Records für beide Subdomains auf die IP des VPS.
 - **TLS:** ausschließlich am Traefik terminiert; beide Router über Entrypoint `websecure` + certresolver `letsencrypt`.
-- **Redirect:** HTTP → HTTPS über eine gemeinsame Middleware (`meadow-https-redirect`), analog the predecessor project.
+- **Redirect:** HTTP → HTTPS über eine gemeinsame Middleware (`meadow-https-redirect`), wie bei den übrigen Stacks.
 - **Nicht öffentlich routen:** `surrealdb`, `nats`, `object-storage`, `redis` und `pim-worker` bleiben ausschließlich im internen Netz.
 
 ## 3. Stack-Architektur (docker-compose.vps.yml)
 
 ### 3.1 Netzwerke
 
-- `traefik-net` (external) — nur an `pim-frontend` und `pim-core` (Traefik-Routing). Name über `TRAEFIK_NETWORK` parametrisiert.
+- Das externe Traefik-Netz (Compose-Alias `traefik`, realer Name über `TRAEFIK_NETWORK`) — nur an `pim-frontend` und `pim-core` (Traefik-Routing).
 - `meadow-backend` (bridge, intern) — an alle Dienste.
 
 ### 3.2 Dienste
 
 | Service            | Image                                              | Ports (intern)            | Netzwerke                      | Traefik                    |
 | ------------------ | -------------------------------------------------- | ------------------------- | ------------------------------ | -------------------------- |
-| `pim-core`         | `${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}`         | 8080                      | traefik-net + meadow-backend | `meadow.api.example.com` |
-| `pim-frontend`     | `${PIM_REGISTRY}/pim-frontend:${PIM_FRONTEND_TAG}` | 8081                      | traefik-net + meadow-backend | `meadow.pim.example.com` |
+| `pim-core`         | `${PIM_REGISTRY}/pim-core:${PIM_CORE_TAG}`         | 8080                      | traefik + meadow-backend       | `pim-api.example.com`      |
+| `pim-frontend`     | `${PIM_REGISTRY}/pim-frontend:${PIM_FRONTEND_TAG}` | 8081                      | traefik + meadow-backend       | `pim.example.com`          |
 | `pim-worker`       | `${PIM_REGISTRY}/pim-worker:${PIM_WORKER_TAG}`     | –                         | meadow-backend                 | nein                       |
 | `surrealdb`        | `surrealdb/surrealdb:latest`                       | 8000                      | meadow-backend                 | nein                       |
 | `nats`             | `nats:latest` (JetStream)                          | 4222, 8222 (Monitoring)   | meadow-backend                 | nein                       |
@@ -54,12 +54,12 @@ Alle Komponenten werden als Docker-Container betrieben. Die Standardauslieferung
 
 ### 3.3 Traefik-Labels (pim-core / pim-frontend)
 
-Beispiel für `pim-core` (analog the predecessor project; Router-Präfix `meadow-api`):
+Beispiel für `pim-core` (Router-Präfix `meadow-api`):
 
 ```yaml
 labels:
   - "traefik.enable=true"
-  - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-net}"
+  - "traefik.docker.network=${TRAEFIK_NETWORK}"
   - "traefik.http.routers.meadow-api.rule=Host(`${PIM_API_HOST}`)"
   - "traefik.http.routers.meadow-api.entrypoints=websecure"
   - "traefik.http.routers.meadow-api.tls=true"
@@ -92,7 +92,7 @@ Für `pim-frontend` entsprechend mit Router-Präfix `meadow-ui` und Server-Port 
 
 Eine `.env.vps` auf dem Server (aus `.env.vps.example`, **nicht** in der Versionskontrolle) hält alle Secrets und Parameter. **Die Liste steht genau einmal: in `.env.vps.example`** — sie hier zu wiederholen hat schon einmal dazu geführt, dass ein Wert (`S3_ENDPOINT` vs. `S3_ENDPOINT_URL`) im Dokument richtig und im Container leer war.
 
-- **Registry:** `registry.example.com/meadow` (Forgejo desselben Servers, wie the reference stack); der Pfad muss kleingeschrieben sein, Forgejo weist Großbuchstaben ab.
+- **Registry:** `PIM_REGISTRY` (jede OCI-Registry); der Pfad muss kleingeschrieben sein, Forgejo weist Großbuchstaben ab.
 - **Nicht offensichtliche Werte:**
   - `SURREALDB_URL=surrealdb:8000` (Dienstname, nicht `127.0.0.1`); `SURREALDB_HTTP_URL=http://127.0.0.1:8000` ist die **Host-Sicht** für `run-migration.sh` und `restore-vps-db.sh`.
   - `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` sind gleichzeitig die MinIO-Root-Zugangsdaten und das, was Frontend **und** Worker lesen (`meadow/frontend/exports.py` importiert das Storage-Modul des Workers).
@@ -109,7 +109,7 @@ Eine `.env.vps` auf dem Server (aus `.env.vps.example`, **nicht** in der Version
 
 ## 5. Deployment-Skripte
 
-Die Skripte folgen dem VPS-Muster von the reference stack („bauen und pushen auf dem Entwicklungsrechner, auf dem Server nur pullen“) und liegen unter `scripts/`:
+Die Skripte folgen dem üblichen VPS-Muster („bauen und pushen auf dem Entwicklungsrechner, auf dem Server nur pullen“) und liegen unter `scripts/`:
 
 | Skript                        | Aufgabe                                                                                                                                                        |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -146,16 +146,16 @@ Das Basisschema gehört dem **Kern**: `crates/pim-core/src/db/schema.rs` definie
 - **Startreihenfolge:** Migrationen laufen im Deploy-Skript vor dem Start von `pim-core`/`pim-frontend`.
 - **Ausführung:** `bash scripts/run-migration.sh --status` (bzw. `--baseline`), gegen eine lokale Datenbank mit `SURREALDB_HTTP_URL=http://127.0.0.1:8000`.
 
-## 7. Erst-Deployment (Runbook example.com)
+## 7. Erst-Deployment (Runbook)
 
-1. **DNS:** A-Records `meadow.pim.example.com` und `meadow.api.example.com` → IP des VPS.
+1. **DNS:** A-Records `pim.example.com` und `pim-api.example.com` → IP des VPS.
 2. **Images bauen und pushen** (auf dem Entwicklungsrechner): `./scripts/build-images.sh --registry registry.example.com/meadow --push` bzw. unter Windows `powershell -File scripts/build-images.ps1 -Registry registry.example.com/meadow -Push` (der Entwicklungsrechner hat kein `.env.vps`; alternativ `PIM_REGISTRY` in der Umgebung setzen). Vorher einmalig `docker login registry.example.com`. Der Lauf druckt den unveränderlichen Tag aus.
 3. **Repo auf den Server bringen** (z. B. `/opt/meadow`).
 4. **`.env.vps`** aus `.env.vps.example` erzeugen, Secrets setzen und in `PIM_CORE_TAG`/`PIM_FRONTEND_TAG`/`PIM_WORKER_TAG` den **gepushten Tag** eintragen (nicht `latest` — nur so sind Rollback und Reproduzierbarkeit gegeben).
-5. **Netz prüfen:** `docker network inspect traefik-net` (existiert, da Traefik/the reference stack läuft; das Deploy-Skript legt es sonst an).
+5. **Netz prüfen:** `docker network inspect "$TRAEFIK_NETWORK"` (auf einem Host mit Traefik existiert es bereits; das Deploy-Skript legt es sonst an).
 6. **Deploy:** `./scripts/deploy-vps-meadow.sh` (Preflight, Login, Pull, Infrastruktur, Migrationen, Anwendung, Healthcheck).
 7. **Bootstrap:** `./scripts/bootstrap-vps-admin.sh` — ersetzt das Seed-Passwort `admin`/`admin` über `POST /auth/password` und prüft den neuen Login. Danach ein persönliches Superadmin-Konto anlegen und `admin` nur als Notzugang behalten.
-8. **Verifikation:** `https://meadow.pim.example.com` (UI) und `https://meadow.api.example.com` (OpenAPI) im Browser; `./scripts/healthcheck-vps.sh`.
+8. **Verifikation:** `https://pim.example.com` (UI) und `https://pim-api.example.com` (OpenAPI) im Browser; `./scripts/healthcheck-vps.sh`.
 9. **Cron** für Backup/Cleanup einrichten (Abschnitt 8).
 10. **Standardpakete (optional):** Paketordner nach `resources/standards/<name>/` kopieren und `uv run python scripts/install_standard_bundle.py --all --bulk` ausführen (idempotent, mit Einheiten-Vorprüfung). Für den Vollbestand danach **erneut** laufen lassen, damit die Klassen-Merkmale nachgezogen werden; ohne Pakete im Ordner ist der Aufruf ein No-op. Details: [bmecat-export.md](bmecat-export.md) §11.9.
 
@@ -236,9 +236,9 @@ Das Basisschema gehört dem **Kern**: `crates/pim-core/src/db/schema.rs` definie
 - **Python-Worker:** ein Container verarbeitet parallel (asyncio; getrennte Konsumenten für `jobs.*` und `events.*`, [jobs-scheduler.md](jobs-scheduler.md)); mehrere Container über eine NATS-Queue-Group (Lastverteilung).
 - **Frontend:** mehrere Instanzen nur mit Sticky Sessions (NiceGUI ist zustandsbehaftet); im MVP eine Instanz.
 - **SurrealDB:** im MVP Einzelinstanz; Cluster-Modus erst bei größerem Datenaufkommen.
-- **Hinweis:** Der example.com-Server teilt sich Ressourcen mit anderen Stacks (z. B. the predecessor project); Skalierung dort nur nach Kapazitätsprüfung.
+- **Hinweis:** Der VPS teilt sich Ressourcen mit anderen Stacks; Skalierung dort nur nach Kapazitätsprüfung.
 
-## 13. Ressourcenbedarf (Richtwerte für example.com)
+## 13. Ressourcenbedarf (Richtwerte)
 
 | Dienst         | CPU       | RAM    | Speicher (Volumen) |
 | -------------- | --------- | ------ | ------------------ |
@@ -250,12 +250,12 @@ Das Basisschema gehört dem **Kern**: `crates/pim-core/src/db/schema.rs` definie
 | object-storage | 1 vCPU    | 512 MB | 50–500 GB          |
 | redis (opt.)   | 0.5 vCPU  | 256 MB | 1–5 GB             |
 
-Diese Werte sind als Ausgangspunkt gedacht; auf dem gemeinsamen Server ist die tatsächlich verfügbare Kapazität (VPS-Paket) zu berücksichtigen.
+Diese Werte sind als Ausgangspunkt gedacht; auf dem gemeinsamen Server ist die tatsächlich verfügbare Kapazität des Pakets zu berücksichtigen.
 
 ## 14. Offene Punkte & Annahmen
 
-- **Hostnamen:** Es gelten `meadow.pim.example.com` (UI) und `meadow.api.example.com` (Core).
-- **Registry: entschieden** — `registry.example.com/meadow` (Forgejo desselben Servers, wie the reference stack); der Pfad ist kleingeschrieben, Forgejo weist Großbuchstaben ab. GHCR bleibt eine Alternative.
+- **Hostnamen:** Es gelten `PIM_UI_HOST` (UI) und `PIM_API_HOST` (Core); die Vorlage nennt `pim.example.com` und `pim-api.example.com`.
+- **Registry: entschieden** — `PIM_REGISTRY` (jede OCI-Registry, z. B. auch GHCR); der Pfad ist kleingeschrieben, Forgejo weist Großbuchstaben ab.
 - **Rust-Toolchain: entschieden** — `rust:1.97-bookworm`; die zuvor deklarierte MSRV 1.90 trägt `diskann` 0.54 (über `surrealdb`) nicht: der erste Produktions-Image-Build brach dort mit 11 × E0311 ab. `Cargo.toml` deklariert jetzt 1.97.
 - **NATS-Healthcheck:** Das `nats`-Image hat keine Shell, also ist kein Container-eigener Check möglich; geprüft wird der Monitoring-Port 8222 vom Host (`healthcheck-vps.sh`). Ein `nats-server`-Check wäre erst mit einem anderen Image möglich.
 - **Dev-Restore:** `scripts/restore-db.ps1` hängt noch an `surreal import` (Abschnitt 10) — für die Dev-Datenbank bewusst offen.

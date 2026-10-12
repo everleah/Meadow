@@ -71,7 +71,7 @@ impl Config {
             surrealdb_database: env_or("SURREALDB_DATABASE", "meadow"),
             surrealdb_user: env_or("SURREALDB_USER", "root"),
             surrealdb_pass: env_or("SURREALDB_PASS", "root"),
-            jwt_secret: env_or("JWT_SECRET", "dev-secret-change-me"),
+            jwt_secret: jwt_secret(),
             jwt_ttl_seconds: env_or_parse("JWT_TTL_SECONDS", 3600),
             log_ingest_api_key: std::env::var("LOG_INGEST_API_KEY")
                 .ok()
@@ -98,6 +98,32 @@ impl Config {
     }
 }
 
+/// Minimum length of a signing secret. The template's placeholder and the
+/// defaults that shipped before this check are all far shorter, so a single
+/// rule rejects both without spelling them out.
+const MIN_SECRET_LENGTH: usize = 32;
+
+/// Accepts a configured secret only when it is long enough to be one.
+fn usable_secret(raw: Option<&str>) -> Option<String> {
+    let value = raw?.trim();
+    if value.len() < MIN_SECRET_LENGTH {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+/// `JWT_SECRET` signs every access token (HS256). There is deliberately no
+/// default: a public fallback would let anyone mint a `superadmin` token.
+fn jwt_secret() -> String {
+    match usable_secret(std::env::var("JWT_SECRET").ok().as_deref()) {
+        Some(secret) => secret,
+        None => panic!(
+            "JWT_SECRET must be set to at least {MIN_SECRET_LENGTH} characters; the core refuses \
+             to start with a guessable signing key - generate one with `openssl rand -hex 32`"
+        ),
+    }
+}
+
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_owned())
 }
@@ -114,4 +140,23 @@ fn env_or_bool(key: &str, default: bool) -> bool {
         .ok()
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_or_short_secret_is_rejected() {
+        assert_eq!(usable_secret(None), None);
+        assert_eq!(usable_secret(Some("")), None);
+        assert_eq!(usable_secret(Some("   ")), None);
+        assert_eq!(usable_secret(Some("too-short-to-sign-anything")), None);
+    }
+
+    #[test]
+    fn a_long_secret_is_kept_without_surrounding_whitespace() {
+        let secret = "x".repeat(MIN_SECRET_LENGTH);
+        assert_eq!(usable_secret(Some(&format!("  {secret}  "))), Some(secret));
+    }
 }

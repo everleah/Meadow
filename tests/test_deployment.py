@@ -6,7 +6,7 @@ These checks are cheap and they protect the parts of a deployment that break
 log rotation (a small VPS fills its disk), a build context that drags `target/`
 and `.env.vps` along, or a migration file whose name breaks the ordering of the
 runner. Nothing here starts a container - the file-level invariants are what
-kept the reference deployment (the reference stack) from drifting.
+kept the reference deployment from drifting.
 """
 
 from __future__ import annotations
@@ -82,6 +82,15 @@ def _env_names() -> set[str]:
     return names
 
 
+def _env_value(name: str) -> str:
+    """The value the example file sets for `name`."""
+    for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{name}="):
+            return stripped.split("=", 1)[1].strip()
+    raise AssertionError(f"{name} is not set in .env.vps.example")
+
+
 def test_compose_reads_no_variable_that_the_example_does_not_document() -> None:
     """A documented variable nobody reads is dead; an undocumented one is a trap.
 
@@ -141,9 +150,16 @@ def test_the_database_is_reachable_for_the_migration_runner() -> None:
     assert isinstance(ports, list)
     assert any("127.0.0.1:8000:8000" in str(port) for port in ports)
     for name in ("pim-core",):
-        assert "traefik-net" in services[name]["networks"]
+        assert "traefik" in services[name]["networks"]
     for name in ("surrealdb", "nats", "object-storage", "pim-worker"):
-        assert "traefik-net" not in services[name]["networks"], name
+        assert "traefik" not in services[name]["networks"], name
+
+
+def test_the_proxy_network_is_a_deployment_setting() -> None:
+    """The file names the network by alias; its real name comes from `.env.vps`."""
+    network = _compose()["networks"]["traefik"]
+    assert network["external"] is True
+    assert network["name"] == "${TRAEFIK_NETWORK}"
 
 
 def test_the_export_bucket_reaches_frontend_and_worker() -> None:
@@ -166,14 +182,11 @@ def test_the_ingest_key_is_the_same_on_both_sides() -> None:
 
 
 def test_the_registry_path_is_lowercase() -> None:
-    """Forgejo rejects an image path with upper case (learned from the reference stack)."""
-    registry = next(
-        line.split("=", 1)[1].strip()
-        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
-        if line.startswith("PIM_REGISTRY=")
-    )
+    """Forgejo rejects an image path with upper case, so the example stays lowercase."""
+    registry = _env_value("PIM_REGISTRY")
     assert registry == registry.lower()
-    assert registry.startswith("git.")
+    assert "CHANGE_ME" not in registry
+    assert "/" in registry
 
 
 def test_the_build_context_excludes_the_heavy_and_the_secret() -> None:

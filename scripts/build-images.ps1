@@ -24,9 +24,9 @@
     Immutable tag to use instead of the git short SHA.
 
 .PARAMETER Registry
-    Registry host and path (e.g. registry.example.com/meadow). The workstation has
-    no `.env.vps`, so this is how the value gets in - otherwise it is read from
-    the environment or from `.env.vps`.
+    Registry host and path (e.g. registry.example.com/meadow). The workstation
+    has no `.env.vps`, so this is how the value gets in - otherwise it is read
+    from the environment or from `.env.vps`.
 
 .EXAMPLE
     powershell -File scripts/build-images.ps1 -Registry registry.example.com/meadow -Push
