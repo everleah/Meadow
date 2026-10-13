@@ -20,6 +20,7 @@ Owns all durable project documentation that does not belong to planning: user-fa
 
 ## Work Guidance
 
+- The root `README.md` reuses one of the generated handbook images as its preview image (`docs/user/assets/dashboard.png`); it is not a second asset to maintain.
 - Structure `docs/` hierarchically by topic or audience (e.g. user, developer, operations).
 - Split documents into subfolders when they outgrow a single page; keep an index where useful.
 - Refine conventions once the first real documents are added.
