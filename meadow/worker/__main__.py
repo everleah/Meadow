@@ -13,7 +13,7 @@ from meadow.worker.business_rules import build_business_rule_handler
 from meadow.worker.collections import build_collection_refresh_handler
 from meadow.worker.config_import import build_config_import_handler
 from meadow.worker.connector_test import build_connector_test_handler
-from meadow.worker.connectors import load_webhook_configs
+from meadow.worker.connectors import fetch_object, load_webhook_configs, post_connector_status
 from meadow.worker.exports import build_export_handler
 from meadow.worker.http import loopback_host
 from meadow.worker.imports import build_import_handler
@@ -109,6 +109,12 @@ async def main() -> None:
                 lambda: load_webhook_configs(core_url, api_key=api_key),
                 reload_interval_s=webhook_reload,
                 log_sender=log_sender,
+                # `payload_mode: object` (Stage 3): the object comes from the core,
+                # the worker holds no object data of its own.
+                load_object=lambda object_id: fetch_object(core_url, api_key, object_id),
+                report_status=lambda connector_id, ok, error: post_connector_status(
+                    core_url, api_key, connector_id, ok=ok, error=error
+                ),
             )
         )
     )

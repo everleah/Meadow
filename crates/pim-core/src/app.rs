@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use utoipa::OpenApi as _;
 use utoipa::openapi::OpenApi;
@@ -378,6 +378,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/connectors/{id}/test",
             post(api::connectors::test_connector),
+        )
+        .route(
+            "/connectors/{id}/status",
+            post(api::connectors::report_connector_status),
+        )
+        .route(
+            "/connector-types",
+            post(api::connector_types::create_connector_type),
+        )
+        .route(
+            "/connector-types/{name}",
+            patch(api::connector_types::update_connector_type)
+                .delete(api::connector_types::delete_connector_type),
         )
         .route(
             "/connectors/validate",

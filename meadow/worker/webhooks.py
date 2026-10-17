@@ -5,8 +5,9 @@ events out to every configured webhook endpoint with **at-least-once**
 semantics: delivery failures are retried via NATS redelivery (negative-ack) and
 finally dead-lettered to a dedicated DLQ stream (manual cleanup, like the job
 queue). The retry policy is **per connector** (`parameters.retry_policy`:
-`max_attempts` + constant `backoff_seconds`); the middleware must deduplicate on
-`event_id` (redelivery is normal).
+`max_attempts` + `backoff_seconds`, a list with one wait per further attempt and
+the last entry repeating); the middleware must deduplicate on `event_id`
+(redelivery is normal).
 
 When coalescing is enabled, events are buffered per connector, `object_id` and
 `event_type` within a fixed window and only the **last** event is sent (with
@@ -27,7 +28,7 @@ import dataclasses
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import nats
@@ -81,13 +82,17 @@ class WebhookRetry(BaseModel):
     """Per-connector retry policy (`parameters.retry_policy`).
 
     `max_attempts` caps the delivery attempts before the event is dead-lettered
-    to `EVENTS_DLQ`; `backoff_seconds` is the wait time before every further
-    attempt. A message is only terminated once the **strictest** matching
-    connector gave up (a terminal settlement of any connector terminates it).
+    to `EVENTS_DLQ`; `backoff_seconds` is the wait time before the **next**
+    attempt — one entry per repetition, the last entry repeats
+    (`[5, 30, 120]` waits 5 s, then 30 s, then 120 s for every further one). A
+    connector stored before the list existed carries a single number; it becomes
+    a one-entry list and waits the same time as before. A message is only
+    terminated once the **strictest** matching connector gave up (a terminal
+    settlement of any connector terminates it).
     """
 
     max_attempts: int = WEBHOOK_DEFAULT_MAX_ATTEMPTS
-    backoff_seconds: float = WEBHOOK_NAK_DELAY_S
+    backoff_seconds: list[float] = Field(default_factory=lambda: [WEBHOOK_NAK_DELAY_S])
 
     @field_validator("max_attempts")
     @classmethod
@@ -96,20 +101,19 @@ class WebhookRetry(BaseModel):
 
     @field_validator("backoff_seconds", mode="before")
     @classmethod
-    def _accept_legacy_backoff_list(cls, value: object) -> object:
-        """Accepts the previously documented list form (`[30, 60, 120]`).
-
-        The schema declares a single number now; a stored list would otherwise
-        disable the connector, so the last entry is used as the constant delay.
-        """
-        if isinstance(value, (list, tuple)) and value:
-            return value[-1]
+    def _accept_single_number(cls, value: object) -> object:
+        """Takes a single number (the older form) as a one-entry list."""
+        if isinstance(value, (list, tuple)):
+            return [item for item in value if not isinstance(item, bool)]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return [value]
         return value
 
     @field_validator("backoff_seconds")
     @classmethod
-    def _clamp_backoff(cls, value: float) -> float:
-        return max(float(value), 0.1)
+    def _clamp_backoff(cls, value: list[float]) -> list[float]:
+        clamped = [max(float(item), 0.1) for item in value]
+        return clamped or [max(float(WEBHOOK_NAK_DELAY_S), 0.1)]
 
 
 class WebhookConfig(BaseModel):
@@ -117,6 +121,8 @@ class WebhookConfig(BaseModel):
 
     #: Connector key used for logging and dead-letter attribution.
     key: str = "webhook"
+    #: Record id of the connector (`connector:<key>`); the status report needs it.
+    id: str = ""
     url: str
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
@@ -124,6 +130,10 @@ class WebhookConfig(BaseModel):
     coalesce: WebhookCoalesce = Field(default_factory=WebhookCoalesce)
     retry: WebhookRetry = Field(default_factory=WebhookRetry)
     timeout_s: float = 30.0
+    #: What the body carries: the event alone (`event`, the historical default) or
+    #: the event plus the full object under `object` (`object`). The event stays the
+    #: envelope either way, so `event_id` still deduplicates a redelivery.
+    payload_mode: Literal["event", "object"] = "event"
 
 
 @dataclasses.dataclass
@@ -132,6 +142,13 @@ class _Connector:
 
     config: WebhookConfig
     buffer: _CoalesceBuffer | None = None
+    #: Fetches one object for `payload_mode: object` (None: the mode is not served).
+    load_object: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None
+    #: Reports a delivery outcome to the core (`POST /connectors/{id}/status`).
+    report_status: Callable[[str, bool, str | None], Awaitable[None]] | None = None
+    #: The outcome last reported (`None` = nothing reported yet, or the last report
+    #: failed). Only a change is sent: a webhook fires often, the list needs a state.
+    last_status: bool | None = None
 
 
 def matches_filter(event: dict[str, Any], config: WebhookConfig) -> bool:
@@ -291,23 +308,86 @@ async def _dead_letter(
 
 async def _deliver(
     client: httpx.AsyncClient,
-    config: WebhookConfig,
+    connector: _Connector,
     event: dict[str, Any],
 ) -> None:
     """Sends one event to the middleware; raises on a non-2xx response."""
+    config = connector.config
+    payload = await _payload_for(connector, event)
     response = await client.request(
         config.method,
         config.url,
-        json=event,
+        json=payload,
         headers=config.headers or None,
         timeout=config.timeout_s,
     )
     response.raise_for_status()
 
 
-def _retry_delay(config: WebhookConfig) -> float:
-    """The connector's own wait time before the next delivery attempt."""
-    return max(config.retry.backoff_seconds, 0.1)
+#: Event type of a deleted object — there is no object left to add to the payload.
+OBJECT_DELETED_EVENT = "object.deleted"
+
+
+async def _report_status(connector: _Connector, *, ok: bool, error: str | None) -> None:
+    """Tells the core about the delivery outcome — **only when it changes**.
+
+    A webhook fires on every CRUD event; reporting each one would mean an extra
+    write per delivery. The list only needs "healthy / failing", so the first
+    failure and the first success after one are reported
+    (`plan/detail/konnektor-konfiguration.md` §14.4). A failed report is retried on
+    the next delivery instead of being lost.
+    """
+    if connector.report_status is None or not connector.config.id:
+        return
+    if connector.last_status is ok:
+        return
+    connector.last_status = ok
+    try:
+        await connector.report_status(connector.config.id, ok, error)
+    except httpx.HTTPError as failure:
+        logger.warning(
+            "could not report the status of connector %s: %s", connector.config.key, failure
+        )
+        connector.last_status = None
+
+
+async def _payload_for(connector: _Connector, event: dict[str, Any]) -> dict[str, Any]:
+    """The event as the body, plus the full object in `payload_mode: object`.
+
+    The event stays the envelope (so `event_id`, the filter facts and the
+    coalescing flags keep their place, and the middleware still deduplicates on
+    `event_id`); `object` is added beside them. A **deleted** object has nothing to
+    add — the event is the whole truth there. Any other fetch failure raises, so
+    the delivery is retried instead of silently sending the wrong shape.
+    """
+    if connector.config.payload_mode != "object" or connector.load_object is None:
+        return event
+    object_id = str(event.get("object_id") or "")
+    if not object_id or event.get("event_type") == OBJECT_DELETED_EVENT:
+        return event
+    try:
+        document = await connector.load_object(object_id)
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 404:
+            logger.info(
+                "object %s no longer exists; sending the event alone (connector %s)",
+                object_id,
+                connector.config.key,
+            )
+            return event
+        raise
+    if document is None:
+        return event
+    return {**event, "object": document}
+
+
+def _retry_delay(config: WebhookConfig, attempt: int) -> float:
+    """The wait after delivery attempt `attempt` (1-based; the last entry repeats)."""
+    values = config.retry.backoff_seconds
+    if not values:
+        return max(WEBHOOK_NAK_DELAY_S, 0.1)
+    index = min(max(attempt - 1, 0), len(values) - 1)
+    return max(values[index], 0.1)
 
 
 async def _deliver_immediate(
@@ -322,7 +402,7 @@ async def _deliver_immediate(
     num_delivered = _num_delivered(msg)
     max_attempts = connector.config.retry.max_attempts
     try:
-        await _deliver(client, connector.config, event)
+        await _deliver(client, connector, event)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
             "webhook delivery failed for %s (connector %s, attempt %d/%d): %s",
@@ -332,6 +412,7 @@ async def _deliver_immediate(
             max_attempts,
             exc,
         )
+        await _report_status(connector, ok=False, error=str(exc))
         if num_delivered >= max_attempts:
             try:
                 await _dead_letter(
@@ -339,12 +420,17 @@ async def _deliver_immediate(
                 )
             except Exception:  # noqa: BLE001 - fall back to a retry
                 logger.exception("webhook dead-letter publish failed")
-                await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
+                await tracker.settle(
+                    msg, retry=True, retry_delay=_retry_delay(connector.config, num_delivered)
+                )
                 return
             await tracker.settle(msg, terminal=True)
         else:
-            await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
+            await tracker.settle(
+                msg, retry=True, retry_delay=_retry_delay(connector.config, num_delivered)
+            )
     else:
+        await _report_status(connector, ok=True, error=None)
         await tracker.settle(msg)
 
 
@@ -364,7 +450,7 @@ async def _deliver_coalesced(
     num_delivered = _num_delivered(msgs[-1])
     max_attempts = connector.config.retry.max_attempts
     try:
-        await _deliver(client, connector.config, latest)
+        await _deliver(client, connector, latest)
     except Exception as exc:  # noqa: BLE001 - transient delivery failure
         logger.warning(
             "webhook coalesced delivery failed for %s (connector %s, attempt %d/%d): %s",
@@ -374,6 +460,7 @@ async def _deliver_coalesced(
             max_attempts,
             exc,
         )
+        await _report_status(connector, ok=False, error=str(exc))
         if num_delivered >= max_attempts:
             try:
                 await _dead_letter(
@@ -383,16 +470,19 @@ async def _deliver_coalesced(
                 logger.exception("webhook dead-letter publish failed")
                 for msg in msgs:
                     await tracker.settle(
-                        msg, retry=True, retry_delay=_retry_delay(connector.config)
+                        msg, retry=True, retry_delay=_retry_delay(connector.config, num_delivered)
                     )
                 return
             for msg in msgs:
                 await tracker.settle(msg, terminal=True)
         else:
             for msg in msgs:
-                await tracker.settle(msg, retry=True, retry_delay=_retry_delay(connector.config))
+                await tracker.settle(
+                    msg, retry=True, retry_delay=_retry_delay(connector.config, num_delivered)
+                )
         return
 
+    await _report_status(connector, ok=True, error=None)
     for msg in msgs:
         await tracker.settle(msg)
 
@@ -423,6 +513,8 @@ async def serve_webhooks(
     max_deliver: int = WEBHOOK_MAX_DELIVER,
     nak_delay: float = WEBHOOK_NAK_DELAY_S,
     log_sender: LogSender | None = None,
+    load_object: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    report_status: Callable[[str, bool, str | None], Awaitable[None]] | None = None,
 ) -> None:
     """Consumes CRUD events and fans matching ones out to every webhook endpoint.
 
@@ -430,9 +522,17 @@ async def serve_webhooks(
     long webhook deliveries never block job processing. One JetStream consumer
     feeds all connectors; the attempt count and backoff are per connector
     (`retry_policy`), so `max_deliver` is only the consumer ceiling.
+
+    `load_object` fetches one object from the core for connectors with
+    `payload_mode: object`; without it those connectors send the event alone.
     """
     connectors = [
-        _Connector(config=config, buffer=_CoalesceBuffer() if config.coalesce.enabled else None)
+        _Connector(
+            config=config,
+            buffer=_CoalesceBuffer() if config.coalesce.enabled else None,
+            load_object=load_object,
+            report_status=report_status,
+        )
         for config in configs
     ]
     nc = await nats.connect(nats_url)
@@ -526,6 +626,8 @@ async def serve_webhooks_dynamic(
     max_deliver: int = WEBHOOK_MAX_DELIVER,
     nak_delay: float = WEBHOOK_NAK_DELAY_S,
     log_sender: LogSender | None = None,
+    load_object: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    report_status: Callable[[str, bool, str | None], Awaitable[None]] | None = None,
 ) -> None:
     """Supervises the webhook consumer and live-reloads connector config.
 
@@ -581,6 +683,8 @@ async def serve_webhooks_dynamic(
                                 max_deliver=max_deliver,
                                 nak_delay=nak_delay,
                                 log_sender=log_sender,
+                                load_object=load_object,
+                                report_status=report_status,
                             )
                         )
             await asyncio.sleep(reload_interval_s)

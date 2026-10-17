@@ -50,7 +50,7 @@ PROVIDER_EXAMPLES: dict[str, dict[str, str]] = {
 
 #: Editor kinds per setting key. One table instead of if-chains in three places
 #: (build, reload, save) — a key added here works in all of them.
-SWITCH_KEYS = ("rules_degrade", "ai_enabled")
+SWITCH_KEYS = ("rules_degrade", "connector_strict_parameters", "ai_enabled")
 INT_KEYS = (
     "log_retention_days",
     "log_rate_limit",
@@ -137,6 +137,11 @@ async def settings_page() -> None:
                     "rules_breaker_threshold",
                     "rules_timeout_ms",
                 ),
+            ),
+            (
+                "settings.group_connectors",
+                "teal",
+                ("connector_strict_parameters",),
             ),
             (
                 "settings.group_ai",

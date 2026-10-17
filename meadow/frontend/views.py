@@ -11,6 +11,7 @@ from meadow.frontend import (
     channels,  # noqa: F401  (registers the /channels page)
     config,
     config_page,  # noqa: F401  (registers the /config page)
+    connector_types_page,  # noqa: F401  (registers the /connector-types page)
     connectors,  # noqa: F401  (registers the /connectors page)
     enum_sets,  # noqa: F401  (registers the /enum-sets page)
     export_page,  # noqa: F401  (registers the /export page)
@@ -44,6 +45,7 @@ _IMPLEMENTED_ROUTES = {
     "/attribute-definitions",
     "/categories",
     "/connectors",
+    "/connector-types",
     "/jobs",
     "/users",
     "/groups",

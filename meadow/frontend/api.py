@@ -142,11 +142,22 @@ class CoreError(Exception):
     (e.g. a validation failure such as ``height: Height is required``) plus the
     HTTP status code, so the UI can show the actual reason instead of a generic
     "could not save" notice.
+
+    `fields` is the same verdict keyed by path (`{"parameters.url": "is required"}`),
+    when the core names fields — a form marks the widgets instead of only printing
+    the sentence (`plan/detail/konnektor-konfiguration.md` §14.4).
     """
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        fields: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.fields = dict(fields or {})
 
 
 def is_session_expired(results: list[dict]) -> bool:
@@ -2297,7 +2308,11 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                raise CoreError(self._error_detail(response), status=response.status_code)
+                raise CoreError(
+                    self._error_detail(response),
+                    status=response.status_code,
+                    fields=self._error_fields(response),
+                )
             return response.json()
 
     async def update_connector(
@@ -2335,7 +2350,11 @@ class CoreClient:
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
-                raise CoreError(self._error_detail(response), status=response.status_code)
+                raise CoreError(
+                    self._error_detail(response),
+                    status=response.status_code,
+                    fields=self._error_fields(response),
+                )
             return response.json()
 
     async def delete_connector(self, token: str, connector_id: str) -> None:
@@ -2343,6 +2362,68 @@ class CoreClient:
         async with _api_client() as client:
             response = await client.delete(
                 f"{self.base_url}/connectors/{connector_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+
+    async def create_connector_type(
+        self,
+        token: str,
+        *,
+        name: str,
+        label_key: str,
+        direction: str,
+        schema: dict,
+    ) -> dict:
+        """Registers a connector type (``POST /connector-types``, admin).
+
+        The schema is the same document ``GET /connector-types`` serves for the
+        built-in types; the core refuses one it cannot read
+        (``plan/detail/konnektor-konfiguration.md`` §14.1).
+        """
+        payload = {
+            "name": name,
+            "label_key": label_key,
+            "direction": direction,
+            "schema": schema,
+        }
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/connector-types",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def update_connector_type(
+        self,
+        token: str,
+        name: str,
+        *,
+        label_key: str,
+        direction: str,
+        schema: dict,
+    ) -> dict:
+        """Replaces a registered connector type (``PATCH /connector-types/{name}``)."""
+        payload = {"name": name, "label_key": label_key, "direction": direction, "schema": schema}
+        async with _api_client() as client:
+            response = await client.patch(
+                f"{self.base_url}/connector-types/{name}",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def delete_connector_type(self, token: str, name: str) -> None:
+        """Deletes a registered connector type (``DELETE /connector-types/{name}``)."""
+        async with _api_client() as client:
+            response = await client.delete(
+                f"{self.base_url}/connector-types/{name}",
                 headers={"Authorization": f"Bearer {token}"},
             )
             if response.is_error:
@@ -2854,6 +2935,16 @@ class CoreClient:
             return response.json().get("error") or response.text
         except ValueError, AttributeError:  # a body that is not a JSON object has no `error`
             return response.text
+
+    def _error_fields(self, response: httpx.Response) -> dict[str, str]:
+        """The core's `fields` map (`{path: message}`), empty when it named none."""
+        try:
+            fields = response.json().get("fields")
+        except ValueError, AttributeError:  # a body that is not a JSON object
+            return {}
+        if not isinstance(fields, dict):
+            return {}
+        return {str(key): str(value) for key, value in fields.items()}
 
     async def list_saved_searches(
         self,

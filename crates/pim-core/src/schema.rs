@@ -406,6 +406,30 @@ DEFINE FIELD IF NOT EXISTS updated_by ON TABLE connector TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS idx_connector_name ON TABLE connector FIELDS name UNIQUE;
 DEFINE INDEX IF NOT EXISTS idx_connector_type ON TABLE connector FIELDS type;
 
+-- Connector secrets, kept **apart** from `connector.parameters` (Stage 3,
+-- plan/detail/konnektor-konfiguration.md §14.2): a backup, a list response or an
+-- MCF export then never carries a token. One record per connector under the same
+-- key; `values` holds `{<declared path>: <value>}` and `parameters` keeps only a
+-- reference (`{"$secret": "connector:<key>#headers"}`). The worker resolves it
+-- (`GET /connectors?resolve_secrets=true`), the admin UI never sees the value.
+DEFINE TABLE IF NOT EXISTS connector_secret;
+DEFINE FIELD IF NOT EXISTS values ON TABLE connector_secret TYPE object;
+DEFINE FIELD OVERWRITE created_at ON TABLE connector_secret TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE connector_secret TYPE datetime DEFAULT time::now();
+
+-- Registered connector types (Stage 3, plan/detail/konnektor-konfiguration.md §14.1):
+-- an admin adds a type with its parameter schema, so a fourth connector type needs no
+-- Rust change. The schema is the same JSON `GET /connector-types` serves for the
+-- built-in types; such a type is `wired: false` until a worker plugin reads it.
+DEFINE TABLE IF NOT EXISTS connector_type;
+DEFINE FIELD IF NOT EXISTS name ON TABLE connector_type TYPE string;
+DEFINE FIELD IF NOT EXISTS label_key ON TABLE connector_type TYPE string;
+DEFINE FIELD IF NOT EXISTS direction ON TABLE connector_type TYPE string;
+DEFINE FIELD IF NOT EXISTS schema ON TABLE connector_type TYPE object;
+DEFINE FIELD OVERWRITE created_at ON TABLE connector_type TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON TABLE connector_type TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_connector_type_name ON TABLE connector_type FIELDS name UNIQUE;
+
 -- Import documents: raw MEF documents submitted via `POST /imports`. The
 -- core stores the document and queues an `inbound_import` job; the worker
 -- fetches it via `GET /imports/{document_id}` and performs the import.

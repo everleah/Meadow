@@ -2,7 +2,7 @@
 
 - **Hauptdokument:** Abschnitt 7 ([Integration & Eventsystem](../meadow-pim-architektur.md#7-integration--eventsystem)) und Abschnitt 11 ([Benutzeroberfläche](../meadow-pim-architektur.md#11-benutzeroberfläche-frontend))
 - **Relevante Phasen:** Phase 9 (Ausbau), ergänzend zu Phase 6/7 (Konnektoren & Admin-UI)
-- **Stand:** **Stage 1 und 2 umgesetzt** (2026-09-11) — Schema, Servervalidierung, `parameters_mode: merge`, `GET /connector-types`, Konfigurationsformular, Wiederholungsrichtlinie, Import-/Export-Profile und Verbindungstest sind im Betrieb verifiziert. **Stage 3** (Plugin-Registry, Secret-Ablage, MCF-Sektion, kleinere Ausbauten) ist **skizziert, aber nicht umgesetzt** (Abschnitt 14). Die Abschnitte markieren den Ist-Stand mit **(umgesetzt)**.
+- **Stand:** **Stage 1, 2 und 3 umgesetzt** (Stage 1/2 2026-09-11, Stage 3 2026-10-17 — bis auf die Plugin-Laufzeit der registrierten Typen) — Schema, Servervalidierung, `parameters_mode: merge`, `GET /connector-types`, schema-getriebenes Formular, Verbindungstest, getrennte Secret-Ablage, MCF-Sektion `connectors`, Status-/Payload-/Strict-Ausbauten. Details je Abschnitt, Sammelstand in §14.
 
 **Getroffene Entscheidungen (umgesetzt):**
 
@@ -240,7 +240,7 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 
 7. Job-Typ `connector_test` + Worker-Testversand + „Verbindung testen"-Dialog mit Ergebnis (Abschnitt 8).
 
-**Stage 3 — Ausbau (optional, skizziert, nicht umgesetzt):**
+**Stage 3 — Ausbau (umgesetzt 2026-10-17, bis auf die Plugin-Laufzeit; §14):**
 
 8. Ausbauoptionen für später — eigene Konnektor-Typen (Plugin-Registry), getrennte Secret-Ablage, Konnektor-Profile im MCF, kleinere Ausbauten. **Details, Nutzen, Aufwand und Voraussetzungen: Abschnitt 14.**
 
@@ -271,56 +271,59 @@ Damit das Formular nicht lügt, gilt als Arbeitsregel: **jedes deklarierte Feld 
 | Frage | Vorschlag |
 |---|---|
 | `retry_policy` wirksam machen statt entfernen? | **Umgesetzt (Stage 2a):** wirksam gemacht — max. Versuche + Wartezeit je Konnektor (Abschnitt 7). |
-| Einzelne Backoff-Werte je Versuch (`[30, 60, 120, 300]`)? | **Offen, Stage-3-Kandidat (Abschnitt 14.4).** Umgesetzt ist eine konstante Wartezeit (ein Zahlenfeld, auch für Nicht-Techniker verständlich). Eine Liste bräuchte eine neue Feldart (`number_list`) in Schema, Formular und Tests; der Worker akzeptiert eine gespeicherte Liste bereits defensiv (letzter Wert gewinnt). |
-| Payload-Modus (Event vs. vollständiges Objekt)? | **Offen, Stage-3-Kandidat (Abschnitt 14.4);** nicht in Stage 1/2 — erst wenn die Middleware es braucht (heute sendet der Worker immer das Event). |
+| Einzelne Backoff-Werte je Versuch (`[30, 60, 120, 300]`)? | **Umgesetzt (Stage 3, 2026-10-17):** `retry_policy.backoff_seconds` ist eine **Liste** (`number_list`, neue Feldart): ein Wert je weiterem Versuch, der letzte wiederholt sich. Ein gespeicherter Einzelwert bleibt gültig (`normalize` macht daraus eine einelementige Liste, der Worker liest ihn genauso). |
+| Payload-Modus (Event vs. vollständiges Objekt)? | **Umgesetzt (Stage 3, 2026-10-17):** Feld `payload_mode` (`event` = wie bisher, `object` = Ereignis **plus** `object` aus `GET /objects/{id}`). Das Ereignis bleibt die Hülle, damit `event_id` weiter dedupliziert; ein gelöschtes Objekt (und ein `404` beim Lesen) geht als Ereignis allein hinaus, jeder andere Lesefehler wird wiederholt statt still die falsche Form zu senden. |
 | `json_import`/`json_export` als Job-Defaults verdrahten? | **Umgesetzt (Stage 2b)** — der erste aktivierte Konnektor des Typs ist das Profil (Abschnitt 7, Punkt 3). |
-| Unbekannte Schlüssel ablehnen? | Nein, nur melden; optionaler Schalter `strict_parameters` später. |
-| Strukturierte Feldfehler (`{"error": …, "fields": {…}}`)? | Erst wenn das Formular Feldmarkierungen braucht; Stage 1 kommt mit Pfad in der Meldung aus. |
+| Unbekannte Schlüssel ablehnen? | **Umgesetzt (Stage 3, 2026-10-17):** Opt-in über die System-Einstellung `connector_strict_parameters` (Default aus). Mit ihr ist ein nicht deklarierter **Top-Level**-Schlüssel ein Fehler; der Inhalt deklarierter Objekte (`headers`, `json`-Felder) bleibt frei. Aus bleibt Altdaten gültig und der Hinweis im Formular. |
+| Strukturierte Feldfehler (`{"error": …, "fields": {…}}`)? | **Umgesetzt (Stage 3, 2026-10-17):** jeder `400` der Parametervalidierung trägt zusätzlich `fields` als `{pfad: meldung}`; das Formular markiert die Widgets (`ParameterForm.mark_errors`) und löscht die Marke bei der nächsten Änderung. Die flache Meldung bleibt (Logs, KI-Prüfung). |
 | Schema als JSON-Schema ausliefern (statt eigenem Format)? | Nein — das eigene, kleinere Format genügt (kein vollständiger Validator nötig) und bleibt ohne Zusatzabhängigkeit. Mehrfachauswahl (`string_list`) und Key-Wert-Tabellen sind in JSON Schema umständlicher als hier. |
 
-## 14. Stage 3 — Ausbauoptionen (Skizze, **nicht umgesetzt**)
+## 14. Stage 3 — Ausbauoptionen (**umgesetzt 2026-10-17, bis auf die Plugin-Laufzeit**)
 
-> **Status:** Diese Stage ist **weder beauftragt noch implementiert**. Sie sammelt die Optionen, die nach Stage 1/2 offen bleiben, jeweils mit Nutzen, Skizze, Aufwand und Voraussetzungen — damit eine spätere Entscheidung nicht wieder bei null beginnt. Die Abschnitte 1–13 beschreiben ausschließlich den **umgesetzten** Stand.
+> **Status:** Umgesetzt sind 14.1 in der **Datenform** (registrierte Typen mit gespeichertem Schema, Admin-Seite, `wired: false`), 14.2 (eigene Secret-Ablage), 14.3 (MCF-Sektion `connectors`, ohne Secrets) und die Punkte aus 14.4 **außer** dem Verbindungstest für HTTP-Profile. Offen bleibt die **Plugin-Laufzeit** (`MEADOW_CONNECTOR_PLUGINS`): ohne sie liest kein Verbraucher die Parameter eines registrierten Typs, und genau das sagt die Oberfläche.
+>
+> Die Abschnitte 1–13 beschreiben den Stand nach Stage 1/2, mit den Nachträgen aus Stage 3.
 
-### 14.1 Eigene Konnektor-Typen (Plugin-Registry) — größter Nutzen, größter Aufwand
+### 14.1 Eigene Konnektor-Typen (Plugin-Registry) — **umgesetzt als Datenmodell**
 
-**Warum:** Der Kern kennt heute genau drei Typen (`webhook`, `json_import`, `json_export`, `connector_schema.rs`). Ein vierter Typ (z. B. „SAP IDoc“, „Shopify“, „MCP-Tool“) verlangt heute einen Eingriff in **drei** Stellen: Schema im Kern (Rust), Verbraucher im Worker (Python), Labels in drei Locales.
+**Warum:** Der Kern kannte drei Typen (`webhook`, `json_import`, `json_export`). Ein vierter (z. B. „SAP IDoc") verlangte einen Eingriff in **drei** Stellen: Schema im Kern (Rust), Verbraucher im Worker (Python), Labels in drei Locales.
 
-**Skizze:**
-- Neue Tabelle **`connector_type`** analog `object_type`: `name`, multilinguale `label`, `direction`, `wired`, **`schema` als JSON** in exakt dem Format, das `GET /connector-types` heute liefert (`groups[].fields[]`).
-- `GET /connector-types` liefert eingebaute **und** registrierte Typen; `validate()` validiert gegen das jeweils gültige Schema (eingebaut → Rust-Konstante, registriert → gespeichertes Schema). Damit bleiben Kern und Formular automatisch synchron, ohne Rust-Änderung.
-- Verbraucher-Registrierung im Worker über ein Einstiegsmodul (`MEADOW_CONNECTOR_PLUGINS=meinpaket.konnektoren`), das eine Funktion `build(config) -> Handler` exportiert; der Kern prüft nur Struktur/Rechte, nicht die Semantik.
-- Admin-Seite: Schema-Editor (JSON) mit Vorschau über das vorhandene Formular — der Renderer ist bereits schema-getrieben und unverändert nutzbar.
+**Umgesetzt (2026-10-17):**
+- Tabelle **`connector_type`** (`name`, `label_key`, `direction`, `schema`); `schema` ist exakt das Format, das `GET /connector-types` liefert (`groups[].fields[]`).
+- `GET /connector-types` liefert eingebaute **und** registrierte Typen. Damit dieselben Regeln für beide gelten, sind die Schema-Typen jetzt **owned** (`String` statt `&'static str`) und lassen sich aus JSON lesen (`TypeSpec: Deserialize`); der **`Catalog`** (eingebaute + registrierte) trägt `validate`, `normalize`, `apply_defaults`, `unknown_keys`, `split_secrets`, `resolve_secret_references` und `without_secrets` — ein Validator, ein Formular, ein Export.
+- `POST`/`PATCH`/`DELETE /connector-types` (admin, `integration.manage`): Name nur `[a-z0-9_]` und **nie** ein eingebauter Name (der gewinnt), Schema wird vor dem Speichern geparst und auf doppelte Feld-Schlüssel geprüft, Löschen ist gesperrt, solange ein Konnektor den Typ nutzt (`409`).
+- Admin-Seite **`/connector-types`** (`meadow/frontend/connector_types_page.py`): Liste, Neu/Bearbeiten mit JSON-Schema (Vorlage-Knopf), Löschen mit Rückfrage.
+- Registrierte Typen sind **`wired: false`** mit `note_key = connectors.unwired_hint`; das vorhandene Formular zeigt dafür den Hinweis und den JSON-Tab.
 
-**Aufwand:** mittel bis hoch. **Voraussetzungen:** Entscheidung zur Plugin-Laufzeit (eigener Prozess je Konnektor? gemeinsamer Worker-Prozess? RestrictedPython nur für Transformationen?), Audit und Rechte für Schema-Änderungen, Kaltstart-Reihenfolge Registry ↔ Seed. **Risiken:** datengetriebene Validierung verlagert Fehler in die Laufzeit; ohne Sandbox wäre ein Plugin beliebiger Python-Code im Worker.
+**Offen (bewusst):** die **Plugin-Laufzeit** im Worker (`MEADOW_CONNECTOR_PLUGINS=<modul>` mit `build(config) -> Handler`) und die Zustellung der Events an einen solchen Handler. Bis dahin ist ein registrierter Typ eine gültige, prüfbare Konfiguration **ohne** Zustellung — das ist die ehrliche Zwischenstufe, nicht ein halbfertiger Verbraucher.
 
-### 14.2 Getrennte Secret-Ablage
+### 14.2 Getrennte Secret-Ablage — **umgesetzt**
 
-**Warum:** Header-Token und Passwörter liegen als Klartext in `connector.parameters`; maskiert ist nur die **Anzeige** (`secret: true`, `•••`). Audit-Metadaten nennen bewusst keine Werte, Datenbank-Backups aber schon.
+**Warum:** Header-Token und Passwörter lagen als Klartext in `connector.parameters`; maskiert war nur die **Anzeige**. Ein Backup, eine Listenantwort oder ein MCF-Export trug den Token mit.
 
-**Skizze:** `secret: true`-Felder werden beim Schreiben in einen eigenen Speicher ausgelagert — entweder Objektstorage mit eigener Bucket-Policy oder ein `connector_secret`-Record ohne Lesezugriff für Nicht-Admins. In `parameters` steht nur eine Referenz (`{"$secret": "<connector-id>#headers.Authorization"}`); aufgelöst wird sie **im Worker** (der die Konnektoren ohnehin per `X-Api-Key` liest), nicht im Frontend. Rotation und „Wert prüfen“ ohne Anzeige; Audit meldet nur `secret_set`/`secret_cleared`.
+**Umgesetzt (2026-10-17):** `secret: true`-Felder werden beim **Schreiben** aus `parameters` herausgezogen (`connector_schema::split_secrets`); die Werte liegen in **`connector_secret:<key>`** (`values`), in `parameters` steht nur die Referenz `{"$secret": "connector:<key>#headers"}`. Regeln:
+- Ein **eingehender** Wert wird gespeichert; eine **Referenz** in der Eingabe heißt „unverändert“ (das Formular kennt den Wert nicht, ein erneutes Speichern darf ihn nicht löschen); ein leerer Wert **löscht** Referenz und Ablage.
+- Der Worker liest die Werte über `GET /connectors?resolve_secrets=true`; das ist **nur dem Maschinen-Aufrufer** erlaubt (`403` für eine Sitzung). Fehlt ein gespeicherter Wert, wird die Referenz **entfernt**, damit nie `{"$secret": …}` an eine Middleware geht.
+- `DELETE /connectors/{id}` löscht den Secret-Record mit; das Audit meldet `secrets_changed` (Pfade, keine Werte).
+- Das Formular zeigt für eine Referenz ein leeres Key-Wert-Feld (nichts zu sehen, nichts zu überschreiben); zum Entfernen löscht man den Schlüssel im JSON-Tab.
 
-**Aufwand:** mittel. **Voraussetzungen:** Key-Handling/ENV-Secret, Backup- und Restore-Pfad, Entscheidung „Referenz im `parameters`-Objekt“ vs. eigenes Feld; der Verbindungstest (Abschnitt 8) muss die Referenz auflösen können.
+**Nicht** umgesetzt: Verschlüsselung im Ruhezustand (bewusst: nur über bestehende Infrastruktur/Datenbankrechte, keine eigene Krypto), „Wert prüfen“ ohne Anzeige.
 
-### 14.3 Konnektor-Profile im MCF (Konfigurations-Export/-Import)
+### 14.3 Konnektor-Profile im MCF — **umgesetzt**
 
-**Warum:** Konnektoren sind Teil einer Installation, wandern aber heute **nicht** über das MCF ([konfiguration-export-import.md](konfiguration-export-import.md)) — eine Staging→Prod-Übertragung lässt sie zurück.
+**Umgesetzt (2026-10-17):** neue Sektion **`connectors`** (`crates/pim-core/src/api/config/connectors.rs`) mit `name`, `type`, `enabled`, `parameters` — **ohne** Secrets (`without_secrets` streicht jedes `secret`-Feld). Der Import identifiziert über `name` (eindeutig), **mischt** die eingehenden Parameter über die lokalen (Secrets und lokale Zusätze bleiben) und meldet je Eintrag eine **Warnung**, wenn das Dokument Secret-Felder enthielt. `dry_run`/`merge`/`replace` wie bei den anderen Sektionen, inklusive Aufräumen der nicht im Dokument stehenden Konnektoren bei `replace`.
 
-**Skizze:** neue MCF-Sektion `connectors` mit stabilen Schlüsseln (`name`), `type`, `enabled` und `parameters` — **ohne** Secrets; `dry_run`/`merge`/`replace` wie bei den übrigen Sektionen. Import-Regel: Secret-Felder werden nur überschrieben, wenn ein Wert mitgegeben wird (sonst bleibt der lokale Wert stehen) — ohne 14.2 bleiben Tokens also bewusst lokal.
+### 14.4 Kleinere Ausbauten — **umgesetzt 2026-10-17**
 
-**Aufwand:** klein bis mittel (die MCF-Mechanik existiert). **Voraussetzungen:** Entscheidung zu 14.2, sonst müssten Tokens mitwandern — das ist ausdrücklich nicht gewünscht.
+| Ausbau | Stand |
+|---|---|
+| **Test automatisch nach dem Speichern** | **Umgesetzt:** nach einem erfolgreichen Speichern eines **aktivierten** Konnektors läuft der Test im Hintergrund; gemeldet wird nur ein **Fehlschlag** (Warnung mit Grund), ein gesunder Konnektor bleibt still. |
+| **Konnektor-Status in der Liste** | **Umgesetzt:** `POST /connectors/{id}/status` (Maschinen-Key oder Admin) schreibt `last_success_at` bzw. `last_error`/`last_error_at` (gekürzt); der Worker meldet **nur den Wechsel** (erster Fehler, erste Erholung), damit nicht jede Zustellung schreibt. Liste: Spalte **Zustellung** mit Badge (ok / Fehler mit Meldung im Tooltip / noch keine Zustellung). |
+| **`number_list`-Felder** | **Umgesetzt:** neue Feldart in Schema (`FieldKind::NumberList`, `Widget::NumberList`), Validierung elementweise, Formular als kommagetrennte Liste, Altlast Einzelwert wird normalisiert. |
+| **Payload-Modus** | **Umgesetzt:** `payload_mode` (`event`/`object`), Objekt-Abruf über den Kern (`fetch_object`), 404/`object.deleted` ⇒ Ereignis allein, andere Fehler ⇒ Wiederholung. |
+| **Strukturierte Feldfehler** | **Umgesetzt:** `{"error": …, "fields": {pfad: meldung}}` und Feldmarkierung im Formular (siehe §13). |
+| **`strict_parameters`** | **Umgesetzt:** System-Einstellung `connector_strict_parameters` (Default aus). |
+| **Verbindungstest für HTTP-Profile** | **Offen** — der Test löst heute die Profilwerte auf (Trockenlauf der Werte), erzeugt aber keine Datei und ruft keinen Empfänger. |
 
-### 14.4 Kleinere Ausbauten (jederzeit einzeln entscheidbar)
-
-| Ausbau | Nutzen | Aufwand / Voraussetzung |
-|---|---|---|
-| **Test automatisch nach dem Speichern** (Vorschlag aus §8) | Fehler fallen sofort auf, statt im Betrieb | klein; nur sinnvoll, wenn der Test billig und schnell ist — sonst stört er beim Speichern. Ergebnis als Warnung, nicht als Dialog |
-| **Konnektor-Status in der Liste** (letzter Versuch/letzter Fehler) | „Läuft der Konnektor?“ ohne Log-Suche | mittel; braucht einen Rückkanal (z. B. `PATCH /connectors/{id}` mit `last_error`/`last_success_at`), den es heute nicht gibt |
-| **`number_list`-Felder** (gestaffelter Backoff `[30, 60, 120]`) | feinere Wiederholungsstrategie | klein bis mittel; neue Feldart in Schema, Formular und Tests (§13) |
-| **Payload-Modus** (`event` vs. vollständiges Objekt) | Middleware ohne eigenen Objekt-Abruf | mittel; erst wenn die Middleware es braucht (§13) |
-| **Strukturierte Feldfehler** (`{"error": …, "fields": {…}}`) | Feldmarkierungen direkt am Widget statt Sammelmeldung | klein bis mittel; Formular validiert vorab, der Server bleibt die Wahrheit (§13) |
-| **`strict_parameters`** (unbekannte Schlüssel ablehnen) | aufgeräumte Installation | klein; nur als Opt-in, sonst brechen Altdaten (§13) |
-| **Verbindungstest für HTTP-Profile** (Import/Export mit echtem Probelauf statt Defaults-Auflösung) | prüft auch Datei-Erzeugung/Empfänger | mittel; braucht einen Trockenlauf im Export-/Import-Handler |
-
-**Nicht-Ziele (auch in Stage 3 ausgeschlossen):** Plugin-Laufzeit *im MVP*, neue Rollen, Ersatz der Import-/Export-Wizards, Migration bestehender Parameter (Altdaten bleiben gültig und sichtbar), eigene Krypto-Lösung für Secrets (Verschlüsselung nur über bestehende Infrastruktur/ENV).
+**Nicht-Ziele (auch in Stage 3 ausgeschlossen):** Plugin-Laufzeit *im MVP* (siehe 14.1), neue Rollen, Ersatz der Import-/Export-Wizards, Migration bestehender Parameter (Altdaten bleiben gültig und sichtbar), eigene Krypto-Lösung für Secrets (Verschlüsselung nur über bestehende Infrastruktur/ENV).
 

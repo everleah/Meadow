@@ -316,16 +316,27 @@ def test_config_signature_covers_the_retry_policy() -> None:
 
 def test_retry_policy_defaults_and_clamping() -> None:
     assert config().retry.max_attempts == 5
-    assert config().retry.backoff_seconds == 5.0
+    # A list since Stage 3: one wait per further attempt, the last one repeats.
+    assert config().retry.backoff_seconds == [5.0]
     assert config(retry={"max_attempts": 0}).retry.max_attempts == 1
     assert config(retry={"max_attempts": 99}).retry.max_attempts == 10
-    assert config(retry={"backoff_seconds": 0}).retry.backoff_seconds == 0.1
+    assert config(retry={"backoff_seconds": 0}).retry.backoff_seconds == [0.1]
+    assert config(retry={"backoff_seconds": []}).retry.backoff_seconds == [5.0]
 
 
-def test_retry_policy_accepts_the_legacy_backoff_list() -> None:
-    """A stored list (`[30, 60, 120]`, the old documentation) must not break."""
-    retry = WebhookRetry.model_validate({"max_attempts": 3, "backoff_seconds": [30, 60, 120]})
-    assert retry.backoff_seconds == 120
+def test_retry_policy_accepts_a_single_stored_number() -> None:
+    """The older form (one number) keeps its meaning: the same wait every time."""
+    retry = WebhookRetry.model_validate({"max_attempts": 3, "backoff_seconds": 120})
+    assert retry.backoff_seconds == [120.0]
+
+
+def test_the_backoff_list_keeps_its_entries_and_clamps_them() -> None:
+    retry = WebhookRetry.model_validate({"backoff_seconds": [30, 60, 120]})
+    assert retry.backoff_seconds == [30.0, 60.0, 120.0]
+    assert WebhookRetry.model_validate({"backoff_seconds": [0, 60]}).backoff_seconds == [
+        0.1,
+        60.0,
+    ]
 
 
 async def test_connector_attempt_limit_governs_dead_lettering() -> None:
@@ -356,6 +367,178 @@ async def test_strict_connector_dead_letters_earlier() -> None:
     assert len(js.published) == 1
 
 
+async def test_payload_mode_object_adds_the_object_to_the_event() -> None:
+    """`payload_mode: object`: the event stays the envelope, the object is added.
+
+    Keeping the event envelope is what lets the middleware deduplicate on
+    `event_id` — redelivery is normal with at-least-once.
+    """
+    sent: list[dict[str, Any]] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    async def load_object(object_id: str) -> dict[str, Any]:
+        return {"id": object_id, "attributes": {"name": "Loaded"}}
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(
+        client,
+        _FakeJs(),
+        [_Connector(config=config(payload_mode="object"), load_object=load_object)],
+        msg,
+        tracker(),
+    )
+    await client.aclose()
+    assert sent[0]["event_id"] == "outbox_event:1"
+    assert sent[0]["event_type"] == "object.updated"
+    assert sent[0]["object"]["attributes"]["name"] == "Loaded"
+    assert msg.acked is True
+
+
+async def test_payload_mode_object_keeps_the_event_for_a_deleted_object() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    async def load_object(object_id: str) -> dict[str, Any]:
+        raise AssertionError("a deleted object must not be fetched")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    msg = _FakeMsg(json.dumps(event(event_type="object.deleted")).encode())
+    await _handle_message(
+        client,
+        _FakeJs(),
+        [_Connector(config=config(payload_mode="object"), load_object=load_object)],
+        msg,
+        tracker(),
+    )
+    await client.aclose()
+    assert "object" not in sent[0]
+    assert sent[0]["event_type"] == "object.deleted"
+
+
+async def test_a_vanished_object_does_not_block_the_delivery() -> None:
+    """A `404` on the object read means "gone": the event is sent, not retried."""
+    sent: list[dict[str, Any]] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    async def load_object(object_id: str) -> dict[str, Any]:
+        request = httpx.Request("GET", f"http://core/objects/{object_id}")
+        return httpx.Response(404, request=request).raise_for_status()  # type: ignore[return-value]
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(
+        client,
+        _FakeJs(),
+        [_Connector(config=config(payload_mode="object"), load_object=load_object)],
+        msg,
+        tracker(),
+    )
+    await client.aclose()
+    assert "object" not in sent[0]
+    assert msg.acked is True
+
+
+async def test_a_failing_object_read_is_retried() -> None:
+    """Any other fetch failure raises: the delivery retries instead of degrading."""
+    sent: list[dict[str, Any]] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    async def load_object(object_id: str) -> dict[str, Any]:
+        request = httpx.Request("GET", f"http://core/objects/{object_id}")
+        return httpx.Response(500, request=request).raise_for_status()  # type: ignore[return-value]
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    msg = _FakeMsg(json.dumps(event()).encode())
+    await _handle_message(
+        client,
+        _FakeJs(),
+        [_Connector(config=config(payload_mode="object"), load_object=load_object)],
+        msg,
+        tracker(),
+    )
+    await client.aclose()
+    assert sent == []
+    assert msg.nakked is True
+
+
+async def test_the_connector_status_is_reported_only_when_it_changes() -> None:
+    """A webhook fires constantly; the list needs "healthy", not every delivery."""
+    reports: list[tuple[str, bool, str | None]] = []
+
+    async def report(connector_id: str, ok: bool, error: str | None) -> None:
+        reports.append((connector_id, ok, error))
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    connector = _Connector(config=config(id="connector:webhook"), report_status=report)
+    for _ in range(3):
+        msg = _FakeMsg(json.dumps(event()).encode())
+        await _handle_message(client, _FakeJs(), [connector], msg, tracker())
+    await client.aclose()
+    assert reports == [("connector:webhook", True, None)]
+
+
+async def test_a_failure_and_the_recovery_are_reported_but_not_every_retry() -> None:
+    reports: list[tuple[str, bool, str | None]] = []
+    failing = {"now": True}
+
+    async def report(connector_id: str, ok: bool, error: str | None) -> None:
+        reports.append((connector_id, ok, error))
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500 if failing["now"] else 200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    connector = _Connector(config=config(id="connector:webhook"), report_status=report)
+    for _ in range(2):
+        await _handle_message(
+            client, _FakeJs(), [connector], _FakeMsg(json.dumps(event()).encode()), tracker()
+        )
+    failing["now"] = False
+    await _handle_message(
+        client, _FakeJs(), [connector], _FakeMsg(json.dumps(event()).encode()), tracker()
+    )
+    await client.aclose()
+    assert [report[1] for report in reports] == [False, True]
+    assert "500" in str(reports[0][2])
+
+
+async def test_a_failing_status_report_is_retried_on_the_next_delivery() -> None:
+    attempts: list[bool] = []
+
+    async def report(connector_id: str, ok: bool, error: str | None) -> None:
+        attempts.append(ok)
+        if len(attempts) == 1:
+            raise httpx.ConnectError("core not reachable")
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    connector = _Connector(config=config(id="connector:webhook"), report_status=report)
+    for _ in range(2):
+        await _handle_message(
+            client, _FakeJs(), [connector], _FakeMsg(json.dumps(event()).encode()), tracker()
+        )
+    await client.aclose()
+    assert attempts == [True, True]
+
+
 async def test_connector_backoff_is_used_for_the_redelivery_delay() -> None:
     async def transport(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
@@ -367,6 +550,23 @@ async def test_connector_backoff_is_used_for_the_redelivery_delay() -> None:
     await client.aclose()
     assert msg.nakked is True
     assert msg.nak_delay == 120
+
+
+async def test_the_backoff_list_steps_through_the_attempts() -> None:
+    """`[5, 30, 120]`: the first retry waits 5 s, the third (and every later) 120 s."""
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    cfg = config(retry={"max_attempts": 5, "backoff_seconds": [5, 30, 120]})
+    first = _FakeMsg(json.dumps(event()).encode(), num_delivered=1)
+    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], first, tracker())
+    third = _FakeMsg(json.dumps(event()).encode(), num_delivered=3)
+    await _handle_message(client, _FakeJs(), [_Connector(config=cfg)], third, tracker())
+    await client.aclose()
+    assert first.nak_delay == 5
+    assert third.nak_delay == 120
 
 
 async def test_shared_message_uses_the_longest_requested_backoff() -> None:

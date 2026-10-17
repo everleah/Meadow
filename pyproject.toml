@@ -76,6 +76,7 @@ files = [
     "meadow/frontend/column_views.py",
     "meadow/frontend/config.py",
     "meadow/frontend/config_page.py",
+    "meadow/frontend/connector_types_page.py",
     "meadow/frontend/connectors.py",
     "meadow/frontend/connector_form.py",
     "meadow/frontend/create_object.py",

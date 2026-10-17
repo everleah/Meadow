@@ -9,6 +9,7 @@ pub mod channels;
 pub mod classification_standards;
 pub mod config;
 pub mod connector_schema;
+pub mod connector_types;
 pub mod connectors;
 pub mod enum_sets;
 pub mod export_profiles;

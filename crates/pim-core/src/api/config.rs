@@ -25,9 +25,11 @@ use crate::error::ApiError;
 // section helpers stay private to this module, so the file sits inside `config/`).
 mod category_attributes;
 mod classification_standards;
+mod connectors;
 mod export_profiles;
 use category_attributes::{apply_category_attributes, category_attributes_section};
 use classification_standards::{apply_classification_standards, classification_standards_section};
+use connectors::{apply_connectors, connectors_section};
 use export_profiles::{apply_export_profiles, export_profiles_section};
 
 /// Query parameters for `GET /config/export`.
@@ -57,6 +59,7 @@ const SECTIONS: &[&str] = &[
     "relation_definitions",
     "business_rules",
     "export_profiles",
+    "connectors",
     "category_attributes",
 ];
 
@@ -497,6 +500,7 @@ pub async fn export_config(
             }
             "business_rules" => business_rules_section(&state.db).await?,
             "export_profiles" => export_profiles_section(&state.db).await?,
+            "connectors" => connectors_section(&state.db).await?,
             "category_attributes" => category_attributes_section(&state.db).await?,
             _ => unreachable!("sections were validated by parse_sections"),
         };
@@ -1119,6 +1123,7 @@ async fn replace_target_only(
         "relation_definitions" => ("relation_definition", Some("system != true")),
         "business_rules" => ("business_rule", None),
         "export_profiles" => ("export_profile", None),
+        "connectors" => ("connector", None),
         _ => return Ok(()),
     };
     let field = key_field(section);
@@ -2110,6 +2115,7 @@ async fn apply_document(
             }
             "business_rules" => apply_business_rules(db, mode, &entries, &mut report).await?,
             "export_profiles" => apply_export_profiles(db, mode, &entries, &mut report).await?,
+            "connectors" => apply_connectors(db, mode, &entries, &mut report).await?,
             "category_attributes" => {
                 apply_category_attributes(db, mode, &entries, &mut report).await?
             }

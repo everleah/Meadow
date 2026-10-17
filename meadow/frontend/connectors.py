@@ -27,6 +27,7 @@ import copy
 import json as _json
 import logging
 from datetime import datetime
+from html import escape
 from typing import Any, Protocol
 
 import httpx
@@ -39,6 +40,7 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.connector_form import (
     apply_patch,
     build_patch,
+    connector_test_hint,
     connector_test_lines,
     default_values,
     nest,
@@ -92,6 +94,33 @@ def _fmt_dt(value: str | None) -> str:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:  # leave the raw value on parse failure
         return str(value)
+
+
+def status_badge(connector: dict, *, locale: str | None = None) -> str:
+    """Badge for the last delivery the worker reported (`POST /connectors/{id}/status`).
+
+    Three states, because "never delivered" is not "fine": error (with the message and
+    its time in the tooltip), ok (with the time) and never (grey). The worker reports
+    only changes, so this is the current state, not a history.
+    """
+    error = str(connector.get("last_error") or "").strip()
+    if error:
+        at = _fmt_dt(connector.get("last_error_at"))
+        title = f"{at} · {error}" if at else error
+        return (
+            '<span class="px-2 py-0.5 rounded text-xs bg-negative text-white"'
+            f' title="{escape(title)}">{t("connectors.state_error", locale=locale)}</span>'
+        )
+    if connector.get("last_success_at"):
+        at = _fmt_dt(connector.get("last_success_at"))
+        return (
+            '<span class="px-2 py-0.5 rounded text-xs bg-positive text-white"'
+            f' title="{escape(at)}">{t("connectors.state_ok", locale=locale)}</span>'
+        )
+    return (
+        '<span class="px-2 py-0.5 rounded text-xs bg-neutral text-gray-600">'
+        f"{t('connectors.state_never', locale=locale)}</span>"
+    )
 
 
 def _json_pretty(value: object) -> str:
@@ -245,6 +274,7 @@ async def connectors_page() -> None:
                     "type": type_labels.get(str(c.get("type")), str(c.get("type") or "")),
                     "config": summary_text(schemas.get(str(c.get("type"))), c.get("parameters")),
                     "enabled": _enabled_badge(c.get("enabled")),
+                    "status": status_badge(c),
                     "updated": _fmt_dt(c.get("updated_at")),
                     "updated_by": str(c.get("updated_by") or "").split(":")[-1],
                 }
@@ -288,6 +318,7 @@ async def connectors_page() -> None:
             {"headerName": t("connectors.col_type"), "field": "type", "width": 130},
             {"headerName": t("connectors.col_config"), "field": "config", "width": 380},
             {"headerName": t("connectors.col_enabled"), "field": "enabled", "width": 110},
+            {"headerName": t("connectors.col_status"), "field": "status", "width": 110},
             {"headerName": t("connectors.col_updated"), "field": "updated", "width": 180},
             {
                 "headerName": t("connectors.col_updated_by"),
@@ -301,7 +332,9 @@ async def connectors_page() -> None:
                 "rowData": _rows(),
                 "rowSelection": {"mode": "singleRow"},
             },
-            html_columns=[i for i, col in enumerate(column_defs) if col["field"] == "enabled"],
+            html_columns=[
+                i for i, col in enumerate(column_defs) if col["field"] in ("enabled", "status")
+            ],
         ).classes("w-full")
 
         with ui.row().classes("w-full justify-between mt-2 gap-2"):
@@ -444,6 +477,8 @@ async def connectors_page() -> None:
             form = editor_state["form"]
             if form is not None:
                 form.refresh_visibility()
+                # A changed value may have fixed a field: drop the old marks.
+                form.clear_errors()
             _update_hints()
 
         def _render_form() -> None:
@@ -582,9 +617,10 @@ async def connectors_page() -> None:
                     patch = build_patch(editor_state["initial"], _form_values())
                     if patch:
                         parameters, parameters_mode = patch, "merge"
+            saved: dict = {}
             try:
                 if editing_id:
-                    await client.update_connector(
+                    saved = await client.update_connector(
                         token,
                         editing_id,
                         name=name,
@@ -594,7 +630,7 @@ async def connectors_page() -> None:
                         enabled=enabled,
                     )
                 else:
-                    await client.create_connector(
+                    saved = await client.create_connector(
                         token,
                         name=name,
                         connector_type=connector_type,
@@ -602,11 +638,58 @@ async def connectors_page() -> None:
                         enabled=enabled,
                     )
             except CoreError as error:
+                # The core names the offending fields (`{"fields": {path: message}}`):
+                # mark the widgets and keep the sentence in the notice.
+                form = editor_state["form"]
+                if form is not None:
+                    form.mark_errors(error.fields)
                 ui.notify(f"{t('connectors.save_failed')}: {error}", color="negative")
                 return
+            connector_id = str(saved.get("id") or "") if isinstance(saved, dict) else ""
+            if connector_id:
+                editor_state["id"] = connector_id
             editor_dialog.close()
             await reload_rows()
             ui.notify(t("connectors.saved"), color="positive")
+            # A save is the moment to learn whether the target answers — cheap enough
+            # while the form is still in the user's mind. Problems are reported, a
+            # healthy connector stays quiet (`plan/detail/konnektor-konfiguration.md` §14.4).
+            if connector_id and enabled:
+                await _auto_test(connector_id)
+
+        async def _auto_test(connector_id: str) -> None:
+            """Runs the connection test after a save; only a failure speaks up."""
+            try:
+                run_id = await client.test_connector(token, connector_id)
+            except CoreError:
+                return
+            if not run_id:
+                return
+            result = await _poll_test(run_id)
+            if result is None:
+                return
+            if result.get("ok"):
+                return
+            lines = connector_test_lines(result)
+            reason = lines[1] if len(lines) > 1 else connector_test_hint(result)
+            ui.notify(f"{t('connectors.auto_test_failed')}: {reason}", color="warning")
+
+        async def _poll_test(run_id: str) -> dict | None:
+            """Waits for one queued test; `None` on timeout or a failed request."""
+            for _ in range(TEST_POLLS):
+                try:
+                    runs = await client.list_job_runs(token, ids=[run_id], limit=1)
+                except CoreError as error:
+                    ui.notify(f"{t('connectors.test_failed')}: {error}", color="negative")
+                    return None
+                run = runs[0] if runs else {}
+                if run.get("status") in ("success", "failed"):
+                    result = run.get("result") if isinstance(run.get("result"), dict) else None
+                    if result is None:
+                        return {"ok": False, "error": run.get("error") or ""}
+                    return result
+                await asyncio.sleep(TEST_POLL_SECONDS)
+            return None
 
         async def run_connector_test() -> None:
             """Queues a connection test in the worker and shows the result."""
@@ -634,19 +717,7 @@ async def connectors_page() -> None:
                     ui.button(t("grid.close"), on_click=result_dialog.close).props("flat")
             result_dialog.open()
 
-            for _ in range(TEST_POLLS):
-                try:
-                    runs = await client.list_job_runs(token, ids=[run_id], limit=1)
-                except CoreError as error:
-                    ui.notify(f"{t('connectors.test_failed')}: {error}", color="negative")
-                    break
-                run = runs[0] if runs else {}
-                if run.get("status") in ("success", "failed"):
-                    result = run.get("result") if isinstance(run.get("result"), dict) else None
-                    if result is None:
-                        result = {"ok": False, "error": run.get("error") or ""}
-                    break
-                await asyncio.sleep(TEST_POLL_SECONDS)
+            result = await _poll_test(run_id)
 
             body.clear()
             with body:

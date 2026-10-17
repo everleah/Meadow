@@ -25,16 +25,24 @@ from meadow.frontend.config import CORE_URL
 from meadow.frontend.i18n import t
 from meadow.frontend.layout import PAGE_TIMEOUT, build_shell
 
-#: The MCF sections in dependency order (same as the core `/config/export`).
+#: The MCF sections in dependency order (same as the core `/config/export`,
+#: `crates/pim-core/src/api/config.rs::SECTIONS`). A section missing here can still be
+#: exported (selecting nothing sends "all"), but it cannot be picked alone — so the
+#: list has to follow the core.
 SECTIONS = (
     "languages",
+    "channels",
     "units",
     "attribute_groups",
     "enum_sets",
     "object_types",
+    "classification_standards",
     "attribute_definitions",
     "relation_definitions",
     "business_rules",
+    "export_profiles",
+    "connectors",
+    "category_attributes",
 )
 #: Import modes selectable in the UI.
 MODES = ("dry_run", "merge", "replace")

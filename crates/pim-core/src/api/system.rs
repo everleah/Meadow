@@ -94,6 +94,10 @@ fn default_settings() -> Map<String, Value> {
     settings.insert("rules_degrade".to_owned(), json!(false));
     settings.insert("rules_breaker_threshold".to_owned(), json!(3));
     settings.insert("rules_timeout_ms".to_owned(), json!(2000));
+    // Connector parameters: strict mode rejects undeclared keys
+    // (`plan/detail/konnektor-konfiguration.md` §13/§14.4). Off by default, so a
+    // connector written before the schema existed keeps saving.
+    settings.insert("connector_strict_parameters".to_owned(), json!(false));
     // AI assistance (plan/detail/ki-assistenz.md sections 4 and 4.1). Opt-in:
     // with `ai_enabled = false` the feature is invisible in the UI.
     settings.insert("ai_enabled".to_owned(), json!(false));
@@ -198,6 +202,16 @@ fn env_setting(key: &str) -> Option<Value> {
             .ok()
             .and_then(|value| value.parse::<i64>().ok())
             .map(|value| json!(value)),
+        "connector_strict_parameters" => {
+            std::env::var("CONNECTOR_STRICT_PARAMETERS")
+                .ok()
+                .map(|value| {
+                    json!(matches!(
+                        value.as_str(),
+                        "1" | "true" | "TRUE" | "yes" | "YES"
+                    ))
+                })
+        }
         "ai_enabled" => std::env::var("AI_ENABLED").ok().map(|value| {
             json!(matches!(
                 value.as_str(),
@@ -280,6 +294,12 @@ fn validate_setting(key: &str, value: &Value) -> Result<(), ApiError> {
             Some(ms) if (100..=60_000).contains(&ms) => Ok(()),
             _ => Err(ApiError::bad_request(
                 "`rules_timeout_ms` must be between 100 and 60000",
+            )),
+        },
+        "connector_strict_parameters" => match value.as_bool() {
+            Some(_) => Ok(()),
+            None => Err(ApiError::bad_request(
+                "`connector_strict_parameters` must be a boolean",
             )),
         },
         "ai_enabled" => match value.as_bool() {

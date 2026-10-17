@@ -107,6 +107,18 @@ def unknown_keys(schema: dict | None, parameters: dict | None) -> list[str]:
     return sorted(key for key in (parameters or {}) if key not in known)
 
 
+def is_secret_reference(value: Any) -> bool:
+    """Whether a stored value is a reference to the secret store, not the secret.
+
+    The core keeps declared secret fields out of `parameters` and leaves
+    `{"$secret": "connector:<key>#<path>"}` behind
+    (`plan/detail/konnektor-konfiguration.md` §14.2). The form must never show it as
+    a value — and re-saving the untouched field must keep it (the core reads the
+    reference as "unchanged").
+    """
+    return isinstance(value, dict) and len(value) == 1 and isinstance(value.get("$secret"), str)
+
+
 def is_visible(field: dict, values: dict[str, Any]) -> bool:
     """Evaluates the field's `show_if` condition against the current values.
 
@@ -129,12 +141,57 @@ def format_value(field: dict, value: Any) -> Any:
     if widget == "multiselect":
         return list(value) if isinstance(value, list) else []
     if widget == "key_value":
+        # A secret kept apart (`{"$secret": …}`, Stage 3) is not a value to show:
+        # the editor starts empty, and an untouched field keeps the stored token
+        # (the core reads the reference as "unchanged").
+        if is_secret_reference(value):
+            return {}
         return dict(value) if isinstance(value, dict) else {}
     if widget == "number":
         return None if empty else value
+    if widget == "number_list":
+        return format_number_list(value)
     if kind == "string" and empty:
         return ""
     return "" if empty else value
+
+
+def format_number_list(value: Any) -> str:
+    """Stored list of numbers → the comma-separated text the field shows.
+
+    A single number is the older form of a list field (`retry_policy.backoff_seconds`
+    was a scalar) and is shown as a one-entry list — the core normalizes it on save.
+    """
+    if value is MISSING or value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def parse_number_list(raw: Any) -> list[float] | str | None:
+    """Text → list of numbers.
+
+    Returns `None` for an empty field and the **raw text** when a token is not a
+    number: keeping it makes the core answer `must be a list of numbers`, instead
+    of silently saving a shortened list.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        tokens = [str(item).strip() for item in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            return None
+        tokens = [token.strip() for token in text.replace(";", ",").split(",")]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return []
+    try:
+        return [float(token) for token in tokens]
+    except ValueError:
+        return str(raw)
 
 
 def parse_value(field: dict, raw: Any) -> Any:
@@ -159,6 +216,8 @@ def parse_value(field: dict, raw: Any) -> Any:
         except TypeError, ValueError:
             return None
         return int(number) if kind == "integer" else number
+    if widget == "number_list":
+        return parse_number_list(raw)
     text = "" if raw is None else str(raw).strip()
     return text or None
 
@@ -207,6 +266,21 @@ def validate_values(
                 problems.append(
                     t("connector_form.field_maximum", locale=locale, field=key, value=maximum)
                 )
+        if str(field.get("widget")) == "number_list":
+            if not isinstance(value, list):
+                problems.append(t("connector_form.field_numbers", locale=locale, field=key))
+                continue
+            for item in value:
+                if minimum is not None and item < minimum:
+                    problems.append(
+                        t("connector_form.field_minimum", locale=locale, field=key, value=minimum)
+                    )
+                    break
+                if maximum is not None and item > maximum:
+                    problems.append(
+                        t("connector_form.field_maximum", locale=locale, field=key, value=maximum)
+                    )
+                    break
     return problems
 
 
@@ -464,12 +538,31 @@ class ParameterForm:
         self._readers: dict[str, Callable[[], Any]] = {}
         self._setters: dict[str, Callable[[Any], None]] = {}
         self._hosts: dict[str, ui.element] = {}
+        self._widgets: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
 
     def values(self) -> dict[str, Any]:
         """Current values as a flat `{path: value}` map (parsed)."""
         return {
             key: parse_value(self._fields[key], reader()) for key, reader in self._readers.items()
         }
+
+    def mark_errors(self, problems: dict[str, str]) -> None:
+        """Marks the widgets the core named (`parameters.url` → `url`).
+
+        The message comes from the core in its own words; a widget the core did not
+        mention loses an older mark, so a fixed field stops looking broken.
+        """
+        for key, widget in self._widgets.items():
+            message = problems.get(f"parameters.{key}") or problems.get(key) or ""
+            if message:
+                widget.props(f"error error-message='{_prop_text(message)}'")
+            else:
+                widget.props(remove="error error-message")
+
+    def clear_errors(self) -> None:
+        """Drops every mark (called when the editor changes and before a save)."""
+        for widget in self._widgets.values():
+            widget.props(remove="error error-message")
 
     def refresh_visibility(self) -> None:
         current = self.values()
@@ -548,6 +641,11 @@ def _setter_for(
     return setter
 
 
+def _prop_text(text: str) -> str:
+    """A value that survives inside a single-quoted Quasar prop."""
+    return text.replace("'", "\u2019")
+
+
 def _render_field(
     form: ParameterForm,
     field: dict,
@@ -617,3 +715,5 @@ def _render_field(
             ui.label(t(str(field["help_key"]))).classes("text-caption text-gray-500")
     if on_change is not None and widget is not None:
         widget.on_value_change(lambda _event: on_change())
+    if widget is not None:
+        form._widgets[key] = widget

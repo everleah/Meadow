@@ -20,6 +20,7 @@ def test_row_to_webhook_config() -> None:
         "parameters": {
             "url": "https://middleware.example/events",
             "method": "PUT",
+            "payload_mode": "object",
             "headers": {"Authorization": "Bearer token"},
             "filter": {
                 "event_types": ["object.updated"],
@@ -43,8 +44,11 @@ def test_row_to_webhook_config() -> None:
     assert config.coalesce.enabled is True
     assert config.coalesce.window_seconds == 15
     assert config.retry.max_attempts == 3
-    assert config.retry.backoff_seconds == 45
+    assert config.retry.backoff_seconds == [45.0]
     assert config.timeout_s == 10.0
+    # The record id travels along: the status report addresses the connector by it.
+    assert config.id == "connector:abc123"
+    assert config.payload_mode == "object"
 
 
 def test_row_without_url_is_skipped() -> None:
@@ -61,7 +65,9 @@ def test_row_with_defaults() -> None:
     assert config.coalesce.enabled is False
     # Connectors stored before the retry policy existed keep the old behaviour.
     assert config.retry.max_attempts == 5
-    assert config.retry.backoff_seconds == 5.0
+    assert config.retry.backoff_seconds == [5.0]
+    # The historical default: the event alone, no extra object read.
+    assert config.payload_mode == "event"
 
 
 def test_string_list_normalizes() -> None:

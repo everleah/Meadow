@@ -11,6 +11,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use ulid::Ulid;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::app::AppState;
@@ -72,6 +73,10 @@ pub struct ListConnectors {
     #[param(rename = "type")]
     pub connector_type: Option<String>,
     pub enabled: Option<bool>,
+    /// Replace secret references with their stored values. **Machine caller only**
+    /// (the worker): a session never receives a token, it only ever sets one.
+    #[serde(default)]
+    pub resolve_secrets: Option<bool>,
     #[serde(default = "default_limit")]
     pub limit: u32,
     #[serde(default)]
@@ -99,16 +104,134 @@ fn parameters_object(value: Value) -> Result<Map<String, Value>, ApiError> {
 }
 
 /// Rejects parameters that violate the type's schema (message names the field path).
+///
+/// `strict` adds the undeclared-key rule (`connector_strict_parameters`).
 fn ensure_valid_parameters(
+    catalog: &crate::api::connector_schema::Catalog,
     connector_type: &str,
     parameters: &Map<String, Value>,
+    strict: bool,
 ) -> Result<(), ApiError> {
-    let errors = crate::api::connector_schema::validate(connector_type, parameters);
-    if errors.is_empty() {
+    let problems = catalog.validate_strict(connector_type, parameters, strict);
+    if problems.is_empty() {
         Ok(())
     } else {
-        Err(ApiError::bad_request(errors.join("; ")))
+        // Structured too: the form marks the widgets, the message stays the flat one.
+        Err(ApiError::invalid_fields(
+            problems
+                .iter()
+                .map(|problem| {
+                    (
+                        format!("parameters.{}", problem.field),
+                        problem.message.clone(),
+                    )
+                })
+                .collect(),
+        ))
     }
+}
+
+/// Whether undeclared parameter keys are rejected (`connector_strict_parameters`).
+///
+/// Off by default: connectors written before the schema existed keep working, and
+/// the form still shows their undeclared keys as a hint.
+fn strict_parameters(state: &AppState) -> bool {
+    state
+        .settings
+        .read()
+        .map(|guard| {
+            guard
+                .get("connector_strict_parameters")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+/// Table of the apart-stored connector secrets (schema: `src/schema.rs`).
+const SECRET_TABLE: &str = "connector_secret";
+
+/// The stored secret values of one connector (`{path: value}`).
+async fn secret_values(db: &Db, key: &str) -> Result<Map<String, Value>, ApiError> {
+    let sql = format!("LET $r = type::record('{SECRET_TABLE}', $key); SELECT values FROM $r;");
+    let mut response = db
+        .inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    Ok(rows
+        .into_iter()
+        .next()
+        .and_then(|row| row.get("values").and_then(Value::as_object).cloned())
+        .unwrap_or_default())
+}
+
+/// Writes the secret values of one connector: `store` sets, `cleared` removes.
+///
+/// One record per connector under the connector's key, so deleting a connector
+/// (`delete_connector`) can drop it in the same breath. An empty result deletes the
+/// record instead of keeping an empty shell.
+async fn store_secrets(
+    db: &Db,
+    key: &str,
+    store: &Map<String, Value>,
+    cleared: &[String],
+) -> Result<(), ApiError> {
+    let mut values = secret_values(db, key).await?;
+    for path in cleared {
+        values.remove(path);
+    }
+    for (path, value) in store {
+        values.insert(path.clone(), value.clone());
+    }
+    let sql = if values.is_empty() {
+        format!("LET $r = type::record('{SECRET_TABLE}', $key); DELETE $r;")
+    } else {
+        format!("LET $r = type::record('{SECRET_TABLE}', $key); UPSERT $r SET values = $values;")
+    };
+    db.inner()
+        .query(sql)
+        .bind(("key", key.to_owned()))
+        .bind(("values", Value::Object(values)))
+        .await?
+        .check()?;
+    Ok(())
+}
+
+/// Replaces the secret references of one row with the stored values (machine caller).
+async fn resolve_row_secrets(db: &Db, row: &Value) -> Result<Value, ApiError> {
+    let type_key = row
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let key = row
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| id.split_once(':'))
+        .map(|(_, key)| key.to_owned())
+        .unwrap_or_default();
+    if key.is_empty() {
+        return Ok(row.clone());
+    }
+    let parameters = row
+        .get("parameters")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let values = secret_values(db, &key).await?;
+    if values.is_empty() && parameters.is_empty() {
+        return Ok(row.clone());
+    }
+    let resolved =
+        crate::api::connector_schema::resolve_secret_references(&type_key, &parameters, &values);
+    let mut row = row.clone();
+    if let Some(object) = row.as_object_mut() {
+        object.insert("parameters".to_owned(), Value::Object(resolved));
+    }
+    Ok(row)
 }
 
 /// Top-level keys of a submitted `parameters` patch (for the audit trail).
@@ -195,7 +318,8 @@ pub async fn validate_connector(
     // The catalog check keeps the worker's machine path (it validates AI suggestions) and
     // the admin form on one rule.
     crate::auth::require_permission(&state, &headers, "integration.manage")?;
-    if !crate::api::connector_schema::is_known_type(&body.connector_type) {
+    let catalog = crate::api::connector_types::catalog(&state.db).await?;
+    if !catalog.is_known_type(&body.connector_type) {
         return Err(ApiError::bad_request(format!(
             "unknown connector type `{}`",
             body.connector_type
@@ -208,10 +332,26 @@ pub async fn validate_connector(
     };
     // Normalisation and defaults are part of the write path, so the check has to
     // see the same values the save would store.
-    crate::api::connector_schema::normalize(&body.connector_type, &mut parameters);
-    crate::api::connector_schema::apply_defaults(&body.connector_type, &mut parameters);
-    let errors = crate::api::connector_schema::validate(&body.connector_type, &parameters);
-    Ok(Json(json!({ "ok": errors.is_empty(), "errors": errors })))
+    catalog.normalize(&body.connector_type, &mut parameters);
+    catalog.apply_defaults(&body.connector_type, &mut parameters);
+    let problems =
+        catalog.validate_strict(&body.connector_type, &parameters, strict_parameters(&state));
+    // `errors` stays the flat list every caller already reads (the worker checks AI
+    // suggestions against it); `fields` is the same verdict keyed by path, which is
+    // what the form marks.
+    let fields: serde_json::Map<String, Value> = problems
+        .iter()
+        .map(|problem| {
+            (
+                format!("parameters.{}", problem.field),
+                Value::String(problem.message.clone()),
+            )
+        })
+        .collect();
+    let errors: Vec<String> = problems.iter().map(|problem| problem.text()).collect();
+    Ok(Json(
+        json!({ "ok": problems.is_empty(), "errors": errors, "fields": fields }),
+    ))
 }
 
 /// Creates a connector (admin only).
@@ -237,7 +377,8 @@ pub async fn create_connector(
     if name.is_empty() {
         return Err(ApiError::bad_request("`name` must not be empty"));
     }
-    if !crate::api::connector_schema::is_known_type(&body.connector_type) {
+    let catalog = crate::api::connector_types::catalog(&state.db).await?;
+    if !catalog.is_known_type(&body.connector_type) {
         return Err(ApiError::bad_request(format!(
             "unknown connector type `{}`",
             body.connector_type
@@ -246,9 +387,27 @@ pub async fn create_connector(
     ensure_unique_name(&state.db, &name, None).await?;
 
     let mut parameters = parameters_object(body.parameters)?;
-    crate::api::connector_schema::normalize(&body.connector_type, &mut parameters);
-    crate::api::connector_schema::apply_defaults(&body.connector_type, &mut parameters);
-    ensure_valid_parameters(&body.connector_type, &parameters)?;
+    catalog.normalize(&body.connector_type, &mut parameters);
+    catalog.apply_defaults(&body.connector_type, &mut parameters);
+    ensure_valid_parameters(
+        &catalog,
+        &body.connector_type,
+        &parameters,
+        strict_parameters(&state),
+    )?;
+
+    // The key is made here, not by the database: the secret reference has to name the
+    // connector before its row exists (`plan/detail/konnektor-konfiguration.md` §14.2).
+    let connector_key = Ulid::new().to_string();
+    let connector_id = format!("{TABLE}:{connector_key}");
+    let split = catalog.split_secrets(&connector_id, &body.connector_type, &parameters);
+    store_secrets(&state.db, &connector_key, &split.store, &split.cleared).await?;
+    let secrets_changed: Vec<String> = split
+        .store
+        .keys()
+        .chain(split.cleared.iter())
+        .cloned()
+        .collect();
 
     let mut content = Map::new();
     content.insert("name".to_owned(), Value::String(name));
@@ -257,11 +416,11 @@ pub async fn create_connector(
         Value::String(body.connector_type.clone()),
     );
     content.insert("enabled".to_owned(), Value::Bool(body.enabled));
-    content.insert("parameters".to_owned(), Value::Object(parameters));
+    content.insert("parameters".to_owned(), Value::Object(split.parameters));
     content.insert("updated_by".to_owned(), Value::String(claims.sub.clone()));
 
     let sql = "
-        LET $c = type::record('connector', rand::ulid());
+        LET $c = type::record('connector', $key);
         CREATE $c CONTENT $content;
         SELECT * FROM $c;
     ";
@@ -269,6 +428,7 @@ pub async fn create_connector(
         .db
         .inner()
         .query(sql)
+        .bind(("key", connector_key))
         .bind(("content", Value::Object(content)))
         .await?
         .check()?;
@@ -293,7 +453,8 @@ pub async fn create_connector(
             to: None,
             metadata: Some(json!({
                 "name": connector.get("name"),
-                "type": connector.get("type")
+                "type": connector.get("type"),
+                "secrets_changed": secrets_changed
             })),
         },
     )
@@ -321,7 +482,14 @@ pub async fn list_connectors(
     headers: HeaderMap,
     Query(params): Query<ListConnectors>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    crate::auth::require_permission(&state, &headers, "integration.manage")?;
+    let caller = crate::auth::require_caller(&state, &headers, "integration.manage")?;
+    // A token leaves the core towards the worker only: a browser session may write a
+    // secret, never read one back (`plan/detail/konnektor-konfiguration.md` §14.2).
+    if params.resolve_secrets.unwrap_or(false) && !matches!(caller, crate::auth::Caller::System) {
+        return Err(ApiError::forbidden(
+            "`resolve_secrets` is only available to the machine caller (the API key)",
+        ));
+    }
     let limit = params.limit.clamp(1, 1000) as i64;
     let start = params.start as i64;
 
@@ -351,7 +519,14 @@ pub async fn list_connectors(
         .bind(("start", start))
         .await?
         .check()?;
-    let rows: Vec<Value> = response.take(0)?;
+    let mut rows: Vec<Value> = response.take(0)?;
+    if params.resolve_secrets.unwrap_or(false) {
+        let mut resolved = Vec::with_capacity(rows.len());
+        for row in &rows {
+            resolved.push(resolve_row_secrets(&state.db, row).await?);
+        }
+        rows = resolved;
+    }
     Ok(Json(rows))
 }
 
@@ -425,6 +600,77 @@ pub async fn test_connector(
     Ok((StatusCode::ACCEPTED, Json(json!({ "job_run_id": run_id }))))
 }
 
+/// Payload of `POST /connectors/{id}/status`: one delivery outcome.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ConnectorStatus {
+    /// Whether the delivery succeeded.
+    pub ok: bool,
+    /// The failure message (stored truncated; never a stack trace).
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Longest stored failure message — enough for the cause, short enough for a list.
+const STATUS_ERROR_MAX_CHARS: usize = 500;
+
+/// Records the outcome of one delivery (**machine key** or admin).
+///
+/// The webhook worker reports **only on change** (the first failure and the first
+/// success after one), so the list can answer "is it running?" without a log search
+/// (`plan/detail/konnektor-konfiguration.md` §14.4). A success clears the last error:
+/// the connector is healthy again, not "healthy, but once broken".
+#[utoipa::path(
+    post,
+    path = "/connectors/{id}/status",
+    request_body = ConnectorStatus,
+    responses(
+        (status = 204, description = "Recorded"),
+        (status = 400, description = "Invalid id", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 404, description = "Not found", body = Value)
+    )
+)]
+pub async fn report_connector_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<ConnectorStatus>,
+) -> Result<StatusCode, ApiError> {
+    crate::auth::require_permission(&state, &headers, "integration.manage")?;
+    let key = parse_key(&id)?.to_owned();
+    let sql = if body.ok {
+        "
+        LET $c = type::record('connector', $key);
+        UPDATE $c SET last_success_at = time::now(), last_error = NONE, last_error_at = NONE RETURN AFTER;
+        "
+    } else {
+        "
+        LET $c = type::record('connector', $key);
+        UPDATE $c SET last_error = $error, last_error_at = time::now() RETURN AFTER;
+        "
+    };
+    let message: String = body
+        .error
+        .unwrap_or_else(|| "delivery failed".to_owned())
+        .chars()
+        .take(STATUS_ERROR_MAX_CHARS)
+        .collect();
+    let mut response = state
+        .db
+        .inner()
+        .query(sql)
+        .bind(("key", key))
+        .bind(("error", message))
+        .await?
+        .check()?;
+    let rows: Vec<Value> = response.take(1)?;
+    if rows.is_empty() {
+        return Err(ApiError::not_found(format!("connector `{id}` not found")));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Loads a single connector (API key or admin).
 #[utoipa::path(
     get,
@@ -480,8 +726,9 @@ pub async fn update_connector(
         ensure_unique_name(&state.db, &name, Some(id.as_str())).await?;
         changes.insert("name".to_owned(), Value::String(name));
     }
+    let catalog = crate::api::connector_types::catalog(&state.db).await?;
     if let Some(connector_type) = body.connector_type {
-        if !crate::api::connector_schema::is_known_type(&connector_type) {
+        if !catalog.is_known_type(&connector_type) {
             return Err(ApiError::bad_request(format!(
                 "unknown connector type `{connector_type}`"
             )));
@@ -505,6 +752,7 @@ pub async fn update_connector(
         .unwrap_or_default();
 
     let mut audit_keys: Vec<String> = Vec::new();
+    let mut secrets_changed: Vec<String> = Vec::new();
     if let Some(parameters) = body.parameters {
         let patch = parameters_object(parameters)?;
         audit_keys = changed_keys(&patch);
@@ -519,13 +767,35 @@ pub async fn update_connector(
                 )));
             }
         };
-        crate::api::connector_schema::normalize(&effective_type, &mut merged);
-        ensure_valid_parameters(&effective_type, &merged)?;
-        changes.insert("parameters".to_owned(), Value::Object(merged));
+        catalog.normalize(&effective_type, &mut merged);
+        ensure_valid_parameters(
+            &catalog,
+            &effective_type,
+            &merged,
+            strict_parameters(&state),
+        )?;
+        // Values of declared secret fields move out of `parameters`; a reference that
+        // is already there means "unchanged" (the form never saw the value).
+        let split = catalog.split_secrets(&id, &effective_type, &merged);
+        if !split.store.is_empty() || !split.cleared.is_empty() {
+            secrets_changed = split
+                .store
+                .keys()
+                .chain(split.cleared.iter())
+                .cloned()
+                .collect();
+            store_secrets(&state.db, key, &split.store, &split.cleared).await?;
+        }
+        changes.insert("parameters".to_owned(), Value::Object(split.parameters));
     } else if changes.contains_key("type") {
         // A type switch alone must not leave a configuration behind the new
         // type's schema rejects.
-        ensure_valid_parameters(&effective_type, &current_parameters)?;
+        ensure_valid_parameters(
+            &catalog,
+            &effective_type,
+            &current_parameters,
+            strict_parameters(&state),
+        )?;
     }
 
     if changes.is_empty() {
@@ -574,7 +844,8 @@ pub async fn update_connector(
             metadata: Some(json!({
                 "name": connector.get("name"),
                 "type": connector.get("type"),
-                "changed_keys": audit_keys
+                "changed_keys": audit_keys,
+                "secrets_changed": secrets_changed
             })),
         },
     )
@@ -679,7 +950,10 @@ pub async fn list_connector_types(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     crate::auth::require_permission(&state, &headers, "integration.manage")?;
-    Ok(Json(crate::api::connector_schema::schema_document()))
+    // Built-ins **and** registered types: the form renders whatever is here, so a
+    // registered type needs no UI change (`plan/detail/konnektor-konfiguration.md` §14.1).
+    let catalog = crate::api::connector_types::catalog(&state.db).await?;
+    Ok(Json(catalog.schema_document()))
 }
 
 /// Deletes a connector (admin only).
@@ -702,9 +976,13 @@ pub async fn delete_connector(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("connector `{id}` not found")))?;
 
+    // The secret record goes with the connector — a leftover token would be a
+    // secret nobody can see, rotate or delete (`…/konnektor-konfiguration.md` §14.2).
     let sql = "
         LET $c = type::record('connector', $key);
+        LET $s = type::record('connector_secret', $key);
         DELETE $c;
+        DELETE $s;
     ";
     state
         .db
@@ -743,10 +1021,11 @@ mod tests {
 
     #[test]
     fn rejects_unknown_connector_types() {
-        assert!(crate::api::connector_schema::is_known_type("webhook"));
-        assert!(crate::api::connector_schema::is_known_type("json_import"));
-        assert!(crate::api::connector_schema::is_known_type("json_export"));
-        assert!(!crate::api::connector_schema::is_known_type("ftp"));
+        let catalog = crate::api::connector_schema::Catalog::builtin();
+        assert!(catalog.is_known_type("webhook"));
+        assert!(catalog.is_known_type("json_import"));
+        assert!(catalog.is_known_type("json_export"));
+        assert!(!catalog.is_known_type("ftp"));
     }
 
     #[test]
@@ -757,7 +1036,9 @@ mod tests {
 
     #[test]
     fn invalid_parameters_are_reported_with_their_path() {
-        let error = ensure_valid_parameters("webhook", &Map::new()).expect_err("missing url");
+        let catalog = crate::api::connector_schema::Catalog::builtin();
+        let error = ensure_valid_parameters(&catalog, "webhook", &Map::new(), false)
+            .expect_err("missing url");
         assert_eq!(error.message(), "parameters.url: is required");
 
         let mut valid = Map::new();
@@ -765,7 +1046,7 @@ mod tests {
             "url".to_owned(),
             Value::String("https://x.example".to_owned()),
         );
-        assert!(ensure_valid_parameters("webhook", &valid).is_ok());
+        assert!(ensure_valid_parameters(&catalog, "webhook", &valid, false).is_ok());
     }
 
     #[test]

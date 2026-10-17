@@ -9,6 +9,11 @@ use serde_json::json;
 #[derive(Debug)]
 pub enum ApiError {
     BadRequest(String),
+    /// A `400` whose body also carries `fields` (`{path: message}`).
+    BadRequestFields {
+        message: String,
+        fields: Vec<(String, String)>,
+    },
     NotFound(String),
     Conflict(String),
     PayloadTooLarge(String),
@@ -51,10 +56,26 @@ impl ApiError {
         Self::Internal(message.into())
     }
 
+    /// A `400` that names the offending fields.
+    ///
+    /// The body carries the flat message (what every caller already showed) **and**
+    /// `fields` as `{path: message}`, so a form can mark the widget instead of only
+    /// printing a sentence (`plan/detail/konnektor-konfiguration.md` §14.4). The
+    /// message keeps the historical wording, so log lines and tests stay readable.
+    pub fn invalid_fields(fields: Vec<(String, String)>) -> Self {
+        let message = fields
+            .iter()
+            .map(|(field, problem)| format!("{field}: {problem}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Self::BadRequestFields { message, fields }
+    }
+
     /// Returns the human-readable error message.
     pub fn message(&self) -> &str {
         match self {
             ApiError::BadRequest(message)
+            | ApiError::BadRequestFields { message, .. }
             | ApiError::NotFound(message)
             | ApiError::Conflict(message)
             | ApiError::PayloadTooLarge(message)
@@ -70,6 +91,17 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            ApiError::BadRequestFields { message, fields } => {
+                let fields: serde_json::Map<String, serde_json::Value> = fields
+                    .into_iter()
+                    .map(|(field, problem)| (field, serde_json::Value::String(problem)))
+                    .collect();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": message, "fields": fields })),
+                )
+                    .into_response();
+            }
             ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
             ApiError::Conflict(message) => (StatusCode::CONFLICT, message),
             ApiError::PayloadTooLarge(message) => (StatusCode::PAYLOAD_TOO_LARGE, message),

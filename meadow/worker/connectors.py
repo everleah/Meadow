@@ -34,7 +34,12 @@ async def fetch_webhook_configs(core_url: str, api_key: str | None) -> list[Webh
     bootstrap (initial load). Returns an empty list when no connector exists.
     """
     core_url = loopback_host(core_url)
-    url = f"{core_url.rstrip('/')}/connectors?type={CONNECTOR_TYPE_WEBHOOK}&enabled=true"
+    # `resolve_secrets`: the values live in `connector_secret` and only the machine
+    # caller may receive them (`plan/detail/konnektor-konfiguration.md` §14.2).
+    url = (
+        f"{core_url.rstrip('/')}/connectors?type={CONNECTOR_TYPE_WEBHOOK}"
+        "&enabled=true&resolve_secrets=true"
+    )
     headers = {"x-api-key": api_key} if api_key else {}
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(url, headers=headers)
@@ -47,6 +52,43 @@ async def fetch_webhook_configs(core_url: str, api_key: str | None) -> list[Webh
         if config is not None:
             configs.append(config)
     return configs
+
+
+async def fetch_object(core_url: str, api_key: str | None, object_id: str) -> dict[str, Any] | None:
+    """Reads one object for a webhook with `payload_mode: object`.
+
+    Raises `httpx.HTTPStatusError` (404 = the object is gone) so the caller decides:
+    the webhook sends the event alone on a 404 and retries anything else.
+    """
+    core_url = loopback_host(core_url)
+    url = f"{core_url.rstrip('/')}/objects/{object_id}"
+    headers = {"x-api-key": api_key} if api_key else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+async def post_connector_status(
+    core_url: str,
+    api_key: str | None,
+    connector_id: str,
+    *,
+    ok: bool,
+    error: str | None,
+) -> None:
+    """Reports one delivery outcome (`POST /connectors/{id}/status`).
+
+    Raises on a transport/HTTP failure so the caller can retry on the next delivery;
+    the endpoint answers `204` and stores only the *change* the caller decided on.
+    """
+    core_url = loopback_host(core_url)
+    url = f"{core_url.rstrip('/')}/connectors/{connector_id}/status"
+    headers = {"x-api-key": api_key} if api_key else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(url, json={"ok": ok, "error": error}, headers=headers)
+        response.raise_for_status()
 
 
 def env_bootstrap_config() -> WebhookConfig | None:
@@ -113,9 +155,11 @@ def _webhook_config_from_row(row: dict[str, Any]) -> WebhookConfig | None:
 
     payload: dict[str, Any] = {
         "key": key,
+        "id": str(row.get("id") or ""),
         "url": url,
         "method": parameters.get("method", "POST"),
         "headers": parameters.get("headers", {}),
+        "payload_mode": parameters.get("payload_mode", "event"),
         "filter": {
             "event_types": _string_list(filter_params.get("event_types")),
             "object_types": _string_list(filter_params.get("object_types")),

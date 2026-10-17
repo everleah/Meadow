@@ -24,6 +24,7 @@ from meadow.frontend.connector_form import (
     fields_of,
     format_value,
     get_path,
+    is_secret_reference,
     is_visible,
     nest,
     parse_value,
@@ -32,7 +33,7 @@ from meadow.frontend.connector_form import (
     unknown_keys,
     validate_values,
 )
-from meadow.frontend.connectors import load_option_sources
+from meadow.frontend.connectors import load_option_sources, status_badge
 from meadow.frontend.i18n import t
 
 
@@ -205,6 +206,27 @@ def test_value_formatting_and_parsing() -> None:
         {"key": "x", "type": "string_map", "widget": "key_value"}, {" A ": " 1 "}
     ) == {"A": " 1 "}
 
+    # A secret kept apart (`{"$secret": …}`) is not a value to show: the editor
+    # starts empty so an untouched field sends nothing (the core keeps the token).
+    headers = {"key": "headers", "type": "string_map", "widget": "key_value", "secret": True}
+    reference = {"$secret": "connector:01ABC#headers"}
+    assert format_value(headers, reference) == {}
+    assert is_secret_reference(reference) is True
+    assert is_secret_reference({"Authorization": "Bearer abc"}) is False
+
+    backoff = {"key": "b", "type": "number_list", "widget": "number_list"}
+    # A list is shown as comma-separated text and read back as numbers.
+    assert format_value(backoff, [5, 30, 120]) == "5, 30, 120"
+    assert format_value(backoff, MISSING) == ""
+    assert parse_value(backoff, "5, 30, 120") == [5.0, 30.0, 120.0]
+    assert parse_value(backoff, " 5 ; 30 ") == [5.0, 30.0]
+    assert parse_value(backoff, "") is None
+    # Unparsable text stays text: the core answers `must be a list of numbers`
+    # instead of the form saving a shortened list.
+    assert parse_value(backoff, "5, bald") == "5, bald"
+    # The older stored form (one number) is shown as a one-entry list.
+    assert format_value(backoff, 120) == "120"
+
 
 def test_validation_mirrors_the_core_rules() -> None:
     schema = _webhook_schema()
@@ -232,6 +254,36 @@ def test_validation_mirrors_the_core_rules() -> None:
         schema, {"url": "https://x", "filter.event_types": ["object.bogus"]}, locale="en"
     ) == [
         "filter.event_types must be one of object.created, object.updated",
+    ]
+
+
+def test_a_number_list_is_validated_element_wise() -> None:
+    schema = {
+        "wired": True,
+        "groups": [
+            {
+                "key": "retry",
+                "label_key": "g",
+                "fields": [
+                    {
+                        "key": "retry.backoff",
+                        "type": "number_list",
+                        "widget": "number_list",
+                        "label_key": "l",
+                        "minimum": 0.1,
+                        "maximum": 3600.0,
+                    }
+                ],
+            }
+        ],
+    }
+    assert validate_values(schema, {"retry.backoff": [5.0, 30.0]}, locale="en") == []
+    # Text that did not parse into numbers comes back as a string.
+    assert validate_values(schema, {"retry.backoff": "5, bald"}, locale="en") == [
+        "retry.backoff must be a comma-separated list of numbers"
+    ]
+    assert validate_values(schema, {"retry.backoff": [5.0, 0.05]}, locale="en") == [
+        "retry.backoff must be at least 0.1"
     ]
 
 
@@ -408,6 +460,24 @@ def test_connector_test_hint_matches_the_failure() -> None:
     assert connector_test_hint({"ok": False}) == "connector_test.hint_generic"
 
 
+def test_status_badge_shows_the_delivery_state() -> None:
+    """The list answers "is it running?" without a log search (Stage 3)."""
+    failing = status_badge(
+        {"last_error": 'HTTP 500 "boom"', "last_error_at": "2026-10-17T09:00:00Z"},
+        locale="en",
+    )
+    assert "bg-negative" in failing
+    assert "error" in failing
+    # The message travels in an HTML attribute, so it must be escaped.
+    assert "&quot;boom&quot;" in failing
+
+    healthy = status_badge({"last_success_at": "2026-10-17T09:00:00Z"}, locale="en")
+    assert "bg-positive" in healthy
+    assert ">ok<" in healthy
+
+    assert "no delivery yet" in status_badge({}, locale="en")
+
+
 def test_connector_test_lines_include_the_hint() -> None:
     lines = connector_test_lines({"ok": False, "status_code": 401}, locale="en")
     assert lines[0] == "Connection failed"
@@ -421,6 +491,7 @@ def test_i18n_keys_of_the_schema_exist() -> None:
         "connector_fields.group_target",
         "connector_fields.group_headers",
         "connector_fields.group_filter",
+        "connector_fields.group_payload",
         "connector_fields.group_coalesce",
         "connector_fields.group_retry",
         "connector_fields.group_import",
@@ -448,6 +519,8 @@ def test_i18n_keys_of_the_schema_exist() -> None:
         "connector_fields.webhook.timeout_s.help",
         "connector_fields.webhook.headers.label",
         "connector_fields.webhook.headers.help",
+        "connector_fields.webhook.payload_mode.label",
+        "connector_fields.webhook.payload_mode.help",
         "connector_fields.webhook.filter_event_types.label",
         "connector_fields.webhook.filter_event_types.help",
         "connector_fields.webhook.filter_object_types.label",
