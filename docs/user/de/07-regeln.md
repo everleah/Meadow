@@ -87,12 +87,21 @@ Worten, was die Regel tun soll, und wählen den Modus:
 - **Neu schreiben** — aus der Beschreibung entsteht ein vollständiges Skript.
 - **Bestehendes verbessern** — das Skript im Editor ist die Grundlage.
 - **Erklären** — umgekehrt: aus einem vorhandenen Skript wird ein Satz für das
-  Feld *Beschreibung*.
+  Feld *Beschreibung*. Der Modus erscheint in der Liste, sobald im Skript etwas
+  zum Erklären steht.
 
 Der Vorschlag erscheint im Dialog und wird erst mit **Übernehmen** in den
 Editor geschrieben — gespeichert wird er trotzdem nur über **Speichern**.
 Jeder Vorschlag wird mit derselben Prüfung geprüft wie handgeschriebener Code;
 lehnt die Sandbox ihn ab, wird der Grund angezeigt.
+
+Eine Erklärung entsteht, während Sie zusehen: der Text wächst im Dialog, und
+**Stopp** (oder das Schließen des Dialogs) beendet den Lauf — dann wird nichts
+übernommen, und der Verlauf führt ihn als abgebrochen.
+
+**Verlauf** listet die früheren Vorschläge zu dieser Regel — wann, Modus,
+Ergebnis, Modell, Dauer und wer gefragt hat. Der Prompt und das Skript gehören
+nicht dazu.
 
 Ist die Assistenz aus, steht an dieser Stelle, warum: eingeschaltet wird sie
 unter *System-Einstellungen*.

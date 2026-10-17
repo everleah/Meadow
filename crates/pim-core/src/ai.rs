@@ -9,11 +9,13 @@
 //! **The API key travels only in this message** — never to the browser, never
 //! into a prompt. The worker holds it for the duration of one call.
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
+use tokio::sync::watch;
 use ulid::Ulid;
 
 use crate::config::Config;
@@ -167,6 +169,23 @@ pub struct AiClient {
     generate_subject: String,
     test_subject: String,
     settings: Arc<RwLock<Map<String, Value>>>,
+    /// Running streams by request id — the handle a cancel rings.
+    ///
+    /// The abort message alone is not enough: it is plain NATS, and a cancel that
+    /// arrives before the worker subscribed is lost (`plan/detail/ki-assistenz.md`
+    /// §13). The core owns the SSE response, so it also owns the verdict: a
+    /// cancelled stream ends with the cancelled reply instead of the answer.
+    streams: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+}
+
+/// The reply a stopped stream ends with — the same shape the worker uses.
+fn cancelled_reply() -> Value {
+    json!({
+        "ok": false,
+        "cancelled": true,
+        "attempts": 0,
+        "errors": ["cancelled by the user"],
+    })
 }
 
 impl AiClient {
@@ -177,6 +196,7 @@ impl AiClient {
             generate_subject: config.ai_generate_subject.clone(),
             test_subject: config.ai_test_subject.clone(),
             settings,
+            streams: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -276,7 +296,19 @@ impl AiClient {
             .map_err(|error| AiError::Transport(error.to_string()))?;
         let (sender, events) = tokio::sync::mpsc::channel::<Value>(64);
         let generate_subject = self.generate_subject.clone();
+        let (cancel, cancel_rx) = watch::channel(false);
+        {
+            let mut streams = self
+                .streams
+                .lock()
+                .map_err(|_| AiError::BadReply("stream registry lock poisoned".to_owned()))?;
+            streams.insert(request_id.clone(), cancel);
+        }
+        let streams = Arc::clone(&self.streams);
+        let registered = request_id.clone();
         tokio::spawn(async move {
+            let mut cancel_rx = cancel_rx;
+            let mut watch_alive = true;
             let request = async_nats::Request::new()
                 .payload(bytes.into())
                 .timeout(Some(Duration::from_millis(timeout_ms + 5_000)));
@@ -284,12 +316,25 @@ impl AiClient {
             tokio::pin!(pending);
             loop {
                 tokio::select! {
+                    // A cancel ends the response itself: no further piece is shown
+                    // and the audit records the run as cancelled.
+                    changed = cancel_rx.changed(), if watch_alive => {
+                        if changed.is_err() {
+                            // The registry entry is gone; nothing can cancel anymore.
+                            watch_alive = false;
+                        } else if *cancel_rx.borrow() {
+                            let _ = sender
+                                .send(json!({ "type": "done", "reply": cancelled_reply() }))
+                                .await;
+                            break;
+                        }
+                    }
                     message = subscriber.next() => {
-                        let Some(message) = message else { return };
+                        let Some(message) = message else { break };
                         match serde_json::from_slice::<Value>(&message.payload) {
                             Ok(value) => {
                                 if sender.send(value).await.is_err() {
-                                    return; // the client went away (stream dropped)
+                                    break; // the client went away (stream dropped)
                                 }
                             }
                             Err(error) => {
@@ -309,17 +354,33 @@ impl AiClient {
                             Err(error) => json!({ "type": "error", "error": error.to_string() }),
                         };
                         let _ = sender.send(event).await;
-                        return;
+                        break;
                     }
                 }
+            }
+            if let Ok(mut streams) = streams.lock() {
+                streams.remove(&registered);
             }
         });
         Ok((request_id, events))
     }
 
     /// Asks the worker to abort a running streamed call.
+    ///
+    /// Two paths on purpose: the watch channel ends the response the core is
+    /// already streaming (authoritative, cannot be lost), the NATS message stops
+    /// the provider call in the worker (best effort, saves the remaining tokens).
     pub async fn cancel_stream(&self, request_id: &str) -> Result<(), AiError> {
         self.config()?;
+        let channel = self
+            .streams
+            .lock()
+            .map_err(|_| AiError::BadReply("stream registry lock poisoned".to_owned()))?
+            .get(request_id)
+            .cloned();
+        if let Some(channel) = channel {
+            let _ = channel.send(true);
+        }
         let client = self.connect().await?;
         client
             .publish(
@@ -338,6 +399,16 @@ impl AiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cancelled_stream_ends_with_the_worker_shape() {
+        // The shape the worker returns and the frontend reads (`reply["cancelled"]`),
+        // so the audit entry does not depend on which side noticed the cancel.
+        let reply = cancelled_reply();
+        assert_eq!(reply.get("ok"), Some(&json!(false)));
+        assert_eq!(reply.get("cancelled"), Some(&json!(true)));
+        assert_eq!(reply.get("errors"), Some(&json!(["cancelled by the user"])));
+    }
 
     fn settings(pairs: &[(&str, Value)]) -> Map<String, Value> {
         let mut map = Map::new();

@@ -393,6 +393,12 @@ fn audit_metadata(
         "rule_type": rule_type,
         "object_type": object_type,
         "ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        // The user stopped the stream: the history names that instead of calling
+        // the run rejected, and no caller has to match on the error text.
+        "cancelled": reply
+            .get("cancelled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         "model": reply.get("model"),
         "attempts": reply.get("attempts"),
         "latency_ms": reply.get("latency_ms"),
@@ -583,6 +589,23 @@ mod tests {
         assert!(checked_request_id("abc.def").is_err());
         assert!(checked_request_id("abc def").is_err());
         assert!(checked_request_id("abc>").is_err());
+    }
+
+    #[test]
+    fn the_audit_tells_a_cancelled_run_from_a_rejected_one() {
+        let cancelled = audit_metadata(
+            "rule",
+            "explain",
+            None,
+            None,
+            None,
+            &json!({"ok": false, "cancelled": true}),
+        );
+        assert_eq!(cancelled.get("cancelled"), Some(&json!(true)));
+        assert_eq!(cancelled.get("ok"), Some(&json!(false)));
+        // A blocking reply carries no flag at all — the history shows it rejected.
+        let rejected = audit_metadata("rule", "create", None, None, None, &json!({"ok": false}));
+        assert_eq!(rejected.get("cancelled"), Some(&json!(false)));
     }
 
     fn message(error: ApiError) -> String {

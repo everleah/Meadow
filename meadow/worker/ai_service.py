@@ -569,7 +569,9 @@ async def handle_generate(
         if streamed is not None:
             await streamed.close()
     if streamed is not None and streamed.cancelled.is_set():
-        return {"ok": False, "attempts": 0, "errors": ["cancelled by the user"]}
+        # `cancelled` is the machine-readable reason: the history shows it as
+        # *cancelled*, not as a rejection by the checks (`frontend/ai_assist.py`).
+        return {"ok": False, "cancelled": True, "attempts": 0, "errors": ["cancelled by the user"]}
     return reply
 
 

@@ -36,7 +36,7 @@ def test_a_recorded_suggestion_carries_its_metadata() -> None:
         {
             "when": "2026-10-17 09:12",
             "mode": "create",
-            "accepted": True,
+            "verdict": "accepted",
             "model": "deepseek-chat",
             "ms": "1700",
             "user": "user:admin",
@@ -54,9 +54,27 @@ def test_a_rejected_suggestion_is_marked_and_missing_fields_stay_empty() -> None
             }
         ]
     )
-    assert rows[0]["accepted"] is False
+    assert rows[0]["verdict"] == "rejected"
     assert rows[0]["model"] == ""
     assert rows[0]["ms"] == ""
+
+
+def test_a_stopped_stream_is_cancelled_rather_than_rejected() -> None:
+    """The dialog's „Stopp" is the user's decision, not a failed check.
+
+    The worker marks the reply `cancelled` (`meadow/worker/ai_service.py`), the core
+    copies the flag into the audit, and this is what the history reads.
+    """
+    rows = history_rows(
+        [
+            {
+                "timestamp": "2026-10-17T09:13:00Z",
+                "user_id": "user:admin",
+                "metadata": {"mode": "explain", "ok": False, "cancelled": True},
+            }
+        ]
+    )
+    assert rows[0]["verdict"] == "cancelled"
 
 
 def test_an_entry_without_metadata_does_not_break_the_table() -> None:
@@ -64,4 +82,4 @@ def test_an_entry_without_metadata_does_not_break_the_table() -> None:
     assert len(rows) == 2
     assert rows[0]["when"] == ""
     assert rows[0]["user"] == ""
-    assert rows[0]["accepted"] is False
+    assert rows[0]["verdict"] == "rejected"

@@ -1105,4 +1105,14 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 
 **(4) Zeitlimit.** Der gestreamte Aufruf nutzt einen **eigenen** httpx-Client ohne 30-s-Deckel (der geteilte Client hätte vor dem Kern aufgeben können, dessen Provider-Timeout allein 30 s beträgt).
 
-**Gates:** `cargo test` **243**, `clippy -D warnings`/`cargo fmt --check`, `ruff`/`ruff format`/`mypy` (182 Dateien), `pytest` **833** — grün. **Nicht geprüft:** ein Live-Lauf gegen einen echten Provider (nur der OpenAI-kompatible Pfad ist überhaupt getestet; Azure/Ollama nicht).
+**Gates:** `cargo test` **243**, `clippy -D warnings`/`cargo fmt --check`, `ruff`/`ruff format`/`mypy` (182 Dateien), `pytest` **833** — grün. **Live geprüft (2026-10-17, DeepSeek, Wegwerf-Instanz):** ein gestreamtes „Erklären" lieferte **78 Textstücke** und ein `done` mit `ok: true` (1 345 ms, 217 Tokens), ein Abbruch nach dem ersten Stück endete mit `cancelled by the user`, und die Historie zeigte beide Läufe korrekt (`ok: false` beim Abbruch). **Nicht geprüft:** Azure OpenAI und Ollama (nur der OpenAI-kompatible Pfad); der Browser-Durchlauf folgte in (33).
+
+*Zuletzt geändert: 2026-10-17 (33) – **Der Dialog im Browser: zwei Fehler, die kein Test gefunden hätte** (Abschnitte 8/12; Details in [detail/ki-assistenz.md](detail/ki-assistenz.md) §13):*
+
+**(1) Was der Durchlauf zeigte.** Der Dialog funktioniert: bei laufendem Strom wächst die Vorschau sichtbar (73 → 223 → 245 Zeichen), „Stopp" erscheint nur während des Laufs, ein Abbruch endet mit „Cancelled.", leerer Vorschau und gesperrtem „Übernehmen", die Historie listet den Lauf. Der von DeepSeek gemessene Schwall (44 Stücke in 0,23 s nach 1,4 s Bedenkzeit) machte das Messen schwer, ist aber Anbieterverhalten, kein Fehler.
+
+**(2) „Erklären" ohne Text.** Der Modus stand auch bei einer neuen, leeren Regel im Menü und scheiterte am Kern (`current_script is required`). Die Modusliste folgt jetzt dem Inhalt (`offered_modes`), und ein Hinweis sagt, warum „Erklären" noch fehlt — die Grenze des Aufrufers (Gruppen ohne Prosa-Feld) bleibt unberührt.
+
+**(3) Der Abbruch, der verpuffte.** Zwei Ursachen: die Id entsteht erst mit dem **ersten** Stream-Ereignis (ein Klick davor hatte nichts zu canceln), und `ai.cancel.<id>` ist Core-NATS — kam die Nachricht vor dem Abo des Workers, war sie verloren und der Lauf lief bis zum Ende. Jetzt wartet der Dialog bis zu 2 s auf die Id, und der **Kern** entscheidet: ein `watch`-Kanal je laufendem Stream beendet die Antwort sofort mit `{"ok": false, "cancelled": true, …}`. Das Flag reist ins Audit, die Historie zeigt *abgebrochen* statt *abgelehnt* (drei Ausgänge), im Browser nachgewiesen; die NATS-Nachricht an den Worker bleibt als Token-Ersparnis.
+
+**Gates:** `cargo test` **245**, `clippy -D warnings`/`cargo fmt --check`, `ruff`/`ruff format`/`mypy` (183 Dateien), `pytest` **840** — grün.

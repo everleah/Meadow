@@ -87,12 +87,20 @@ rule should do and pick a mode:
 - **Write new** — a complete script grows out of the description.
 - **Improve existing** — the script in the editor is the starting point.
 - **Explain** — the other direction: an existing script becomes one sentence for
-  the *Description* field.
+  the *Description* field. It appears in the list once the script field holds
+  something to explain.
 
 The suggestion appears in the dialog and only reaches the editor through
 **Apply** — and it is still saved through **Save** alone. Every suggestion passes
 the same check as hand-written code; when the sandbox rejects it, the reason is
 shown.
+
+An explanation is written while you watch: the text grows in the dialog, and
+**Stop** (or closing the dialog) ends the run — nothing is applied then, and the
+history records it as cancelled.
+
+**History** lists the earlier suggestions for this rule — when, mode, outcome,
+model, duration and who asked. The prompt and the script are not part of it.
 
 With the assistance switched off, the same spot says why: it is enabled under
 *System settings*.

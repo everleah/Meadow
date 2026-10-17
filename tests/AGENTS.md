@@ -60,6 +60,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `FakeCore.data["list_system_settings"]` (`ai_enabled`/`ai_api_key`/`ai_endpoint`/
   `ai_model`; without them `ai_state` says "unavailable" and the button does not exist,
   which is itself worth a test). `test_users_page.py::test_an_ai_suggestion_fills_the_form_and_saves_nothing` drives it end to end and asserts that `POST`/`PATCH /groups` is **not** called.
+  What does not need a page is tested without one: `tests/test_ai_assist.py` holds the
+  dialog's mode list (`offered_modes` — "Explain" only once the editor has something to
+  explain, and a caller's own restriction still wins) and the stop-before-the-first-event
+  wait (`stream_request_id`); both were found by clicking the dialog in a browser on
+  2026-10-17, which no simulated user could have reported.
 - Two traps of the simulated user, found while testing the permission matrix's state
   buttons: `UserInteraction.elements` is a **set**, so the order of equal-looking widgets
   can only come from the element tree (`element.default_slot.children`) — never from the

@@ -23,8 +23,10 @@ Two properties of the server side show up here:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import time
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -35,6 +37,34 @@ from meadow.frontend.i18n import current_locale, t
 
 #: Modes offered for a suggestion.
 MODES = ("create", "edit", "explain")
+
+
+def offered_modes(
+    modes: tuple[str, ...], current_script: Callable[[], str] | None
+) -> tuple[str, ...]:
+    """Modes that can work with what the open editor holds right now.
+
+    `explain` needs something to explain: the core refuses the request without a
+    script, query or configuration (`crates/pim-core/src/api/ai.rs`). A fresh
+    editor therefore does not offer it, instead of failing after the click.
+    """
+    has_text = current_script is not None and bool(str(current_script() or "").strip())
+    return modes if has_text else tuple(mode for mode in modes if mode != "explain")
+
+
+async def stream_request_id(stream_state: dict[str, object], *, timeout_s: float = 2.0) -> str:
+    """The running stream's id, waiting briefly if the click came before it.
+
+    The id is the core's **first** stream event, so a „Stopp" pressed immediately
+    after „Erzeugen" has nothing to cancel yet — without this it would silently do
+    nothing. Returns `""` when the run already ended or no id shows up in time.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        request_id = str(stream_state.get("id") or "")
+        if request_id or not stream_state.get("running") or time.monotonic() >= deadline:
+            return request_id
+        await asyncio.sleep(0.05)
 
 
 async def ai_state(client: CoreClient, token: str) -> dict[str, object]:
@@ -60,11 +90,12 @@ async def ai_state(client: CoreClient, token: str) -> dict[str, object]:
 def history_rows(entries: list[object]) -> list[dict[str, object]]:
     """Rows for the history dialog from the core's audit projection.
 
-    Returns `when`, `mode`, `accepted` (bool), `model`, `ms` and `user` per entry —
-    the dialog adds the translated verdict labels, so this stays testable without a
-    UI context. Only metadata is read: the prompt, the script and object values are
-    **never** part of the audit entry (`plan/detail/ki-assistenz.md` §6.7), which is
-    what makes a history safe for anyone allowed to ask for suggestions.
+    Returns `when`, `mode`, `verdict` (`accepted` | `cancelled` | `rejected`), `model`,
+    `ms` and `user` per entry — the dialog adds the translated labels, so this stays
+    testable without a UI context. Only metadata is read: the prompt, the script and
+    object values are **never** part of the audit entry (`plan/detail/ki-assistenz.md`
+    §6.7), which is what makes a history safe for anyone allowed to ask for suggestions.
+    A run the user stopped is not a rejection: the worker marks it `cancelled`.
     """
     rows: list[dict[str, object]] = []
     for entry in entries:
@@ -73,11 +104,17 @@ def history_rows(entries: list[object]) -> list[dict[str, object]]:
         metadata = entry.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         latency = metadata.get("latency_ms")
+        if metadata.get("ok"):
+            verdict = "accepted"
+        elif metadata.get("cancelled"):
+            verdict = "cancelled"
+        else:
+            verdict = "rejected"
         rows.append(
             {
                 "when": _history_time(entry.get("timestamp")),
                 "mode": str(metadata.get("mode") or ""),
-                "accepted": bool(metadata.get("ok")),
+                "verdict": verdict,
                 "model": str(metadata.get("model") or ""),
                 "ms": "" if latency is None else str(latency),
                 "user": str(entry.get("user_id") or ""),
@@ -116,7 +153,8 @@ def open_suggestion_dialog(
     The callables read the *current* editor state when a suggestion is requested,
     so a dialog opened once always works with the latest values. `modes` restricts
     the mode list for an area without an explain target (a group document has no
-    prose field to fill).
+    prose field to fill); on top of that [`offered_modes`][meadow.frontend.ai_assist.offered_modes]
+    drops `explain` while the editor is still empty.
 
     `target` names **what is being written** (a record id while editing, `new` for
     an unsaved artefact, the attribute name for a computed attribute). It travels
@@ -128,12 +166,13 @@ def open_suggestion_dialog(
     with ui.dialog() as dialog, ui.card().classes("w-[46rem] max-w-[95vw]"):
         ui.label(t(title_key)).classes("text-h6")
         ui.label(t(hint_key)).classes("text-caption text-gray-500")
+        available = offered_modes(modes, current_script) or modes
         with ui.row().classes("w-full gap-2 mt-2"):
             mode_select = (
                 ui.select(
-                    {mode: t(f"ai.mode_{mode}") for mode in modes},
+                    {mode: t(f"ai.mode_{mode}") for mode in available},
                     label=t("ai.mode"),
-                    value=modes[0],
+                    value=available[0],
                 )
                 .props("filled dense")
                 .classes("w-48")
@@ -144,6 +183,8 @@ def open_suggestion_dialog(
                 .classes("grow")
                 .mark("ai-description")
             )
+        if "explain" in modes and "explain" not in available:
+            ui.label(t("ai.explain_needs_script")).classes("text-caption text-gray-500")
         preview = (
             ui.codemirror("", language="Python")
             .classes("w-full h-64 font-mono text-sm")
@@ -236,7 +277,7 @@ def open_suggestion_dialog(
             stop_button.set_visibility(False)
         if not reply.get("ok"):
             messages = [str(item) for item in reply.get("errors") or []]
-            if any("cancelled" in message for message in messages):
+            if reply.get("cancelled"):
                 status.text = t("ai.stopped")
                 return
             status.text = t("ai.rejected")
@@ -286,9 +327,10 @@ def open_suggestion_dialog(
         rows = [
             {
                 **row,
-                "result": (
-                    t("ai.history_accepted") if row["accepted"] else t("ai.history_rejected")
-                ),
+                "result": {
+                    "accepted": t("ai.history_accepted"),
+                    "cancelled": t("ai.history_cancelled"),
+                }.get(str(row["verdict"]), t("ai.history_rejected")),
             }
             for row in history_rows(entries if isinstance(entries, list) else [])
         ]
@@ -339,7 +381,7 @@ def open_suggestion_dialog(
 
     async def stop() -> None:
         """Asks the core to abort the running stream (the worker stops the provider)."""
-        request_id = str(stream_state.get("id") or "")
+        request_id = await stream_request_id(stream_state)
         if not request_id:
             return
         try:
