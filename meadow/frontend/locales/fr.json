@@ -1242,6 +1242,8 @@
   "connector_form.field_required": "{field} est obligatoire",
   "connector_form.row_key": "Clé",
   "connector_form.row_value": "Valeur",
+  "connector_form.secret_clear": "Supprimer la valeur enregistrée",
+  "connector_form.secret_stored": "Une valeur est stockée séparément de la configuration ; laisser le champ vide la conserve.",
   "connector_test.body": "Réponse : {value}",
   "connector_test.error": "Erreur : {value}",
   "connector_test.failed": "Connexion échouée",

@@ -37,7 +37,9 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   `plan/detail/ai-code-quality.md` §4.11; `test_users_page.py`, the net for the group
   editor's permission matrix and scope card; `test_settings_page.py`, the net for the AI
   commissioning preset, which must fill empty fields only and never replace a configured
-  endpoint) boot the real frontend app through NiceGUI's
+  endpoint; `test_connector_types_page.py`, the net for the connector-type registry:
+  built-ins filtered out of the list, template schema, create, missing name, broken JSON,
+  delete without a selection, failing catalog) boot the real frontend app through NiceGUI's
   user simulation (`user_simulation(main_file=…)`, plugin registered in the root
   `conftest.py` for a session-temp storage path, which also supplies the frontend's required
   session secret). Three rules: the fixture must drop
@@ -48,6 +50,11 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   takes an **`Exception`** for a method as well: the call then raises it, which is how
   a failing catalog request is tested (a rejected token must degrade the page instead of
   answering `500`, `test_a_failing_catalog_call_degrades_instead_of_killing_the_page`).
+  Two traps of the re-imported frontend: an exception class imported at module level is a
+  **different** class than the one the page uses after `_drop_frontend_modules()` (import it
+  inside the test, otherwise the page does not catch it), and a textarea's value is written
+  through the typed element (`_schema_area(user).set_value(...)`) because `find(...).elements`
+  hands out `Element`, not `ui.textarea`.
   They also carry
   the **shell** contract (`test_shell_drawer_entries_are_plain_links`): the drawer
   entries must stay plain links with an `href` — navigation that travels through the

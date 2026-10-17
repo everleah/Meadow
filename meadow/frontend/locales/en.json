@@ -1242,6 +1242,8 @@
   "connector_form.field_required": "{field} is required",
   "connector_form.row_key": "Key",
   "connector_form.row_value": "Value",
+  "connector_form.secret_clear": "Delete the stored value",
+  "connector_form.secret_stored": "A value is stored away from the configuration; leaving the field empty keeps it.",
   "connector_test.body": "Response: {value}",
   "connector_test.error": "Error: {value}",
   "connector_test.failed": "Connection failed",

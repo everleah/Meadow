@@ -1242,6 +1242,8 @@
   "connector_form.field_required": "{field} ist erforderlich",
   "connector_form.row_key": "Schlüssel",
   "connector_form.row_value": "Wert",
+  "connector_form.secret_clear": "Gespeicherten Wert löschen",
+  "connector_form.secret_stored": "Ein Wert liegt getrennt von der Konfiguration; bleibt das Feld leer, bleibt er erhalten.",
   "connector_test.body": "Antwort: {value}",
   "connector_test.error": "Fehler: {value}",
   "connector_test.failed": "Verbindung fehlgeschlagen",

@@ -75,26 +75,38 @@ async def connector_types_page() -> None:
         state: dict[str, object] = {"name": None}
         rows: list[dict] = []
 
-        table = ui.table(
-            columns=[
-                {"name": "name", "label": t("connector_types.col_name"), "field": "name"},
-                {
-                    "name": "direction",
-                    "label": t("connector_types.col_direction"),
-                    "field": "direction",
-                },
-                {"name": "fields", "label": t("connector_types.col_fields"), "field": "fields"},
-            ],
-            rows=rows,
-            row_key="name",
-            selection="single",
-        ).classes("w-full")
+        table = (
+            ui.table(
+                columns=[
+                    {"name": "name", "label": t("connector_types.col_name"), "field": "name"},
+                    {
+                        "name": "direction",
+                        "label": t("connector_types.col_direction"),
+                        "field": "direction",
+                    },
+                    {"name": "fields", "label": t("connector_types.col_fields"), "field": "fields"},
+                ],
+                rows=rows,
+                row_key="name",
+                selection="single",
+            )
+            .classes("w-full")
+            .mark("types-table")
+        )
 
         with ui.dialog() as editor, ui.card().classes("w-[52rem] max-w-[95vw]"):
             title = ui.label(t("connector_types.new")).classes("text-h6")
-            name_input = ui.input(t("connector_types.name")).props("filled dense").classes("w-64")
+            name_input = (
+                ui.input(t("connector_types.name"))
+                .props("filled dense")
+                .classes("w-64")
+                .mark("type-name")
+            )
             label_input = (
-                ui.input(t("connector_types.label_key")).props("filled dense").classes("w-64")
+                ui.input(t("connector_types.label_key"))
+                .props("filled dense")
+                .classes("w-64")
+                .mark("type-label")
             )
             direction_select = (
                 ui.select(
@@ -107,6 +119,7 @@ async def connector_types_page() -> None:
                 )
                 .props("filled dense")
                 .classes("w-48")
+                .mark("type-direction")
             )
             ui.label(t("connector_types.schema_hint")).classes("text-caption text-gray-500")
             schema_area = (
@@ -122,12 +135,12 @@ async def connector_types_page() -> None:
                     on_click=lambda: schema_area.set_value(
                         json.dumps(TEMPLATE, indent=2, ensure_ascii=False)
                     ),
-                ).props("flat")
+                ).props("flat").mark("type-template")
                 with ui.row().classes("gap-2"):
                     ui.button(t("grid.close"), on_click=editor.close).props("flat")
                     ui.button(
                         t("connector_types.save"), icon="save", on_click=lambda: save()
-                    ).props("flat")
+                    ).props("flat").mark("type-save")
 
         def fill(spec: dict | None) -> None:
             """Fills the dialog from a served type spec (or empties it for a new one)."""
@@ -232,7 +245,7 @@ async def connector_types_page() -> None:
                     ui.button(
                         t("connector_types.delete"),
                         on_click=lambda: delete_confirmed(name, confirm),
-                    ).props("flat color=negative")
+                    ).props("flat color=negative").mark("type-delete-confirm")
             confirm.open()
 
         async def delete_confirmed(name: str, confirm: ui.dialog) -> None:
@@ -249,11 +262,13 @@ async def connector_types_page() -> None:
         with ui.row().classes("w-full gap-2 mt-2"):
             ui.button(t("connector_types.new"), icon="add", on_click=lambda: new_type()).props(
                 "flat"
-            )
-            ui.button(t("connector_types.edit"), icon="edit", on_click=edit_selected).props("flat")
+            ).mark("type-new")
+            ui.button(t("connector_types.edit"), icon="edit", on_click=edit_selected).props(
+                "flat"
+            ).mark("type-edit")
             ui.button(
                 t("connector_types.delete"), icon="delete", on_click=lambda: do_delete()
-            ).props("flat")
+            ).props("flat").mark("type-delete")
 
         table.on("rowDblclick", lambda event: edit_selected())
         await reload_types()

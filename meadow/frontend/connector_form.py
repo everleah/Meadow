@@ -132,20 +132,22 @@ def is_visible(field: dict, values: dict[str, Any]) -> bool:
 
 
 def format_value(field: dict, value: Any) -> Any:
-    """Stored value → widget value."""
+    """Stored value → widget value.
+
+    A secret kept apart (`{"$secret": …}`, Stage 3) is not a value to show: the
+    widget starts empty and the field gets a separate control to delete the
+    stored value (`_render_field`).
+    """
     kind = str(field.get("type") or "string")
     widget = str(field.get("widget") or "")
+    if is_secret_reference(value):
+        return {"switch": False, "multiselect": [], "key_value": {}, "number": None}.get(widget, "")
     empty = value is MISSING or value is None
     if widget == "switch":
         return bool(value) if not empty else False
     if widget == "multiselect":
         return list(value) if isinstance(value, list) else []
     if widget == "key_value":
-        # A secret kept apart (`{"$secret": …}`, Stage 3) is not a value to show:
-        # the editor starts empty, and an untouched field keeps the stored token
-        # (the core reads the reference as "unchanged").
-        if is_secret_reference(value):
-            return {}
         return dict(value) if isinstance(value, dict) else {}
     if widget == "number":
         return None if empty else value
@@ -200,6 +202,10 @@ def parse_value(field: dict, raw: Any) -> Any:
     kind = str(field.get("type") or "string")
     if raw is MISSING:
         raw = None
+    if is_secret_reference(raw):
+        # The baseline of an untouched secret field: the reference is reported
+        # unchanged, so a save sends nothing and only a delete clears the value.
+        return raw
     if widget == "switch":
         return bool(raw)
     if widget == "multiselect":
@@ -220,6 +226,32 @@ def parse_value(field: dict, raw: Any) -> Any:
         return parse_number_list(raw)
     text = "" if raw is None else str(raw).strip()
     return text or None
+
+
+def _is_blank(value: Any) -> bool:
+    """Whether a parsed form value carries nothing the user entered."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, dict)):
+        return not value
+    return False
+
+
+def secret_reading(key: str, value: Any, references: dict[str, Any], cleared: bool) -> Any:
+    """What a secret field reports after the user touched (or did not touch) it.
+
+    `references` holds the references of the stored secrets (`{path: {"$secret": …}}`).
+    An empty widget reports the reference back, so an untouched field is "unchanged"
+    for the core; the delete control reports `None`, which removes the key and with it
+    the stored value (`plan/detail/konnektor-konfiguration.md` §14.2).
+    """
+    if cleared:
+        return None
+    if key in references and _is_blank(value):
+        return references[key]
+    return value
 
 
 def validate_values(
@@ -539,12 +571,28 @@ class ParameterForm:
         self._setters: dict[str, Callable[[Any], None]] = {}
         self._hosts: dict[str, ui.element] = {}
         self._widgets: dict[str, ui.input | ui.select | ui.number | ui.switch] = {}
+        self._references: dict[str, Any] = {}
+        self._clears: dict[str, ui.checkbox] = {}
 
     def values(self) -> dict[str, Any]:
-        """Current values as a flat `{path: value}` map (parsed)."""
-        return {
-            key: parse_value(self._fields[key], reader()) for key, reader in self._readers.items()
-        }
+        """Current values as a flat `{path: value}` map (parsed).
+
+        A secret field whose stored value is only a reference reports that
+        reference while its widget stays empty — that is how "unchanged" reaches
+        the core. Ticking the field's delete box reports `None`, which removes the
+        key and with it the stored secret
+        (`plan/detail/konnektor-konfiguration.md` §14.2).
+        """
+        current: dict[str, Any] = {}
+        for key, reader in self._readers.items():
+            clear = self._clears.get(key)
+            current[key] = secret_reading(
+                key,
+                parse_value(self._fields[key], reader()),
+                self._references,
+                bool(clear.value) if clear is not None else False,
+            )
+        return current
 
     def mark_errors(self, problems: dict[str, str]) -> None:
         """Marks the widgets the core named (`parameters.url` → `url`).
@@ -574,7 +622,21 @@ class ParameterForm:
         for key, field in self._fields.items():
             value = get_path(parameters or {}, key)
             self._setters[key](format_value(field, value))
+            self._track_secret(key, value)
         self.refresh_visibility()
+
+    def _track_secret(self, key: str, stored: Any) -> None:
+        """Keeps a secret field's delete control in step with the given value."""
+        clear = self._clears.get(key)
+        if clear is None:
+            return
+        reference = is_secret_reference(stored)
+        if reference:
+            self._references[key] = stored
+        else:
+            self._references.pop(key, None)
+        clear.set_value(False)
+        clear.set_visibility(reference)
 
 
 def _options_for(field: dict, sources: dict[str, list[str]], current: Any) -> dict[str, str]:
@@ -711,6 +773,15 @@ def _render_field(
             ).props("filled dense")
             form._readers[key] = _reader_for(widget)
             form._setters[key] = _setter_for(widget)
+        if field.get("secret") and is_secret_reference(value):
+            # The value itself stays in the core: the field starts empty and this
+            # control is the only way to remove a stored secret from the form.
+            form._references[key] = value
+            clear_box = ui.checkbox(t("connector_form.secret_clear")).mark(f"clear-secret-{key}")
+            ui.label(t("connector_form.secret_stored")).classes("text-caption text-gray-500")
+            form._clears[key] = clear_box
+            if on_change is not None:
+                clear_box.on_value_change(lambda _event: on_change())
         if field.get("help_key"):
             ui.label(t(str(field["help_key"]))).classes("text-caption text-gray-500")
     if on_change is not None and widget is not None:

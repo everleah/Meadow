@@ -28,6 +28,8 @@ from meadow.frontend.connector_form import (
     is_visible,
     nest,
     parse_value,
+    project_fields,
+    secret_reading,
     summary_parts,
     summary_text,
     unknown_keys,
@@ -226,6 +228,36 @@ def test_value_formatting_and_parsing() -> None:
     assert parse_value(backoff, "5, bald") == "5, bald"
     # The older stored form (one number) is shown as a one-entry list.
     assert format_value(backoff, 120) == "120"
+
+
+def test_a_stored_secret_is_kept_until_it_is_deleted() -> None:
+    """The reference is the baseline: an untouched save sends nothing, deleting sends `None`.
+
+    Without that baseline every save of a connector with a stored token cleared it:
+    the form showed an empty editor while the stored value was a reference, so the
+    patch always looked changed.
+    """
+    headers = {"key": "headers", "type": "string_map", "widget": "key_value", "secret": True}
+    reference = {"$secret": "connector:01ABC#headers"}
+    schema = {"groups": [{"key": "g", "fields": [headers]}]}
+    baseline = project_fields(schema, {"headers": reference})
+    assert baseline == {"headers": reference}
+
+    # Untouched: the editor stays empty and the form reports the reference.
+    assert format_value(headers, reference) == {}
+    assert secret_reading("headers", {}, {"headers": reference}, False) == reference
+    assert build_patch(baseline, {"headers": reference}) == {}
+
+    # A typed value replaces the stored secret ...
+    typed = {"Authorization": "Bearer x"}
+    assert secret_reading("headers", typed, {"headers": reference}, False) == typed
+    assert build_patch(baseline, {"headers": typed}) == {"headers": typed}
+    # ... and the delete control reports `None`, which removes the key in the core.
+    assert secret_reading("headers", {}, {"headers": reference}, True) is None
+    assert build_patch(baseline, {"headers": None}) == {"headers": None}
+
+    # A secret field without a stored value reports what the user typed.
+    assert secret_reading("headers", {}, {}, False) == {}
 
 
 def test_validation_mirrors_the_core_rules() -> None:
@@ -487,6 +519,11 @@ def test_connector_test_lines_include_the_hint() -> None:
 def test_i18n_keys_of_the_schema_exist() -> None:
     """Guards against typos in the core's label/help keys (all three locales)."""
     keys = [
+        "connector_form.add_row",
+        "connector_form.row_key",
+        "connector_form.row_value",
+        "connector_form.secret_clear",
+        "connector_form.secret_stored",
         "connector_fields.unwired",
         "connector_fields.group_target",
         "connector_fields.group_headers",
