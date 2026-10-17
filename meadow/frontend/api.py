@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import AsyncIterator, Callable, Mapping
 
 import httpx
@@ -31,6 +32,22 @@ _SHARED_CLIENT_TIMEOUT = 30.0
 #: Sentinel distinguishing "field not provided at all" from an explicit
 #: ``None`` (e.g. clearing an ``enum_set_id`` on an attribute definition).
 _UNSET = object()
+
+
+def sse_json(line: str) -> dict | None:
+    """The JSON payload of one `text/event-stream` line, or `None`.
+
+    The core frames every event as one `data:` line (`crates/pim-core/src/api/ai.rs`);
+    comments, blank separators and unparseable lines are skipped so a malformed
+    piece cannot kill an otherwise healthy stream.
+    """
+    if not line.startswith("data:"):
+        return None
+    try:
+        value = json.loads(line[len("data:") :].strip())
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 @contextlib.asynccontextmanager
@@ -1907,6 +1924,63 @@ class CoreClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def ai_generate_stream(
+        self,
+        token: str,
+        payload: dict,
+        *,
+        on_id: Callable[[str], None],
+        on_delta: Callable[[str], None],
+    ) -> dict:
+        """Streams a suggestion (``POST /ai/generate/stream``, only ``explain``).
+
+        Reports the request id (`on_id`, for `ai_cancel`) and every text piece
+        (`on_delta`) while the answer is produced, and returns the finished reply —
+        the same shape a blocking call returns. It uses its **own** client: the
+        shared one caps every request at 30 s, and a stream is a long call.
+        """
+        async with (
+            httpx.AsyncClient(timeout=None) as client,
+            client.stream(
+                "POST",
+                f"{self.base_url}/ai/generate/stream",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response,
+        ):
+            if response.is_error:
+                await response.aread()
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            reply: dict = {}
+            async for line in response.aiter_lines():
+                event = sse_json(line)
+                if event is None:
+                    continue
+                kind = event.get("type")
+                if kind == "id":
+                    on_id(str(event.get("id") or ""))
+                elif kind == "delta":
+                    on_delta(str(event.get("text") or ""))
+                elif kind == "done":
+                    finished = event.get("reply")
+                    reply = finished if isinstance(finished, dict) else {}
+                elif kind == "error":
+                    reply = {"ok": False, "errors": [str(event.get("error") or "")]}
+            return reply or {
+                "ok": False,
+                "errors": ["the stream ended without an answer"],
+            }
+
+    async def ai_cancel(self, token: str, request_id: str) -> None:
+        """Stops a streamed suggestion (``POST /ai/generate/{id}/cancel``)."""
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/ai/generate/{request_id}/cancel",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
 
     # --- Configuration export/import (MCF) --------------------------------
     async def export_config(

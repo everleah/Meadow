@@ -213,13 +213,14 @@ Gefahren wurde die komplette geplante Kette mit `deepseek-chat` (OpenAI-kompatib
 **Stufe 2b — Gruppen-Rechte und Scope (2026-09-27).** Ein weiterer JSON-Bereich nach derselben Mechanik, angestossen aus Stufe D des RBAC-Plans (`plan/detail/benutzer-gruppen-rechte.md`).
 
 **Stufe 3 — Komfort und Betrieb.**
-„Erklären" für ganze Konfigurationen, Vorschlags-Historie je Regel/Attribut — **umgesetzt 2026-10-17** über das Audit (`GET /ai/history`, Knopf „Verlauf", kein zweiter Speicher); offen bleiben Kosten-/Nutzungsanzeige und optional Streaming der Antwort.
+„Erklären" für ganze Konfigurationen, Vorschlags-Historie je Regel/Attribut — **umgesetzt 2026-10-17** über das Audit (`GET /ai/history`, Knopf „Verlauf", kein zweiter Speicher); **Streaming der Antwort** ebenfalls umgesetzt (nur `explain`, mit Abbruch, §13); offen bleibt die Kosten-/Nutzungsanzeige.
 
 Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dry-Run gegen echte Daten) und den größten Nutzen; Suche und JSON folgen mit derselben Mechanik, brauchen aber je eigene Prompt-/Prüfteile.
 
 ## 10. Tests und Verifikation
 
 - `tests/test_ai_history.py`: `history_rows` — audit-Metadaten als Tabellenzeilen, ein abgelehnter Vorschlag, Einträge ohne `metadata` und Fremdeinträge. **Umgesetzt** (3 Tests).
+- `tests/test_ai_stream.py` und `tests/test_ai_provider.py`: `sse_json` (Datenzeilen, Trenner, kaputte Pakete, Skalare) und `chat_stream` (Stücke in Reihenfolge, `[DONE]`, `usage`, `stream: true` im Rumpf, leere Antwort ⇒ Fehler). **Umgesetzt** (4 Tests).
 
 - `tests/test_ai_policy.py`: AST-Prüfung (fehlende/zusätzliche Funktion, falsche Signatur, jeder Name der Verbotsliste), Built-in-Liste **gegen die echte Sandbox** (kein abgeschriebener Katalog). **Umgesetzt** (12 Tests).
 - `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp. **Umgesetzt** (9 Tests, inkl. Generator-Abgleich; für den Gruppen-Bereich kommen drei dazu: Rechte-Katalog mit Rollen-Defaults, Scope-Schema und Typ-Schlüssel).
@@ -244,13 +245,15 @@ Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dr
 ## 12. Offene Punkte
 
 1. **Provider-Voreinstellung** — **umgesetzt (2026-10-16):** `meadow/frontend/settings.py` führt für jeden Anbieter Beispielwerte (`PROVIDER_EXAMPLES`: generisch/DeepSeek, OpenAI, Azure OpenAI, Ollama); der Knopf „Beispielwerte eintragen" (`ai-preset-apply`) füllt Endpunkt und Modell **nur in leere Felder** ein, vorhandene Werte bleiben, und eine Meldung sagt, was eingetragen wurde. Kein Kern-Bestandteil — die Voreinstellung ist Bedienhilfe für die Inbetriebnahme.
-2. **Streaming** der Antwort (fühlbar schneller, aber NiceGUI/Worker-Aufwand) — Stufe 3.
+2. **Streaming** der Antwort — **umgesetzt (2026-10-17), nur für `explain`:** `POST /ai/generate/stream` liefert die Textstücke als SSE (Worker → `ai.stream.<id>` → Kern → NiceGUI), „Stopp"/Schließen schickt `POST /ai/generate/{id}/cancel` (`ai.cancel.<id>`), und der Audit-Eintrag fällt wie bei jedem Aufruf an — auch für einen Abbruch (`ok: false`). Artefakte bleiben blockierend, weil sie erst nach der Prüfkette gezeigt werden dürfen. Details: §13.
 3. **Sichtbare Historie** je Regel/Attribut — **umgesetzt (2026-10-17):** der Dialog schickt `target` (Record-Id, `new` für Ungespeichertes, der Attributname beim berechneten Attribut; das Import-Mapping hat keine stabile Identität und bekommt keinen Knopf), der Kern legt es in den `ai_generated`-Audit-Eintrag, und `GET /ai/history?area=…&target=…` (`ai.use`) liefert Modell, Versuche, Latenz, Tokenzahl und Verdikt; der Knopf **„Verlauf"** zeigt sie als Tabelle. **Kein zweiter Speicher** — das Audit ist die Quelle.
 4. **Import-Vorschau im Kern** — **umgesetzt (2026-10-16):** `POST /imports/preview` führt den **Schreibpfad selbst** aus (`objects::upsert_objects` im Report-Modus: Typregister, Business-Key, Scope, Attributwerte, Regeln) und ergänzt die Kompositionsregel des Import-Jobs (ein Elternteil, der weder im Dokument noch im System liegt, lässt sein Kind scheitern). Die Antwort zählt `create`/`update`/`failed`, liefert die Objektzeilen (`results`, gedeckelt) und nennt die Objekttypen, die der Import registrieren würde. **Geschrieben wird nichts** — kein Objekt, keine Kante, kein Event, kein Audit, kein Typ; die Regelauswertung läuft im Report-Modus (`WriteEvaluation::as_dry_run`) und kann keinen Circuit Breaker bewegen. Grenzen: `references` werden gezählt, nicht aufgelöst, und die Werte-Normalisierung des Import-Workers läuft nicht mit. Knopf „Mit dem Kern prüfen" auf `/import` (`CoreClient.preview_import`).
 5. **Sprache der Vorschläge** — **umgesetzt (2026-09-19):** die Prosa folgt der Arbeitssprache (das Frontend schickt `language`/`current_locale()` mit `POST /ai/generate`, der Kern reicht sie in den NATS-Auftrag weiter, der Prompt sagt „Write … in the language `X`; the code stays English"), Code und Kommentare bleiben Englisch (Projektregel) — `meadow/ai/prompts.py`, `meadow/frontend/ai_assist.py`.
 6. **Job-Parameter beim Speichern prüfen** — **umgesetzt (2026-10-16):** `POST`/`PATCH /jobs` rufen `job_schema::problems_for_write`; deklarierte Felder, die fehlen oder falsch geformt sind, ⇒ `400` (`` invalid job parameters: … ``), unbekannte Schlüssel werden gespeichert und als `notices` (Prüfendpunkt) plus `WARN`-Logeintrag der Kategorie `job` gemeldet. Das Job-Formular fragt den Prüfendpunkt **vor** dem Speichern (blockierende Meldungen halten auf, Hinweise erscheinen danach als Warnung), und die Typ-Auswahl ist beim Bearbeiten gesperrt, weil `PATCH /jobs/{id}` den Typ nicht ändern kann.
 
 ## 13. Streaming der Antwort (Entscheidung 2026-10-17)
+
+**Stand:** umgesetzt (Kern, Worker, Dialog). Geprüft durch Unit-Tests (SSE-Framing, Id-Prüfung, Provider-Streaming); **kein** Live-Lauf gegen einen echten Provider — der OpenAI-kompatible Pfad ist der einzige, der überhaupt geprüft ist.
 
 **Umfang.** Nur der Modus **`explain`** streamt. Ein Artefakt (Skript, JSON) erscheint weiterhin erst **nach** der Prüfkette — roher Text, der anschließend verworfen, korrigiert oder abgelehnt wird, wäre eine Anzeige, die niemand speichern kann. „Erklären" ist Prosa ohne Prüfobjekt.
 

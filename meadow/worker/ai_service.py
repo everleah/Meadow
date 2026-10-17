@@ -14,6 +14,7 @@ not travel on every suggestion.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -25,7 +26,7 @@ import httpx
 
 from meadow import tabular
 from meadow.ai.context import conventional_names, key_attribute_names, language_codes
-from meadow.ai.provider import ProviderConfig, ProviderError
+from meadow.ai.provider import ProviderConfig, ProviderError, chat, chat_stream
 from meadow.ai.service import (
     GenerationRequest,
     PayloadValidator,
@@ -339,11 +340,63 @@ async def preview_query(
     return True, f"{count} hits" if count is not None else "accepted", payload
 
 
+class _StreamPublisher:
+    """Publishes one streamed answer's text pieces and watches for a cancel.
+
+    The publisher is the worker half of `plan/detail/ki-assistenz.md` §13: pieces
+    go to `ai.stream.<id>` while `ai.cancel.<id>` stops the provider stream at the
+    next chunk (the raise inside the provider's delta callback closes it).
+    """
+
+    def __init__(
+        self,
+        client: Any,
+        subject: str,
+        cancelled: asyncio.Event,
+        watcher: asyncio.Task[None],
+    ) -> None:
+        self.client = client
+        self.subject = subject
+        self.cancelled = cancelled
+        self._watcher = watcher
+
+    async def publish(self, text: str) -> None:
+        if self.cancelled.is_set():
+            raise ProviderError("cancelled by the user")
+        payload = json.dumps({"type": "delta", "text": text}, ensure_ascii=False).encode()
+        await self.client.publish(self.subject, payload)
+
+    async def close(self) -> None:
+        self._watcher.cancel()
+        try:
+            await self.client.close()
+        except Exception:  # noqa: BLE001 - closing must not mask the answer
+            logger.warning("closing the AI stream connection failed", exc_info=True)
+
+
+async def _open_stream(nats_url: str, request_id: str, subject: str) -> _StreamPublisher:
+    """Connects, subscribes to `ai.cancel.<id>` and returns the publisher."""
+    import nats  # imported here so the module stays importable without a broker
+
+    client = await nats.connect(nats_url)
+    cancel_subscription = await client.subscribe(f"ai.cancel.{request_id}")
+    cancelled = asyncio.Event()
+
+    async def watch() -> None:
+        async for _message in cancel_subscription.messages:
+            cancelled.set()
+            return
+
+    watcher = asyncio.create_task(watch())
+    return _StreamPublisher(client, subject, cancelled, watcher)
+
+
 async def handle_generate(
     envelope: AiGenerateEnvelope,
     *,
     core_url: str,
     api_key: str | None,
+    nats_url: str,
     vocabulary: JsonCache,
     search_catalog: JsonCache,
     connector_types: JsonCache,
@@ -490,8 +543,15 @@ async def handle_generate(
 
         config_validator = validate_group
 
+    # The core asks for the text pieces only in the `explain` streaming path; the
+    # answer itself still leaves through the NATS reply.
+    streamed: _StreamPublisher | None = None
+    chat_fn: Callable[..., Awaitable[Any]] = chat
+    if envelope.stream_subject and envelope.request_id:
+        streamed = await _open_stream(nats_url, envelope.request_id, envelope.stream_subject)
+        chat_fn = functools.partial(chat_stream, on_delta=streamed.publish)
     try:
-        return await generate(
+        reply = await generate(
             config,
             request,
             vocabulary_rows=vocabulary_rows,
@@ -500,10 +560,17 @@ async def handle_generate(
             validate_query=validator,
             validate_config=config_validator,
             state=state,
+            chat_fn=chat_fn,
         )
     except (ProviderError, httpx.HTTPError) as error:
         # A transport failure while validating is not a verdict about the query.
-        return {"ok": False, "attempts": 0, "errors": [str(error)]}
+        reply = {"ok": False, "attempts": 0, "errors": [str(error)]}
+    finally:
+        if streamed is not None:
+            await streamed.close()
+    if streamed is not None and streamed.cancelled.is_set():
+        return {"ok": False, "attempts": 0, "errors": ["cancelled by the user"]}
+    return reply
 
 
 async def handle_test(envelope: AiTestEnvelope) -> dict[str, Any]:
@@ -585,6 +652,7 @@ async def serve(
             envelope,
             core_url=core_url,
             api_key=api_key,
+            nats_url=nats_url,
             vocabulary=vocabulary,
             search_catalog=search_catalog,
             connector_types=connector_types,

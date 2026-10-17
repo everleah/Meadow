@@ -13,8 +13,9 @@ request. `plan/detail/ki-assistenz.md` §4.
 
 from __future__ import annotations
 
+import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -188,6 +189,76 @@ async def chat(
         raise ProviderError(f"provider answered with invalid JSON: {error}") from error
     reply = parse_reply(payload)
     return reply._replace(latency_ms=latency_ms, model=reply.model or config.model)
+
+
+async def chat_stream(
+    config: ProviderConfig,
+    messages: list[dict[str, str]],
+    *,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> ChatReply:
+    """One chat request with `stream: true`; reports each text piece as it arrives.
+
+    Returns the same [`ChatReply`] as [`chat`] once the provider is done, so the
+    caller keeps one shape. The pieces reported through `on_delta` are the **raw**
+    provider output — the streaming path is only used for prose (`explain`), where
+    nothing has to pass a policy check first (`plan/detail/ki-assistenz.md` §13).
+    An unchanged OpenAI-compatible endpoint answers `data: {...}` lines and closes
+    with `data: [DONE]`; `usage` may arrive in the last packet (and is optional).
+    """
+    url, headers = config.request_target()
+    body = _body(config, messages)
+    body["stream"] = True
+    timeout = httpx.Timeout(config.timeout_ms / 1000)
+    started = time.monotonic()
+    pieces: list[str] = []
+    usage: dict[str, Any] = {}
+    model = config.model
+    owned = client is None
+    stream_client = client or httpx.AsyncClient(timeout=timeout)
+    try:
+        async with stream_client.stream("POST", url, json=body, headers=headers) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                raise ProviderError(
+                    f"provider answered {response.status_code}: {_error_text(response)}"
+                )
+            async for line in response.aiter_lines():
+                data = line.strip()
+                if not data.startswith("data:"):
+                    continue
+                data = data[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    packet = json.loads(data)
+                except ValueError:
+                    continue
+                if not isinstance(packet, Mapping):
+                    continue
+                if isinstance(packet.get("usage"), Mapping):
+                    usage = dict(packet["usage"])
+                model = str(packet.get("model") or model)
+                choices = packet.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                delta = choices[0].get("delta") if isinstance(choices[0], Mapping) else None
+                text = delta.get("content") if isinstance(delta, Mapping) else None
+                if isinstance(text, str) and text:
+                    pieces.append(text)
+                    if on_delta is not None:
+                        await on_delta(text)
+    except httpx.HTTPError as error:
+        raise ProviderError(f"provider request failed: {error}") from error
+    finally:
+        if owned:
+            await stream_client.aclose()
+    latency_ms = int((time.monotonic() - started) * 1000)
+    answer = "".join(pieces)
+    if not answer.strip():
+        raise ProviderError("provider returned an empty completion")
+    return ChatReply(text=answer, model=model, latency_ms=latency_ms, usage=usage)
 
 
 def _error_text(response: httpx.Response) -> str:

@@ -12,9 +12,21 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde_json::{Map, Value, json};
+use ulid::Ulid;
 
 use crate::config::Config;
+
+/// NATS subject prefix of the streamed text pieces (`ai.stream.<request id>`).
+///
+/// Core NATS, not JetStream: a text piece is display progress, not a contract —
+/// the finished answer still comes back as the request's reply. The worker
+/// mirrors these two prefixes (`meadow/worker/ai_service.py`).
+pub(crate) const STREAM_SUBJECT_PREFIX: &str = "ai.stream.";
+
+/// NATS subject prefix of the abort messages (`ai.cancel.<request id>`).
+pub(crate) const CANCEL_SUBJECT_PREFIX: &str = "ai.cancel.";
 
 /// Everything the worker needs for one provider call, resolved by the core.
 ///
@@ -199,9 +211,7 @@ impl AiClient {
     ) -> Result<Value, AiError> {
         let bytes =
             serde_json::to_vec(&payload).map_err(|error| AiError::BadReply(error.to_string()))?;
-        let client = async_nats::connect(&self.nats_url)
-            .await
-            .map_err(|error| AiError::Transport(error.to_string()))?;
+        let client = self.connect().await?;
         let request = async_nats::Request::new()
             .payload(bytes.into())
             .timeout(Some(Duration::from_millis(timeout_ms + 5_000)));
@@ -210,6 +220,13 @@ impl AiClient {
             .await
             .map_err(|error| AiError::Transport(error.to_string()))?;
         serde_json::from_slice(&reply.payload).map_err(|error| AiError::BadReply(error.to_string()))
+    }
+
+    /// One NATS connection (the clients are stateless, see the struct docs).
+    async fn connect(&self) -> Result<async_nats::Client, AiError> {
+        async_nats::connect(&self.nats_url)
+            .await
+            .map_err(|error| AiError::Transport(error.to_string()))
     }
 
     /// Asks the worker to build a suggestion (`request` = area, mode, description, …).
@@ -226,6 +243,95 @@ impl AiClient {
         let (config, timeout_ms) = self.config()?;
         let payload = json!({ "config": config.to_json() });
         self.request(&self.test_subject, payload, timeout_ms).await
+    }
+
+    /// Starts a streamed generation: `(request id, events)`.
+    ///
+    /// The worker publishes the text pieces of a streamed provider answer to
+    /// `ai.stream.<id>`; the **finished** answer still arrives as the reply, so
+    /// the caller gets the same payload a blocking call would. One task owns the
+    /// subscription **and** the request (`select!`), so neither outlives the
+    /// other; the events are `{"type":"delta","text":…}` followed by exactly one
+    /// `{"type":"done","reply":…}` or `{"type":"error","error":…}`.
+    pub async fn generate_stream(
+        &self,
+        request: Value,
+    ) -> Result<(String, tokio::sync::mpsc::Receiver<Value>), AiError> {
+        let (config, timeout_ms) = self.config()?;
+        let request_id = Ulid::new().to_string();
+        let stream_subject = format!("{STREAM_SUBJECT_PREFIX}{request_id}");
+        let payload = json!({
+            "config": config.to_json(),
+            "request": request,
+            "request_id": request_id,
+            "stream_subject": stream_subject,
+        });
+        let bytes =
+            serde_json::to_vec(&payload).map_err(|error| AiError::BadReply(error.to_string()))?;
+        let client = self.connect().await?;
+        // Subscribe **before** the request: a fast first chunk must not be lost.
+        let mut subscriber = client
+            .subscribe(stream_subject)
+            .await
+            .map_err(|error| AiError::Transport(error.to_string()))?;
+        let (sender, events) = tokio::sync::mpsc::channel::<Value>(64);
+        let generate_subject = self.generate_subject.clone();
+        tokio::spawn(async move {
+            let request = async_nats::Request::new()
+                .payload(bytes.into())
+                .timeout(Some(Duration::from_millis(timeout_ms + 5_000)));
+            let pending = client.send_request(generate_subject, request);
+            tokio::pin!(pending);
+            loop {
+                tokio::select! {
+                    message = subscriber.next() => {
+                        let Some(message) = message else { return };
+                        match serde_json::from_slice::<Value>(&message.payload) {
+                            Ok(value) => {
+                                if sender.send(value).await.is_err() {
+                                    return; // the client went away (stream dropped)
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "ignored a malformed AI stream piece");
+                            }
+                        }
+                    }
+                    reply = &mut pending => {
+                        let event = match reply {
+                            Ok(reply) => match serde_json::from_slice::<Value>(&reply.payload) {
+                                Ok(reply) => json!({ "type": "done", "reply": reply }),
+                                Err(error) => json!({
+                                    "type": "error",
+                                    "error": format!("invalid reply: {error}"),
+                                }),
+                            },
+                            Err(error) => json!({ "type": "error", "error": error.to_string() }),
+                        };
+                        let _ = sender.send(event).await;
+                        return;
+                    }
+                }
+            }
+        });
+        Ok((request_id, events))
+    }
+
+    /// Asks the worker to abort a running streamed call.
+    pub async fn cancel_stream(&self, request_id: &str) -> Result<(), AiError> {
+        self.config()?;
+        let client = self.connect().await?;
+        client
+            .publish(
+                format!("{CANCEL_SUBJECT_PREFIX}{request_id}"),
+                Vec::<u8>::new().into(),
+            )
+            .await
+            .map_err(|error| AiError::Transport(error.to_string()))?;
+        client
+            .flush()
+            .await
+            .map_err(|error| AiError::Transport(error.to_string()))
     }
 }
 

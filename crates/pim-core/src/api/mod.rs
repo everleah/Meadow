@@ -39,6 +39,8 @@ use utoipa::OpenApi;
 #[openapi(
     paths(
         ai::generate,
+        ai::generate_stream,
+        ai::cancel_stream,
         ai::history,
         ai::test,
         auth::login,

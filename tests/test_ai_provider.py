@@ -12,6 +12,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ from meadow.ai.provider import (  # noqa: E402 - after the path fix
     ProviderConfig,
     ProviderError,
     chat,
+    chat_stream,
     parse_reply,
 )
 
@@ -184,3 +186,52 @@ def test_chat_raises_on_a_transport_error() -> None:
     with pytest.raises(ProviderError) as error:
         asyncio.run(run())
     assert "connection refused" in str(error.value)
+
+
+def test_chat_stream_reports_every_piece_and_returns_the_whole_answer() -> None:
+    # The OpenAI-compatible framing: one `data:` line per packet, a usage-only
+    # packet, then `[DONE]` (`plan/detail/ki-assistenz.md` §13).
+    body = (
+        'data: {"model":"m","choices":[{"delta":{"content":"Hallo "}}]}\n\n'
+        'data: {"model":"m","choices":[{"delta":{"content":"Welt"}}]}\n\n'
+        'data: {"model":"m","choices":[],"usage":{"total_tokens":7}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=body)
+
+    pieces: list[str] = []
+
+    async def collect(text: str) -> None:
+        pieces.append(text)
+
+    async def run() -> Any:
+        async with _client(handler) as client:
+            return await chat_stream(
+                _config(), [{"role": "user", "content": "hi"}], on_delta=collect, client=client
+            )
+
+    reply = asyncio.run(run())
+    assert pieces == ["Hallo ", "Welt"]
+    assert reply.text == "Hallo Welt"
+    assert reply.usage["total_tokens"] == 7
+    assert reply.model == "m"
+    body_sent = seen["body"]
+    assert isinstance(body_sent, dict)
+    assert body_sent["stream"] is True
+
+
+def test_chat_stream_raises_on_an_empty_answer() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content="data: [DONE]\n\n")
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            await chat_stream(_config(), [{"role": "user", "content": "hi"}], client=client)
+
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(run())
+    assert "empty completion" in str(error.value)

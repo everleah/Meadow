@@ -159,14 +159,25 @@ def open_suggestion_dialog(
                 history_button = (
                     ui.button(t("ai.history"), icon="history").props("flat").mark("ai-history")
                 )
-            ui.button(t("grid.close"), on_click=dialog.close).props("flat")
+            close_button = ui.button(t("grid.close")).props("flat")
             apply_button = ui.button(t("ai.apply"), icon="check").props("flat").mark("ai-apply")
             generate_button = (
                 ui.button(t("ai.generate"), icon="auto_awesome").props("flat").mark("ai-generate")
             )
+            stop_button = ui.button(t("ai.stop"), icon="stop").props("flat").mark("ai-stop")
 
     #: The last successful reply — what `apply` hands to the caller.
     state: dict[str, object] = {"reply": None}
+    #: The running stream: its request id (for a cancel) and whether it runs.
+    stream_state: dict[str, object] = {"id": "", "running": False}
+
+    def append_delta(text: str) -> None:
+        """Appends one streamed piece to the preview.
+
+        Only prose is streamed (`explain`), so showing the pieces as they arrive
+        cannot display anything that would have to pass a check first.
+        """
+        preview.value = str(preview.value or "") + text
 
     async def apply() -> None:
         reply = state.get("reply")
@@ -178,13 +189,19 @@ def open_suggestion_dialog(
         dialog.close()
 
     async def run() -> None:
-        status.text = t("ai.running")
         status.classes(remove="text-negative text-positive")
         note_label.set_text("")
         errors_box.clear()
         apply_button.set_enabled(False)
         state["reply"] = None
+        stream_state["id"] = ""
         mode = str(mode_select.value or "create")
+        streamed = mode == "explain"
+        status.text = t("ai.streaming") if streamed else t("ai.running")
+        if streamed:
+            preview.value = ""
+            stream_state["running"] = True
+            stop_button.set_visibility(True)
         payload = {
             "area": area,
             "mode": mode,
@@ -201,15 +218,30 @@ def open_suggestion_dialog(
             "target": target() if target else None,
         }
         try:
-            reply = await client.ai_generate(token, payload)
-        except CoreError as error:
+            if streamed:
+                reply = await client.ai_generate_stream(
+                    token,
+                    payload,
+                    on_id=lambda value: stream_state.update({"id": value}),
+                    on_delta=append_delta,
+                )
+            else:
+                reply = await client.ai_generate(token, payload)
+        except (CoreError, httpx.HTTPError) as error:
             status.text = f"{t('ai.failed')}: {error}"
             status.classes("text-negative")
             return
+        finally:
+            stream_state["running"] = False
+            stop_button.set_visibility(False)
         if not reply.get("ok"):
+            messages = [str(item) for item in reply.get("errors") or []]
+            if any("cancelled" in message for message in messages):
+                status.text = t("ai.stopped")
+                return
             status.text = t("ai.rejected")
             status.classes("text-negative")
-            for message in reply.get("errors") or [t("ai.failed")]:
+            for message in messages or [t("ai.failed")]:
                 with errors_box:
                     ui.label(f"• {message}").classes("text-caption text-negative")
             return
@@ -305,9 +337,27 @@ def open_suggestion_dialog(
                 ui.button(t("grid.close"), on_click=history_dialog.close).props("flat")
         history_dialog.open()
 
+    async def stop() -> None:
+        """Asks the core to abort the running stream (the worker stops the provider)."""
+        request_id = str(stream_state.get("id") or "")
+        if not request_id:
+            return
+        try:
+            await client.ai_cancel(token, request_id)
+        except (CoreError, httpx.HTTPError) as error:
+            ui.notify(f"{t('ai.stop_failed')}: {error}", color="negative")
+
+    async def close_dialog() -> None:
+        if stream_state["running"]:
+            await stop()
+        dialog.close()
+
+    stop_button.set_visibility(False)
     apply_button.set_enabled(False)
     apply_button.on_click(apply)
     generate_button.on_click(run)
+    stop_button.on_click(stop)
+    close_button.on_click(close_dialog)
     if history_button is not None:
         history_button.on_click(show_history)
     dialog.open()

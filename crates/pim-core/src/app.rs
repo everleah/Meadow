@@ -330,6 +330,11 @@ pub fn router(state: AppState) -> Router {
             put(api::system::put_setting).delete(api::system::delete_setting),
         )
         .route("/ai/generate", post(api::ai::generate))
+        .route("/ai/generate/stream", post(api::ai::generate_stream))
+        .route(
+            "/ai/generate/{request_id}/cancel",
+            post(api::ai::cancel_stream),
+        )
         .route("/ai/history", get(api::ai::history))
         .route("/ai/test", post(api::ai::test))
         .route(

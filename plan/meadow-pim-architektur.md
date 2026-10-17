@@ -1094,3 +1094,15 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 **(2) Umsetzung.** Der Vorschlagsdialog schickt `target` (Record-Id, `new` für Ungespeichertes, der Attributname beim berechneten Attribut; das Import-Mapping hat keine stabile Identität und bekommt keinen Knopf), der Kern legt es mit Modell, Versuchen, Latenz und Tokenzahl in den Audit-Eintrag, und **`GET /ai/history?area=…&target=…`** (`ai.use`, neueste zuerst, gedeckelt) liefert ihn zurück; der Knopf **„Verlauf"** zeigt daraus eine Metadaten-Tabelle. Prompt, Skript und Objektwerte bleiben außen vor — die Historie ist deshalb für jeden `ai.use`-Träger unbedenklich, und ein zweiter Speicher entfällt.
 
 **Gates:** `cargo test` **242**, `pytest` **829**, `mypy` 181 Dateien, `ruff`/`ruff format`/`clippy -D warnings`/`cargo fmt --check` sauber.
+
+*Zuletzt geändert: 2026-10-17 (32) – **Streaming für „Erklären" — und nur dafür** (Abschnitte 8/11/12; Details in [detail/ki-assistenz.md](detail/ki-assistenz.md) §13):*
+
+**(1) Warum nur Prosa.** Ein Artefakt (Skript, JSON) ist erst nach AST-Prüfung, Sandbox-Compile und ggf. Dry-Run brauchbar; roher Text, der anschließend verworfen oder abgelehnt wird, wäre eine Anzeige, die niemand speichern kann. „Erklären" hat kein Prüfobjekt — dort ist Streaming ehrlich.
+
+**(2) Der Weg über drei Prozesse.** Der Browser sieht den Kern nie (Worker → NATS → Kern → NiceGUI-Prozess → Websocket). Request/Reply kann nicht fortschreitend antworten, deshalb abonniert der Kern **vor** dem Aufruf `ai.stream.<id>`, der Worker liest die Provider-SSE und **publiziert** die Stücke, die fertige Antwort kommt weiter per `msg.respond`; `POST /ai/generate/stream` reicht beides als `text/event-stream` (`id`, `delta`s, `done`/`error`) durch. Ein Task hält Abo und Request zusammen (`select!`).
+
+**(3) Abbruch und Audit.** „Stopp"/Schließen schickt `POST /ai/generate/{id}/cancel` (Id auf ein alphanumerisches Subject-Token geprüft), der Worker bricht den Provider-Stream beim nächsten Stück ab. Der Audit-Eintrag entsteht wie bei jedem Aufruf beim Eintreffen der Antwort — ein Abbruch ist eine Zeile mit `ok: false` und erscheint damit auch in der Historie.
+
+**(4) Zeitlimit.** Der gestreamte Aufruf nutzt einen **eigenen** httpx-Client ohne 30-s-Deckel (der geteilte Client hätte vor dem Kern aufgeben können, dessen Provider-Timeout allein 30 s beträgt).
+
+**Gates:** `cargo test` **243**, `clippy -D warnings`/`cargo fmt --check`, `ruff`/`ruff format`/`mypy` (182 Dateien), `pytest` **833** — grün. **Nicht geprüft:** ein Live-Lauf gegen einen echten Provider (nur der OpenAI-kompatible Pfad ist überhaupt getestet; Azure/Ollama nicht).

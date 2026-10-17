@@ -53,6 +53,11 @@ class AiGenerateEnvelope(BaseModel):
 
     config: dict[str, Any] = Field(default_factory=dict)
     request: dict[str, Any] = Field(default_factory=dict)
+    #: Set by the core for a streamed `explain` call: the NATS subject the text
+    #: pieces go to, and the id the cancel message (`ai.cancel.<id>`) names.
+    #: Both absent for a blocking call (`plan/detail/ki-assistenz.md` §13).
+    request_id: str | None = None
+    stream_subject: str | None = None
 
 
 class AiTestEnvelope(BaseModel):

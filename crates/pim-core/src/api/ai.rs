@@ -9,8 +9,13 @@
 //! configuration or an unreachable worker each answer `503` with a message a
 //! human can act on. There is no fallback and no effect on any write path.
 
+use std::convert::Infallible;
+
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
+use futures_util::{Stream, StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use utoipa::{IntoParams, ToSchema};
@@ -19,6 +24,7 @@ use crate::ai::AiError;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
+use crate::db::Db;
 use crate::error::ApiError;
 
 /// Payload for `POST /ai/generate`.
@@ -208,38 +214,18 @@ pub async fn generate(
     claims.require("ai.use")?;
     validate(&body)?;
 
-    let request = json!({
-        "area": body.area,
-        "mode": body.mode,
-        "description": body.description,
-        "rule_type": body.rule_type,
-        "object_type": body.object_type,
-        "current_script": body.current_script,
-        "target_attribute": body.target_attribute,
-        "declared_computed": body.declared_computed,
-        "language": body.language,
-        "config_kind": body.config_kind,
-        "columns": body.columns,
-        "statuses": body.statuses,
-    });
-    let reply = state.ai.generate(request).await.map_err(|error| {
-        tracing::warn!(error = %error, "AI generation failed");
-        unavailable(&error)
-    })?;
+    let reply = state
+        .ai
+        .generate(worker_request(&body))
+        .await
+        .map_err(|error| {
+            tracing::warn!(error = %error, "AI generation failed");
+            unavailable(&error)
+        })?;
 
     // Audit metadata only: never the prompt, never the script, never object
     // values — just enough to see where a suggestion came from and to list the
-    // suggestions of one target (`plan/detail/ki-assistenz.md` section 6.7).
-    let tokens = reply
-        .get("usage")
-        .and_then(|usage| usage.get("total_tokens"))
-        .and_then(Value::as_i64);
-    let target = body
-        .target
-        .as_deref()
-        .map(str::trim)
-        .filter(|target| !target.is_empty())
-        .map(str::to_owned);
+    // suggestions of one target (`plan/detail/ki-assistenz.md` §6.7).
     audit::record_best_effort(
         &state.db,
         AuditEntry {
@@ -248,18 +234,14 @@ pub async fn generate(
             object_id: None,
             from: None,
             to: None,
-            metadata: Some(json!({
-                "area": body.area,
-                "mode": body.mode,
-                "target": target,
-                "rule_type": body.rule_type,
-                "object_type": body.object_type,
-                "ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(false),
-                "model": reply.get("model"),
-                "attempts": reply.get("attempts"),
-                "latency_ms": reply.get("latency_ms"),
-                "tokens": tokens,
-            })),
+            metadata: Some(audit_metadata(
+                &body.area,
+                &body.mode,
+                trimmed(&body.target),
+                body.rule_type.as_deref(),
+                body.object_type.as_deref(),
+                &reply,
+            )),
         },
     )
     .await;
@@ -364,6 +346,203 @@ fn history_key(area: &str, target: &str) -> Result<(String, String), ApiError> {
     Ok((area.to_owned(), target.to_owned()))
 }
 
+/// The payload one worker call carries — identical for the blocking and the
+/// streamed path, so the two cannot drift apart.
+fn worker_request(body: &GenerateRequest) -> Value {
+    json!({
+        "area": body.area,
+        "mode": body.mode,
+        "description": body.description,
+        "rule_type": body.rule_type,
+        "object_type": body.object_type,
+        "current_script": body.current_script,
+        "target_attribute": body.target_attribute,
+        "declared_computed": body.declared_computed,
+        "language": body.language,
+        "config_kind": body.config_kind,
+        "columns": body.columns,
+        "statuses": body.statuses,
+    })
+}
+
+/// A trimmed, non-empty optional string (the history key of a call).
+fn trimmed(value: &Option<String>) -> Option<&str> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+/// The audit metadata of one AI call — the request's identity plus the reply's
+/// verdict.
+///
+/// Written by the blocking **and** the streamed path, so the history cannot depend
+/// on how an answer was delivered. No prompt, no script, no object values.
+fn audit_metadata(
+    area: &str,
+    mode: &str,
+    target: Option<&str>,
+    rule_type: Option<&str>,
+    object_type: Option<&str>,
+    reply: &Value,
+) -> Value {
+    json!({
+        "area": area,
+        "mode": mode,
+        "target": target,
+        "rule_type": rule_type,
+        "object_type": object_type,
+        "ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "model": reply.get("model"),
+        "attempts": reply.get("attempts"),
+        "latency_ms": reply.get("latency_ms"),
+        "tokens": reply
+            .get("usage")
+            .and_then(|usage| usage.get("total_tokens"))
+            .and_then(Value::as_i64),
+    })
+}
+
+/// What the stream needs to write the audit entry when the answer arrives.
+struct StreamAudit {
+    db: Db,
+    user: String,
+    area: String,
+    mode: String,
+    rule_type: Option<String>,
+    object_type: Option<String>,
+    target: Option<String>,
+}
+
+/// Streams a suggestion — **only** the mode `explain`.
+///
+/// `text/event-stream` with `{"type":"id"}`, one event per text piece and a final
+/// `{"type":"done","reply":…}` (or `{"type":"error"}`). Prose has nothing to
+/// validate; an artefact must pass the checks first, so streaming it would show
+/// text that cannot be kept (`plan/detail/ki-assistenz.md` §13).
+#[utoipa::path(
+    post,
+    path = "/ai/generate/stream",
+    request_body = GenerateRequest,
+    responses(
+        (status = 200, description = "Server-sent events: id, delta …, done|error"),
+        (status = 400, description = "Invalid request (or a mode that must not stream)", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value),
+        (status = 503, description = "Assistance disabled or worker unavailable", body = Value)
+    )
+)]
+pub async fn generate_stream(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<GenerateRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    claims.require("ai.use")?;
+    validate(&body)?;
+    if body.mode != "explain" {
+        return Err(ApiError::bad_request(
+            "streaming is only available for the mode `explain` — an artefact must pass \
+             the checks before it is shown",
+        ));
+    }
+    let (request_id, events) = state
+        .ai
+        .generate_stream(worker_request(&body))
+        .await
+        .map_err(|error| {
+            tracing::warn!(error = %error, "AI streaming request failed");
+            unavailable(&error)
+        })?;
+    let audit = StreamAudit {
+        db: state.db.clone(),
+        user: claims.sub.clone(),
+        area: body.area.clone(),
+        mode: body.mode.clone(),
+        rule_type: body.rule_type.clone(),
+        object_type: body.object_type.clone(),
+        target: body.target.clone(),
+    };
+
+    let head = stream::once(async move {
+        Ok::<Event, Infallible>(sse_event(json!({ "type": "id", "id": request_id })))
+    });
+    let tail = stream::unfold((events, audit), |(mut events, audit)| async move {
+        let value = events.recv().await?;
+        if value.get("type").and_then(Value::as_str) == Some("done")
+            && let Some(reply) = value.get("reply")
+        {
+            audit::record_best_effort(
+                &audit.db,
+                AuditEntry {
+                    user_id: &audit.user,
+                    action: "ai_generated",
+                    object_id: None,
+                    from: None,
+                    to: None,
+                    metadata: Some(audit_metadata(
+                        &audit.area,
+                        &audit.mode,
+                        trimmed(&audit.target),
+                        audit.rule_type.as_deref(),
+                        audit.object_type.as_deref(),
+                        reply,
+                    )),
+                },
+            )
+            .await;
+        }
+        Some((Ok::<Event, Infallible>(sse_event(value)), (events, audit)))
+    });
+    Ok(Sse::new(head.chain(tail)))
+}
+
+/// Aborts a running streamed call (the dialog's „Stopp" or closing it).
+#[utoipa::path(
+    post,
+    path = "/ai/generate/{request_id}/cancel",
+    params(("request_id" = String, Path, description = "The `id` of the first stream event")),
+    responses(
+        (status = 204, description = "Cancel requested"),
+        (status = 400, description = "Invalid request id", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn cancel_stream(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    claims.require("ai.use")?;
+    let request_id = checked_request_id(&request_id)?;
+    state.ai.cancel_stream(request_id).await.map_err(|error| {
+        tracing::warn!(error = %error, "AI cancel failed");
+        unavailable(&error)
+    })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A request id must stay **one** NATS subject token: it becomes `ai.cancel.<id>`,
+/// and a caller-supplied string must never extend the subject.
+fn checked_request_id(id: &str) -> Result<&str, ApiError> {
+    let id = id.trim();
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+    {
+        return Err(ApiError::bad_request(
+            "invalid request id (it must be the `id` of the stream's first event)",
+        ));
+    }
+    Ok(id)
+}
+
+/// One `text/event-stream` event carrying a JSON payload.
+fn sse_event(value: Value) -> Event {
+    Event::default().data(value.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +573,16 @@ mod tests {
         );
         assert!(history_key("", "new").is_err());
         assert!(history_key("rule", "   ").is_err());
+    }
+
+    #[test]
+    fn a_stream_request_id_stays_one_subject_token() {
+        assert_eq!(checked_request_id(" 01J9XY  ").expect("trimmed"), "01J9XY");
+        assert!(checked_request_id("").is_err());
+        // A dot would extend `ai.cancel.<id>` into another subject.
+        assert!(checked_request_id("abc.def").is_err());
+        assert!(checked_request_id("abc def").is_err());
+        assert!(checked_request_id("abc>").is_err());
     }
 
     fn message(error: ApiError) -> String {
