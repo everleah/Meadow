@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::api::job_schema;
 use crate::app::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::auth::AuthUser;
@@ -248,6 +249,52 @@ async fn ensure_unique_name(db: &Db, name: &str, except: Option<&str>) -> Result
     Ok(())
 }
 
+/// The `400` a definition with broken **declared** fields gets.
+///
+/// `job_schema::problems_for_write` answers the errors and the notices separately;
+/// only the errors block (see `api::job_schema`).
+fn invalid_parameters(errors: &[String]) -> ApiError {
+    ApiError::bad_request(format!("invalid job parameters: {}", errors.join("; ")))
+}
+
+/// Reports parameter keys the contract does not declare as one `job` warning.
+///
+/// Such keys are stored as-is — a definition may carry a parameter a newer worker
+/// understands — so the log entry is the report the admin can find later (the
+/// immediate report is the `notices` list of `POST /jobs/validate`).
+/// Best-effort: a failing log write must not fail the save.
+async fn record_parameter_notices(db: &Db, definition: &Value, notices: &[String]) {
+    if notices.is_empty() {
+        return;
+    }
+    let content = json!({
+        "service": "pim-core",
+        "level": "WARN",
+        "category": "job",
+        "message": format!(
+            "job definition `{}` stores {} parameter key(s) the contract does not declare",
+            definition
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            notices.len()
+        ),
+        "context": json!({
+            "type": definition.get("type"),
+            "parameters": notices,
+        }),
+    });
+    let result = db
+        .inner()
+        .query("CREATE log_entry CONTENT $content;")
+        .bind(("content", content))
+        .await
+        .and_then(|response| response.check());
+    if let Err(error) = result {
+        tracing::warn!(?error, "failed to write job parameter log entry");
+    }
+}
+
 /// Creates a job definition.
 #[utoipa::path(
     post,
@@ -276,6 +323,11 @@ pub async fn create_job_definition(
             "unknown job type `{}`",
             body.job_type
         )));
+    }
+    let (parameter_errors, parameter_notices) =
+        job_schema::problems_for_write(&body.job_type, &body.parameters);
+    if !parameter_errors.is_empty() {
+        return Err(invalid_parameters(&parameter_errors));
     }
     ensure_unique_name(&state.db, &name, None).await?;
 
@@ -328,6 +380,8 @@ pub async fn create_job_definition(
         },
     )
     .await;
+
+    record_parameter_notices(&state.db, &definition, &parameter_notices).await;
 
     Ok((StatusCode::CREATED, Json(definition)))
 }
@@ -426,6 +480,7 @@ pub async fn update_job_definition(
 
     let mut changes = Map::new();
     let mut clear_schedule = false;
+    let mut parameter_notices: Vec<String> = Vec::new();
     if let Some(name) = body.name {
         let name = name.trim().to_owned();
         if name.is_empty() {
@@ -451,6 +506,19 @@ pub async fn update_job_definition(
         }
     }
     if let Some(parameters) = body.parameters {
+        // The type cannot change here, so the stored one is what the contract is
+        // asked about — the same check `POST /jobs` runs.
+        let (errors, notices) = job_schema::problems_for_write(
+            current
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            &parameters,
+        );
+        if !errors.is_empty() {
+            return Err(invalid_parameters(&errors));
+        }
+        parameter_notices = notices;
         changes.insert("parameters".to_owned(), parameters);
     }
     if let Some(enabled) = body.enabled {
@@ -501,6 +569,8 @@ pub async fn update_job_definition(
         },
     )
     .await;
+
+    record_parameter_notices(&state.db, &definition, &parameter_notices).await;
 
     Ok(Json(definition))
 }

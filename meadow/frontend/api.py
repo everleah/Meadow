@@ -1372,6 +1372,36 @@ class CoreClient:
             response.raise_for_status()
             return response.json()
 
+    async def validate_job_definition(
+        self,
+        token: str,
+        *,
+        job_type: str,
+        schedule: str | None = None,
+        parameters: dict | None = None,
+    ) -> dict:
+        """Checks a job definition without saving it (``POST /jobs/validate``).
+
+        The core runs the checks its write path runs plus the scheduler's cron
+        parser, so ``ok`` is the save's verdict and ``notices`` names the parameter
+        keys the contract does not know (those are stored, never rejected).
+        """
+        payload: dict[str, object] = {
+            "type": job_type,
+            "parameters": parameters or {},
+        }
+        if schedule:
+            payload["schedule"] = schedule
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/jobs/validate",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
     async def create_job_definition(
         self,
         token: str,
@@ -3175,6 +3205,40 @@ class CoreClient:
         async with _api_client() as client:
             response = await client.post(
                 f"{self.base_url}/imports",
+                params=params,
+                json=document,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if response.is_error:
+                raise CoreError(self._error_detail(response), status=response.status_code)
+            return response.json()
+
+    async def preview_import(
+        self,
+        token: str,
+        document: dict,
+        *,
+        match_by_key: str | None = None,
+        match_by_id: bool = False,
+        source: str | None = None,
+        limit: int = 100,
+    ) -> dict:
+        """Asks what an import would do (``POST /imports/preview``, no write).
+
+        The core runs the write path's own checks, so ``objects.create``/``update``/
+        ``failed`` are the verdict a real import would reach; ``results`` carries the
+        per-object rows (``results_truncated`` says whether they were capped).
+        """
+        params: dict[str, str] = {"limit": str(limit)}
+        if match_by_key:
+            params["match_by_key"] = match_by_key
+        if match_by_id:
+            params["match_by_id"] = "true"
+        if source:
+            params["source"] = source
+        async with _api_client() as client:
+            response = await client.post(
+                f"{self.base_url}/imports/preview",
                 params=params,
                 json=document,
                 headers={"Authorization": f"Bearer {token}"},

@@ -24,6 +24,30 @@ CATEGORIES = ("app", "job", "rule", "auth", "integration")
 #: Providers the core accepts for `ai_provider` (see `crates/pim-core/src/api/system.rs`).
 PROVIDERS = ("generic", "openai", "azure_openai", "ollama")
 
+#: Example values for a first setup (`settings.ai_preset_apply`).
+#:
+#: The core resolves an empty endpoint/model to "not configured", so a fresh
+#: installation needs three values to get going. The button fills these in **only**
+#: where the field is still empty — an administrator's own value is never replaced.
+PROVIDER_EXAMPLES: dict[str, dict[str, str]] = {
+    "generic": {
+        "ai_endpoint": "https://api.deepseek.com/v1",
+        "ai_model": "deepseek-chat",
+    },
+    "openai": {
+        "ai_endpoint": "https://api.openai.com/v1",
+        "ai_model": "gpt-4o-mini",
+    },
+    "azure_openai": {
+        "ai_endpoint": "https://<resource>.openai.azure.com",
+        "ai_model": "<deployment name>",
+    },
+    "ollama": {
+        "ai_endpoint": "http://localhost:11434",
+        "ai_model": "llama3.1",
+    },
+}
+
 #: Editor kinds per setting key. One table instead of if-chains in three places
 #: (build, reload, save) — a key added here works in all of them.
 SWITCH_KEYS = ("rules_degrade", "ai_enabled")
@@ -231,6 +255,7 @@ async def settings_page() -> None:
                             .classes("w-32")
                         )
                     editors[key] = editor
+                    editor.mark(f"setting-{key}")
                     if locked:
                         editor.props("disable")
                 if locked:
@@ -266,6 +291,30 @@ async def settings_page() -> None:
             result_label.text = "; ".join(str(error) for error in errors)
             result_label.classes("text-negative")
 
+        def _apply_provider_example() -> None:
+            """Fills the chosen provider's example into the **empty** AI fields.
+
+            A commissioning aid: with `generic`/`ollama` the endpoint and the model
+            name are the two things an administrator has to know. Whatever is already
+            set stays — a wrong example is worse than none.
+            """
+            provider = str(editors["ai_provider"].value or "generic")
+            filled: list[str] = []
+            for key, value in PROVIDER_EXAMPLES.get(provider, {}).items():
+                field = editors.get(key)
+                # Only the text fields carry an example, and only an empty one is
+                # filled: `isinstance` is the type check the TypeChecker needs.
+                if not isinstance(field, ui.input) or str(field.value or "").strip():
+                    continue
+                field.set_value(value)
+                filled.append(t(f"settings.{key}"))
+            ui.notify(
+                t("settings.ai_preset_applied").format(fields=", ".join(filled))
+                if filled
+                else t("settings.ai_preset_kept"),
+                color="positive" if filled else "info",
+            )
+
         for group_title, color, keys in GROUPS:
             with (
                 ui.expansion(t(group_title), icon="tune")
@@ -285,6 +334,14 @@ async def settings_page() -> None:
                             icon="network_check",
                             on_click=lambda label=test_result: test_ai(label),
                         ).props("flat")
+                    ui.label(t("settings.ai_preset_hint")).classes(
+                        "text-caption text-gray-500 mt-3"
+                    )
+                    ui.button(
+                        t("settings.ai_preset_apply"),
+                        icon="auto_fix_high",
+                        on_click=_apply_provider_example,
+                    ).props("flat").mark("ai-preset-apply")
 
         async def reload() -> None:
             nonlocal settings

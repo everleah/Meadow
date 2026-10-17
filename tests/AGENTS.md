@@ -35,7 +35,9 @@ Central home for all automated tests of Meadow PIM. Keeps the repository root un
   (`run-migration.sh --status`, `restore-vps-db.sh <backup> --force`).
 - **Page tests** (`test_products_page.py`, the net for the `products_page` refactor,
   `plan/detail/ai-code-quality.md` §4.11; `test_users_page.py`, the net for the group
-  editor's permission matrix and scope card) boot the real frontend app through NiceGUI's
+  editor's permission matrix and scope card; `test_settings_page.py`, the net for the AI
+  commissioning preset, which must fill empty fields only and never replace a configured
+  endpoint) boot the real frontend app through NiceGUI's
   user simulation (`user_simulation(main_file=…)`, plugin registered in the root
   `conftest.py` for a session-temp storage path, which also supplies the frontend's required
   session secret). Three rules: the fixture must drop

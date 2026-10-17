@@ -17,12 +17,15 @@
 //! * consumers in the worker: `meadow/worker/{exports,imports,business_rules,
 //!   bulk,collections,config_import,connector_test}.py`
 //!
-//! **Deliberately not enforced on the write path (yet):** `POST /jobs/validate`
-//! answers with the problems of a definition, but `create_job_definition` /
-//! `update_job_definition` still accept any `parameters` object. Job definitions
-//! are also part of MCF documents (`sections.jobs`) and of existing databases, so
-//! tightening the write would reject definitions the worker runs today. The check
-//! is therefore advisory — the AI area states that, and the form can adopt it.
+//! **Enforced on the write path:** `create_job_definition` /
+//! `update_job_definition` reject a definition whose **declared** fields are
+//! missing or malformed (`400`) — the same rule `POST /connectors/validate` and
+//! `POST /export-profiles/validate` apply, only that here the write itself checks.
+//! An **unknown** key is not a rejection: it is stored as-is and reported, because
+//! a stored definition may carry a parameter a newer worker understands. The report
+//! is the `notices` list of `POST /jobs/validate` and a `job`-category `WARN` log
+//! entry. `POST /jobs/validate` therefore answers with the write path's own verdict
+//! (`job_schema::problems_for_write`, the same function the write calls).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -705,14 +708,59 @@ fn allowed_of(parameters: &[Parameter], key: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
-/// Checks a definition's `parameters` against the declared contract.
+/// What a contract problem means for the write path.
 ///
-/// Returns one message per problem, so a caller can hand them to a human or to a
-/// model. The check is **advisory** (see the module docs): the write path accepts
-/// any object, this answers what the declared contract thinks of it.
-pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
+/// A **declared** field that is missing or malformed leaves the definition
+/// unrunnable, so the write path rejects it. A key the contract does not know is
+/// kept: the definition may carry parameters a newer worker understands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Severity {
+    Error,
+    Notice,
+}
+
+/// One contract problem, tagged with what the write path does about it.
+struct Problem {
+    severity: Severity,
+    message: String,
+}
+
+impl Problem {
+    fn error(message: String) -> Self {
+        Self {
+            severity: Severity::Error,
+            message,
+        }
+    }
+
+    fn notice(message: String) -> Self {
+        Self {
+            severity: Severity::Notice,
+            message,
+        }
+    }
+}
+
+/// Splits the contract problems into blocking errors and reports.
+///
+/// This is the write path's check (`POST`/`PATCH /jobs`): a non-empty error list
+/// means `400`, while the notices are stored and reported. `POST /jobs/validate`
+/// answers with exactly these two lists, so its verdict is the save's verdict.
+pub fn problems_for_write(job_type: &str, parameters: &Value) -> (Vec<String>, Vec<String>) {
+    let mut errors: Vec<String> = Vec::new();
+    let mut notices: Vec<String> = Vec::new();
+    for problem in check(job_type, parameters) {
+        match problem.severity {
+            Severity::Error => errors.push(problem.message),
+            Severity::Notice => notices.push(problem.message),
+        }
+    }
+    (errors, notices)
+}
+
+fn check(job_type: &str, parameters: &Value) -> Vec<Problem> {
     let Some(spec) = specs().into_iter().find(|spec| spec.job_type == job_type) else {
-        return vec![format!("unknown job type `{job_type}`")];
+        return vec![Problem::error(format!("unknown job type `{job_type}`"))];
     };
     let object = match parameters {
         Value::Null => {
@@ -725,19 +773,19 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
             return if missing.is_empty() {
                 Vec::new()
             } else {
-                vec![format!(
+                vec![Problem::error(format!(
                     "`parameters` must be an object with {}",
                     missing
                         .iter()
                         .map(|key| format!("`{key}`"))
                         .collect::<Vec<String>>()
                         .join(", ")
-                )]
+                ))]
             };
         }
         Value::Object(map) => map,
         other => {
-            return vec![format!(
+            return vec![Problem::error(format!(
                 "`parameters` must be an object, got {}",
                 if other.is_array() {
                     "an array"
@@ -746,11 +794,11 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
                 } else {
                     "a scalar"
                 }
-            )];
+            ))];
         }
     };
 
-    let mut errors: Vec<String> = Vec::new();
+    let mut problems: Vec<Problem> = Vec::new();
     for key in object.keys() {
         if !spec.parameters.iter().any(|parameter| parameter.key == key) {
             let known: Vec<&str> = spec
@@ -758,36 +806,39 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
                 .iter()
                 .map(|parameter| parameter.key)
                 .collect();
-            errors.push(format!(
+            problems.push(Problem::notice(format!(
                 "unknown parameter `{key}` for `{job_type}` (known: {})",
                 known.join(", ")
-            ));
+            )));
         }
     }
     for parameter in spec.parameters {
         match object.get(parameter.key) {
             None | Some(Value::Null) => {
                 if parameter.required {
-                    errors.push(format!("`parameters.{}` is required", parameter.key));
+                    problems.push(Problem::error(format!(
+                        "`parameters.{}` is required",
+                        parameter.key
+                    )));
                 }
             }
             Some(value) if !parameter.shape.accepts(value) => {
-                errors.push(format!(
+                problems.push(Problem::error(format!(
                     "`parameters.{}` must be a {}",
                     parameter.key,
                     parameter.shape.as_str()
-                ));
+                )));
             }
             Some(value) => {
                 let allowed = parameter.allowed;
                 if !allowed.is_empty()
                     && value.as_str().is_some_and(|text| !allowed.contains(&text))
                 {
-                    errors.push(format!(
+                    problems.push(Problem::error(format!(
                         "`parameters.{}` must be one of {}",
                         parameter.key,
                         allowed.join(", ")
-                    ));
+                    )));
                 }
             }
         }
@@ -801,10 +852,10 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
         match BULK_OPERATIONS.iter().find(|operation| operation.op == op) {
             None => {
                 let known: Vec<&str> = BULK_OPERATIONS.iter().map(|entry| entry.op).collect();
-                errors.push(format!(
+                problems.push(Problem::error(format!(
                     "unknown `parameters.op` `{op}` (known: {})",
                     known.join(", ")
-                ));
+                )));
             }
             Some(operation) => {
                 let inner = object
@@ -820,25 +871,27 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
                         || (key == "send_for_approval"
                             && allowed_of(&[SEND_FOR_APPROVAL], key).is_empty());
                     if !known {
-                        errors.push(format!("unknown parameter `parameters.{key}` for `{op}`"));
+                        problems.push(Problem::notice(format!(
+                            "unknown parameter `parameters.{key}` for `{op}`"
+                        )));
                     }
                 }
                 for parameter in operation.parameters {
                     match inner.get(parameter.key) {
                         None | Some(Value::Null) => {
                             if parameter.required {
-                                errors.push(format!(
+                                problems.push(Problem::error(format!(
                                     "`parameters.parameters.{}` is required for `{op}`",
                                     parameter.key
-                                ));
+                                )));
                             }
                         }
                         Some(value) if !parameter.shape.accepts(value) => {
-                            errors.push(format!(
+                            problems.push(Problem::error(format!(
                                 "`parameters.parameters.{}` must be a {}",
                                 parameter.key,
                                 parameter.shape.as_str()
-                            ));
+                            )));
                         }
                         Some(_) => {}
                     }
@@ -847,7 +900,7 @@ pub fn validate(job_type: &str, parameters: &Value) -> Vec<String> {
         }
     }
 
-    errors
+    problems
 }
 
 /// Payload for `POST /jobs/validate`: a definition to check without saving.
@@ -888,11 +941,10 @@ pub async fn job_schema(
 
 /// Checks a definition against the contract — **without saving** (editor or API key).
 ///
-/// **Advisory:** unlike `POST /export-profiles/validate`, this is not the write
-/// path's check. `POST`/`PATCH /jobs` still accept any `parameters` object (job
-/// definitions arrive through MCF imports and exist in running databases, see the
-/// module docs), so a green answer here means "matches the declared contract",
-/// not "the save will succeed".
+/// **The write path's own check:** it calls `problems_for_write`, the function
+/// `POST`/`PATCH /jobs` check with, and the same cron parser the scheduler registers
+/// with. `ok` is therefore the save's verdict, and `notices` names the keys the
+/// contract does not know — the write keeps them (see the module docs).
 #[utoipa::path(
     post,
     path = "/jobs/validate",
@@ -910,7 +962,7 @@ pub async fn validate_job_definition(
     Json(body): Json<ValidateJobDefinition>,
 ) -> Result<Json<Value>, ApiError> {
     crate::auth::require_permission(&state, &headers, "job.read")?;
-    let mut errors = validate(&body.job_type, &body.parameters);
+    let (mut errors, notices) = problems_for_write(&body.job_type, &body.parameters);
     // An empty schedule means "only on demand" — the same as omitting it.
     if let Some(schedule) = body.schedule.as_deref().map(str::trim)
         && !schedule.is_empty()
@@ -918,12 +970,84 @@ pub async fn validate_job_definition(
     {
         errors.push(error.message().to_owned());
     }
-    Ok(Json(json!({ "ok": errors.is_empty(), "errors": errors })))
+    Ok(Json(json!({
+        "ok": errors.is_empty(),
+        "errors": errors,
+        "notices": notices,
+    })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every message a caller shows a human or a model — errors and notices.
+    ///
+    /// The write path splits them (`problems_for_write`); the tests assert against
+    /// this combined list the way the older single-list check did.
+    fn messages(job_type: &str, parameters: &Value) -> Vec<String> {
+        let (mut errors, notices) = problems_for_write(job_type, parameters);
+        errors.extend(notices);
+        errors
+    }
+
+    #[test]
+    fn a_broken_declared_field_blocks_the_save() {
+        // The write path's errors: a required declaration that is missing.
+        let (errors, notices) = problems_for_write("collection_refresh", &json!({}));
+        assert!(notices.is_empty(), "{notices:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == "`parameters.collection_id` is required"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_is_a_notice_not_an_error() {
+        // … an unknown key is not: the write keeps it and reports it.
+        let (errors, notices) = problems_for_write(
+            "collection_refresh",
+            &json!({ "collection_id": "collection:abc", "nope": 1 }),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].starts_with("unknown parameter `nope`"));
+    }
+
+    #[test]
+    fn an_unknown_bulk_operation_blocks_the_save() {
+        // The operation name decides what runs, so it is a declared field.
+        let (errors, notices) = problems_for_write(
+            "bulk_operation",
+            &json!({ "op": "frobnicate", "object_ids": ["object:1"] }),
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("unknown `parameters.op`")),
+            "{errors:?}"
+        );
+        assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    #[test]
+    fn an_unknown_bulk_parameter_is_a_notice() {
+        let (errors, notices) = problems_for_write(
+            "bulk_operation",
+            &json!({
+                "op": "change_status",
+                "object_ids": [],
+                "parameters": { "status": "published", "nope": 2 },
+            }),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            notices,
+            vec!["unknown parameter `parameters.nope` for `change_status`".to_owned()]
+        );
+    }
 
     #[test]
     fn every_declared_type_is_a_known_job_type() {
@@ -996,7 +1120,7 @@ mod tests {
 
     #[test]
     fn validation_reports_unknown_missing_and_mistyped_fields() {
-        let errors = validate(
+        let errors = messages(
             "inbound_import",
             &json!({ "document_id": 42, "nope": true, "match_by_id": "yes" }),
         );
@@ -1017,32 +1141,32 @@ mod tests {
         );
 
         assert!(
-            validate(
+            messages(
                 "inbound_import",
                 &json!({ "document_id": "import_document:1" })
             )
             .is_empty()
         );
         assert!(
-            validate("inbound_import", &json!({}))
+            messages("inbound_import", &json!({}))
                 .iter()
                 .any(|error| error.contains("`parameters.document_id` is required"))
         );
         // `null` counts as missing, not as a value.
         assert!(
-            validate("inbound_import", &json!({ "document_id": Value::Null }))
+            messages("inbound_import", &json!({ "document_id": Value::Null }))
                 .iter()
                 .any(|error| error.contains("is required"))
         );
         assert!(
-            validate("nope", &json!({}))
+            messages("nope", &json!({}))
                 .iter()
                 .any(|e| e.contains("unknown job type"))
         );
         // No parameters at all is fine for a type without required fields.
-        assert!(validate("outbound_export", &Value::Null).is_empty());
+        assert!(messages("outbound_export", &Value::Null).is_empty());
         assert!(
-            validate(
+            messages(
                 "config_import",
                 &json!({ "document_id": "d", "mode": "nope" })
             )
@@ -1059,19 +1183,19 @@ mod tests {
             "parameters": { "search": "alt", "replace": "neu", "case_sensitive": false },
         });
         assert!(
-            validate("bulk_operation", &good).is_empty(),
+            messages("bulk_operation", &good).is_empty(),
             "{:?}",
-            validate("bulk_operation", &good)
+            messages("bulk_operation", &good)
         );
 
         let missing = json!({ "op": "replace_text", "object_ids": ["object:1"], "parameters": {} });
-        assert!(validate("bulk_operation", &missing).iter().any(|error| {
+        assert!(messages("bulk_operation", &missing).iter().any(|error| {
             error.contains("`parameters.parameters.search` is required for `replace_text`")
         }));
 
         let wrong_op = json!({ "op": "frobnicate", "object_ids": ["object:1"] });
         assert!(
-            validate("bulk_operation", &wrong_op)
+            messages("bulk_operation", &wrong_op)
                 .iter()
                 .any(|error| error.contains("unknown `parameters.op` `frobnicate`"))
         );
@@ -1082,13 +1206,13 @@ mod tests {
             "parameters": { "nope": 1 },
         });
         assert!(
-            validate("bulk_operation", &unknown_inner)
+            messages("bulk_operation", &unknown_inner)
                 .iter()
                 .any(|error| error.contains("unknown parameter `parameters.nope` for `delete`"))
         );
         // An operation without parameters accepts an empty object.
         assert!(
-            validate(
+            messages(
                 "bulk_operation",
                 &json!({ "op": "delete", "object_ids": ["object:1"] })
             )
@@ -1101,6 +1225,6 @@ mod tests {
             "object_ids": ["object:1"],
             "parameters": { "attribute": "name", "send_for_approval": true },
         });
-        assert!(validate("bulk_operation", &with_approval).is_empty());
+        assert!(messages("bulk_operation", &with_approval).is_empty());
     }
 }

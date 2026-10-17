@@ -100,6 +100,12 @@ pub struct WriteEvaluation<'a> {
     pub actor: Option<&'a str>,
     /// Channel-release context (default for plain object writes).
     pub context: EvaluationContext<'a>,
+    /// Report-only call: the rules run, but nothing they produce is persisted.
+    ///
+    /// Set by a **dry run** (`POST /imports/preview`): a preview must not move the
+    /// circuit-breaker counters of a healthy rule or write its warnings as log
+    /// entries — the verdict is what the caller wants, not the bookkeeping.
+    pub dry_run: bool,
 }
 
 impl<'a> WriteEvaluation<'a> {
@@ -116,7 +122,14 @@ impl<'a> WriteEvaluation<'a> {
             language,
             actor,
             context: EvaluationContext::default(),
+            dry_run: false,
         }
+    }
+
+    /// Marks the call as report-only (see [`Self::dry_run`]).
+    pub fn as_dry_run(mut self) -> Self {
+        self.dry_run = true;
+        self
     }
 }
 
@@ -365,6 +378,7 @@ pub async fn evaluate_for_write(
         language,
         actor,
         context,
+        dry_run,
     } = evaluation;
     let object_type = object_view
         .get("type")
@@ -389,12 +403,14 @@ pub async fn evaluate_for_write(
         .await
     {
         Ok(outcome) => {
-            if let Err(error) =
-                account_failures(db, &rules, &outcome, client.breaker_threshold()).await
-            {
-                tracing::warn!(?error, "failed to update rule failure counters");
+            if !dry_run {
+                if let Err(error) =
+                    account_failures(db, &rules, &outcome, client.breaker_threshold()).await
+                {
+                    tracing::warn!(?error, "failed to update rule failure counters");
+                }
+                persist_outcome_logs(db, &outcome).await;
             }
-            persist_outcome_logs(db, &outcome).await;
             Ok(outcome)
         }
         Err(error) => {

@@ -330,6 +330,7 @@ pub fn router(state: AppState) -> Router {
             put(api::system::put_setting).delete(api::system::delete_setting),
         )
         .route("/ai/generate", post(api::ai::generate))
+        .route("/ai/history", get(api::ai::history))
         .route("/ai/test", post(api::ai::test))
         .route(
             "/jobs",
@@ -380,6 +381,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/imports",
             post(api::imports::create_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
+        .route(
+            "/imports/preview",
+            post(api::imports::preview_import).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
         .route(
             "/imports/{document_id}",

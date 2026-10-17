@@ -1028,8 +1028,28 @@ pub async fn batch_upsert_objects(
     Query(params): Query<WriteObjectQuery>,
     Json(body): Json<BatchUpsertRequest>,
 ) -> Result<Json<BatchUpsertResponse>, ApiError> {
+    let response = upsert_objects(&state, &headers, &params, &body, false).await?;
+    Ok(Json(response))
+}
+
+/// The batch upsert's checks and its write — or, with `dry_run`, **only** the checks.
+///
+/// `POST /imports/preview` calls this with `dry_run = true`, so a preview cannot
+/// drift from the write: the type registry, the business-key uniqueness, the scope,
+/// the composition parent, the attribute values and the rules are the same code
+/// paths. A dry run stops before the transaction (nothing is written, no audit and
+/// no outbox row) and leaves the record id of an entry it would create empty — that
+/// id comes into being with the write. The rule evaluation also runs in report mode
+/// there, so a preview cannot move a rule's circuit breaker.
+pub(crate) async fn upsert_objects(
+    state: &AppState,
+    headers: &HeaderMap,
+    params: &WriteObjectQuery,
+    body: &BatchUpsertRequest,
+    dry_run: bool,
+) -> Result<BatchUpsertResponse, ApiError> {
     // An upsert needs `create`: it may bring objects that do not exist yet.
-    let caller = crate::auth::require_caller(&state, &headers, "object.create")?;
+    let caller = crate::auth::require_caller(state, headers, "object.create")?;
     let user_id = caller.user_id().to_owned();
     if body.objects.is_empty() {
         return Err(ApiError::bad_request("`objects` must not be empty"));
@@ -1103,7 +1123,12 @@ pub async fn batch_upsert_objects(
         if key_names.contains_key(&item.object_type) {
             continue;
         }
-        crate::api::object_types::ensure_registered(&state.db, &item.object_type).await?;
+        if !dry_run {
+            // A real write keeps the type registry complete; a dry run must not
+            // create a type, so it only reads the declared key attributes (the
+            // preview reports the types the import would register).
+            crate::api::object_types::ensure_registered(&state.db, &item.object_type).await?;
+        }
         let names =
             crate::api::object_types::key_attributes_for(&state.db, &item.object_type).await?;
         key_names.insert(item.object_type.clone(), names);
@@ -1375,7 +1400,7 @@ pub async fn batch_upsert_objects(
                 .map_or_else(|| id.clone(), |(_, key)| key.to_owned())
         })
         .collect();
-    reject_out_of_scope_objects(&state, &caller, &matched).await?;
+    reject_out_of_scope_objects(state, &caller, &matched).await?;
 
     // Composition parents of the entries that will be **created** (one query for
     // the whole batch): a missing parent must fail the entry instead of parking the
@@ -1501,17 +1526,29 @@ pub async fn batch_upsert_objects(
             "status": new_status.clone(),
             "attributes": Value::Object(eval_attributes),
         });
+        let mut save_evaluation = crate::rules::WriteEvaluation::new(
+            &["validation", "computed"],
+            "save",
+            locale,
+            Some(&user_id),
+        );
+        let mut transition_evaluation = crate::rules::WriteEvaluation::new(
+            &["workflow_guard"],
+            "transition",
+            locale,
+            Some(&user_id),
+        );
+        if dry_run {
+            // A preview reports the verdict, it does not move the rule lifecycle.
+            save_evaluation = save_evaluation.as_dry_run();
+            transition_evaluation = transition_evaluation.as_dry_run();
+        }
         match crate::rules::evaluate_for_write(
             &state.cache,
             &state.db,
             &state.rules,
             &candidate,
-            crate::rules::WriteEvaluation::new(
-                &["validation", "computed"],
-                "save",
-                locale,
-                Some(&user_id),
-            ),
+            save_evaluation,
         )
         .await
         {
@@ -1539,12 +1576,7 @@ pub async fn batch_upsert_objects(
                         &state.db,
                         &state.rules,
                         &candidate,
-                        crate::rules::WriteEvaluation::new(
-                            &["workflow_guard"],
-                            "transition",
-                            locale,
-                            Some(&user_id),
-                        ),
+                        transition_evaluation,
                     )
                     .await
                     {
@@ -1667,6 +1699,22 @@ pub async fn batch_upsert_objects(
         }
     }
 
+    if dry_run {
+        // Nothing is written: report what the checks decided. A record id that the
+        // write would create does not exist yet, so it stays empty.
+        for result in &mut results {
+            if result.action == "created" {
+                result.id = None;
+            }
+        }
+        return Ok(BatchUpsertResponse {
+            created: created_count,
+            updated: updated_count,
+            failed: failed_count,
+            results,
+        });
+    }
+
     // ---- one transaction for the whole batch --------------------------------
     if !creates.is_empty() || !updates.is_empty() || !events.is_empty() {
         let mut sql = String::from("BEGIN TRANSACTION;\n");
@@ -1720,7 +1768,7 @@ pub async fn batch_upsert_objects(
     }
     for id in cascades {
         if let Err(error) =
-            crate::rules::queue_inherited_cascade(&state, &id, locale, &user_id).await
+            crate::rules::queue_inherited_cascade(state, &id, locale, &user_id).await
         {
             tracing::warn!(?error, "failed to enqueue inherited-computed cascade");
         }
@@ -1733,12 +1781,12 @@ pub async fn batch_upsert_objects(
         "batch upsert"
     );
 
-    Ok(Json(BatchUpsertResponse {
+    Ok(BatchUpsertResponse {
         created: created_count,
         updated: updated_count,
         failed: failed_count,
         results,
-    }))
+    })
 }
 
 /// A validated batch-upsert entry on its way to the write (see
@@ -1755,7 +1803,9 @@ struct PreparedBatchItem {
 
 /// Fallback source label when an entry carries a `source_id` but no `source`
 /// (the object table stores `source` as a plain string, so the lookup needs one).
-const SOURCE_FALLBACK: &str = "api";
+/// `pub(crate)` because the import preview resolves composition parents by the
+/// same `(source, source_id)` pair and must read the same label.
+pub(crate) const SOURCE_FALLBACK: &str = "api";
 
 /// Result placeholder for an entry that has not been decided yet.
 fn pending_result(index: usize) -> BatchUpsertItemResult {

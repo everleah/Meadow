@@ -312,6 +312,10 @@ async def jobs_page() -> None:
                         if editing
                         else "business_rule"
                     )
+                    # `PATCH /jobs/{id}` cannot change the type, so the choice closes
+                    # while editing — the check before saving must ask about the stored
+                    # type, not about a dropdown the save would ignore.
+                    type_select.set_enabled(not editing)
                     schedule_input.set_value(
                         str(definition.get("schedule") or "") if editing else ""
                     )
@@ -372,6 +376,27 @@ async def jobs_page() -> None:
                         return
                     schedule = (schedule_input.value or "").strip() or None
                     enabled = bool(enabled_switch.value)
+                    # The write path's own check, asked before the save so the reasons
+                    # and the keys the contract does not know show up in this dialog. A
+                    # failing check does not block: the write reports the same problems.
+                    notices: list[str] = []
+                    try:
+                        verdict = await client.validate_job_definition(
+                            token,
+                            job_type=str(type_select.value or "business_rule"),
+                            schedule=schedule,
+                            parameters=params,
+                        )
+                    except CoreError, httpx.HTTPError:  # the write decides on its own
+                        verdict = {}
+                    blocking = [str(message) for message in verdict.get("errors") or []]
+                    if blocking:
+                        ui.notify(
+                            f"{t('jobs.save_failed')}: {'; '.join(blocking)}",
+                            color="negative",
+                        )
+                        return
+                    notices = [str(message) for message in verdict.get("notices") or []]
                     try:
                         if editing_id:
                             await client.update_job_definition(
@@ -396,7 +421,14 @@ async def jobs_page() -> None:
                         return
                     def_dialog.close()
                     await reload_defs()
-                    ui.notify(t("jobs.saved"), color="positive")
+                    if notices:
+                        ui.notify(
+                            f"{t('jobs.saved')} {t('jobs.parameter_notices')}: "
+                            f"{'; '.join(notices)}",
+                            color="warning",
+                        )
+                    else:
+                        ui.notify(t("jobs.saved"), color="positive")
 
                 async def reload_defs() -> None:
                     nonlocal defs

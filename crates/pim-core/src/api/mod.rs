@@ -39,6 +39,7 @@ use utoipa::OpenApi;
 #[openapi(
     paths(
         ai::generate,
+        ai::history,
         ai::test,
         auth::login,
         auth::me,
@@ -68,6 +69,7 @@ use utoipa::OpenApi;
         exports::create_export,
         exports::get_export_file,
         imports::create_import,
+        imports::preview_import,
         imports::get_import_document,
         imports::complete_import,
         object_types::list_object_types,
@@ -196,6 +198,7 @@ use utoipa::OpenApi;
         ai::GenerateRequest,
         ai::ColumnSpec,
         ai::TestRequest,
+        ai::HistoryParams,
         auth::LoginRequest,
         auth::LoginResponse,
         auth::ChangePasswordRequest,
@@ -219,6 +222,7 @@ use utoipa::OpenApi;
         jobs::UpdateJobRun,
         job_schema::ValidateJobDefinition,
         imports::ImportParams,
+        imports::PreviewImportParams,
         imports::CompleteImport,
         objects::CreateObject,
         objects::UpdateObject,

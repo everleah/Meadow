@@ -10,9 +10,10 @@
 //! human can act on. There is no fallback and no effect on any write path.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::ai::AiError;
 use crate::app::AppState;
@@ -70,6 +71,15 @@ pub struct GenerateRequest {
     /// silently, so the list travels with the request like `declared_computed` does.
     #[serde(default)]
     pub statuses: Option<Vec<String>>,
+    /// What the suggestion is for — the stable identity the editor is writing: a
+    /// record id while editing, `new` for an unsaved artefact, or the attribute
+    /// name for a computed attribute.
+    ///
+    /// It is the **history key** of the audit entry (`GET /ai/history`) and never
+    /// reaches the model: the prompt is built from the fields above, and the value
+    /// is an identifier, not object data.
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 /// One column of an uploaded file: the header and what its values look like.
@@ -218,8 +228,12 @@ pub async fn generate(
     })?;
 
     // Audit metadata only: never the prompt, never the script, never object
-    // values — just enough to see where a suggestion came from
-    // (`plan/detail/ki-assistenz.md` section 6.7).
+    // values — just enough to see where a suggestion came from and to list the
+    // suggestions of one target (`plan/detail/ki-assistenz.md` section 6.7).
+    let tokens = reply
+        .get("usage")
+        .and_then(|usage| usage.get("total_tokens"))
+        .and_then(Value::as_i64);
     audit::record_best_effort(
         &state.db,
         AuditEntry {
@@ -231,12 +245,14 @@ pub async fn generate(
             metadata: Some(json!({
                 "area": body.area,
                 "mode": body.mode,
+                "target": body.target,
                 "rule_type": body.rule_type,
                 "object_type": body.object_type,
                 "ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(false),
                 "model": reply.get("model"),
                 "attempts": reply.get("attempts"),
                 "latency_ms": reply.get("latency_ms"),
+                "tokens": tokens,
             })),
         },
     )
@@ -270,6 +286,78 @@ pub async fn test(
     Ok(Json(reply))
 }
 
+/// Default and maximum number of history entries `GET /ai/history` returns.
+const HISTORY_DEFAULT: u32 = 20;
+const HISTORY_MAX: u32 = 100;
+
+/// Query parameters for `GET /ai/history`.
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HistoryParams {
+    /// Area of the suggestions (`rule`, `computed_attribute`, `search`, …).
+    pub area: String,
+    /// What the suggestions were asked for (`new`, a record id, an attribute name).
+    pub target: String,
+    /// Maximum number of entries (default 20, capped at 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// The recorded suggestions for one target — **metadata only**.
+///
+/// Reads the `ai_generated` audit entries the write path already writes: area,
+/// mode, target, model, attempts, latency, token count and whether the suggestion
+/// passed the checks. No prompt, no script, no object values — the same rule the
+/// audit entry follows (`plan/detail/ki-assistenz.md` §6.7), so a history is safe
+/// to show to anyone who may ask for suggestions at all (`ai.use`).
+#[utoipa::path(
+    get,
+    path = "/ai/history",
+    params(HistoryParams),
+    responses(
+        (status = 200, description = "Recorded suggestions, newest first", body = Value),
+        (status = 400, description = "Invalid payload", body = Value),
+        (status = 401, description = "Unauthorized", body = Value),
+        (status = 403, description = "Forbidden", body = Value)
+    )
+)]
+pub async fn history(
+    AuthUser(claims): AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<HistoryParams>,
+) -> Result<Json<Value>, ApiError> {
+    claims.require("ai.use")?;
+    let (area, target) = history_key(&params.area, &params.target)?;
+    let limit = params.limit.unwrap_or(HISTORY_DEFAULT).min(HISTORY_MAX);
+    let mut response = state
+        .db
+        .inner()
+        .query(
+            "SELECT timestamp, user_id, metadata FROM audit_log \
+             WHERE action = 'ai_generated' AND metadata.area = $area \
+             AND metadata.target = $target ORDER BY timestamp DESC LIMIT $limit;",
+        )
+        .bind(("area", area))
+        .bind(("target", target))
+        .bind(("limit", limit))
+        .await?
+        .check()?;
+    let entries: Vec<Value> = response.take(0)?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+/// The trimmed `(area, target)` of a history request; both are required.
+fn history_key(area: &str, target: &str) -> Result<(String, String), ApiError> {
+    let area = area.trim();
+    let target = target.trim();
+    if area.is_empty() || target.is_empty() {
+        return Err(ApiError::bad_request(
+            "`area` and `target` are required (the history is per target)",
+        ));
+    }
+    Ok((area.to_owned(), target.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,7 +376,18 @@ mod tests {
             config_kind: config_kind.map(str::to_owned),
             columns: None,
             statuses: None,
+            target: None,
         }
+    }
+
+    #[test]
+    fn a_history_request_needs_area_and_target() {
+        assert_eq!(
+            history_key(" rule ", " business_rule:sku ").expect("trimmed"),
+            ("rule".to_owned(), "business_rule:sku".to_owned())
+        );
+        assert!(history_key("", "new").is_err());
+        assert!(history_key("rule", "   ").is_err());
     }
 
     fn message(error: ApiError) -> String {

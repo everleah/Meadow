@@ -531,6 +531,84 @@ async def import_page() -> None:
                     ui.button(t("import.close"), on_click=dialog.close).props("flat")
             dialog.open()
 
+        async def on_core_check() -> None:
+            """Asks the core what the import **would** do — the write path's own check.
+
+            `POST /imports/preview` runs the same checks a save runs (type registry,
+            business key, scope, attribute values, rules) plus the import job's
+            composition rule, and writes nothing — so a wrong mapping shows up before
+            the import job exists.
+            """
+            is_mef = state["mode"] == "mef"
+            if not state["mode"] or (not is_mef and not state["table"].columns):
+                ui.notify(t("import.no_file"), type="warning")
+                return
+            document = _build_document()
+            if not document.get("objects"):
+                ui.notify(t("import.no_rows"), type="warning")
+                return
+            try:
+                answer = await client.preview_import(
+                    token,
+                    document,
+                    match_by_key=str(key_select.value or "") or None,
+                    match_by_id=is_mef and bool(match_by_id_switch.value),
+                    source=str(source_input.value or "") or (None if is_mef else "tabular-import"),
+                )
+            except CoreError as exc:
+                ui.notify(t("import.check_failed").format(err=exc), type="negative")
+                return
+            counts = answer.get("objects") or {}
+            preview_box.clear()
+            with preview_box, ui.card().classes("w-full"):
+                ui.label(t("import.check_section")).classes("text-subtitle1")
+                ui.label(
+                    t("import.check_summary").format(
+                        create=counts.get("create", 0),
+                        update=counts.get("update", 0),
+                        failed=counts.get("failed", 0),
+                    )
+                ).classes("text-caption")
+                new_types = [str(name) for name in answer.get("new_object_types") or []]
+                if new_types:
+                    ui.label(
+                        t("import.check_new_types").format(types=", ".join(new_types))
+                    ).classes("text-caption text-gray-500")
+                ui.label(t("import.check_note")).classes("text-caption text-gray-500")
+                _preview_table(
+                    [
+                        {
+                            "name": "action",
+                            "label": t("import.col_action"),
+                            "field": "action",
+                            "align": "left",
+                        },
+                        {"name": "type", "label": "type", "field": "type", "align": "left"},
+                        {
+                            "name": "parent",
+                            "label": t("import.col_parent"),
+                            "field": "parent",
+                            "align": "left",
+                        },
+                        {
+                            "name": "error",
+                            "label": t("import.col_error"),
+                            "field": "error",
+                            "align": "left",
+                        },
+                    ],
+                    [
+                        {
+                            "action": str(row.get("action") or ""),
+                            "type": str(row.get("type") or ""),
+                            "parent": str(row.get("parent") or ""),
+                            "error": str(row.get("error") or ""),
+                        }
+                        for row in answer.get("results") or []
+                        if isinstance(row, dict)
+                    ],
+                )
+
         async def on_import() -> None:
             if not state["mode"]:
                 ui.notify(t("import.no_file"), type="warning")
@@ -576,6 +654,7 @@ async def import_page() -> None:
 
         with ui.row().classes("mt-4 gap-2"):
             preview_button = ui.button(t("import.preview"), on_click=on_preview).props("outline")
+            ui.button(t("import.check"), on_click=on_core_check).props("outline")
             import_button = ui.button(t("import.import"), icon="upload", on_click=on_import).props(
                 "unelevated"
             )

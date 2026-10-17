@@ -260,10 +260,13 @@ async def validate_job_definition(
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Validates a job definition with the core (``POST /jobs/validate``).
 
-    The core checks the definition against the declared parameter contract and the
-    cron parser the scheduler uses. It is a contract check, **not** the write
-    path's check: `POST`/`PATCH /jobs` still accept any parameters object, because
-    job definitions also travel through MCF documents (see `api::job_schema`).
+    The core runs the write path's own checks (``job_schema::problems_for_write``)
+    plus the cron parser the scheduler registers with, so a green answer means the
+    same definition would save.
+
+    A suggestion is held stricter than a human edit: a key the contract does not
+    declare is only a notice for the write (it stores the definition as it is), but
+    a model that invents one is guessing — so notices fail the check here.
     """
     response = await post_core(
         core_url,
@@ -276,11 +279,13 @@ async def validate_job_definition(
         },
     )
     ok, message, preview = _verdict(response)
-    if ok:
-        # Say what was checked: the save path stays permissive (see above), so
-        # "accepted by the core schema" would promise more than it can hold.
-        message = "matches the job parameter contract"
-    return ok, message, preview
+    if not ok:
+        return ok, message, preview
+    payload = response.json()
+    notices = payload.get("notices") if isinstance(payload, dict) else None
+    if isinstance(notices, list) and notices:
+        return False, "; ".join(str(notice) for notice in notices), None
+    return True, "the save would be accepted", preview
 
 
 async def validate_group_document(

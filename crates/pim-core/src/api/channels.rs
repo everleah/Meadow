@@ -238,6 +238,7 @@ async fn guard_release(
                 // Filled by `evaluate_for_write` (class features, Stage B).
                 missing_features: None,
             },
+            dry_run: false,
         },
     )
     .await?;
