@@ -150,7 +150,7 @@ Die KI ist eine **Quelle wie jeder Mensch am Editor** — sie bekommt keine Sond
 4. **Ausführung/Dry-Run** dort, wo es ihn schon gibt: Rule Lab gegen ein echtes Objekt, `POST /saved-searches/preview` für Suchen, Import-Vorschau für Mappings. Der Nutzer sieht das Ergebnis vor dem Speichern.
 5. **Ein Selbstkorrektur-Versuch:** schlägt Schritt 2–3 fehl, geht die Fehlermeldung **einmal** zurück an das Modell; danach ist Schluss und der Nutzer sieht den Fehler. Kein Endlos-Loop.
 6. **Fail-closed wie bei den Regeln:** ist `ai_enabled=false`, fehlt der Key oder ist der Worker nicht erreichbar, gibt es eine klare Meldung (`503`/Hinweis) — **keine** stille Ersatzfunktion und **kein** Einfluss auf Speicherpfade.
-7. **Audit:** jeder Aufruf wird als `audit_log`-Eintrag (`ai_generated`) mit Bereich, Zielobjekt/-regel, Modell, Versuchen und Tokenzahl festgehalten — **ohne** Prompt und ohne Objektwerte. Damit ist nachvollziehbar, woher ein Skript kam.
+7. **Audit:** jeder Aufruf wird als `audit_log`-Eintrag (`ai_generated`) mit Bereich, **Ziel** (`target`: die Identität des bearbeiteten Artefakts), Modell, Versuchen, Latenz und Tokenzahl festgehalten — **ohne** Prompt, ohne Skript und ohne Objektwerte. Damit ist nachvollziehbar, woher ein Skript kam, und **`GET /ai/history?area=…&target=…`** liefert genau diese Einträge (neueste zuerst, nur Metadaten) — ein eigener Speicher für die Vorschlags-Historie ist damit überflüssig.
 8. **Datenminimierung:** in den Prompt gehen **Schema und Metadaten** (Attributnamen, Typen, Status) — **keine Objektwerte**. Wer Objektwerte braucht, nutzt den Dry-Run im Haus (Regeln), nicht das Modell.
 
 ## 7. Bedienung
@@ -213,11 +213,13 @@ Gefahren wurde die komplette geplante Kette mit `deepseek-chat` (OpenAI-kompatib
 **Stufe 2b — Gruppen-Rechte und Scope (2026-09-27).** Ein weiterer JSON-Bereich nach derselben Mechanik, angestossen aus Stufe D des RBAC-Plans (`plan/detail/benutzer-gruppen-rechte.md`).
 
 **Stufe 3 — Komfort und Betrieb.**
-„Erklären" für ganze Konfigurationen, Vorschlags-Historie je Regel/Attribut (wer hat wann was generiert — aus dem Audit ableitbar, ohne neuen Speicher), Kosten-/Nutzungsanzeige, optional Streaming der Antwort.
+„Erklären" für ganze Konfigurationen, Vorschlags-Historie je Regel/Attribut — **umgesetzt 2026-10-17** über das Audit (`GET /ai/history`, Knopf „Verlauf", kein zweiter Speicher); offen bleiben Kosten-/Nutzungsanzeige und optional Streaming der Antwort.
 
 Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dry-Run gegen echte Daten) und den größten Nutzen; Suche und JSON folgen mit derselben Mechanik, brauchen aber je eigene Prompt-/Prüfteile.
 
 ## 10. Tests und Verifikation
+
+- `tests/test_ai_history.py`: `history_rows` — audit-Metadaten als Tabellenzeilen, ein abgelehnter Vorschlag, Einträge ohne `metadata` und Fremdeinträge. **Umgesetzt** (3 Tests).
 
 - `tests/test_ai_policy.py`: AST-Prüfung (fehlende/zusätzliche Funktion, falsche Signatur, jeder Name der Verbotsliste), Built-in-Liste **gegen die echte Sandbox** (kein abgeschriebener Katalog). **Umgesetzt** (12 Tests).
 - `tests/test_ai_context.py`: Projektionen (nur eigene Attribute, `reference_data` ausgeschlossen), **Größenbudget** (Prompt bleibt unter einer definierten Zeichengrenze), Few-Shot-Auswahl je Regeltyp. **Umgesetzt** (9 Tests, inkl. Generator-Abgleich; für den Gruppen-Bereich kommen drei dazu: Rechte-Katalog mit Rollen-Defaults, Scope-Schema und Typ-Schlüssel).
@@ -243,7 +245,26 @@ Reihenfolge-Begründung: Stufe 1 hat die **stärksten Prüfungen** (Compile + Dr
 
 1. **Provider-Voreinstellung** — **umgesetzt (2026-10-16):** `meadow/frontend/settings.py` führt für jeden Anbieter Beispielwerte (`PROVIDER_EXAMPLES`: generisch/DeepSeek, OpenAI, Azure OpenAI, Ollama); der Knopf „Beispielwerte eintragen" (`ai-preset-apply`) füllt Endpunkt und Modell **nur in leere Felder** ein, vorhandene Werte bleiben, und eine Meldung sagt, was eingetragen wurde. Kein Kern-Bestandteil — die Voreinstellung ist Bedienhilfe für die Inbetriebnahme.
 2. **Streaming** der Antwort (fühlbar schneller, aber NiceGUI/Worker-Aufwand) — Stufe 3.
-3. **Sichtbare Historie** je Regel/Attribut („welche Vorschläge gab es?") — heute über das Audit ableitbar; eigener Speicher nur, wenn der Bedarf belegt ist.
+3. **Sichtbare Historie** je Regel/Attribut — **umgesetzt (2026-10-17):** der Dialog schickt `target` (Record-Id, `new` für Ungespeichertes, der Attributname beim berechneten Attribut; das Import-Mapping hat keine stabile Identität und bekommt keinen Knopf), der Kern legt es in den `ai_generated`-Audit-Eintrag, und `GET /ai/history?area=…&target=…` (`ai.use`) liefert Modell, Versuche, Latenz, Tokenzahl und Verdikt; der Knopf **„Verlauf"** zeigt sie als Tabelle. **Kein zweiter Speicher** — das Audit ist die Quelle.
 4. **Import-Vorschau im Kern** — **umgesetzt (2026-10-16):** `POST /imports/preview` führt den **Schreibpfad selbst** aus (`objects::upsert_objects` im Report-Modus: Typregister, Business-Key, Scope, Attributwerte, Regeln) und ergänzt die Kompositionsregel des Import-Jobs (ein Elternteil, der weder im Dokument noch im System liegt, lässt sein Kind scheitern). Die Antwort zählt `create`/`update`/`failed`, liefert die Objektzeilen (`results`, gedeckelt) und nennt die Objekttypen, die der Import registrieren würde. **Geschrieben wird nichts** — kein Objekt, keine Kante, kein Event, kein Audit, kein Typ; die Regelauswertung läuft im Report-Modus (`WriteEvaluation::as_dry_run`) und kann keinen Circuit Breaker bewegen. Grenzen: `references` werden gezählt, nicht aufgelöst, und die Werte-Normalisierung des Import-Workers läuft nicht mit. Knopf „Mit dem Kern prüfen" auf `/import` (`CoreClient.preview_import`).
 5. **Sprache der Vorschläge** — **umgesetzt (2026-09-19):** die Prosa folgt der Arbeitssprache (das Frontend schickt `language`/`current_locale()` mit `POST /ai/generate`, der Kern reicht sie in den NATS-Auftrag weiter, der Prompt sagt „Write … in the language `X`; the code stays English"), Code und Kommentare bleiben Englisch (Projektregel) — `meadow/ai/prompts.py`, `meadow/frontend/ai_assist.py`.
 6. **Job-Parameter beim Speichern prüfen** — **umgesetzt (2026-10-16):** `POST`/`PATCH /jobs` rufen `job_schema::problems_for_write`; deklarierte Felder, die fehlen oder falsch geformt sind, ⇒ `400` (`` invalid job parameters: … ``), unbekannte Schlüssel werden gespeichert und als `notices` (Prüfendpunkt) plus `WARN`-Logeintrag der Kategorie `job` gemeldet. Das Job-Formular fragt den Prüfendpunkt **vor** dem Speichern (blockierende Meldungen halten auf, Hinweise erscheinen danach als Warnung), und die Typ-Auswahl ist beim Bearbeiten gesperrt, weil `PATCH /jobs/{id}` den Typ nicht ändern kann.
+
+## 13. Streaming der Antwort (Entscheidung 2026-10-17)
+
+**Umfang.** Nur der Modus **`explain`** streamt. Ein Artefakt (Skript, JSON) erscheint weiterhin erst **nach** der Prüfkette — roher Text, der anschließend verworfen, korrigiert oder abgelehnt wird, wäre eine Anzeige, die niemand speichern kann. „Erklären" ist Prosa ohne Prüfobjekt.
+
+**Transport über drei Prozesse.** Der Browser sieht den Kern nie; die Kette ist Worker → NATS → Kern → NiceGUI-Prozess → Browser-Websocket. NATS-Request/Reply kann nicht fortschreitend antworten, deshalb:
+
+1. Der Kern abonniert **vor** dem Aufruf ein eigenes Subject **`ai.stream.<id>`** (Core-NATS, keine JetStream-Persistenz: Textstücke sind Anzeige-Fortschritt, kein Vertrag).
+2. Der Worker liest die Provider-SSE (`stream: true`), **publiziert** jedes Stück dorthin und antwortet die **fertige** Antwort wie bisher per `msg.respond`.
+3. `POST /ai/generate/stream` (nur `mode = explain`, sonst `400`) liefert **`text/event-stream`**: `{"type":"id","id":…}`, dann `{"type":"delta","text":…}`, zuletzt `{"type":"done","reply":…}` oder `{"type":"error","error":…}`. Ein Task vereint Subscriber und `send_request` in einem `select!`, damit weder Verbindung noch Abo zurückbleiben; die **Audit-Zeile** schreibt der Kern wie bei jedem Aufruf (eine Zeile, mit `target`, Modell, Versuchen, Latenz, Tokens).
+4. Das Frontend liest die Antwort mit `httpx.stream`, schreibt die Stücke in die Vorschau (NiceGUI-Update über den eigenen Socket) und zeigt die Statuszeile erst am Ende.
+
+**Abbruch.** Solange der Lauf läuft, zeigt der Dialog **„Stopp"**; Schließen oder Stopp schickt **`POST /ai/generate/{id}/cancel`** (`ai.use`). Der Kern publiziert `ai.cancel.<id>`, der Worker bricht die Provider-Aufgabe ab und antwortet mit einem Abbruch-Fehler — die Historie zeigt damit auch **abgebrochene** Versuche. Die Id wird vor jeder Verwendung auf `[A-Za-z0-9]` geprüft (kein Subject-Anteil aus einer Eingabe).
+
+**Zeitlimits.** Der gestreamte Aufruf bekommt einen **eigenen** httpx-Timeout statt des geteilten 30-s-Client-Timeouts (der Provider darf laut `ai_timeout_ms` selbst 30 s plus Kontextaufbau brauchen — heute könnte das Frontend vorher aufgeben); der Kern liest ohne Read-Timeout, das Gesamtbudget bleibt der NATS-Timeout (`ai_timeout_ms` + 5 s).
+
+**Nicht-Ziele.** Kein Streaming für Artefakte, kein „Token x von y", kein Speichern der Textstücke, kein zweiter Prüfpfad: die Prüfkette läuft wie heute auf der fertigen Antwort.
+
+**Offen/Annahmen.** Ob der Provider `usage` im letzten SSE-Paket mitschickt, ist anbieterspezifisch (OpenAI-kompatibel: `stream_options.include_usage`); fehlt sie, bleibt die Tokenzahl im Audit leer. Azure OpenAI und Ollama sind gegen Streaming **nicht live geprüft** (nur der OpenAI-kompatible Pfad).

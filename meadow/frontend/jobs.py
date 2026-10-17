@@ -363,6 +363,7 @@ async def jobs_page() -> None:
                             },
                             ensure_ascii=False,
                         ),
+                        target=lambda: str(editing_id or "new"),
                         on_apply=apply,
                     )
 

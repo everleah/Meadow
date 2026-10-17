@@ -1891,6 +1891,23 @@ class CoreClient:
                 raise CoreError(self._error_detail(response), status=response.status_code)
             return response.json()
 
+    async def ai_history(self, token: str, *, area: str, target: str, limit: int = 20) -> dict:
+        """Lists the recorded suggestions for one target (``GET /ai/history``).
+
+        Metadata only — area, mode, model, attempts, latency, token count and
+        whether the suggestion passed the checks; the prompt and the script are not
+        part of the audit entry. ``target`` is the identity the editor passed along
+        (a record id, ``new`` or an attribute name).
+        """
+        async with _api_client() as client:
+            response = await client.get(
+                f"{self.base_url}/ai/history",
+                params={"area": area, "target": target, "limit": str(limit)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+
     # --- Configuration export/import (MCF) --------------------------------
     async def export_config(
         self,

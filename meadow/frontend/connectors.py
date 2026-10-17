@@ -523,6 +523,7 @@ async def connectors_page() -> None:
                 hint_key="ai.hint_config",
                 config_kind=lambda: str(editor_state["type"]),
                 current_script=lambda: str(parameters_area.value or ""),
+                target=lambda: str(editor_state.get("id") or "new"),
                 on_apply=apply,
             )
 

@@ -234,6 +234,12 @@ pub async fn generate(
         .get("usage")
         .and_then(|usage| usage.get("total_tokens"))
         .and_then(Value::as_i64);
+    let target = body
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(str::to_owned);
     audit::record_best_effort(
         &state.db,
         AuditEntry {
@@ -245,7 +251,7 @@ pub async fn generate(
             metadata: Some(json!({
                 "area": body.area,
                 "mode": body.mode,
-                "target": body.target,
+                "target": target,
                 "rule_type": body.rule_type,
                 "object_type": body.object_type,
                 "ok": reply.get("ok").and_then(Value::as_bool).unwrap_or(false),

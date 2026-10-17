@@ -440,6 +440,7 @@ async def rules_page() -> None:
                 object_type=lambda: next(iter(applies_select.value or []), ""),
                 rule_type=lambda: str(type_select.value or "validation"),
                 current_script=lambda: str(editor.value or ""),
+                target=lambda: str(editing_id or "new"),
                 on_apply=apply,
             )
 

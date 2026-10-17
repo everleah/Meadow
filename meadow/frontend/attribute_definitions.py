@@ -877,6 +877,7 @@ async def attribute_definitions_page() -> None:
                     for row in definitions
                     if row.get("computed") and row.get("name")
                 ],
+                target=lambda: str(name_input.value or "") or "new",
                 on_apply=apply,
             )
 

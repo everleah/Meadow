@@ -1086,3 +1086,11 @@ Meadow PIM kombiniert einen hochperformanten Rust-Kern (headless) mit SurrealDB 
 **(4)** Die **Prompt-Sprache** war bereits umgesetzt (das Frontend schickt `language`, der Prompt verankert „Prosa in der Arbeitssprache, Code Englisch"). **Offen bleiben** aus §12: **Streaming** und die **sichtbare Vorschlags-Historie** (Stufe 3).
 
 **Gates:** `cargo test` **241**, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `ruff`, `ruff format --check`, `mypy` (180 Dateien), `pytest` **826** — alle grün.
+
+*Zuletzt geändert: 2026-10-17 (31) – **Die Vorschlags-Historie ist sichtbar (aus dem Audit, ohne zweiten Speicher)** (Abschnitte 8/12; Details in [detail/ki-assistenz.md](detail/ki-assistenz.md) §6.7/§12):*
+
+**(1) Was fehlte.** Der `ai_generated`-Eintrag trug Bereich und Modus, aber **kein Ziel** — „welche Vorschläge gab es zu dieser Regel?" war damit nicht beantwortbar, obwohl §6.7 genau das zusagte.
+
+**(2) Umsetzung.** Der Vorschlagsdialog schickt `target` (Record-Id, `new` für Ungespeichertes, der Attributname beim berechneten Attribut; das Import-Mapping hat keine stabile Identität und bekommt keinen Knopf), der Kern legt es mit Modell, Versuchen, Latenz und Tokenzahl in den Audit-Eintrag, und **`GET /ai/history?area=…&target=…`** (`ai.use`, neueste zuerst, gedeckelt) liefert ihn zurück; der Knopf **„Verlauf"** zeigt daraus eine Metadaten-Tabelle. Prompt, Skript und Objektwerte bleiben außen vor — die Historie ist deshalb für jeden `ai.use`-Träger unbedenklich, und ein zweiter Speicher entfällt.
+
+**Gates:** `cargo test` **242**, `pytest` **829**, `mypy` 181 Dateien, `ruff`/`ruff format`/`clippy -D warnings`/`cargo fmt --check` sauber.

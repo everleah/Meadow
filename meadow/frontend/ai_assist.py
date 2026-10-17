@@ -1,6 +1,6 @@
 """Shared AI-assist surface for the editors (rule editor, attribute dialog).
 
-Two entry points:
+Three entry points:
 
 * [`ai_state`][meadow.frontend.ai_assist.ai_state] — whether the assistant is
   switched on *and* configured. The settings response never carries the API key,
@@ -9,6 +9,8 @@ Two entry points:
 * [`open_suggestion_dialog`][meadow.frontend.ai_assist.open_suggestion_dialog] —
   the dialog both editors use: a description, a mode, the generated suggestion,
   the policy-check verdict, and an **apply** step.
+* [`history_rows`][meadow.frontend.ai_assist.history_rows] — the recorded
+  suggestions of one target (audit metadata only, `GET /ai/history`).
 
 Two properties of the server side show up here:
 
@@ -25,6 +27,7 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable
 
+import httpx
 from nicegui import ui
 
 from meadow.frontend.api import CoreClient, CoreError
@@ -54,6 +57,41 @@ async def ai_state(client: CoreClient, token: str) -> dict[str, object]:
     return {"available": True, "reason": ""}
 
 
+def history_rows(entries: list[object]) -> list[dict[str, object]]:
+    """Rows for the history dialog from the core's audit projection.
+
+    Returns `when`, `mode`, `accepted` (bool), `model`, `ms` and `user` per entry —
+    the dialog adds the translated verdict labels, so this stays testable without a
+    UI context. Only metadata is read: the prompt, the script and object values are
+    **never** part of the audit entry (`plan/detail/ki-assistenz.md` §6.7), which is
+    what makes a history safe for anyone allowed to ask for suggestions.
+    """
+    rows: list[dict[str, object]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        metadata = entry.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        latency = metadata.get("latency_ms")
+        rows.append(
+            {
+                "when": _history_time(entry.get("timestamp")),
+                "mode": str(metadata.get("mode") or ""),
+                "accepted": bool(metadata.get("ok")),
+                "model": str(metadata.get("model") or ""),
+                "ms": "" if latency is None else str(latency),
+                "user": str(entry.get("user_id") or ""),
+            }
+        )
+    return rows
+
+
+def _history_time(value: object) -> str:
+    """`2026-10-17T09:12:44.123Z` → `2026-10-17 09:12` for the table."""
+    text = str(value or "")
+    return text[:16].replace("T", " ") if len(text) >= 16 else text
+
+
 def open_suggestion_dialog(
     *,
     client: CoreClient,
@@ -70,6 +108,7 @@ def open_suggestion_dialog(
     config_kind: Callable[[], str] | None = None,
     columns: Callable[[], list[dict]] | None = None,
     statuses: Callable[[], list[str]] | None = None,
+    target: Callable[[], str] | None = None,
     modes: tuple[str, ...] = MODES,
 ) -> None:
     """Opens the suggestion dialog; `on_apply` receives the accepted reply.
@@ -78,6 +117,13 @@ def open_suggestion_dialog(
     so a dialog opened once always works with the latest values. `modes` restricts
     the mode list for an area without an explain target (a group document has no
     prose field to fill).
+
+    `target` names **what is being written** (a record id while editing, `new` for
+    an unsaved artefact, the attribute name for a computed attribute). It travels
+    with the request, lands in the audit as the history key — and unlocks the
+    **Verlauf** button, which lists the earlier suggestions for that target. An
+    area without a stable identity (the import mapping of an uploaded file) passes
+    none and gets no history.
     """
     with ui.dialog() as dialog, ui.card().classes("w-[46rem] max-w-[95vw]"):
         ui.label(t(title_key)).classes("text-h6")
@@ -108,6 +154,11 @@ def open_suggestion_dialog(
         note_label = ui.label("").classes("text-caption text-gray-500").mark("ai-note")
         errors_box = ui.column().classes("w-full gap-1")
         with ui.row().classes("w-full justify-end mt-2 gap-2"):
+            history_button = None
+            if target is not None:
+                history_button = (
+                    ui.button(t("ai.history"), icon="history").props("flat").mark("ai-history")
+                )
             ui.button(t("grid.close"), on_click=dialog.close).props("flat")
             apply_button = ui.button(t("ai.apply"), icon="check").props("flat").mark("ai-apply")
             generate_button = (
@@ -147,6 +198,7 @@ def open_suggestion_dialog(
             "columns": columns() if columns else None,
             "statuses": statuses() if statuses else None,
             "language": current_locale(),
+            "target": target() if target else None,
         }
         try:
             reply = await client.ai_generate(token, payload)
@@ -189,7 +241,73 @@ def open_suggestion_dialog(
         state["reply"] = reply
         apply_button.set_enabled(True)
 
+    async def show_history() -> None:
+        """Lists the earlier suggestions for this target (audit metadata only)."""
+        if target is None:
+            return
+        try:
+            answer = await client.ai_history(token, area=area, target=target() or "new")
+        except (CoreError, httpx.HTTPError) as exc:
+            ui.notify(f"{t('ai.history_failed')}: {exc}", color="negative")
+            return
+        entries = answer.get("entries")
+        rows = [
+            {
+                **row,
+                "result": (
+                    t("ai.history_accepted") if row["accepted"] else t("ai.history_rejected")
+                ),
+            }
+            for row in history_rows(entries if isinstance(entries, list) else [])
+        ]
+        with ui.dialog() as history_dialog, ui.card().classes("w-[44rem] max-w-[95vw]"):
+            ui.label(t("ai.history_title")).classes("text-h6")
+            if rows:
+                ui.table(
+                    columns=[
+                        {
+                            "name": "when",
+                            "label": t("ai.history_when"),
+                            "field": "when",
+                            "align": "left",
+                        },
+                        {
+                            "name": "mode",
+                            "label": t("ai.mode"),
+                            "field": "mode",
+                            "align": "left",
+                        },
+                        {
+                            "name": "result",
+                            "label": t("ai.history_result"),
+                            "field": "result",
+                            "align": "left",
+                        },
+                        {
+                            "name": "model",
+                            "label": t("ai.history_model"),
+                            "field": "model",
+                            "align": "left",
+                        },
+                        {"name": "ms", "label": "ms", "field": "ms", "align": "right"},
+                        {
+                            "name": "user",
+                            "label": t("ai.history_user"),
+                            "field": "user",
+                            "align": "left",
+                        },
+                    ],
+                    rows=rows,
+                ).classes("w-full")
+            else:
+                ui.label(t("ai.history_empty")).classes("text-caption text-gray-500")
+            with ui.row().classes("w-full justify-end"):
+                ui.button(t("grid.close"), on_click=history_dialog.close).props("flat")
+        history_dialog.open()
+
     apply_button.set_enabled(False)
     apply_button.on_click(apply)
     generate_button.on_click(run)
+    if history_button is not None:
+        history_button.on_click(show_history)
     dialog.open()

@@ -1202,6 +1202,7 @@ async def users_page() -> None:
                     hint_key="groups.ai_hint",
                     current_script=_current_group_state,
                     statuses=lambda: list(OBJECT_STATUSES),
+                    target=lambda: str(getattr(save_group, "editing_id", None) or "new"),
                     # No "explain": a group has no prose field to fill.
                     modes=("create", "edit"),
                     on_apply=apply_permissions,

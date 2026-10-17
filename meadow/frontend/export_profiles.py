@@ -245,6 +245,7 @@ async def export_profiles_page() -> None:
                     },
                     ensure_ascii=False,
                 ),
+                target=lambda: str(state.get("editing_id") or "new"),
                 on_apply=apply,
             )
 
