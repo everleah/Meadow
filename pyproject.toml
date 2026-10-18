@@ -30,6 +30,7 @@ dev = [
     "ai-slop-detector[go,js]>=3.8.9",
     "slopguards>=0.5.0",
     "aislop>=0.16.1",
+    "diagrams>=0.25.1",
 ]
 
 [tool.ruff]
