@@ -9,6 +9,10 @@ The handbook is written as Markdown in `docs/user/<language>/` and rendered by t
 - [Erste Schritte](user/de/01-getting-started.md) · [Objektliste (Grid)](user/de/02-product-grid.md) · [Objekt bearbeiten](user/de/03-product-form.md) · [Daten importieren](user/de/04-import.md) · [Daten exportieren](user/de/05-export.md)
 - [Getting started](user/en/01-getting-started.md) · [Object list (grid)](user/en/02-product-grid.md) · [Editing an object](user/en/03-product-form.md) · [Importing data](user/en/04-import.md) · [Exporting data](user/en/05-export.md)
 
+## Architecture diagrams
+
+- [Overview and detail diagrams](diagrams/README.md) — executable Python sources and generated PNG/SVG views derived from the architecture plan, with consistent icons and a source-document index.
+
 ## Integration
 
 - [MEF & Event System Integration](integration/mef-and-events.md) — the Meadow Exchange Format (import/export JSON) and the NATS/outbox event contract for external systems.

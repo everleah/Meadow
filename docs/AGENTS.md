@@ -24,7 +24,7 @@ Owns all durable project documentation that does not belong to planning: user-fa
 - Structure `docs/` hierarchically by topic or audience (e.g. user, developer, operations).
 - Split documents into subfolders when they outgrow a single page; keep an index where useful.
 - Refine conventions once the first real documents are added.
-- Current content: `README.md` (index), `user/` (in-app handbook, de/en), `integration/mef-and-events.md` (MEF & event system integration reference) and `developer/` (engineering references; `rule-context.md`/`.json` are **generated** by `scripts/ai_context.py`, never edited by hand). The authoritative spec stays in `plan/`; these docs are the audience-facing contract.
+- Current content: `README.md` (index), `user/` (in-app handbook, de/en), `integration/mef-and-events.md` (MEF & event system integration reference), `diagrams/` (executable architecture views derived from the main plan and detail documents; owned by `diagrams/AGENTS.md`) and `developer/` (engineering references; `rule-context.md`/`.json` are **generated** by `scripts/ai_context.py`, never edited by hand). The authoritative spec stays in `plan/`; these docs are the audience-facing contract.
 - **Help texts follow one rule:** a tooltip answers in one sentence, the handbook chapter answers in full — a concept is explained at exactly **one** place and linked from there (`info_button` for a concept, `chapter_button` for the page itself). Do not repeat the same explanation in several dialogs.
 - New handbook chapters are added in `docs/user/de/` **and** `docs/user/en/` (same ids, same order — `tests/test_help.py` enforces it); cross-references inside the handbook are absolute links `/help?page=<id>`.
 
@@ -34,4 +34,4 @@ Owns all durable project documentation that does not belong to planning: user-fa
 
 ## Child DOX Index
 
-- (none yet)
+- `diagrams/` — consistent `diagrams` Python sources, generated PNG/SVG views and their source index; owned by `diagrams/AGENTS.md`.

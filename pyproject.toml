@@ -59,6 +59,7 @@ files = [
     "meadow/mef.py",
     "scripts",
     "tests",
+    "docs/diagrams",
     # Frontend modules, added one by one as they became clean (2026-09-18). The
     # remaining ones are the widget-heavy pages; they follow the same way.
     "meadow/frontend/__main__.py",
@@ -150,7 +151,7 @@ warn_unused_configs = true
 # Libraries without a `py.typed` marker or stubs: their internals are out of our
 # hands, so only our own use of them is checked. `yaml` is used by the deployment
 # contracts in `tests/test_deployment.py`.
-module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*", "markdown.*", "engineio.*", "yaml.*"]
+module = ["openpyxl.*", "lxml.*", "boto3.*", "botocore.*", "markdown.*", "engineio.*", "yaml.*", "diagrams.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
